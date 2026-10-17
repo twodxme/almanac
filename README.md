@@ -171,8 +171,7 @@ tooling deliberately kept), unmerged `.pacnew` files, failed services, broken
 launcher entries, dead symlinks, AppImage rollback copies, AUR packages that
 vanished upstream, package file integrity, session logs, trash, disk
 headroom, settings reset to defaults, known vulnerabilities, and whether the
-last update can be
-undone.
+last update can be undone.
 
 A cleanup is judged by what it would free, not by how big the thing is. A
 trimmed package cache is still gigabytes — two versions of everything
