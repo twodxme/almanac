@@ -26,7 +26,7 @@ They conflict with each other, so a user has one or the other.
 git clone ssh://aur@aur.archlinux.org/almanac.git /tmp/aur-almanac
 cp packaging/aur/almanac/{PKGBUILD,.SRCINFO} /tmp/aur-almanac/
 git -C /tmp/aur-almanac add PKGBUILD .SRCINFO
-git -C /tmp/aur-almanac commit -m "Update to 1.2.0"
+git -C /tmp/aur-almanac commit -m "Update to 1.3.0"
 git -C /tmp/aur-almanac push
 
 # almanac-git

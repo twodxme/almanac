@@ -1,6 +1,6 @@
 pkgbase = almanac
 	pkgdesc = See everything installed, where it came from, and what needs you
-	pkgver = 1.2.0
+	pkgver = 1.3.0
 	pkgrel = 1
 	url = https://github.com/twodxme/almanac
 	arch = any
@@ -26,7 +26,7 @@ pkgbase = almanac
 	optdepends = github-cli: raises the GitHub API ceiling from 60/h to 5000/h
 	optdepends = webp-pixbuf-loader: marketplace card artwork
 	conflicts = almanac-git
-	source = almanac-1.2.0.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v1.2.0.tar.gz
-	sha256sums = 320f8db80c358b10b4da3938268b06c85efcd8cbcf25c9ad437cbfbc3aa8895d
+	source = almanac-1.3.0.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v1.3.0.tar.gz
+	sha256sums = 95a76dc4e93a3852c264f79b1c4bcf1f380d858d005b912031ba3142a146c460
 
 pkgname = almanac
