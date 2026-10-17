@@ -1,6 +1,6 @@
 pkgbase = almanac-git
 	pkgdesc = See everything installed, where it came from, and what needs you
-	pkgver = r20.0c22272
+	pkgver = r22.380d6d5
 	pkgrel = 1
 	url = https://github.com/twodxme/almanac
 	arch = any
