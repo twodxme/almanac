@@ -1,0 +1,27 @@
+pkgbase = almanac-git
+	pkgdesc = See everything installed, where it came from, and what needs you
+	pkgver = r13.dd01595
+	pkgrel = 1
+	url = https://github.com/twodxme/almanac
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = gtk4
+	depends = libadwaita
+	depends = python-gobject
+	depends = python-cairo
+	depends = pacman
+	optdepends = omarchy: plugin catalogue, themes and system updates
+	optdepends = yay: AUR package updates and installs
+	optdepends = pacman-contrib: checkupdates, for pending repository updates
+	optdepends = flatpak: Flatpak inventory and updates
+	optdepends = mise: version-managed AI agent CLIs
+	optdepends = github-cli: raises the GitHub API ceiling from 60/h to 5000/h
+	optdepends = webp-pixbuf-loader: marketplace card artwork
+	provides = almanac
+	conflicts = almanac
+	source = git+https://github.com/twodxme/almanac.git
+	sha256sums = SKIP
+
+pkgname = almanac-git
