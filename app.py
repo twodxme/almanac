@@ -2,14 +2,22 @@
 """almanac — one window for everything installed on this machine.
 
 Design rule: this app owns the VIEW and the AppImage registry. It does not own
-package state. Every repo/AUR mutation is handed to `omarchy update` running in
-a real terminal, which is also how the sudo password prompt reaches the user --
-a GUI that tried to drive pacman itself would either hang on that prompt or
-need passwordless root.
+package state: installs and updates are handed to the tool that owns them
+(yay, pacman, mise, git), with root requested through polkit, and a full
+upgrade runs in a real terminal through the system's own updater. Every
+result is then checked rather than assumed -- see verify.py.
 """
 from __future__ import annotations
 
-import gi
+import sys
+
+# `almanac --guard` is the background settings watcher: no window, so it is
+# dispatched before GTK is even imported.
+if __name__ == "__main__" and "--guard" in sys.argv[1:]:
+    import watcher
+    sys.exit(watcher.main())
+
+import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -48,6 +56,7 @@ import patches  # noqa: E402
 import snapshots  # noqa: E402
 import sources  # noqa: E402
 import verify  # noqa: E402
+import watcher  # noqa: E402
 import xdg  # noqa: E402
 import shlex  # noqa: E402
 
@@ -3942,6 +3951,27 @@ class AlmanacWindow(Adw.ApplicationWindow):
             include.add(row)
         page.add(include)
 
+        # The settings watcher, for while this window is closed.
+        watch = Adw.PreferencesGroup(
+            title="While Almanac is closed",
+            description="A small background process with no window. It only "
+                        "watches config folders, and notifies you the moment "
+                        "a tool resets one of your files to its defaults.")
+        guard_row = Adw.SwitchRow(
+            title="Watch for settings reset to defaults",
+            subtitle="Starts with your session, through the standard autostart "
+                     "folder",
+            active=watcher.enabled())
+
+        def toggle_guard(row, _pspec):
+            try:
+                watcher.enable() if row.get_active() else watcher.disable()
+            except OSError as exc:
+                self._say(f"Could not change the autostart entry: {exc}")
+        guard_row.connect("notify::active", toggle_guard)
+        watch.add(guard_row)
+        page.add(watch)
+
         actions = Adw.PreferencesGroup()
         run_row = Adw.ActionRow(
             title="Run the update now",
@@ -5087,5 +5117,4 @@ class AlmanacApp(Adw.Application):
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(AlmanacApp().run(sys.argv))

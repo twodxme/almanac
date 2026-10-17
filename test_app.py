@@ -1230,6 +1230,37 @@ class Timeline(unittest.TestCase):
         self.assertEqual(day.events[0], pkg)          # newest first
 
 
+class BackgroundGuard(unittest.TestCase):
+    def test_enabling_writes_a_standard_autostart_entry(self):
+        import watcher
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict("os.environ", {"XDG_CONFIG_HOME": d}):
+            watcher.enable(start_now=False)
+            entry = Path(d, "autostart", watcher.ENTRY_NAME).read_text()
+            self.assertTrue(watcher.enabled())
+            watcher.disable()
+            self.assertFalse(watcher.enabled())
+        self.assertIn("--guard", entry)
+        self.assertIn("NoDisplay=true", entry)
+
+    def test_exec_arguments_are_quoted_per_the_spec(self):
+        import watcher
+        self.assertEqual(watcher._quote("/usr/bin/almanac"), "/usr/bin/almanac")
+        self.assertEqual(watcher._quote("/path with space/app.py"),
+                         '"/path with space/app.py"')
+
+    def test_a_reset_is_announced_once(self):
+        import guard
+        import watcher
+        r = guard.Reset(Path("/c/shell.json"), Path("/c/shell.json.bak.1"), 1,
+                        ["x"])
+        with mock.patch.object(watcher, "_notify") as notify:
+            seen = watcher.announce([r], set())
+            watcher.announce([r], seen)
+        self.assertEqual(notify.call_count, 1)
+        self.assertIn("1 of your entries was removed", notify.call_args[0][1])
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
