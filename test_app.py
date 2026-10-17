@@ -400,7 +400,8 @@ class EmptyStates(unittest.TestCase):
     def test_an_empty_updates_list_is_good_news_not_an_error(self):
         import app as app_mod
         icon, title, body = app_mod.AlmanacWindow.EMPTY_STATES["updates"]
-        self.assertIn("ok", icon, "a finished state should not look like a fault")
+        # A check mark: a finished state should not look like a fault.
+        self.assertEqual(icon, "object-select-symbolic")
         self.assertNotIn("error", icon)
         self.assertIn("up to date", title.lower())
 
@@ -2012,6 +2013,54 @@ class RowsFitTheWindow(unittest.TestCase):
         row = app_mod.AlmanacWindow._ai_row(win, e)
         minimum = row.measure(app_mod.Gtk.Orientation.HORIZONTAL, -1)[0]
         self.assertLess(minimum, 480, "the window's own minimum width")
+
+
+class IconsExist(unittest.TestCase):
+    def test_every_icon_name_is_in_adwaita_or_shipped_here(self):
+        """A theme-specific name renders as a blank square on every other
+        theme: Yaru has emblem-ok-symbolic, Adwaita does not."""
+        adwaita = Path("/usr/share/icons/Adwaita")
+        if not adwaita.is_dir():
+            self.skipTest("Adwaita icon theme not installed")
+        have = {p.stem for p in adwaita.rglob("*.svg")} | {p.stem for p in adwaita.rglob("*.png")}
+        here = Path(__file__).parent
+        have |= {p.stem for p in (here / "icons").glob("*.svg")}
+        names = set()
+        for f in here.glob("*.py"):
+            if f.name == "test_app.py":
+                continue
+            names |= set(re.findall(r'"([a-z0-9-]+-symbolic)"', f.read_text()))
+        # adw-* icons ship inside libadwaita itself.
+        missing = sorted(n for n in names if n not in have and not n.startswith("adw-"))
+        self.assertEqual(missing, [])
+
+
+class PolishRegressions(unittest.TestCase):
+    def test_an_appimage_listing_offers_install(self):
+        p = store.Plugin(id="x", name="X", installable=True, install_cmd="",
+                         install_kind="appimage", market="artcraft")
+        self.assertTrue(p.can_install)
+        q = store.Plugin(id="y", name="Y", installable=False, market="omarchy")
+        self.assertFalse(q.can_install)
+
+    def test_keyring_reinstalls_are_not_history(self):
+        import history
+        log = ("[2026-10-16T23:02:32-0700] [ALPM] transaction started\n"
+               "[2026-10-16T23:02:33-0700] [ALPM] reinstalled archlinux-keyring "
+               "(20261001-1)\n"
+               "[2026-10-16T23:02:34-0700] [ALPM] transaction completed\n")
+        self.assertEqual(history.package_events(0, log), [])
+
+    def test_star_counts_fit_a_chip(self):
+        import app as app_mod
+        self.assertEqual([app_mod._compact(n) for n in (198, 2151, 2000, 15419, 66175)],
+                         ["198", "2.2k", "2k", "15k", "66k"])
+
+    def test_paths_from_home_read_as_tilde(self):
+        import ai
+        home = str(Path.home())
+        self.assertEqual(ai._tilde(home + "/.local/bin/claude"), "~/.local/bin/claude")
+        self.assertEqual(ai._tilde("/usr/bin/x"), "/usr/bin/x")
 
 
 class PackageIntegrity(unittest.TestCase):

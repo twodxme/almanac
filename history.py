@@ -130,6 +130,11 @@ def package_events(since: float, log_text: str | None = None) -> list[Event]:
         elif msg == "transaction completed":
             started, changes = current
             current = None
+            # `omarchy update` reinstalls archlinux-keyring every time: same
+            # version, nothing changed. A transaction of nothing but those is
+            # noise between the entries that matter.
+            if all(c.startswith("reinstalled ") for c in changes):
+                continue
             if changes and started >= since:
                 out.append(Event(started, PACKAGES, _summarise(changes),
                                  items=changes))

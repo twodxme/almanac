@@ -80,7 +80,8 @@ Every card shows a **provenance chip**:
 | `First-party` | Published by the marketplace's own GitHub account — *checked*, not assumed |
 | `Reviewed` | A human reviewed the source |
 | `Verified` | Automated checks passed against the listed commit |
-| `Changed since review` | Upstream has committed past what was reviewed — **1,336 listings are in this state** |
+| `Changed since review` | Upstream has committed past what a person reviewed |
+| `Changed since check` | Upstream has committed past what the automated checks passed |
 | `Unverified` | No review recorded |
 | `Source unreachable` | The marketplace could not reach the repository on its last check |
 

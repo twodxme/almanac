@@ -73,6 +73,15 @@ import shlex  # noqa: E402
 INSTALL_ICON = "almanac-install-symbolic"
 
 
+def _compact(n: int) -> str:
+    """15419 -> '15k', 2151 -> '2.2k', 198 -> '198': a count that fits a chip."""
+    if n >= 10_000:
+        return f"{n // 1000}k"
+    if n >= 1_000:
+        return f"{n / 1000:.1f}k".replace(".0k", "k")
+    return str(n)
+
+
 def _name(widget, text: str):
     """Tooltip and accessible name at once, for a control that is only an icon.
 
@@ -202,6 +211,15 @@ row:selected .count-badge.is-crit {
 .store-verified { color: @success_color; }
 .store-stars { font-size: 0.72rem; }
 .stats { font-size: 0.74rem; }
+/* Sidebar rows at 36px rather than Adwaita's 50: fifteen destinations and
+   the stats fit a laptop's height without the Maintenance group falling off
+   the bottom. */
+.almanac-sidebar > row > box.header {
+  min-height: 36px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.almanac-sidebar > row { margin-top: 0; margin-bottom: 1px; }
 .stat-key { opacity: 0.62; }
 .stat-val {
   font-weight: bold;
@@ -387,7 +405,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # would rank them as peers of "Sources".
         ("primary", None, (
             ("featured", _("Featured"), "starred-symbolic"),
-            ("discover", _("App Store"), "software-store-symbolic"),
+            ("discover", _("App Store"), "system-software-install-symbolic"),
             ("themes", _("Themes"), "preferences-desktop-wallpaper-symbolic"),
             ("updates", _("Updates"), "software-update-available-symbolic"),
             (inventory.AGENT, _("AI"), "applications-science-symbolic"),
@@ -408,7 +426,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             (inventory.TOOL, _("Dev tools"), "utilities-terminal-symbolic"),
         )),
         ("maintenance", _("Maintenance"), (
-            ("maintenance", _("Health check"), "emblem-ok-symbolic"),
+            ("maintenance", _("Health check"), "object-select-symbolic"),
             ("history", _("History"), "document-open-recent-symbolic"),
             (inventory.ORPHAN, _("Orphans"), "user-trash-symbolic"),
         )),
@@ -514,6 +532,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.sidebar_rows = {}
         sidebar_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         sidebar_list.add_css_class("navigation-sidebar")
+        sidebar_list.add_css_class("almanac-sidebar")
         sidebar_list.connect("row-selected", self._on_sidebar_selected)
 
         self.group_rows: dict[str, Any] = {}
@@ -536,7 +555,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 continue
 
             header = Gtk.ListBoxRow(selectable=False, activatable=True)
-            hb = Gtk.Box(spacing=6, margin_start=6, margin_top=8,
+            hb = Gtk.Box(spacing=6, margin_start=6, margin_top=6,
                          margin_bottom=2, margin_end=6)
             chevron = Gtk.Image(icon_name="pan-down-symbolic")
             chevron.add_css_class("dim-label")
@@ -576,9 +595,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # A stats footer. The sidebar's bottom half is empty on any normal
         # window height, and these are the numbers you would otherwise open a
         # terminal for.
-        self.stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
-                             margin_start=12, margin_end=12,
-                             margin_top=8, margin_bottom=12)
+        # Two columns: six numbers in three lines, not six. Each keeps its
+        # explanation as a tooltip.
+        self.stats = Gtk.Grid(column_spacing=12, row_spacing=1,
+                              column_homogeneous=True,
+                              margin_start=12, margin_end=12,
+                              margin_top=6, margin_bottom=8)
         self.stats.add_css_class("stats")
         sidebar_scroll.set_vexpand(True)
 
@@ -768,7 +790,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.list_stack.set_vexpand(True)
         self.list_stack.add_named(scroller, "list")
         self.list_empty = self._status_page(
-            "emblem-ok-symbolic", _("Nothing here"), "")
+            "object-select-symbolic", _("Nothing here"), "")
         self.list_stack.add_named(self.list_empty, "empty")
         box.append(self.list_stack)
 
@@ -1811,14 +1833,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         security = sum(1 for i in items if i.critical == "security")
 
         rows = [("Installed", f"{total}", "Everything Almanac can see, orphans aside"),
-                ("On disk", maintenance.fmt_size(size),
+                ("Disk", maintenance.fmt_size(size),
                  "Installed size reported by the package manager"),
                 ("Updates", f"{pending}",
                  "Packages, AppImages, plugins and agents with a newer version"),
-                ("From the AUR", f"{foreign}",
+                ("AUR", f"{foreign}",
                  f"{foreign} of {explicit} repo and AUR packages are foreign")]
         if majors:
-            rows.append(("A major behind", f"{majors}",
+            rows.append(("Majors", f"{majors}",
                          "Packages at least one major version behind upstream"))
         if security:
             rows.append(("Security", f"{security}",
@@ -1826,19 +1848,22 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         free = maintenance.reclaimable_mb(getattr(self, "_findings", []) or [])
         if free:
-            rows.append(("Reclaimable", maintenance.fmt_size(free),
+            rows.append(("Free-able", maintenance.fmt_size(free),
                          "Caches and logs that can be cleared"))
 
         kernel = self._kernel_version()
         if kernel:
-            rows.append(("Kernel", kernel, "Running kernel release"))
+            # The version, not the full release string: "7.2.5", not
+            # "7.2.5-3-omarchy" -- the rest is in the tooltip.
+            rows.append(("Kernel", kernel.split("-")[0],
+                         f"Running kernel release {kernel}"))
 
         up = self._uptime()
         if up:
-            rows.append(("Uptime", up, "Since last boot"))
+            rows.append(("Up", up, "Uptime, since last boot"))
 
-        for label, value, tip in rows:
-            self.stats.append(self._stat_row(label, value, tip))
+        for n, (label, value, tip) in enumerate(rows):
+            self.stats.attach(self._stat_row(label, value, tip), n % 2, n // 2, 1, 1)
 
     @staticmethod
     def _kernel_version() -> str:
@@ -2258,6 +2283,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self.update_btn.set_visible(False)
             return
         label, enabled, tooltip = action[0], action[1], action[2]
+        # A disabled primary button ("Nothing to reclaim", "Plugins current")
+        # takes the header's most prominent place to say there is nothing to
+        # do; the subtitle already says that.
+        if not enabled:
+            self.update_btn.set_visible(False)
+            return
         self.update_btn.set_visible(True)
         self.update_btn.set_label(label)
         self.update_btn.set_sensitive(enabled)
@@ -2614,14 +2645,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _card_setup(self, _factory, item):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         card.add_css_class("store-card")
-        card.set_size_request(224, -1)
+        card.set_size_request(200, -1)        # three across at a laptop's width
         card.set_overflow(Gtk.Overflow.HIDDEN)
 
         # Artwork: a screenshot when the entry has one, the accent tile when
         # it does not. Both occupy the same box so the grid stays aligned.
         shot = Gtk.Box()
         shot.add_css_class("store-shot")
-        shot.set_size_request(-1, 142)
+        shot.set_size_request(-1, 112)
         shot.set_overflow(Gtk.Overflow.HIDDEN)
         pic = Gtk.Picture()
         pic.set_content_fit(Gtk.ContentFit.COVER)
@@ -2654,7 +2685,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         name.set_max_width_chars(22)
         name.add_css_class("store-name")
         name.set_hexpand(True)
-        check = Gtk.Image(icon_name="emblem-ok-symbolic", pixel_size=12)
+        check = Gtk.Image(icon_name="object-select-symbolic", pixel_size=12)
         check.add_css_class("store-verified")
         check.set_tooltip_text(_("Source reviewed by the marketplace"))
         spacer = Gtk.Box(hexpand=True)
@@ -2705,12 +2736,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         cat.set_max_width_chars(11)
         cat.add_css_class("pill")
         trust = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
-        trust.set_max_width_chars(14)
+        trust.set_max_width_chars(18)
         stars = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
         stars.set_max_width_chars(8)
         stars.add_css_class("store-stars")
         stars.add_css_class("dim-label")
-        bottom.append(cat)
+        # Provenance and stars only: a card is 200px wide, and the category
+        # is already a filter and in the card's tooltip. Three chips there
+        # all truncated ("Gra…", "Fir…", "★ …").
         bottom.append(trust)
         bottom.append(stars)
         bottom.append(Gtk.Box(hexpand=True))
@@ -2738,7 +2771,6 @@ class AlmanacWindow(Adw.ApplicationWindow):
         token = item._token
 
         w["name"].set_text(p.name)
-        w["name"].set_tooltip_text(p.name)
         w["check"].set_visible(p.verified)
         w["installed"].set_visible(p.installed)
         # Installed and switched off reads "Off": answers "is it running?"
@@ -2750,7 +2782,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         w["sub"].set_text(p.subtitle)
         w["desc"].set_text(p.description or p.install_note or "")
         w["cat"].set_text(p.category)
-        w["stars"].set_text(f"★ {p.stars}" if p.stars else "")
+        w["stars"].set_text(f"★ {_compact(p.stars)}" if p.stars else "")
+        w["stars"].set_tooltip_text(f"{p.stars:,} stars" if p.stars else "")
+        w["name"].set_tooltip_text(f"{p.name} · {p.category}")
 
         # Provenance
         t = p.trust
@@ -2822,7 +2856,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 _("Ships with Omarchy — cannot be removed") if p.built_in
                 else f"Remove {p.name}")
             item._handler = btn.connect("clicked", self.on_plugin_remove, p)
-        elif p.installable and p.install_cmd:
+        elif p.can_install:
             # A glyph rather than a word: cards are narrow, and the word is
             # still there for the pointer (tooltip) and screen readers.
             btn.set_icon_name(INSTALL_ICON)
@@ -2830,7 +2864,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             btn.add_css_class("suggested-action")      # filled: the main action
             btn.set_tooltip_text(f"Install {p.name}"
                                  + (_(" — setup follows") if p.needs_setup else "")
-                                 + f"\n{p.install_cmd}")
+                                 + (f"\n{p.install_cmd}" if p.install_cmd
+                                    else f"\n{p.asset_name}" if p.asset_name else ""))
             btn.update_property([Gtk.AccessibleProperty.LABEL],
                                 [f"Install {p.name}"])
             item._handler = btn.connect("clicked", self.on_plugin_install, p)
@@ -3477,7 +3512,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         links = Adw.PreferencesGroup()
         for label, url, icon in (
                 ("Marketplace listing", p.page, "web-browser-symbolic"),
-                ("Source repository", p.repo, "code-symbolic")):
+                ("Source repository", p.repo, "folder-remote-symbolic")):
             if not url:
                 continue
             row = self._plain(title=label, subtitle=url, activatable=True)
@@ -3537,7 +3572,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             lbl = Gtk.Label(label=_("Built in"))
             lbl.add_css_class("pill-ok")
             bottom.append(lbl)
-        elif p.installable and p.install_cmd:
+        elif p.can_install:
             ins = Gtk.Button(child=Adw.ButtonContent(icon_name=INSTALL_ICON,
                                                      label=_("Install")))
             ins.add_css_class("suggested-action")
@@ -3569,12 +3604,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         """One page per question the system can answer about its own health."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                        margin_start=12, margin_end=12, margin_bottom=16)
+        # No heading: the page is already called Health check.
         section = self._section(
-            _("System health"),
-            _("Each check reads the system and offers the one command that acts "
-            "on what it found. Nothing here runs until you ask it to."))
+            "", _("Each check reads the system and offers the one command that "
+                  "acts on what it found. Nothing here runs until you ask it to."))
         self.maint_list = section._rows
         body.append(section)
 
@@ -3599,7 +3634,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         """Every plugin on the system, with a switch each. See plugins.py."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.plugins_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                    spacing=20, margin_start=12, margin_end=12,
+                                    spacing=12, margin_start=12, margin_end=12,
                                     margin_bottom=16)
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -3678,7 +3713,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _plugin_row(self, i, trust, shortcut: str, listing=None):
         row = self._plain(title=i.name, subtitle=i.description or i.id)
-        row.set_subtitle_lines(2)
+        row.set_title_lines(1)
+        row.set_subtitle_lines(1)
+        row.set_tooltip_text(i.description or i.id)
         row.add_prefix(self._plugin_logo(i, listing))
 
         st = i.state
@@ -3888,7 +3925,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         that says how many are on and goes there."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.switch_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                   spacing=20, margin_start=12, margin_end=12,
+                                   spacing=12, margin_start=12, margin_end=12,
                                    margin_bottom=16)
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -3933,10 +3970,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
                                      valign=Gtk.Align.CENTER))
             row.set_activatable(True)
             row.connect("activated", lambda _r: self._select_category("plugins"))
-            box = self._section(_("Plugins"))
-            box._rows.append(row)
-            self.switch_body.append(box)
-            self._switch_rows.append((box, "plugins"))
+            links = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+            links.add_css_class("boxed-list")
+            links.append(row)
+            self.switch_body.append(links)
+            self._switch_rows.append((links, "plugins"))
 
         section(_("Startup apps"),
                 _("Started when you log in. Switching one off writes a "
@@ -3972,7 +4010,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         switching off something that matters.
         """
         row = self._plain(title=title, subtitle=subtitle)
-        row.set_subtitle_lines(2)
+        row.set_subtitle_lines(1)
+        row.set_tooltip_text(subtitle)
         if prefix is not None:
             row.add_prefix(prefix)
         for label, css in pills:
@@ -4111,14 +4150,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         history.PACKAGES: "package-x-generic-symbolic",
         history.SNAPSHOT: "camera-photo-symbolic",
         history.RESET: "edit-undo-symbolic",
-        history.ALMANAC: "emblem-ok-symbolic",
+        history.ALMANAC: "object-select-symbolic",
     }
 
     def _build_history(self):
         """What changed on this machine, by day. See history.py."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.history_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                    spacing=20, margin_start=12, margin_end=12,
+                                    spacing=12, margin_start=12, margin_end=12,
                                     margin_bottom=16)
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -4157,7 +4196,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _history_row(self, e):
         when = datetime.fromtimestamp(e.ts).strftime("%H:%M")
-        subtitle = " · ".join(x for x in (when, e.detail) if x)
+        subtitle = e.detail
         if e.items:
             row = self._plain(Adw.ExpanderRow, title=e.title, subtitle=subtitle)
             for item in e.items[:80]:
@@ -4168,9 +4207,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row = self._plain(title=e.title, subtitle=subtitle)
         icon = Gtk.Image(icon_name=("dialog-warning-symbolic" if e.severity == "warn"
                                     else self._HISTORY_ICONS.get(e.kind,
-                                                                 "emblem-ok-symbolic")))
+                                                                 "object-select-symbolic")))
         icon.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
         row.add_prefix(icon)
+        clock = Gtk.Label(label=when, valign=Gtk.Align.CENTER)
+        clock.add_css_class("dim-label")
+        clock.add_css_class("caption")
+        clock.add_css_class("numeric")
+        row.add_suffix(clock)
         return row
 
     def _maint_reload(self):
@@ -4193,19 +4237,38 @@ class AlmanacWindow(Adw.ApplicationWindow):
         while (row := self.maint_list.get_first_child()) is not None:
             self.maint_list.remove(row)
 
+        # Problems first, each in full; everything that passed folds into one
+        # row. Fifteen "OK" rows of two or three lines each were most of the
+        # page, and pushed the one that mattered down with them.
+        passed = [f for f in findings if f.severity == maintenance.OK]
         for f in findings:
-            self.maint_list.append(self._maint_row(f))
+            if f.severity != maintenance.OK:
+                self.maint_list.append(self._maint_row(f))
+        if passed:
+            fold = self._plain(Adw.ExpanderRow,
+                               title=f"{len(passed)} checks passed",
+                               subtitle=", ".join(f.title for f in passed[:4])
+                               + ("…" if len(passed) > 4 else ""))
+            fold.set_subtitle_lines(1)
+            tick = Gtk.Image(icon_name="object-select-symbolic",
+                             valign=Gtk.Align.CENTER)
+            tick.add_css_class("store-verified")
+            fold.add_prefix(tick)
+            # Open when nothing else is listed, so the page is never blank.
+            fold.set_expanded(len(passed) == len(findings))
+            for f in passed:
+                fold.add_row(self._maint_row(f))
+            self.maint_list.append(fold)
 
         issues = [f for f in findings if f.severity in
                   (maintenance.CRIT, maintenance.WARN)]
         free = maintenance.reclaimable_mb(findings)
         self._sync_primary()
+        # "0 KB reclaimable" is not news; say it only when there is some.
+        room = f" · {maintenance.fmt_size(free)} reclaimable" if free >= 1 else ""
         self._summarize(
-            (f"{len(issues)} thing(s) worth attention · "
-            f"{maintenance.fmt_size(free)} reclaimable"
-            if issues else
-            f"Nothing needs attention · {maintenance.fmt_size(free)} reclaimable"),
-            "maintenance")
+            (f"{len(issues)} thing(s) worth attention{room}" if issues
+             else f"Nothing needs attention{room}"), "maintenance")
 
         # Keep the sidebar badge honest about what the page says.
         row = self.sidebar_rows.get("maintenance")
@@ -4215,9 +4278,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     EMPTY_STATES = {
-        "updates": ("emblem-ok-symbolic", _("Everything is up to date"),
+        "updates": ("object-select-symbolic", _("Everything is up to date"),
                     _("Nothing installed has a newer version waiting.")),
-        inventory.ORPHAN: ("emblem-ok-symbolic", _("No orphans"),
+        inventory.ORPHAN: ("object-select-symbolic", _("No orphans"),
                            _("Every installed package is either asked for "
                            "directly or needed by something that is.")),
         inventory.FLATPAK: ("package-x-generic-symbolic", _("No Flatpaks"),
@@ -4256,7 +4319,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     title=f"… and {len(f.items) - 60} more"))
         else:
             row = self._plain(title=f.title, subtitle=f.detail)
-        row.set_subtitle_lines(3)
+        # A problem gets room to explain itself; a pass gets one line.
+        row.set_subtitle_lines(1 if f.severity == maintenance.OK else 3)
+        row.set_tooltip_text(f.detail)
 
         pill = Gtk.Label(label=label, valign=Gtk.Align.CENTER)
         pill.add_css_class(css)
@@ -4356,7 +4421,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         """
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-        self.ai_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+        self.ai_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                                margin_start=12, margin_end=12, margin_bottom=16)
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -4402,8 +4467,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
     @staticmethod
     def _section(title: str, description: str = "", trailing=None):
         """One titled, full-width list. The shared shape for secondary pages."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        head = Gtk.Label(label=title, xalign=0, hexpand=True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        head = Gtk.Label(label=title, xalign=0, hexpand=True, visible=bool(title))
         head.add_css_class("heading")
         if trailing is not None:
             row = Gtk.Box(spacing=8)
@@ -4413,10 +4478,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         else:
             box.append(head)
         if description:
-            sub = Gtk.Label(label=description, xalign=0, wrap=True)
-            sub.add_css_class("dim-label")
-            sub.add_css_class("caption")
-            box.append(sub)
+            # What the section is, a hover away rather than a line per section:
+            # on a full page those lines were a fifth of the height.
+            head.set_tooltip_text(description)
+            head.update_property([Gtk.AccessibleProperty.DESCRIPTION], [description])
         rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         rows.add_css_class("boxed-list")
         box.append(rows)
@@ -4522,7 +4587,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             subtitle = (f"{e.version}" + (f" → {e.update}" if e.update else "")
                         + (f" · {e.detail}" if e.detail else ""))
         row = self._plain(title=e.name, subtitle=subtitle)
-        row.set_subtitle_lines(2)
+        row.set_subtitle_lines(1)
+        row.set_tooltip_text(subtitle)
         row.set_subtitle_selectable(True)
 
         # The vendor's own mark, fetched from the vendor. Falls back to a
@@ -4953,7 +5019,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _build_featured(self):
         """The landing page: what deserves attention, assembled from live data."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.feat_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+        self.feat_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                                  margin_start=12, margin_end=12,
                                  margin_top=12, margin_bottom=16)
         self.feat_page.append(self._build_hero())
@@ -4963,7 +5029,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         page.append(scroller)
         return page
 
-    HERO_HEIGHT = 190
+    HERO_HEIGHT = 120
 
     def _build_hero(self):
         """The machine's own wallpaper, with the state of the machine on it.
@@ -5072,6 +5138,21 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         problems = 0
         for shelf in shelves:
+            if shelf.key == "attention" and not shelf.items:
+                # The good outcome takes one line, not a heading, a
+                # description and a row.
+                ok = Gtk.Box(spacing=8, margin_top=2)
+                tick = Gtk.Image(icon_name="object-select-symbolic")
+                tick.add_css_class("store-verified")
+                ok.append(tick)
+                msg = Gtk.Label(label=shelf.empty, xalign=0, hexpand=True)
+                msg.add_css_class("dim-label")
+                ok.append(msg)
+                link = self._shelf_link(shelf)
+                if link is not None:
+                    ok.append(link)
+                self.feat_page.append(ok)
+                continue
             section = self._section(
                 f"{shelf.title} ({len(shelf.items)})" if shelf.items else shelf.title,
                 shelf.subtitle,
@@ -5079,7 +5160,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if not shelf.items:
                 row = self._plain(title=shelf.empty)
                 if shelf.key == "attention":
-                    tick = Gtk.Image(icon_name="emblem-ok-symbolic",
+                    tick = Gtk.Image(icon_name="object-select-symbolic",
                                      valign=Gtk.Align.CENTER)
                     tick.add_css_class("store-verified")
                     row.add_prefix(tick)
@@ -5134,7 +5215,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _feat_row(self, item):
         row = self._plain(title=item.title, subtitle=item.detail)
-        row.set_subtitle_lines(2)
+        row.set_subtitle_lines(1)
+        row.set_tooltip_text(item.detail)
 
         if item.severity:
             label, css = self._SEVERITY_CSS.get(

@@ -64,7 +64,7 @@ class Trust:
     """What is actually known about an entry's origin.
 
     `rank` orders the provenance sort: 0 is the strongest claim. The labels
-    are deliberately specific -- "Reviewed · changed since" and "Verified"
+    are deliberately specific -- "Changed since review" and "Verified"
     are different promises, and collapsing both to a tick would overstate one
     of them.
     """
@@ -199,6 +199,14 @@ class Plugin:
         return "unknown source"
 
     @property
+    def can_install(self) -> bool:
+        """Whether Install should be offered. An AppImage has no command --
+        Almanac downloads it itself -- so it cannot be judged by having one;
+        that test showed "Manual setup" on every installable ArtCraft app."""
+        return bool(self.installable and (self.install_cmd
+                                          or self.install_kind == "appimage"))
+
+    @property
     def drifted(self) -> bool:
         """Upstream has moved past the commit the marketplace validated."""
         return bool(self.validated_commit and self.upstream_commit
@@ -231,7 +239,7 @@ class Plugin:
             when = f" on {self.reviewed_at[:10]}" if self.reviewed_at else ""
             base = f"Source reviewed{who}{when} for {self.market_name}"
             if self.drifted:
-                return t("reviewed-stale", "Reviewed · changed since",
+                return t("reviewed-stale", "Changed since review",
                          "pill-warn",
                          base + ", but upstream has committed since then")
             return t("reviewed", "Reviewed", "pill-ok", base)
@@ -240,7 +248,7 @@ class Plugin:
                      f"{self.market_name} automated checks passed against "
                      f"commit {self.validated_commit[:7]}")
         if self.coverage in ("snapshot-verified", "update-unverified"):
-            return t("stale", "Changed since review", "pill-warn",
+            return t("stale", "Changed since check", "pill-warn",
                      f"Validated at {self.validated_commit[:7]}, but upstream "
                      f"is now at {self.upstream_commit[:7]} -- the newer "
                      f"commits have not been checked")

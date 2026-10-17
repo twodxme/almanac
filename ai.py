@@ -111,6 +111,13 @@ def _frontmatter(path: Path) -> dict:
 
 # ---- harnesses ---------------------------------------------------------------
 
+def _tilde(path: str) -> str:
+    """A path under the home directory, written the way people say it."""
+    import os
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path and path.startswith(home + "/") else path
+
+
 def harnesses() -> list[Entry]:
     import agents
     out = []
@@ -119,7 +126,7 @@ def harnesses() -> list[Entry]:
         out.append(Entry(
             kind=HARNESS,
             name=a.name,
-            detail=(f"{a.extra.get('manager')}-managed · {a.exec_path}"),
+            detail=(f"{a.extra.get('manager')}-managed · {_tilde(a.exec_path)}"),
             version=a.version,
             update=a.update,
             status=(f"{behind} {kind} behind" if a.update else "current"),
@@ -283,7 +290,7 @@ def marketplaces() -> list[Entry]:
             url=f"https://github.com/{repo}" if repo else "",
             icon_key=f"gh-{repo.split('/')[0]}" if repo else "",
             icon_url=_github_avatar(repo),
-            fallback_icon="software-store-symbolic",
+            fallback_icon="system-software-install-symbolic",
             action_label="Sync",
             action=["claude", "plugin", "marketplace", "update", name],
             action_note="Re-fetches the marketplace catalogue from its source."))

@@ -299,7 +299,7 @@ def ai_groups():
         kind=ai.MARKET, name="example-marketplace",
         detail="24 plugins available · example/claude-plugins",
         status="synced 2026-10-14", severity="info",
-        fallback_icon="software-store-symbolic",
+        fallback_icon="system-software-install-symbolic",
         action_label="Sync", action=["true"],
         url="https://github.com/example/claude-plugins")]
 
