@@ -270,7 +270,9 @@ Stated plainly, because an app that reads your whole system should be explicit
 about this:
 
 - **Marketplace catalogues** from `plugins.omarchy.org`, the GitHub API and
-  `getartcraft.com`. Cached for six hours.
+  `getartcraft.com`. Cached for six hours — or ten minutes, when GitHub did not
+  answer for some entry, which is listed as *Not checked* rather than
+  guessed at.
 - **Vendor icons**, fetched from each vendor's own domain — `stripe.com`'s
   favicon comes from `stripe.com`. Deliberately *not* a favicon proxy, which
   would mean sending one request containing the full list of everything you
@@ -294,7 +296,7 @@ better than I can.
 python3 test_app.py
 ```
 
-54 tests, weighted toward the destructive paths — removal, orphan cleanup,
+58 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

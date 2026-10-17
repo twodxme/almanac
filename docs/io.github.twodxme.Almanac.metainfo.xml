@@ -96,6 +96,13 @@
   </requires>
 
   <releases>
+    <release version="1.0.3" date="2026-10-17">
+      <description>
+        <p>Apps whose release could not be looked up are listed as not checked,
+        and retried within minutes, instead of being shown as having no Linux
+        build.</p>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-10-16">
       <description>
         <p>Health check cleanups that cannot free anything no longer stay listed:

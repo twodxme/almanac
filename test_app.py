@@ -625,6 +625,65 @@ class CleanupsThatCannotHelp(unittest.TestCase):
         self.assertFalse(tasks.needs_root(["journalctl", "--disk-usage"]))
 
 
+class CatalogueLookups(unittest.TestCase):
+    """A release lookup that failed is not a release without a Linux build.
+
+    One rate-limited refresh listed VectorCraft -- installed, from its Linux
+    AppImage -- and three others as "No Linux build" for six hours.
+    """
+
+    def _rows(self, releases):
+        import io
+        import ghcache
+        html = ('<a href="/apps/wordcraft">WordCraft</a>'
+                '<a href="/apps/gridcraft">GridCraft</a>')
+        asset = {"name": "gridcraft-0.7.0-linux-x86_64.AppImage",
+                 "browser_download_url": "https://example.invalid/g.AppImage",
+                 "size": 1048576}
+        found = {"tag_name": "v0.7.0", "assets": [asset]}
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(store, "CACHE", Path(d)), \
+             mock.patch.object(store.urllib.request, "urlopen",
+                               return_value=io.BytesIO(html.encode())), \
+             mock.patch.object(ghcache, "org_repos", return_value=[]), \
+             mock.patch.object(ghcache, "latest_release",
+                               side_effect=lambda r: releases(r, found)):
+            return {r["id"]: r for r in store._artcraft_rows()}
+
+    def test_a_failed_lookup_says_not_checked(self):
+        rows = self._rows(lambda r, found: found if "gridcraft" in r else None)
+        self.assertEqual(rows["gridcraft"]["status"], "Available")
+        self.assertEqual(rows["wordcraft"]["status"], "Not checked")
+        self.assertTrue(rows["wordcraft"]["unchecked"])
+
+    def test_every_row_field_loads_into_a_plugin(self):
+        # Rows become Plugin(**row); a key the dataclass lacks broke the whole
+        # store, which the row-level tests above could not see.
+        rows = self._rows(lambda r, found: found if "gridcraft" in r else None)
+        for row in rows.values():
+            store.Plugin(**{**row, "market": "artcraft"})
+
+    def test_a_release_without_an_appimage_still_says_so(self):
+        bare = {"tag_name": "v1.0.0", "assets": []}
+        rows = self._rows(lambda r, found: found if "gridcraft" in r else bare)
+        self.assertEqual(rows["wordcraft"]["status"], "No Linux build")
+        self.assertFalse(rows["wordcraft"]["unchecked"])
+
+    def test_an_incomplete_catalogue_is_refetched_before_the_ttl(self):
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(store, "CACHE", Path(d)):
+            m = store.Market(id="t", name="T", site="", loader=lambda: [
+                {"id": "wordcraft", "unchecked": False}])
+            m.cache.write_text(json.dumps({"schema": store.SCHEMA, "rows": [
+                {"id": "wordcraft", "unchecked": True}]}))
+            past = time.time() - store.RETRY - 1
+            os.utime(m.cache, (past, past))
+            rows = store._load_market(m, force=False)
+        self.assertFalse(rows[0]["unchecked"], "the stale miss must be retried")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

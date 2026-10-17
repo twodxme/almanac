@@ -127,6 +127,8 @@ class Plugin:
     validated_branch: str = ""
     upstream_commit: str = ""
     upstream_checked_at: str = ""
+    # The release lookup failed, so "not installable" is unknown, not a fact.
+    unchecked: bool = False
     upstream_status: str = ""
 
     # filled in from the local system, not the catalog
@@ -425,7 +427,10 @@ def _artcraft_rows() -> list[dict]:
         repo = repos.get(slug, {})
         tag, published, url, asset, size = "", "", "", "", 0
         rel = releases.get(slug) or {}
-        if isinstance(rel, dict):
+        # A release with no tag is a lookup that failed (rate limit, network),
+        # not an answer. "No Linux build" is only said when GitHub said so.
+        answered = isinstance(rel, dict) and bool(rel.get("tag_name"))
+        if answered:
             tag = (rel.get("tag_name") or "").lstrip("v")
             published = (rel.get("published_at") or "")[:19]
             for a in rel.get("assets", []):
@@ -445,6 +450,7 @@ def _artcraft_rows() -> list[dict]:
             asset = old.get("asset_name", "")
             size = old.get("size_mb", 0)
             published = published or old.get("added", "")
+        unchecked = not url and not answered
 
         lic = (repo.get("license") or {}).get("spdx_id") or ""
         rows.append({
@@ -455,7 +461,8 @@ def _artcraft_rows() -> list[dict]:
             "version": tag,
             "category": _ARTCRAFT_CATEGORY.get(slug, "Graphics"),
             "kind": "Desktop app",
-            "status": "Available" if url else "No Linux build",
+            "status": ("Available" if url else
+                       "Not checked" if unchecked else "No Linux build"),
             "tags": ["appimage", "desktop"],
             "accent": _ACCENT_CYCLE[i % len(_ACCENT_CYCLE)],
             "initials": label[:2].upper(),
@@ -464,8 +471,12 @@ def _artcraft_rows() -> list[dict]:
             "verified": bool(url),
             "installable": bool(url),
             "install_cmd": "",          # handled in-app, not by a shell command
-            "install_note": "" if url else
-                            "No x86_64 AppImage in the latest release.",
+            "install_note": ("" if url else
+                             "GitHub did not answer when this was listed; it "
+                             "is asked again on the next refresh."
+                             if unchecked else
+                             "No x86_64 AppImage in the latest release."),
+            "unchecked": unchecked,
             "license": "NOASSERTION" if lic == "NOASSERTION" else lic,
             "updated": repo.get("pushed_at") or "",
             "added": published,
@@ -513,14 +524,22 @@ _lock = threading.Lock()
 _cached: list[Plugin] | None = None
 
 
+# A catalogue with rows that could not be checked is retried this soon rather
+# than kept for the full TTL: one rate-limited refresh otherwise reported four
+# installable apps as having no Linux build for six hours.
+RETRY = 10 * 60
+
+
 def _load_market(m: Market, force: bool) -> list[dict]:
     rows = None
-    fresh = m.cache.exists() and time.time() - m.cache.stat().st_mtime < TTL
-    if fresh and not force:
+    age = time.time() - m.cache.stat().st_mtime if m.cache.exists() else TTL
+    if age < TTL and not force:
         try:
             blob = json.loads(m.cache.read_text())
             if isinstance(blob, dict) and blob.get("schema") == SCHEMA:
                 rows = blob.get("rows")
+                if age >= RETRY and any(r.get("unchecked") for r in rows or []):
+                    rows = None
         except (OSError, ValueError):
             rows = None
     if rows is not None:
