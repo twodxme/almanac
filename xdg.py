@@ -41,7 +41,7 @@ def bin_home() -> Path:
 
 # How each terminal takes a command to run. Most use -e; several do not, and
 # guessing wrong opens an empty shell instead of running anything.
-_TERMINALS = (
+_TERMINALS: tuple[tuple[str, list[str]], ...] = (
     ("foot", []),
     ("alacritty", ["-e"]),
     ("kitty", []),

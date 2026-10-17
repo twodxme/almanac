@@ -114,7 +114,8 @@ def package_events(since: float, log_text: str | None = None) -> list[Event]:
                 log_text = fh.read().decode("utf-8", "replace")
         except OSError:
             return []
-    out, current = [], None
+    out: list[Event] = []
+    current: tuple[float, list[str]] | None = None
     for line in log_text.splitlines():
         m = _LINE.match(line)
         if not m:
@@ -137,12 +138,12 @@ def package_events(since: float, log_text: str | None = None) -> list[Event]:
 
 def _summarise(changes: list[str]) -> str:
     """'Updated 5 packages · installed wordcraft' -- verbs in a fixed order."""
-    verbs = {}
+    verbs: dict[str, list[str]] = {}
     for c in changes:
         m = _CHANGE.match(c)
         if m:
             verbs.setdefault(m.group(1), []).append(m.group(2))
-    parts = []
+    parts: list[str] = []
     for verb, label in (("upgraded", "Updated"), ("installed", "Installed"),
                         ("removed", "Removed"), ("downgraded", "Downgraded"),
                         ("reinstalled", "Reinstalled")):

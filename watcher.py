@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import xdg
 
@@ -174,7 +175,7 @@ def main() -> int:
         return 0                    # nothing ships defaults; nothing to guard
 
     loop = GLib.MainLoop()
-    state = {"seen": seen, "pending": 0}
+    state: dict[str, Any] = {"seen": seen, "pending": 0}
 
     def check():
         state["pending"] = 0

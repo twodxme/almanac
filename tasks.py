@@ -60,7 +60,7 @@ class TaskDialog(Adw.Dialog):
 
         self._steps = steps
         self._on_done = on_done
-        self._proc = None
+        self._proc: subprocess.Popen[str] | None = None
         self._cancelled = False
         self._failed = False
 
@@ -177,7 +177,7 @@ class TaskDialog(Adw.Dialog):
             cmd = elevate(argv)
             self.log(f"$ {' '.join(shlex.quote(c) for c in cmd)}")
             try:
-                self._proc = subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL, text=True, bufsize=1,
                     start_new_session=True)
@@ -185,9 +185,10 @@ class TaskDialog(Adw.Dialog):
                 self.log(f"could not start: {exc}")
                 ok = False
                 break
-            for line in self._proc.stdout:
+            self._proc = proc               # kept so Cancel can stop it
+            for line in proc.stdout or ():
                 self.log(line.rstrip("\n"))
-            code = self._proc.wait()
+            code = proc.wait()
             self._proc = None
             if code != 0:
                 self.log(f"— exited {code} —")

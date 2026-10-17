@@ -119,7 +119,7 @@ def packages():
     import inventory
     out = []
     for name, version, update, source, desc, size, extra in _PACKAGES:
-        e = dict(extra)
+        e: dict = dict(extra)
         e.update({"size": f"{size:.2f} MiB", "is_app": name in
                   ("chromium", "firefox", "neovim"),
                   "url": f"https://example.org/{name}",
@@ -354,7 +354,7 @@ def history():
                        "installed wl-clipboard (2.2.1-3)"]),
         h.Event(at(3, 10, 28), h.SNAPSHOT, "Snapshot taken", "“4.0.4-1”"),
     ]
-    by_day = {}
+    by_day: dict = {}
     from datetime import datetime
     for e in sorted(events, key=lambda e: e.ts, reverse=True):
         by_day.setdefault(datetime.fromtimestamp(e.ts).date(), []).append(e)

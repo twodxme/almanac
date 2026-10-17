@@ -274,7 +274,7 @@ def failed_units() -> Finding:
 
 
 def pacnew() -> Finding:
-    files = []
+    files: list[str] = []
     for pat in ("*.pacnew", "*.pacsave"):
         out = _run(["find", "/etc", "-name", pat, "-type", "f"], timeout=40)
         files.extend(f for f in out.splitlines() if f.strip())

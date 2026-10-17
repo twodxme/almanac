@@ -27,10 +27,7 @@ import os
 import re
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:                             # Python < 3.11
-    tomllib = None
+import tomllib
 
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
 CURRENT = STATE / "omarchy/current/theme"
@@ -79,7 +76,7 @@ def load_palette() -> dict:
     app looking like stock Adwaita, not inject broken CSS into every widget.
     """
     path = colors_path()
-    if not path or tomllib is None:
+    if not path:
         return {}
     try:
         with open(path, "rb") as f:
@@ -241,9 +238,9 @@ def theme_name() -> str:
         try:
             out = subprocess.run(["omarchy", "theme", "current"],
                                  capture_output=True, text=True, timeout=10)
-            name = (out.stdout or "").strip().splitlines()
-            if out.returncode == 0 and name and name[0]:
-                return name[0]
+            lines = (out.stdout or "").strip().splitlines()
+            if out.returncode == 0 and lines and lines[0]:
+                return lines[0]
         except (OSError, subprocess.SubprocessError):
             pass
     d = theme_dir()

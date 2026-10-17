@@ -22,10 +22,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:                             # Python < 3.11
-    tomllib = None
+import tomllib
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "almanac"
 ART = CACHE / "themeart"
@@ -56,7 +53,7 @@ def palette_url(repo: str) -> str:
 def fetch_palette(repo: str) -> dict:
     """The theme's own colours. Served raw, so it costs no API quota."""
     url = palette_url(repo)
-    if not url or tomllib is None:
+    if not url:
         return {}
     try:
         req = urllib.request.Request(url, headers=UA)

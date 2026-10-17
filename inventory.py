@@ -13,6 +13,7 @@ import re
 import time
 import subprocess
 from dataclasses import dataclass, field
+from typing import Any
 from pathlib import Path
 
 # Runtime data, deliberately not where the code lives.
@@ -201,7 +202,8 @@ def _package_info(names: list[str]) -> dict[str, dict]:
     if not names:
         return {}
     out = _run(["pacman", "-Qi", *names], timeout=60)
-    info, current, field = {}, None, None
+    info: dict[str, dict] = {}
+    current, field = None, None
     for line in out.splitlines():
         if not line.strip():
             current, field = None, None
@@ -626,6 +628,7 @@ def _git_behind(repo: Path, cache: dict) -> dict:
                               capture_output=True, text=True, timeout=timeout)
 
     try:
+        result: dict[str, Any]
         if git("rev-parse", "--abbrev-ref", "@{upstream}").returncode != 0:
             result = {"tracked": False}
         else:

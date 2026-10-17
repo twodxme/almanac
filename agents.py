@@ -258,8 +258,8 @@ def detect(check_updates: bool = True) -> list:
 
     from concurrent.futures import ThreadPoolExecutor
 
-    present = [(spec, shutil.which(spec.id)) for spec in KNOWN]
-    present = [(spec, path) for spec, path in present if path]
+    present = [(spec, path) for spec in KNOWN
+               if (path := shutil.which(spec.id))]
     if not present:
         return []
 

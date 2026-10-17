@@ -1,6 +1,7 @@
 # Every push and pull request, on a clean Arch Linux: the tests, a lint for
-# names that do not exist (two shipped crashes were exactly that), the
-# desktop and AppStream metadata, and a real package build of this commit.
+# names that do not exist (two shipped crashes were exactly that), a type
+# check, the desktop and AppStream metadata, and a real package build of
+# this commit.
 name: CI
 
 on:
@@ -19,7 +20,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed \
             base-devel git python gtk4 libadwaita python-gobject python-cairo \
-            pacman-contrib polkit xdg-utils ruff appstream desktop-file-utils
+            pacman-contrib polkit xdg-utils ruff mypy appstream desktop-file-utils
 
       - uses: actions/checkout@v4
         with:
@@ -35,6 +36,11 @@ jobs:
 
       - name: Lint
         run: ruff check --select F821,F811,F823 --output-format github *.py
+
+      - name: Type check
+        # Settings in mypy.ini. The system interpreter, so pycairo's own
+        # type information is found.
+        run: mypy
 
       - name: Metadata
         run: |

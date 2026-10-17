@@ -306,7 +306,7 @@ def hooks() -> list[Entry]:
                 # session start, which is exactly the kind of rot this exists
                 # to surface.
                 m = re.search(r"(/[^\s'\"]+)", cmd)
-                missing = bool(m) and not os.path.exists(m.group(1))
+                missing = m is not None and not os.path.exists(m.group(1))
                 out.append(Entry(
                     kind=HOOK, name=event,
                     detail=cmd,

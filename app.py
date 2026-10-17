@@ -36,6 +36,7 @@ import time  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
 import appimage as appimage_mod  # noqa: E402
 import inventory
@@ -408,7 +409,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     #   search   placeholder, or None when the box does nothing here
     #   update   show the "Update all" button
     #   sort     show the sort menu
-    PAGES = {
+    PAGES: dict[str, dict[str, Any]] = {
         "featured":    dict(view="featured", title=_("Featured"),
                             search=None, update=False, sort=False,
                             filters=False),
@@ -490,8 +491,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         sidebar_list.add_css_class("navigation-sidebar")
         sidebar_list.connect("row-selected", self._on_sidebar_selected)
 
-        self.group_rows = {}
-        self.group_members = {}
+        self.group_rows: dict[str, Any] = {}
+        self.group_members: dict[str, list] = {}
         for gkey, glabel, items in self.GROUPS:
             if glabel is None:
                 self.group_rows[gkey] = None
@@ -767,7 +768,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         split.set_sidebar_width_fraction(0.24)
         split.set_min_sidebar_width(205)
         split.set_max_sidebar_width(260)
-        self.split = split
+        self.split: Any = split
         self.set_content(split)
 
         # Below ~760px the sidebar costs more than it gives: 205 of 480 pixels
@@ -2226,7 +2227,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # fires a handful of times; coalesce into one restyle.
         if getattr(self, "_theme_timer", None):
             GLib.source_remove(self._theme_timer)
-        self._theme_timer = GLib.timeout_add(250, self._theme_tick)
+        self._theme_timer: int | None = GLib.timeout_add(250, self._theme_tick)
 
     def _theme_tick(self):
         self._theme_timer = None
@@ -2244,7 +2245,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         else:
             self.busy.stop()
 
-    def _summarize(self, text: str, page: str = None):
+    def _summarize(self, text: str, page: str | None = None):
         """The standing one-line description of what is on screen.
 
         Scoped to a page because the loaders are asynchronous: the package
@@ -3637,10 +3638,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._ai_pending = len(specs)
         self._ai_show(self._ai_survey, final=False)
 
-        for index, (title, desc, fn) in enumerate(specs):
-            self._thumb_pool.submit(
-                lambda i=index, t=title, f=fn: GLib.idle_add(
-                    self._ai_group_done, i, t, ai.load_group(f, t)))
+        def load(i: int, t: str, f) -> None:
+            GLib.idle_add(self._ai_group_done, i, t, ai.load_group(f, t))
+
+        for index, (title, _desc, fn) in enumerate(specs):
+            self._thumb_pool.submit(load, index, title, fn)
 
     def _ai_group_done(self, index, title, entries):
         if index < len(self._ai_survey):
@@ -4457,7 +4459,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         Build tooling and debug packages are excluded: the next AUR build pulls
         rust straight back, so removing it is churn rather than cleanup.
         """
-        safe, kept = [], []
+        safe: list[str] = []
+        kept: list[str] = []
         for i in range(self.store.get_n_items()):
             it = self.store.get_item(i)
             if it.source != inventory.ORPHAN:

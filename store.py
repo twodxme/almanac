@@ -31,6 +31,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -312,8 +313,8 @@ class Market:
     name: str
     site: str
     catalog_url: str = ""
-    mapper: object = None               # raw entry -> dict of Plugin fields
-    loader: object = None               # or: build the rows itself
+    mapper: Callable[[dict], dict] | None = None   # raw entry -> Plugin fields
+    loader: Callable[[], list[dict]] | None = None  # or: build the rows itself
     root: str = "plugins"               # key holding the entry list
     listing: str = "?plugin={id}"       # how the site addresses one entry
     # The account this marketplace publishes under, when it is a vendor
@@ -345,6 +346,7 @@ class Market:
         rows = data.get(self.root) if isinstance(data, dict) else data
         out = []
         for e in rows or []:
+            assert self.mapper is not None, f"{self.id}: no mapper or loader"
             row = self.mapper(e)
             if row.get("id"):
                 row["market"] = self.id
@@ -425,7 +427,8 @@ def _artcraft_rows() -> list[dict]:
     for i, slug in enumerate(slugs):
         label = names[slug]
         repo = repos.get(slug, {})
-        tag, published, url, asset, size = "", "", "", "", 0
+        tag, published, url, asset = "", "", "", ""
+        size: float = 0
         rel = releases.get(slug) or {}
         # A release with no tag is a lookup that failed (rate limit, network),
         # not an answer. "No Linux build" is only said when GitHub said so.
@@ -570,7 +573,7 @@ def catalog(force: bool = False) -> list[Plugin]:
     with _lock:
         if _cached is not None and not force:
             return _cached
-        out = []
+        out: list[Plugin] = []
         for m in enabled_markets():
             out.extend(Plugin(**r) for r in _load_market(m, force))
         _cached = out
