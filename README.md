@@ -101,14 +101,34 @@ Stock themes that ship with Omarchy are marked `Official` and offer **Apply**;
 community ones you installed also offer **Remove**. Same card, same slots, same
 vocabulary as every other listing.
 
-### Updates — one list for six package managers
+### Updates — one list for everything that updates
 
 <img src="docs/screenshots/updates.png" alt="Updates" width="820">
 
-Repo, AUR, Flatpak, AppImage, local git checkouts, AI agent CLIs and Almanac
-itself, with versions-behind counts, security flagging, and per-row actions.
-Vendor logos are resolved from each package's own upstream URL, which `pacman`
-already records.
+Repo, AUR, Flatpak, AppImage, local git checkouts, version-managed developer
+tools, AI agent CLIs and Almanac itself — with versions-behind counts, security
+flagging, and per-row actions. Vendor logos are resolved from each package's own
+upstream URL, which `pacman` already records.
+
+| Source | Where it comes from | Updated with |
+|---|---|---|
+| Repositories | `pacman` + `checkupdates` | `pacman` |
+| AUR | `yay -Qua` | `yay`, building locally |
+| Omarchy | the `omarchy` packages themselves | `omarchy update` |
+| Flatpak | `flatpak` | `flatpak` |
+| AppImages | the `.upd_info` each AppImage embeds | downloaded in place, old build kept |
+| Local builds | git checkouts under `~/.config/omarchy/plugins` | `git pull --ff-only` |
+| Dev tools | `mise ls` — `gh`, `uv`, `node` and friends | `mise upgrade` |
+| AI agents | `mise`, or each agent's own updater | whichever owns it |
+| Almanac | its own checkout | `git pull --ff-only` |
+
+How a thing updates is **detected, not assumed**. A shimmed `mise` binary
+resolves to `/usr/bin/mise`, which looks nothing like a mise install path — so
+asking the filesystem gets it wrong, and asking `mise` gets it right.
+
+Versions-behind counts from the first component that actually differs, and
+calendar versions are not counted at all: `20181225 → 20261002` is a date, not
+79,777 releases.
 
 Install and removal run **inside the app**. Removal still shows you the full
 `pacman -Rs` preview, including the dependencies it would take with it, before
