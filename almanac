@@ -1,0 +1,4 @@
+#!/bin/bash
+# Almanac — a catalogue of everything installed on this machine: where each
+# thing came from, how old it is, and whether it still has a maintainer.
+exec python3 "$HOME/.local/share/almanac/app.py" "$@"
