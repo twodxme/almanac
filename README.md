@@ -126,6 +126,20 @@ How a thing updates is **detected, not assumed**. A shimmed `mise` binary
 resolves to `/usr/bin/mise`, which looks nothing like a mise install path — so
 asking the filesystem gets it wrong, and asking `mise` gets it right.
 
+**What you just updated leaves the list on the next scan.** Only the upstream
+side of a check is cached — `mise outdated`, `git fetch`, GitHub releases —
+because that is the part that costs a network round trip. What is installed is
+read live every time: `mise ls` takes milliseconds, and a commit count against
+already-fetched refs never touches the network. **Update all** rescans by
+itself when its terminal closes.
+
+A repository update can be visible before it is installable. `checkupdates`
+syncs a private copy of the package database, so it sees releases the system
+copy has not heard of yet; installing one of those on its own would mean
+`pacman -Sy` for a single package, the partial upgrade Arch warns against.
+For those rows, **Update** says so and offers **Update all** instead of running
+a command that would skip the package and report success.
+
 Versions-behind counts from the first component that actually differs, and
 calendar versions are not counted at all: `20181225 → 20261002` is a date, not
 79,777 releases.
@@ -161,11 +175,13 @@ vanished upstream, trash and disk headroom.
 
 ## Install
 
-**From the AUR** (recommended — Almanac then appears in its own Updates list
-as a package, and defers its updates to `pacman`):
+**As a package** (recommended — Almanac then appears in its own Updates list
+as a package, and defers its updates to `pacman`). It is not on the AUR yet;
+the `PKGBUILD` in this repository builds it, and runs the tests while doing so:
 
 ```bash
-yay -S almanac-git
+git clone https://github.com/twodxme/almanac && cd almanac
+makepkg -si
 ```
 
 **From source:**
@@ -272,7 +288,7 @@ better than I can.
 python3 test_app.py
 ```
 
-28 tests, weighted toward the destructive paths — removal, orphan cleanup,
+51 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

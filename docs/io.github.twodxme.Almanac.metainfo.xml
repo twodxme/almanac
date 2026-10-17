@@ -96,6 +96,13 @@
   </requires>
 
   <releases>
+    <release version="1.0.1" date="2026-10-16">
+      <description>
+        <p>Updates you have already installed no longer stay in the updates list,
+        and a repository update that needs a full upgrade says so instead of
+        silently doing nothing.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-10-16">
       <description>
         <p>First release.</p>
