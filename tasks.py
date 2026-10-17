@@ -31,7 +31,13 @@ from gi.repository import Adw, GLib, Gtk, Pango  # noqa: E402
 
 
 def needs_root(argv: list[str]) -> bool:
-    return bool(argv) and argv[0] in ("pacman", "paccache", "pacman-key")
+    if not argv:
+        return False
+    # The system journal is root's. Vacuumed as the user, journalctl cannot
+    # delete a single file, says "freed 0B" and still exits 0.
+    if argv[0] == "journalctl":
+        return any(a.startswith("--vacuum") for a in argv)
+    return argv[0] in ("pacman", "paccache", "pacman-key")
 
 
 def elevate(argv: list[str]) -> list[str]:

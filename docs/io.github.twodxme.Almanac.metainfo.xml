@@ -96,6 +96,13 @@
   </requires>
 
   <releases>
+    <release version="1.0.2" date="2026-10-16">
+      <description>
+        <p>Health check cleanups that cannot free anything no longer stay listed:
+        the package cache is rated by what a trim would free, and the journal
+        vacuum runs with the permission it needs.</p>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-10-16">
       <description>
         <p>Updates you have already installed no longer stay in the updates list,

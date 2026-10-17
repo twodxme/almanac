@@ -165,11 +165,17 @@ with neither says so instead of pretending.
 
 <img src="docs/screenshots/health.png" alt="Health check" width="820">
 
-Twelve read-only checks, each offering the single command that acts on what it
+Fourteen read-only checks, each offering the single command that acts on what it
 found: package cache, journal size, AUR build cache, orphans (with build
 tooling deliberately kept), unmerged `.pacnew` files, failed services, broken
 launcher entries, dead symlinks, AppImage rollback copies, AUR packages that
-vanished upstream, trash and disk headroom.
+vanished upstream, package file integrity, session logs, trash and disk
+headroom.
+
+A cleanup is judged by what it would free, not by how big the thing is. A
+trimmed package cache is still gigabytes — two versions of everything
+installed is what makes a downgrade possible — so it is rated on paccache's own
+dry run, and clears once there is nothing left to trim.
 
 ---
 
@@ -288,7 +294,7 @@ better than I can.
 python3 test_app.py
 ```
 
-51 tests, weighted toward the destructive paths — removal, orphan cleanup,
+54 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

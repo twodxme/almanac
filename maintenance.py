@@ -87,16 +87,42 @@ def fmt_size(mb: float) -> str:
 
 # ---- checks ------------------------------------------------------------------
 
+_SAVED = re.compile(r"disk space saved:\s*([\d.]+)\s*([KMGT]?)i?B")
+
+
+def _paccache_reclaimable(*flags: str) -> float:
+    """Megabytes a paccache run with `flags` would free, from its dry run."""
+    m = _SAVED.search(_run(["paccache", "-d", *flags]))
+    if not m:
+        return 0.0                      # "no candidate packages found"
+    mult = {"": 1 / 1048576, "K": 1 / 1024, "M": 1, "G": 1024, "T": 1048576}
+    return float(m.group(1)) * mult[m.group(2)]
+
+
 def pacman_cache() -> Finding:
     mb, n = _du_mb(PACMAN_CACHE)
-    sev = CRIT if mb > 4096 else WARN if mb > 1024 else OK
+    # Judged on what the fix would free, not on the cache's size. A trimmed
+    # cache is still gigabytes -- two versions of every installed package --
+    # and rating it by size kept it critical after a trim that had nothing
+    # left to remove.
+    free = _paccache_reclaimable("-k2") + _paccache_reclaimable("-uk0")
+    if free < 256:
+        return Finding(
+            id="pacman-cache",
+            title="Package cache",
+            detail=(f"{fmt_size(mb)} in {n} downloaded packages, already "
+                    f"trimmed to the two newest versions of each installed "
+                    f"package. That much is what makes a downgrade possible."),
+            severity=OK, count=n, size_mb=mb)
+    sev = CRIT if free > 4096 else WARN if free > 1024 else INFO
     return Finding(
         id="pacman-cache",
         title="Package cache",
-        detail=(f"{fmt_size(mb)} in {n} downloaded packages. Keeping a couple "
-                f"of versions makes a downgrade possible; keeping all of them "
-                f"since install does not."),
-        severity=sev, count=n, size_mb=mb,
+        detail=(f"{fmt_size(mb)} in {n} downloaded packages, {fmt_size(free)} "
+                f"of it older versions and packages no longer installed. "
+                f"Keeping a couple of versions makes a downgrade possible; "
+                f"keeping all of them since install does not."),
+        severity=sev, count=n, size_mb=free,
         fix_label="Trim to 2 versions",
         # -rk2 keeps the two newest of each installed package; -ruk0 drops
         # every cached version of packages no longer installed, which can
@@ -145,7 +171,8 @@ def journal() -> Finding:
         title="Systemd journal",
         detail=(f"{fmt_size(mb)} of logs. Useful for diagnosing the recent "
                 f"past; months of it rarely is."),
-        severity=sev, size_mb=mb,
+        # What the vacuum frees, which is what the reclaimable total adds up.
+        severity=sev, size_mb=max(mb - 500, 0.0),
         fix_label="Vacuum to 500 MB",
         fix=["journalctl", "--vacuum-size=500M"],
         fix_note="Deletes the oldest journal files until 500 MB remains.")

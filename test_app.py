@@ -592,6 +592,39 @@ class UpdatesClearAfterUpdating(unittest.TestCase):
         win.on_update_all.assert_called_once()
 
 
+class CleanupsThatCannotHelp(unittest.TestCase):
+    """A finding must clear once its fix has done everything it can."""
+
+    def test_a_trimmed_package_cache_is_not_a_finding(self):
+        import maintenance
+        # 4.4 GB, but every byte is the two newest versions of something
+        # installed: paccache has no candidates and the button would do nothing.
+        with mock.patch.object(maintenance, "_du_mb", return_value=(4500, 522)), \
+             mock.patch.object(maintenance, "_run",
+                               return_value="==> no candidate packages found for pruning"):
+            f = maintenance.pacman_cache()
+        self.assertEqual(f.severity, maintenance.OK)
+        self.assertFalse(f.actionable)
+
+    def test_cache_severity_follows_what_a_trim_would_free(self):
+        import maintenance
+        dry = "==> finished dry run: 26 candidates (disk space saved: 1.23 GiB)"
+        with mock.patch.object(maintenance, "_du_mb", return_value=(4500, 522)), \
+             mock.patch.object(maintenance, "_run", return_value=dry):
+            f = maintenance.pacman_cache()
+        # Two dry runs (-k2 and -uk0), each 1.23 GiB here.
+        self.assertAlmostEqual(f.size_mb, 2 * 1.23 * 1024, places=0)
+        self.assertEqual(f.severity, maintenance.WARN)
+        self.assertTrue(f.actionable)
+
+    def test_journal_vacuum_runs_as_root(self):
+        import tasks
+        # As the user it deletes nothing, prints "freed 0B" and exits 0.
+        self.assertEqual(tasks.elevate(["journalctl", "--vacuum-size=500M"])[0],
+                         "pkexec")
+        self.assertFalse(tasks.needs_root(["journalctl", "--disk-usage"]))
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
