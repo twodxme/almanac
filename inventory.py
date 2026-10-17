@@ -448,6 +448,19 @@ def versions_behind(current: str, latest: str) -> tuple[int, str]:
     a, b = nums(current), nums(latest)
     if not a or not b:
         return (0, "")
+    # Calendar versions are not release counters. Both the packed form
+    # (20181225 -> 20261002, which differenced to "79777 major behind") and
+    # the dotted form (2026.10.16 -> 2026.10.17, which read as "1 patch")
+    # describe when a build was cut, not how many releases were missed.
+    def calendar(v: list[int]) -> bool:
+        if v[0] > 100000:                       # 20261002
+            return True
+        return (1980 <= v[0] <= 2100           # 2026.10.17
+                and len(v) >= 2 and 1 <= v[1] <= 12
+                and (len(v) < 3 or 1 <= v[2] <= 31))
+
+    if calendar(a) or calendar(b):
+        return (0, "")
     names = ("major", "minor", "patch")
     for i in range(max(len(a), len(b))):
         x = a[i] if i < len(a) else 0

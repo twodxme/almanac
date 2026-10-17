@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.png" alt="" width="104">
+
 # Almanac
 
 **Everything installed on this machine — where it came from, how old it is,

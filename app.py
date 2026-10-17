@@ -530,7 +530,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         sidebar_page = Adw.ToolbarView()
         sidebar_header = Adw.HeaderBar()
-        sidebar_header.set_title_widget(Gtk.Label(label="Almanac"))
+        # The app's own mark, where someone actually looks at it. It was
+        # registered with the desktop file and the window manager and so
+        # appeared only in a launcher and an alt-tab switcher.
+        brand = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        mark = Gtk.Image(icon_name="io.github.twodxme.Almanac", pixel_size=18)
+        wordmark = Gtk.Label(label="Almanac")
+        wordmark.add_css_class("heading")
+        brand.append(mark)
+        brand.append(wordmark)
+        sidebar_header.set_title_widget(brand)
         sidebar_header.set_show_end_title_buttons(False)
         sidebar_page.add_top_bar(sidebar_header)
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)

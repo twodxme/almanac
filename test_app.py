@@ -39,6 +39,14 @@ class VersionsBehind(unittest.TestCase):
         n, kind = inventory.versions_behind("1:1.2.96.518-2", "1:1.3.4.258-1")
         self.assertEqual((n, kind), (1, "minor"))
 
+    def test_date_stamped_versions_are_not_counted_as_releases(self):
+        # 20181225 -> 20261002 differenced as a release count gives 79,777,
+        # which is a fact about calendars, not about software.
+        self.assertEqual(
+            inventory.versions_behind("20181225-1", "20261002.r63-3"), (0, ""))
+        self.assertEqual(
+            inventory.versions_behind("2026.10.16", "2026.10.17"), (0, ""))
+
     def test_unparseable_is_silent_rather_than_wrong(self):
         self.assertEqual(inventory.versions_behind("", "1.0"), (0, ""))
         self.assertEqual(inventory.versions_behind("git-abc123", "git-def456"), (0, ""))
