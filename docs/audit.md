@@ -13,7 +13,7 @@ The full rendered version with severities and before/after figures is
 - **One primary action**, in the header, whose label and handler come from the
   current page. Never a second one in a page toolbar.
 - **Toasts for events** ("Removed X", "Could not reach the remote"); the
-  **header subtitle for standing state** ("130 installed · 31 with updates").
+  **header subtitle for standing state** (how much is installed, how much is stale).
   Summaries are scoped to the page that owns them, because loaders are
   asynchronous and one page's result must not overwrite another's.
 - **Secondary pages** (Featured, AI, Health check) share one layout: full

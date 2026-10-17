@@ -380,7 +380,7 @@
         <div class="head"><h3>Four status labels in four positions</h3>
           <span class="status closed">Closed</span></div>
         <p>Each page owned a dim label in a different place. Forty-seven messages went to them,
-          mixing standing state ("129 installed") with events ("Could not remove X") — so failures
+          mixing standing state (how much is installed) with events ("Could not remove X") — so failures
           were written to a grey line the user had already looked away from.</p>
         <div class="evidence"><span class="was">4 labels · 47 set_text calls</span>
 <span class="now">0 labels · 31 toasts · 17 scoped summaries</span></div>
@@ -441,11 +441,11 @@ _plain(title=…, subtitle=BAD)          <span class="now">→ literal</span></d
     <div class="finding" data-sev="crit">
       <div class="stripe"></div>
       <div class="body">
-        <div class="head"><h3>A row 209 commits behind offered nothing at all</h3>
+        <div class="head"><h3>A local checkout far behind upstream offered nothing at all</h3>
           <span class="status closed">Closed</span></div>
-        <p><code>lock-explorer</code> is a local checkout with uncommitted edits. The pull button is
-          correctly hidden — the pull would be refused — but its action menu was built only from a
-          project URL it doesn't have, so the menu was empty too. The row had a problem, no
+        <p>A local git checkout with uncommitted edits gets no pull button — the pull is
+          refused either way. Its action menu, though, was built only from a project URL such a
+          repository does not have, so the menu came up empty too. The row had a problem, no
           affordance, and no explanation.</p>
         <div class="fix"><b>Fix</b>Local checkouts always get a menu: open the repository, show the
           diff, and — when dirty and behind — stash and update. Stash rather than discard, because the

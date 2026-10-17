@@ -12,8 +12,6 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 ![libadwaita 1.9](https://img.shields.io/badge/libadwaita-1.9%2B-86d39b.svg)
 ![Arch](https://img.shields.io/badge/Arch-pacman%20%7C%20AUR-7dd7dc.svg)
 
-<img src="docs/screenshots/featured.png" alt="Almanac's Featured page: the active Omarchy wallpaper as a hero, with what needs attention below" width="900">
-
 </div>
 
 ---
@@ -23,7 +21,7 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 `pacman` knows about packages. It does not know about the AppImage in
 `~/.local/share`, the plugin you cloned from a GitHub comment, the Claude Code
 binary `mise` installed last week, the MCP server that stopped authenticating,
-or the 4.5 GB of package cache you have been carrying since install.
+or the gigabytes of package cache you have been carrying since install.
 
 Those live in six different places with six different update mechanisms and no
 single thing that looks at all of them. Almanac is that thing.
@@ -40,8 +38,6 @@ was reviewed.
 
 ### Featured — what needs you today
 
-<img src="docs/screenshots/featured.png" alt="Featured" width="820">
-
 The landing page, assembled from live data rather than an editorial list that
 someone has to keep writing:
 
@@ -56,8 +52,6 @@ The hero is your own Omarchy wallpaper, so it re-skins with your theme and
 downloads nothing.
 
 ### App Store — plugins, apps and themes, with provenance
-
-<img src="docs/screenshots/app-store.png" alt="App Store" width="820">
 
 Three catalogues in one grid, each entry carrying where it actually came from:
 
@@ -87,8 +81,6 @@ Sort and filter by provenance, publisher, marketplace, category or stars.
 
 ### Themes — what the theme actually looks like
 
-<img src="docs/screenshots/themes.png" alt="Themes" width="820">
-
 GitHub's social card shows a repository, which tells you nothing about the only
 question you have. Every Omarchy theme publishes `colors.toml`, so Almanac
 fetches it — from `raw.githubusercontent.com`, which costs no API quota — and
@@ -100,8 +92,6 @@ community ones you installed also offer **Remove**. Same card, same slots, same
 vocabulary as every other listing.
 
 ### Updates — one list for six package managers
-
-<img src="docs/screenshots/updates.png" alt="Updates" width="820">
 
 Repo, AUR, Flatpak, AppImage, local git checkouts, AI agent CLIs and Almanac
 itself, with versions-behind counts, security flagging, and per-row actions.
@@ -115,11 +105,6 @@ dropped.
 
 ### AI — the estate no package manager tracks
 
-<img src="docs/screenshots/ai.png" alt="The AI page, showing installed agent CLIs with their versions and update state" width="820">
-
-*Above: the Harnesses section. Below it on the same page sit your MCP servers
-with live connection health, skills, plugins, marketplaces and hooks.*
-
 Agent CLIs (Claude Code, Codex, Gemini, opencode, Copilot, Cursor, Crush,
 Goose, Aider, Qwen, Amp, Droid), MCP servers with live health, skills, plugins,
 marketplaces and hooks — with each vendor's own mark, fetched from that vendor.
@@ -129,8 +114,6 @@ updates through `mise`, one with its own `update` subcommand uses that, and one
 with neither says so instead of pretending.
 
 ### Health check — what six gigabytes of nothing looks like
-
-<img src="docs/screenshots/health.png" alt="Health check" width="820">
 
 Twelve read-only checks, each offering the single command that acts on what it
 found: package cache, journal size, AUR build cache, orphans (with build
