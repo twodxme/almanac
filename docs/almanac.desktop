@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Almanac
+GenericName=Software Catalogue
+Comment=Everything installed on this machine, where it came from, and what needs attention
+Keywords=package;update;software;store;plugin;theme;maintenance;AppImage;AUR;
+Exec=almanac
+Icon=system-software-install
+Terminal=false
+Categories=System;PackageManager;Settings;
+StartupNotify=true
+StartupWMClass=io.github.twodxme.Almanac

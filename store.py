@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import subprocess
 import threading
@@ -324,6 +325,8 @@ class Market:
         return CACHE / f"catalog-{self.id}.json"
 
     def listing_url(self, p: Plugin) -> str:
+        if not self.listing:
+            return p.repo
         return self.site + self.listing.format(id=p.id)
 
     def fetch(self) -> list[dict]:
@@ -581,8 +584,13 @@ def annotate(plugins: list[Plugin]) -> None:
     """Mark what is already on the system, so cards can say so."""
     have = installed_ids()
     images = installed_appimages()
+    themes = installed_themes() if any(
+        p.install_kind == "theme" for p in plugins) else set()
     for p in plugins:
-        if p.install_kind == "appimage":
+        if p.install_kind == "theme":
+            p.installed = p.name.lower() in themes
+            p.enabled = p.installed
+        elif p.install_kind == "appimage":
             p.installed = p.id in images
             p.enabled = p.installed
             p.local_version = images.get(p.id, "")
@@ -738,3 +746,107 @@ def fetch_thumb(p: Plugin, detail: bool = False) -> Path | None:
         return dest
     except Exception:
         return None                     # a missing image is not an error
+
+
+# ---- Omarchy themes ----------------------------------------------------------
+# Themes have no catalogue of their own: omarchythemes.com renders client-side
+# and ships no JSON, so the authoritative list is the `omarchy-theme` topic on
+# GitHub, which is what theme authors already tag their repositories with.
+#
+# A theme is installed with `omarchy theme install <git-url>` and applied with
+# `omarchy theme set <name>`, so unlike a plugin the install and the switch are
+# two different actions -- which is why `install_kind` distinguishes them.
+THEME_TOPIC = "omarchy-theme"
+THEME_PAGES = 4                         # 100 per page, stars-ordered
+
+# Repositories that carry the topic but are not themes: tooling, lists, and
+# collections for other bars. Checked against the name, not the description,
+# because descriptions mention "theme" constantly and legitimately.
+_NOT_A_THEME = ("awesome-", "-hook", "theme-manager", "theme-switcher",
+                "waybar-themes", "-templates", "themes-collection",
+                "theme-builder", "-generator", "dotfiles")
+
+
+def _looks_like_theme(repo: dict) -> bool:
+    name = (repo.get("name") or "").lower()
+    if any(bad in name for bad in _NOT_A_THEME):
+        return False
+    # The convention is omarchy-<something>-theme or <something>-omarchy-theme.
+    return "theme" in name or "omarchy" in name
+
+
+def _theme_rows() -> list[dict]:
+    import ghcache
+
+    seen, rows = set(), []
+    for page in range(1, THEME_PAGES + 1):
+        data = ghcache.get_json(
+            f"{'https://api.github.com'}/search/repositories"
+            f"?q=topic:{THEME_TOPIC}&sort=stars&order=desc"
+            f"&per_page=100&page={page}")
+        items = (data or {}).get("items") or []
+        if not items:
+            break
+        for r in items:
+            full = r.get("full_name", "")
+            if full in seen or not _looks_like_theme(r):
+                continue
+            seen.add(full)
+            owner = (r.get("owner") or {}).get("login", "")
+            slug = (r.get("name") or "").lower()
+            # omarchy-lumon-theme -> Lumon
+            pretty = re.sub(r"^omarchy[-_]?|[-_]?theme$|[-_]?omarchy$", "", slug)
+            pretty = pretty.replace("-", " ").replace("_", " ").strip().title()
+            rows.append({
+                "id": f"theme.{owner.lower()}.{slug}",
+                "name": pretty or slug,
+                "description": r.get("description") or "",
+                "author": owner,
+                "version": "",
+                "category": "Appearance",
+                "kind": "Theme",
+                "status": "Available",
+                "tags": ["theme"] + [t for t in (r.get("topics") or [])
+                                     if t not in ("omarchy", THEME_TOPIC)][:2],
+                "accent": "", "initials": (pretty or slug)[:2].upper(),
+                "repo": r.get("html_url", ""),
+                "stars": int(r.get("stargazers_count") or 0),
+                "verified": False,
+                "installable": True,
+                "install_cmd": f"omarchy theme install {r.get('clone_url', '')}",
+                "install_note": "",
+                "license": ((r.get("license") or {}).get("spdx_id") or ""),
+                "updated": r.get("pushed_at") or "",
+                "added": r.get("created_at") or "",
+                # GitHub renders a social card per repository; for a theme
+                # that is usually the author's own screenshot.
+                "thumb": f"1/{owner}/{r.get('name')}",
+                "preview": f"1/{owner}/{r.get('name')}",
+                "built_in": False,
+                "install_kind": "theme",
+                "source_type": "community",
+                "source_url": r.get("html_url", ""),
+                "upstream_status": "passed",
+                "upstream_checked_at": r.get("pushed_at") or "",
+            })
+    return rows
+
+
+MARKETS["themes"] = Market(
+    id="themes",
+    name="Omarchy Themes",
+    site="https://opengraph.githubassets.com/",
+    loader=_theme_rows,
+    listing="",
+)
+
+
+def installed_themes() -> set:
+    """Theme names omarchy already knows about, lowercased for matching."""
+    try:
+        out = subprocess.run(["omarchy", "theme", "list"],
+                             capture_output=True, text=True, timeout=20)
+        return {line.strip().lower() for line in out.stdout.splitlines()
+                if line.strip()}
+    except Exception:
+        return set()

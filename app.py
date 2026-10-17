@@ -32,6 +32,8 @@ import store as store_mod  # noqa: E402
 import tasks  # noqa: E402
 import maintenance  # noqa: E402
 import selfupdate  # noqa: E402
+import theming  # noqa: E402
+import featured  # noqa: E402
 import ai  # noqa: E402
 import autoupdate  # noqa: E402
 import ghcache  # noqa: E402
@@ -115,6 +117,30 @@ _CSS = b"""
   font-weight: bold;
 }
 .store-stars { font-size: 0.72rem; }
+.stats { font-size: 0.74rem; }
+.stat-key { opacity: 0.62; }
+.stat-val {
+  font-weight: bold;
+  font-feature-settings: "tnum";
+}
+.hero { border-radius: 12px; }
+/* The scrim is what keeps the text legible over an arbitrary wallpaper --
+   dark at the bottom where the type sits, clear at the top. */
+.hero-scrim {
+  background: linear-gradient(to top,
+              alpha(#000, 0.78) 0%,
+              alpha(#000, 0.42) 45%,
+              alpha(#000, 0.10) 100%);
+}
+.hero-head {
+  font-size: 1.45rem;
+  font-weight: bold;
+  color: #ffffff;
+}
+.hero-sub {
+  font-size: 0.86rem;
+  color: alpha(#ffffff, 0.82);
+}
 .store-prov {
   font-size: 0.68rem;
   opacity: 0.75;
@@ -295,6 +321,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # keeping it current are what the app is for, and a header above them
         # would rank them as peers of "Sources".
         ("primary", None, (
+            ("featured", "Featured", "starred-symbolic"),
             ("discover", "App Store", "software-store-symbolic"),
             ("updates", "Updates", "software-update-available-symbolic"),
             (inventory.AGENT, "AI", "applications-science-symbolic"),
@@ -329,6 +356,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
     #   update   show the "Update all" button
     #   sort     show the sort menu
     PAGES = {
+        "featured":    dict(view="featured", title="Featured",
+                            search=None, update=False, sort=False,
+                            filters=False),
         "discover":    dict(view="store", title="App Store",
                             search="Search plugins and apps…",
                             update=False, sort=False, filters=True),
@@ -358,10 +388,26 @@ class AlmanacWindow(Adw.ApplicationWindow):
         Gtk.StyleContext.add_provider_for_display(
             self.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
+        # The Omarchy palette is applied over our own stylesheet, because it
+        # redefines the named colours our stylesheet is written against.
+        self._theme_provider = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(
+            self.get_display(), self._theme_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        self._apply_theme()
+        self._theme_monitors = theming.watch(self._on_theme_changed)
+
         self.filter_key = "all"
         self.query = ""
 
         self.store = Gio.ListStore(item_type=AppItem)
+
+        # Shared image infrastructure. Declared here because every page
+        # builder below may decode an icon or queue a fetch, and a page
+        # builder that runs before its cache exists fails at construction.
+        self._tex_cache = {}
+        self._thumb_pool = ThreadPoolExecutor(max_workers=6,
+                                              thread_name_prefix="thumb")
 
         # Filter -> sort -> selection. Filtering first means the sorter only
         # ever walks the rows actually on screen.
@@ -440,12 +486,25 @@ class AlmanacWindow(Adw.ApplicationWindow):
         sidebar_scroll.set_child(sidebar_list)
         sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
+        # A stats footer. The sidebar's bottom half is empty on any normal
+        # window height, and these are the numbers you would otherwise open a
+        # terminal for.
+        self.stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                             margin_start=14, margin_end=14,
+                             margin_top=10, margin_bottom=12)
+        self.stats.add_css_class("stats")
+        sidebar_scroll.set_vexpand(True)
+
         sidebar_page = Adw.ToolbarView()
         sidebar_header = Adw.HeaderBar()
         sidebar_header.set_title_widget(Gtk.Label(label="Almanac"))
         sidebar_header.set_show_end_title_buttons(False)
         sidebar_page.add_top_bar(sidebar_header)
-        sidebar_page.set_content(sidebar_scroll)
+        sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        sidebar_box.append(sidebar_scroll)
+        sidebar_box.append(Gtk.Separator())
+        sidebar_box.append(self.stats)
+        sidebar_page.set_content(sidebar_box)
 
         # --- content header: one primary action, everything else in a menu --
         toolbar = Adw.ToolbarView()
@@ -605,6 +664,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.content_stack.add_named(self._build_store(), "store")
         self.content_stack.add_named(self._build_maintenance(), "maintenance")
         self.content_stack.add_named(self._build_ai(), "ai")
+        self.content_stack.add_named(self._build_featured(), "featured")
         self.content_stack.set_visible_child_name("list")
 
         # Results and failures appear as toasts. They used to go to whichever
@@ -640,9 +700,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._maint_loaded_once = False
         self._ai_survey = []
         self._ai_loaded_once = False
-        self._tex_cache = {}
-        self._thumb_pool = ThreadPoolExecutor(max_workers=6,
-                                              thread_name_prefix="thumb")
+        self._shelves = []
+        self._feat_loaded_once = False
         # Findings already announced, so a rescan does not re-notify.
         self._reported = set()
         group = Gio.SimpleActionGroup()
@@ -664,7 +723,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # list that reads as a bug.
         if self.sidebar_rows and not any(
                 r.is_selected() for r in self.sidebar_rows.values()):
-            self._select_category("updates" if self.filter_key == "all"
+            self._select_category("featured" if self.filter_key == "all"
                                   else self.filter_key)
         self._watch_pacman()
         self.reload()
@@ -807,16 +866,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 pill.set_visible(False)
 
-            icon = it.app.extra.get("icon") or ""
-            theme = Gtk.IconTheme.get_for_display(self.get_display())
             img.remove_css_class("dim-label")
-            if icon and theme.has_icon(icon):
-                img.set_from_icon_name(icon)
-            elif icon and Path(icon).is_file():
-                img.set_from_file(icon)
-            else:
-                img.set_from_icon_name(
-                    _FALLBACK_ICON.get(it.source, "package-x-generic"))
+            if not self._app_icon(img, it.app, 32):
                 img.add_css_class("dim-label")
 
         self._column("Name", setup_name, bind_name, str_sorter("name"), expand=True)
@@ -1035,8 +1086,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         # The primary destinations are reachable without the mouse, in the
         # order they appear in the sidebar.
-        for i, key in enumerate(("discover", "updates", inventory.AGENT,
-                                 "apps", "all", "maintenance"), start=1):
+        for i, key in enumerate(("featured", "discover", "updates",
+                                 inventory.AGENT, "apps", "all",
+                                 "maintenance"), start=1):
             add(f"<Control>{i}", lambda k=key: self._select_category(k))
         self.add_controller(controller)
 
@@ -1202,6 +1254,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._summarize(text, "packages")
         self._sync_primary()
         self._update_sidebar_counts()
+        self._refresh_stats()
         removable = sum(1 for i in range(total)
                         if self.store.get_item(i).source == inventory.ORPHAN
                         and self.store.get_item(i).advice != "keep")
@@ -1231,14 +1284,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         head = Gtk.Box(spacing=14, margin_bottom=4)
         img = Gtk.Image()
         img.set_pixel_size(64)
-        icon = extra.get("icon") or ""
-        theme = Gtk.IconTheme.get_for_display(self.get_display())
-        if icon and theme.has_icon(icon):
-            img.set_from_icon_name(icon)
-        elif icon and Path(icon).is_file():
-            img.set_from_file(icon)
-        else:
-            img.set_from_icon_name(_FALLBACK_ICON.get(item.source, "package-x-generic"))
+        self._app_icon(img, item.app, 128)
         head.append(img)
 
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
@@ -1446,6 +1492,88 @@ class AlmanacWindow(Adw.ApplicationWindow):
         combined.append(self._priority_sorter)      # then urgency, then name
         self.sorted.set_sorter(combined)
 
+    def _stat_row(self, label: str, value: str, tooltip: str = ""):
+        row = Gtk.Box(spacing=6)
+        name = Gtk.Label(label=label, xalign=0, hexpand=True)
+        name.add_css_class("stat-key")
+        val = Gtk.Label(label=value, xalign=1)
+        val.add_css_class("stat-val")
+        row.append(name)
+        row.append(val)
+        if tooltip:
+            row.set_tooltip_text(tooltip)
+        return row
+
+    def _refresh_stats(self):
+        """The numbers you would otherwise open a terminal to get."""
+        while (child := self.stats.get_first_child()) is not None:
+            self.stats.remove(child)
+
+        items = [self.store.get_item(i) for i in range(self.store.get_n_items())]
+        total = sum(1 for i in items if i.source != inventory.ORPHAN)
+        size = sum(inventory.size_mb(i.app.extra.get("size", "")) for i in items)
+        explicit = sum(1 for i in items if i.source in (inventory.REPO,
+                                                        inventory.AUR))
+        foreign = sum(1 for i in items if i.source == inventory.AUR)
+        # Counting packages, not releases: summing release deltas across
+        # date-versioned and epoch-versioned packages produced numbers in the
+        # tens of thousands, which described nothing.
+        majors = sum(1 for i in items if i.behind and i.behind_kind == "major")
+        pending = sum(1 for i in items if i.has_update)
+        security = sum(1 for i in items if i.critical == "security")
+
+        rows = [("Installed", f"{total}", "Everything Almanac can see, orphans aside"),
+                ("On disk", maintenance.fmt_size(size),
+                 "Installed size reported by the package manager"),
+                ("Updates", f"{pending}",
+                 "Packages, AppImages, plugins and agents with a newer version"),
+                ("From the AUR", f"{foreign}",
+                 f"{foreign} of {explicit} repo and AUR packages are foreign")]
+        if majors:
+            rows.append(("A major behind", f"{majors}",
+                         "Packages at least one major version behind upstream"))
+        if security:
+            rows.append(("Security", f"{security}",
+                         "Network-facing packages with an update waiting"))
+
+        free = maintenance.reclaimable_mb(getattr(self, "_findings", []) or [])
+        if free:
+            rows.append(("Reclaimable", maintenance.fmt_size(free),
+                         "Caches and logs that can be cleared"))
+
+        kernel = self._kernel_version()
+        if kernel:
+            rows.append(("Kernel", kernel, "Running kernel release"))
+
+        up = self._uptime()
+        if up:
+            rows.append(("Uptime", up, "Since last boot"))
+
+        for label, value, tip in rows:
+            self.stats.append(self._stat_row(label, value, tip))
+
+    @staticmethod
+    def _kernel_version() -> str:
+        try:
+            return os.uname().release.split("-arch")[0]
+        except Exception:                               # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _uptime() -> str:
+        try:
+            with open("/proc/uptime") as f:
+                seconds = float(f.read().split()[0])
+        except (OSError, ValueError):
+            return ""
+        days, rem = divmod(int(seconds), 86400)
+        hours, minutes = divmod(rem // 60, 60)
+        if days:
+            return f"{days}d {hours}h"
+        if hours:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
     def _update_sidebar_counts(self):
         """Per-category totals, so the sidebar answers "what needs me?" at rest."""
         items = [self.store.get_item(i) for i in range(self.store.get_n_items())]
@@ -1473,7 +1601,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 header._chevron.set_tooltip_text(None)
         for key, row in self.sidebar_rows.items():
-            if key in ("maintenance", inventory.AGENT):
+            if key in ("maintenance", inventory.AGENT, "featured"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
             row._count.set_text(str(n) if n else "")
@@ -1484,7 +1612,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # a count. Greying out the App Store is what made it unclickable.
             row.set_sensitive(
                 n > 0 or key in ("all", "updates", "discover", "maintenance",
-                                 inventory.AGENT))
+                                 "featured", inventory.AGENT))
             row._count.remove_css_class("count-badge")
             row._count.remove_css_class("dim-label")
             if key == "updates" and n:
@@ -1620,6 +1748,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if row is None:
             return                      # selection cleared during a rebuild
         self.filter_key = row._key
+        if row._key == "featured":
+            self._leave_store()
+            self._show_page("featured")
+            if not self._feat_loaded_once:
+                self._feat_loaded_once = True
+                self._feat_reload()
+            else:
+                self._feat_show(self._shelves)
+            return
+
         if row._key == inventory.AGENT:
             self._leave_store()
             self._show_page(inventory.AGENT)
@@ -1688,7 +1826,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _refresh_page(self):
         """Re-read whatever the current page shows. One action, every page."""
         page = getattr(self, "_page", "packages")
-        if page == "discover":
+        if page == "featured":
+            self._feat_reload()
+        elif page == "discover":
             self._store_reload(force=True)
         elif page == "maintenance":
             self._maint_reload()
@@ -1749,6 +1889,39 @@ class AlmanacWindow(Adw.ApplicationWindow):
         """A transient result. Replaces four separate dim status labels."""
         toast = Adw.Toast(title=message, timeout=timeout)
         self.toasts.add_toast(toast)
+
+    def _apply_theme(self):
+        """Restate the active Omarchy palette as libadwaita's named colours.
+
+        Absence is a valid state: with no Omarchy theme the provider is
+        emptied and GTK's own theme shows through unmodified.
+        """
+        palette = theming.load_palette()
+        try:
+            self._theme_provider.load_from_data(
+                theming.css_for(palette).encode())
+        except GLib.Error:
+            return
+        dark = theming.is_dark(palette)
+        if dark is not None:
+            Adw.StyleManager.get_default().set_color_scheme(
+                Adw.ColorScheme.FORCE_DARK if dark
+                else Adw.ColorScheme.FORCE_LIGHT)
+
+    def _on_theme_changed(self):
+        # The theme is swapped as several filesystem operations, so this
+        # fires a handful of times; coalesce into one restyle.
+        if getattr(self, "_theme_timer", None):
+            GLib.source_remove(self._theme_timer)
+        self._theme_timer = GLib.timeout_add(250, self._theme_tick)
+
+    def _theme_tick(self):
+        self._theme_timer = None
+        self._apply_theme()
+        if getattr(self, "hero", None) is not None:
+            self._refresh_hero()
+        self._say(theming.describe(), 3)
+        return False
 
     def _busy(self, working: bool):
         """The one place the window says it is doing something."""
@@ -2119,7 +2292,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
             item._handler = None
         btn.remove_css_class("suggested-action")
         btn.remove_css_class("destructive-action")
-        if p.installed:
+        if p.installed and p.install_kind == "theme":
+            btn.set_label("Apply")
+            btn.set_sensitive(True)
+            btn.add_css_class("suggested-action")
+            btn.set_tooltip_text(f"Switch the desktop to {p.name}")
+            item._handler = btn.connect(
+                "clicked", lambda _b, pl=p: self._apply_theme_now(pl))
+        elif p.installed:
             btn.set_label("Remove")
             btn.set_sensitive(not p.built_in)
             btn.set_tooltip_text("Built-in plugins cannot be removed, only disabled"
@@ -2332,6 +2512,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if p.install_kind == "appimage":
             self._install_store_appimage(p)
             return
+        if p.install_kind == "theme":
+            self._install_theme(p)
+            return
 
         argv = shlex.split(p.install_cmd)
         # `plugin add` has a prompt to skip; `plugin enable` does not take the
@@ -2367,6 +2550,64 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               [(f"Removing {p.name}",
                                 ["omarchy", "plugin", "remove", p.id, "--yes"])],
                               lambda ok: self._store_after(ok, p, "removed")))
+
+    # ---- store entries that are themes ----
+    def _install_theme(self, p):
+        """Themes install and apply as two steps, so they are offered as two.
+
+        `omarchy theme install` clones it; `omarchy theme set` switches the
+        whole desktop over. Doing both on one click would re-skin everything
+        the moment someone clicked Install out of curiosity.
+        """
+        if p.installed:
+            self._apply_theme_now(p)
+            return
+        url = p.install_cmd.split()[-1]
+        tasks.confirm(
+            self, f"Install the {p.name} theme?",
+            "The theme is cloned into ~/.config/omarchy/themes. Nothing "
+            "changes appearance until you apply it.",
+            f"Publisher  {p.publisher}\n"
+            f"Licence    {p.license or 'unstated'}\n"
+            f"Stars      {p.stars}\n\n"
+            f"$ omarchy theme install {url}",
+            "Install", False,
+            lambda: tasks.run(
+                self, f"Installing {p.name}",
+                [(f"Installing {p.name}",
+                  ["omarchy", "theme", "install", url])],
+                lambda ok: self._theme_installed(ok, p)))
+
+    def _theme_installed(self, ok, p):
+        if not ok:
+            self._say(f"{p.name} was not installed", 8)
+            return False
+        store_mod.annotate(self._plugins)
+        self._store_refresh()
+        toast = Adw.Toast(title=f"{p.name} installed", timeout=0)
+        toast.set_button_label("Apply")
+        toast.connect("button-clicked", lambda *_: self._apply_theme_now(p))
+        self.toasts.add_toast(toast)
+        return False
+
+    def _apply_theme_now(self, p):
+        tasks.confirm(
+            self, f"Switch to {p.name}?",
+            "Applies the theme to the whole desktop — bar, terminal, editor "
+            "and this window. Your previous theme stays installed.",
+            f"$ omarchy theme set {p.name}", "Apply", False,
+            lambda: tasks.run(self, f"Applying {p.name}",
+                              [(f"Applying {p.name}",
+                                ["omarchy", "theme", "set", p.name])],
+                              lambda ok: self._after_theme(ok, p)))
+
+    def _after_theme(self, ok, p):
+        if ok:
+            self._apply_theme()
+            if getattr(self, "hero", None) is not None:
+                self._refresh_hero()
+            self._say(f"Now wearing {p.name}")
+        return False
 
     # ---- store entries that are AppImages, not plugins ----
     def _install_store_appimage(self, p):
@@ -2807,12 +3048,18 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._store_refresh()
 
     @staticmethod
-    def _section(title: str, description: str = ""):
+    def _section(title: str, description: str = "", trailing=None):
         """One titled, full-width list. The shared shape for secondary pages."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        head = Gtk.Label(label=title, xalign=0)
+        head = Gtk.Label(label=title, xalign=0, hexpand=True)
         head.add_css_class("heading")
-        box.append(head)
+        if trailing is not None:
+            row = Gtk.Box(spacing=8)
+            row.append(head)
+            row.append(trailing)
+            box.append(row)
+        else:
+            box.append(head)
         if description:
             sub = Gtk.Label(label=description, xalign=0, wrap=True)
             sub.add_css_class("dim-label")
@@ -2960,6 +3207,85 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.add_suffix(hint)
         return row
 
+    def _app_icon(self, image, app, size: int) -> bool:
+        """The best icon available for an inventory row.
+
+        Order: the .desktop icon, then the vendor's own mark where we know
+        their domain, then a per-source glyph. Agents have no .desktop entry,
+        so without the middle step Claude Code and Codex rendered as the same
+        grey circle as an unidentifiable package.
+
+        Returns False when it fell through to the glyph, so the caller can
+        dim it.
+        """
+        icon = app.extra.get("icon") or ""
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        if icon and theme.has_icon(icon):
+            image.set_from_icon_name(icon)
+            return True
+        if icon and Path(icon).is_file():
+            image.set_from_file(icon)
+            return True
+
+        key, domain, url = self._icon_source(app)
+        if key:
+            hit = icons_mod.cached(key)
+            if hit:
+                self._set_icon(image, hit, size)
+                return True
+            # Not fetched yet: show the glyph now, swap it in when it lands.
+            image.set_from_icon_name(
+                _FALLBACK_ICON.get(app.source, "package-x-generic"))
+            self._thumb_pool.submit(
+                lambda: GLib.idle_add(
+                    self._icon_arrived, image, size,
+                    icons_mod.fetch(key, url, domain)))
+            return True
+
+        image.set_from_icon_name(
+            _FALLBACK_ICON.get(app.source, "package-x-generic"))
+        return False
+
+    @staticmethod
+    def _icon_source(app):
+        """(cache key, domain, explicit url) for an entry's vendor mark.
+
+        pacman already records every package's upstream homepage, so most of
+        the list can show the project's own logo instead of a generic box.
+        Projects hosted on GitHub are the exception worth special-casing: the
+        site favicon would put the same octocat on half the list, while the
+        owner's avatar is the thing people actually recognise.
+        """
+        domain = app.extra.get("domain") or ""
+        if domain:
+            return domain, domain, ""
+
+        # Local builds and plugins record their clone URL rather than a
+        # homepage; Flatpaks are named after their vendor's domain in
+        # reverse. Both are an upstream identity, which is all this needs.
+        url = app.extra.get("url", "") or app.extra.get("repo_url", "")
+        if not url and app.extra.get("appid"):
+            parts = app.extra["appid"].split(".")
+            if len(parts) >= 2:
+                return ".".join(reversed(parts[:2])), ".".join(reversed(parts[:2])), ""
+        host = icons_mod.host_of(url)
+        if not host:
+            return "", "", ""
+        if host.endswith("github.com"):
+            parts = [x for x in url.split("/") if x]
+            owner = parts[2] if len(parts) > 2 else ""
+            if owner and owner not in ("sponsors", "orgs"):
+                return f"gh-{owner.lower()}", "", icons_mod.github_avatar(owner)
+            return "", "", ""
+        if host.endswith("gitlab.com") or host.endswith("codeberg.org"):
+            return icons_mod.registrable(host), host, ""
+        return icons_mod.registrable(host), host, ""
+
+    def _icon_arrived(self, image, size, path):
+        if path:
+            self._set_icon(image, path, size)
+        return False
+
     def _vendor_icon(self, image, e):
         if not (e.icon_key and (e.icon_domain or e.icon_url)):
             return
@@ -2977,8 +3303,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             lambda: GLib.idle_add(
                 done, icons_mod.fetch(e.icon_key, e.icon_url, e.icon_domain)))
 
-    def _set_icon(self, image, path):
-        tex = self._texture(path, 48)
+    def _set_icon(self, image, path, size: int = 48):
+        tex = self._texture(path, size)
         if tex is not None:
             image.set_from_paintable(tex)
 
@@ -3129,6 +3455,261 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     [str(Path.home() / ".local/bin/omarchy-auto-update")])],
                   self._after_pacman)
 
+    # ---- featured ---------------------------------------------------------
+    def _build_featured(self):
+        """The landing page: what deserves attention, assembled from live data."""
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.feat_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+                                 margin_start=12, margin_end=12,
+                                 margin_top=12, margin_bottom=16)
+        self.feat_page.append(self._build_hero())
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self.feat_page)
+        page.append(scroller)
+        return page
+
+    HERO_HEIGHT = 190
+
+    def _build_hero(self):
+        """The machine's own wallpaper, with the state of the machine on it.
+
+        A hero that is decoration is dead weight on a page about what needs
+        doing. This one is the image already behind the window — so it costs
+        no download, carries no stock art, and re-skins with the theme — and
+        it carries the one line that says whether anything is wrong.
+        """
+        overlay = Gtk.Overlay()
+        overlay.set_size_request(-1, self.HERO_HEIGHT)
+        overlay.add_css_class("hero")
+        overlay.set_overflow(Gtk.Overflow.HIDDEN)
+
+        self.hero_pic = Gtk.Picture()
+        self.hero_pic.set_content_fit(Gtk.ContentFit.COVER)
+        self.hero_pic.set_hexpand(True)
+        self.hero_pic.set_vexpand(True)
+        clamp = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        clamp.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+        clamp.set_propagate_natural_width(False)
+        clamp.set_propagate_natural_height(False)
+        clamp.set_child(self.hero_pic)
+        overlay.set_child(clamp)
+
+        scrim = Gtk.Box()
+        scrim.add_css_class("hero-scrim")
+        overlay.add_overlay(scrim)
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
+                       valign=Gtk.Align.END, halign=Gtk.Align.START,
+                       margin_start=20, margin_end=20, margin_bottom=18)
+        self.hero_head = Gtk.Label(xalign=0, wrap=True)
+        self.hero_head.add_css_class("hero-head")
+        self.hero_sub = Gtk.Label(xalign=0, wrap=True)
+        self.hero_sub.add_css_class("hero-sub")
+        text.append(self.hero_head)
+        text.append(self.hero_sub)
+        overlay.add_overlay(text)
+
+        self.hero = overlay
+        self._refresh_hero()
+        return overlay
+
+    def _refresh_hero(self):
+        """Point the hero at the current wallpaper, or hide it if there is none."""
+        bg = theming.background()
+        if bg is None:
+            self.hero.set_visible(False)
+            return
+        self.hero.set_visible(True)
+        tex = self._texture(bg, 1200)
+        if tex is not None:
+            self.hero_pic.set_paintable(tex)
+
+    def _hero_text(self, problems: int):
+        import datetime
+        hour = datetime.datetime.now().hour
+        part = ("Good morning" if hour < 12
+                else "Good afternoon" if hour < 18 else "Good evening")
+        name = theming.theme_name()
+        if problems:
+            self.hero_head.set_text(f"{problems} thing{'s' if problems != 1 else ''} need you")
+        else:
+            self.hero_head.set_text(f"{part} — nothing needs you")
+        bits = []
+        updates = sum(1 for i in range(self.store.get_n_items())
+                      if self.store.get_item(i).has_update)
+        if updates:
+            bits.append(f"{updates} update{'s' if updates != 1 else ''} available")
+        free = maintenance.reclaimable_mb(getattr(self, "_findings", []) or [])
+        if free:
+            bits.append(f"{maintenance.fmt_size(free)} reclaimable")
+        if name:
+            bits.append(f"wearing {name}")
+        self.hero_sub.set_text(" · ".join(bits))
+
+    def _feat_reload(self):
+        self._busy(True)
+        self._summarize("Working out what needs you…", "featured")
+
+        def work():
+            apps = [self.store.get_item(i).app
+                    for i in range(self.store.get_n_items())]
+            findings = getattr(self, "_findings", None) or maintenance.run_all()
+            plugins = getattr(self, "_plugins", None)
+            if not plugins:
+                try:
+                    plugins = store_mod.catalog()
+                    store_mod.annotate(plugins)
+                    self._plugins = plugins
+                except Exception:                       # noqa: BLE001
+                    plugins = []
+            self._findings = findings
+            shelves = featured.build(apps, findings, plugins)
+            GLib.idle_add(self._feat_show, shelves)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _feat_show(self, shelves):
+        self._busy(False)
+        self._shelves = shelves
+        # Keep the hero; replace everything under it.
+        while (child := self.hero.get_next_sibling()) is not None:
+            self.feat_page.remove(child)
+
+        problems = 0
+        for shelf in shelves:
+            section = self._section(
+                f"{shelf.title} ({len(shelf.items)})" if shelf.items else shelf.title,
+                shelf.subtitle,
+                self._shelf_link(shelf))
+            if not shelf.items:
+                row = self._plain(title=shelf.empty)
+                if shelf.key == "attention":
+                    tick = Gtk.Image(icon_name="emblem-ok-symbolic",
+                                     valign=Gtk.Align.CENTER)
+                    tick.add_css_class("store-verified")
+                    row.add_prefix(tick)
+                section._rows.append(row)
+            for item in shelf.items:
+                if item.severity in ("crit", "warn"):
+                    problems += 1
+                section._rows.append(self._feat_row(item))
+            self.feat_page.append(section)
+
+        self._refresh_hero()
+        self._hero_text(problems)
+        self._summarize(
+            f"{problems} thing(s) need you" if problems
+            else "Nothing needs you right now", "featured")
+        row = self.sidebar_rows.get("featured")
+        if row is not None:
+            row._count.set_text(str(problems) if problems else "")
+            row._count.remove_css_class("dim-label")
+            row._count.remove_css_class("count-badge")
+            row._count.add_css_class("count-badge" if problems else "dim-label")
+        return False
+
+    # Each shelf is a sample of a bigger list; this says where the rest is.
+    _SHELF_TARGET = {
+        "attention": ("Open Health check", "maintenance", None),
+        "new": ("Show all", "discover", "new"),
+        "trending": ("Show all", "discover", "trending"),
+        "affinity": ("Show all", "discover", "popular"),
+    }
+
+    def _shelf_link(self, shelf):
+        target = self._SHELF_TARGET.get(shelf.key)
+        if not target or not shelf.items:
+            return None
+        label, page, sort = target
+        btn = Gtk.Button(label=label, valign=Gtk.Align.CENTER)
+        btn.add_css_class("flat")
+        btn.set_tooltip_text(
+            f"Open the {'App Store' if page == 'discover' else 'Health check'}"
+            + (f", sorted by {sort}" if sort else ""))
+        btn.connect("clicked", lambda _b: self._open_shelf(page, sort))
+        return btn
+
+    def _open_shelf(self, page, sort):
+        if page == "discover" and sort:
+            keys = [k for k, _l, _f in store_mod.SORTS]
+            if sort in keys:
+                self.store_sort.set_selected(keys.index(sort))
+        self._select_category(page)
+
+    def _feat_row(self, item):
+        row = self._plain(title=item.title, subtitle=item.detail)
+        row.set_subtitle_lines(2)
+
+        if item.severity:
+            label, css = self._SEVERITY_CSS.get(
+                maintenance.CRIT if item.severity == "crit" else maintenance.WARN,
+                ("", "store-chip"))
+            pill = Gtk.Label(label=label, valign=Gtk.Align.CENTER)
+            pill.add_css_class(css)
+            row.add_prefix(pill)
+
+        art = Gtk.Image(pixel_size=24, valign=Gtk.Align.CENTER)
+        if item.plugin is not None:
+            art.set_from_icon_name("application-x-addon-symbolic")
+            self._plugin_icon(art, item.plugin)
+        elif item.app is not None:
+            self._app_icon(art, item.app, 48)
+        else:
+            art.set_from_icon_name("emblem-important-symbolic")
+            art.add_css_class("dim-label")
+        row.add_prefix(art)
+
+        if item.plugin is not None:
+            chip = Gtk.Label(label=item.plugin.market_name,
+                             valign=Gtk.Align.CENTER)
+            chip.add_css_class("store-chip")
+            row.add_suffix(chip)
+
+        if item.action:
+            btn = Gtk.Button(label=item.action, valign=Gtk.Align.CENTER)
+            if item.severity == "crit":
+                btn.add_css_class("suggested-action")
+            btn.set_tooltip_text(f"{item.action} {item.title}")
+            btn.connect("clicked", lambda _b, it=item: self._feat_act(it))
+            row.add_suffix(btn)
+
+        row.set_activatable(True)
+        row.connect("activated", lambda _r, it=item: self._feat_open(it))
+        return row
+
+    def _plugin_icon(self, image, plugin):
+        """A marketplace entry's own card art, scaled down to a row icon."""
+        cached = store_mod.thumb_path(plugin)
+        if cached is not None and cached.exists() and cached.stat().st_size:
+            self._set_icon(image, cached, 64)
+            return
+
+        def done(path):
+            if path:
+                self._set_icon(image, path, 64)
+            return False
+
+        if plugin.thumb:
+            self._thumb_pool.submit(
+                lambda: GLib.idle_add(done, store_mod.fetch_thumb(plugin)))
+
+    def _feat_act(self, item):
+        if item.plugin is not None:
+            self.on_plugin_install(None, item.plugin)
+        elif item.kind == "update" and item.app is not None:
+            self.on_update_one(None, item.app)
+        elif item.kind == "finding":
+            self._select_category("maintenance")
+
+    def _feat_open(self, item):
+        if item.plugin is not None:
+            self._show_plugin(item.plugin)
+        elif item.app is not None:
+            self._select_category("updates")
+        else:
+            self._select_category("maintenance")
+
     # ---- actions ---------------------------------------------------------
     def _row_visit(self, name: str):
         app = self._row_actions.get(name)
@@ -3201,7 +3782,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         ])
         about.set_debug_info(
             f"Installed as: {info['kind']}\n{info['note']}\n"
-            + ghcache.describe())
+            + theming.describe() + "\n" + ghcache.describe())
         about.present(self)
 
     def _row_folder(self, name: str):
@@ -3609,13 +4190,48 @@ class AlmanacWindow(Adw.ApplicationWindow):
 class AlmanacApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id="io.github.twodxme.Almanac",
-                         flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.start_page = ""
+        self.add_main_option(
+            "page", ord("p"), GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
+            "Open on a specific page: store, updates, ai, health, apps, all",
+            "PAGE")
+
+    # Opening straight to a page makes Almanac scriptable -- a bar widget or
+    # a keybinding can land on Updates without a click -- and makes a
+    # screenshot of a given page reproducible.
+    PAGE_ALIASES = {
+        "featured": "featured", "home": "featured",
+        "store": "discover", "app-store": "discover", "discover": "discover",
+        "updates": "updates", "update": "updates",
+        "ai": inventory.AGENT, "agents": inventory.AGENT,
+        "health": "maintenance", "maintenance": "maintenance",
+        "apps": "apps", "applications": "apps",
+        "all": "all", "everything": "all",
+        "orphans": inventory.ORPHAN,
+    }
+
+    def do_command_line(self, command_line):
+        opts = command_line.get_options_dict().end().unpack()
+        wanted = (opts.get("page") or "").strip().lower()
+        if wanted:
+            resolved = self.PAGE_ALIASES.get(wanted)
+            if resolved is None:
+                command_line.printerr_literal(
+                    f"almanac: unknown page {wanted!r}. Try one of: "
+                    + ", ".join(sorted(set(self.PAGE_ALIASES))) + "\n")
+                return 2
+            self.start_page = resolved
+        self.activate()
+        return 0
 
     def do_activate(self):
         win = self.props.active_window
         if win is None:
             win = AlmanacWindow(application=self)
             win.connect("close-request", self._on_close)
+        if self.start_page:
+            win._select_category(self.start_page)
         win.present()
 
     @staticmethod
