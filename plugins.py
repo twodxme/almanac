@@ -155,6 +155,83 @@ def _count(d: Path, head: str, remote: str) -> int:
     return int(out) if out.isdigit() else 0
 
 
+@dataclass
+class Installed:
+    """One plugin on this system, built in or added, for the Plugins page."""
+    id: str
+    name: str
+    description: str = ""
+    version: str = ""
+    kinds: tuple = ()
+    enabled: bool = False
+    can_disable: bool = True
+    built_in: bool = False
+    folder: Path | None = None
+    state: State | None = None      # only for plugins the user added
+
+    @property
+    def has_panel(self) -> bool:
+        return bool({"panel", "bar-widget", "overlay"} & set(self.kinds))
+
+
+def _manifests(root: Path) -> dict[str, tuple[dict, Path]]:
+    """id -> (manifest, folder) for every manifest under `root`."""
+    out: dict[str, tuple[dict, Path]] = {}
+    for m in root.rglob("manifest.json") if root.is_dir() else []:
+        try:
+            d = json.loads(m.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("id"):
+            out.setdefault(d["id"], (d, m.parent))
+    return out
+
+
+def installed(fetch: bool = True, cache: dict | None = None) -> list[Installed]:
+    """Every plugin Omarchy knows about, with what each one is and its state.
+
+    Omarchy's own list decides what exists and whether it is on; manifests
+    supply the description, and the user's own plugins are classified so the
+    page can say whether each can be updated.
+    """
+    try:
+        out = subprocess.run(["omarchy", "plugin", "list", "--json"],
+                             capture_output=True, text=True, timeout=25).stdout
+        listed = [i for i in json.loads(out) if isinstance(i, dict) and i.get("id")]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    import os as _os
+    shipped = _manifests(Path(_os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy")
+                         / "shell" / "plugins")
+    mine = {}
+    pdir = plugins_dir()
+    for d in sorted(pdir.glob("*")) if pdir.is_dir() else []:
+        try:
+            m = json.loads((d / "manifest.json").read_text())
+        except (OSError, ValueError):
+            continue
+        mine[m.get("id") or d.name] = (m, d)
+
+    result = []
+    for item in listed:
+        pid = item["id"]
+        manifest, folder = mine.get(pid) or shipped.get(pid) or ({}, None)
+        own = pid in mine
+        result.append(Installed(
+            id=pid,
+            name=item.get("name") or manifest.get("name") or pid,
+            description=manifest.get("description", ""),
+            version=manifest.get("version", ""),
+            kinds=tuple(item.get("kinds") or manifest.get("kinds") or ()),
+            enabled=bool(item.get("enabled")),
+            can_disable=bool(item.get("canDisable", True)),
+            built_in=bool(item.get("firstParty")) and not own,
+            folder=folder,
+            state=classify(folder, cache, fetch) if own and folder else None))
+    result.sort(key=lambda i: (i.built_in, i.name.lower()))
+    return result
+
+
 def enabled() -> dict[str, bool]:
     """id -> enabled, from Omarchy's own list."""
     try:

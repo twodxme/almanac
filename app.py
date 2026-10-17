@@ -383,6 +383,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         )),
         ("library", _("Library"), (
             ("apps", _("Applications"), "view-grid-symbolic"),
+            ("plugins", _("Plugins"), "application-x-addon-symbolic"),
             ("all", _("Everything"), "view-list-symbolic"),
         )),
         ("sources", _("Sources"), (
@@ -431,11 +432,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
                             update=True, sort=True, filters=False),
         "maintenance": dict(view="maintenance", title=_("Health check"),
                             search=None, update=False, sort=False, filters=False),
+        "plugins":     dict(view="plugins", title=_("Plugins"),
+                            search=_("Search plugins"), update=False, sort=False,
+                            filters=False),
         "history":     dict(view="history", title=_("History"),
                             search=None, update=False, sort=False, filters=False),
         inventory.AGENT: dict(view="ai", title=_("AI"),
                               search=None, update=False, sort=False, filters=False),
     }
+
+    PAGE_KEYS = ("featured", "discover", "themes", "updates", inventory.AGENT,
+                 "apps", "plugins", "all", "maintenance", "history")
 
     @property
     def CATEGORIES(self):
@@ -759,6 +766,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.content_stack.add_named(self._build_store(), "store")
         self.content_stack.add_named(self._build_maintenance(), "maintenance")
         self.content_stack.add_named(self._build_history(), "history")
+        self.content_stack.add_named(self._build_plugins_page(), "plugins")
         self.content_stack.add_named(self._build_ai(), "ai")
         self.content_stack.add_named(self._build_featured(), "featured")
         self.content_stack.set_visible_child_name("list")
@@ -825,6 +833,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
             a.connect("activate", lambda _a, param, h=handler: h(param.get_string()))
             group.add_action(a)
         self.insert_action_group("row", group)
+        pgroup = Gio.SimpleActionGroup()
+        for act in ("update", "shortcut", "folder", "page", "remove"):
+            a = Gio.SimpleAction.new(act, GLib.VariantType.new("s"))
+            a.connect("activate", lambda _a, param, act=act:
+                      self._plugin_action(act, param.get_string()))
+            pgroup.add_action(a)
+        self.insert_action_group("plugin", pgroup)
 
         self._apply_all_group_states()
         self._install_shortcuts()
@@ -1209,11 +1224,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         add("Escape", self._clear_search)
 
         # The primary destinations are reachable without the mouse, in the
-        # order they appear in the sidebar.
-        for i, key in enumerate(("featured", "discover", "themes", "updates",
-                                 inventory.AGENT, "apps", "all",
-                                 "maintenance", "history"), start=1):
-            add(f"<Control>{i}", lambda k=key: self._select_category(k))
+        # order they appear in the sidebar: Ctrl+1 to Ctrl+9, then Ctrl+0.
+        # There is no Ctrl+10 -- an eleventh page needs another scheme, and
+        # PAGE_KEYS is checked by a test because an invalid accelerator makes
+        # the window fail to open at all.
+        for i, key in enumerate(self.PAGE_KEYS, start=1):
+            add(f"<Control>{i % 10}", lambda k=key: self._select_category(k))
         self.add_controller(controller)
 
     def _clear_search(self):
@@ -1858,8 +1874,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 header._chevron.set_tooltip_text(None)
         for key, row in self.sidebar_rows.items():
-            if key in ("maintenance", "history", inventory.AGENT, "featured",
-                       "themes"):
+            if key in ("maintenance", "history", "plugins", inventory.AGENT,
+                       "featured", "themes"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
             # An empty category stays visible but recedes, so the layout does
@@ -1868,7 +1884,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # must stay reachable when empty, so none of the three is gated on
             # a count. Greying out the App Store is what made it unclickable.
             row.set_sensitive(
-                n > 0 or key in ("all", "updates", "discover", "themes",
+                n > 0 or key in ("all", "updates", "discover", "themes", "plugins",
                                  "maintenance", "featured", inventory.AGENT))
             # Red means "a security update is waiting", nothing else. Pending
             # updates are a number, not an emergency.
@@ -1885,6 +1901,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if self.filter_key == "apps" and not (
                 item.app.extra.get("is_app")
                 or item.source in (inventory.APPIMAGE, inventory.LOCAL)):
+            return False
+        # Plugins have their own page. They stay in Everything and Updates.
+        if (item.app.extra.get("plugin_id")
+                and self.filter_key in ("apps", inventory.LOCAL)):
             return False
         if self.filter_key in ("all", "updates", "apps") and item.source == inventory.ORPHAN:
             return False
@@ -1949,6 +1969,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     def on_search(self, entry):
+        if getattr(self, "_page", "") == "plugins":
+            self._plugins_filter(entry.get_text())
+            return
         if self.filter_key == "discover":
             if self.content_stack.get_visible_child_name() == "store":
                 self._store_queue()
@@ -2042,6 +2065,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._history_reload()
             return
 
+        if row._key == "plugins":
+            self._leave_store()
+            self._show_page("plugins")
+            self._plugins_reload()
+            return
+
         if row._key == "maintenance":
             self._leave_store()
             self._show_page("maintenance")
@@ -2130,6 +2159,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._maint_reload()
         elif page == "history":
             self._history_reload()
+        elif page == "plugins":
+            self._plugins_reload()
         elif page == inventory.AGENT:
             self._ai_reload()
         else:
@@ -2217,6 +2248,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 "Update every agent CLI with a newer release that knows how "
                 "to update itself",
                 self._ai_update_all),
+            "plugins": (
+                f"Update plugins ({self._plugin_updates})"
+                if getattr(self, "_plugin_updates", 0) else _("Plugins current"),
+                bool(getattr(self, "_plugin_updates", 0)),
+                _("Update every plugin with a clean update waiting, within the "
+                  "scope set in Preferences"),
+                self.on_update_plugins),
             "maintenance": (
                 f"Reclaim {maintenance.fmt_size(free)}" if free
                 else "Nothing to reclaim",
@@ -2666,6 +2704,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         w["name"].set_tooltip_text(p.name)
         w["check"].set_visible(p.verified)
         w["installed"].set_visible(p.installed)
+        # Installed and switched off reads "Off": answers "is it running?"
+        # without putting a control on a card meant for browsing.
+        off = p.installed and p.install_kind == "plugin" and not p.enabled
+        w["installed"].set_text(_("Off") if off else _("Installed"))
+        w["installed"].remove_css_class("pill-quiet" if not off else "pill-ok")
+        w["installed"].add_css_class("pill-quiet" if off else "pill-ok")
         w["sub"].set_text(p.subtitle)
         w["desc"].set_text(p.description or p.install_note or "")
         w["cat"].set_text(p.category)
@@ -3405,11 +3449,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
                                              self.on_plugin_remove(b, p)))
             bottom.append(rm)
             if p.install_kind == "plugin":
-                sw = Gtk.Button(label=_("Turn off") if p.enabled else _("Turn on"))
-                sw.connect("clicked", lambda b: (dialog.close(),
-                                                 self._toggle_plugin(p.id, not p.enabled,
-                                                                     p.name)))
-                bottom.append(sw)
+                # A switch shows the state as well as changing it.
+                holder = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+                holder.append(Gtk.Label(label=_("On")))
+                sw = Gtk.Switch(active=p.enabled, valign=Gtk.Align.CENTER)
+                _name(sw, f"{p.name} on" if p.enabled else f"{p.name} off")
+                info = plugins_mod.Installed(id=p.id, name=p.name,
+                                             enabled=p.enabled)
+                sw.connect("state-set", lambda w, on: self._plugin_switch(w, on, info))
+                holder.append(sw)
+                bottom.append(holder)
                 folder = self._plugin_dir(p)
                 if (folder is not None and shortcuts.available()
                         and shortcuts.has_panel(folder)):
@@ -3473,6 +3522,222 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller.set_child(body)
         page.append(scroller)
         return page
+
+    # ---- plugins -----------------------------------------------------------
+    _PLUGIN_STATE_PILLS = {
+        "update": ("Update waiting", "pill-accent"),
+        "modified": ("Local edits", "pill-warn"),
+        "ahead": ("Ahead of upstream", "pill-warn"),
+        "diverged": ("Diverged", "pill-warn"),
+        "detached": ("Not on a branch", "pill-warn"),
+        "symlink": ("Development link", "pill-quiet"),
+        "error": ("Could not check", "pill-warn"),
+    }
+
+    def _build_plugins_page(self):
+        """Every plugin on the system, with a switch each. See plugins.py."""
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.plugins_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                    spacing=20, margin_start=12, margin_end=12,
+                                    margin_bottom=16)
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self.plugins_body)
+        page.append(scroller)
+        self._plugin_rows: list = []
+        self._plugin_updates = 0
+        return page
+
+    def _plugins_reload(self):
+        self._summarize(_("Reading plugins…"), "plugins")
+
+        def work():
+            cache = inventory._git_cache()
+            found = plugins_mod.installed(cache=cache.setdefault("_plugins", {}))
+            try:
+                catalog = getattr(self, "_plugins", None) or store_mod.catalog()
+                trust = {c.id: c.trust for c in catalog}
+            except Exception:                           # noqa: BLE001
+                trust = {}
+            try:
+                raw = shortcuts._read()[0] if shortcuts.available() else ""
+            except (OSError, ValueError):
+                raw = ""
+            keys = {}
+            for i in found:
+                if raw and i.has_panel:
+                    try:
+                        keys[i.id] = shortcuts.current(i.id, raw)
+                    except ValueError:
+                        keys[i.id] = ""
+            GLib.idle_add(self._plugins_show, found, trust, keys)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _plugins_show(self, found, trust, keys):
+        while (child := self.plugins_body.get_first_child()) is not None:
+            self.plugins_body.remove(child)
+        self._plugin_rows = []
+        mine = [i for i in found if not i.built_in]
+        builtin = [i for i in found if i.built_in]
+        for title, note, group in (
+                (_("Your plugins"),
+                 _("Added from the marketplace or by hand. Updated through "
+                   "omarchy plugin update; a development link never is."), mine),
+                (_("Built in"),
+                 _("Ship with Omarchy and update with it. They can be switched "
+                   "on and off."), builtin)):
+            if not group:
+                continue
+            section = self._section(f"{title} ({len(group)})", note)
+            for i in group:
+                row = self._plugin_row(i, trust.get(i.id), keys.get(i.id, ""))
+                section._rows.append(row)
+                self._plugin_rows.append((row, i))
+            self.plugins_body.append(section)
+        if not found:
+            self.plugins_body.append(self._status_page(
+                "application-x-addon-symbolic", _("No plugins found"),
+                _("The omarchy command did not list any plugins.")))
+        self._plugin_updates = sum(1 for i in mine if i.state and i.state.updatable)
+        on = sum(1 for i in found if i.enabled)
+        self._summarize(f"{len(found)} plugins · {on} on"
+                        + (f" · {self._plugin_updates} with updates"
+                           if self._plugin_updates else ""), "plugins")
+        self._plugins_filter(self.search.get_text())
+        self._sync_primary()
+        return False
+
+    def _plugins_filter(self, text: str):
+        q = (text or "").strip().lower()
+        for row, i in getattr(self, "_plugin_rows", []):
+            row.set_visible(not q or q in " ".join(
+                (i.id, i.name, i.description, " ".join(i.kinds))).lower())
+
+    def _plugin_row(self, i, trust, shortcut: str):
+        row = self._plain(title=i.name, subtitle=i.description or i.id)
+        row.set_subtitle_lines(2)
+
+        st = i.state
+        key = (st.kind if st and st.kind in ("update", "error")
+               else st.detail if st else "")
+        if key in self._PLUGIN_STATE_PILLS:
+            label, css = self._PLUGIN_STATE_PILLS[key]
+            pill = Gtk.Label(label=_(label), valign=Gtk.Align.CENTER)
+            pill.add_css_class(css)
+            pill.set_tooltip_text(st.describe() if st else "")
+            row.add_suffix(pill)
+        if trust is not None and not i.built_in:
+            chip = Gtk.Label(label=trust.label, valign=Gtk.Align.CENTER)
+            chip.add_css_class(trust.css)
+            chip.set_tooltip_text(trust.why)
+            row.add_suffix(chip)
+        if shortcut:
+            keys = Gtk.Label(label=shortcut.replace(" + ", "+"),
+                             valign=Gtk.Align.CENTER)
+            keys.add_css_class("dim-label")
+            keys.add_css_class("caption")
+            keys.set_tooltip_text(_("Keyboard shortcut"))
+            row.add_suffix(keys)
+
+        # The actions, behind a menu; the switch beside it is the one control
+        # that is always one click.
+        menu = Gio.Menu()
+        if st and (st.updatable or (st.detail == "modified" and st.behind)):
+            menu.append(_("Update…"), f"plugin.update::{i.id}")
+        if shortcuts.available() and i.has_panel and i.folder is not None:
+            menu.append(_("Keyboard shortcut…"), f"plugin.shortcut::{i.id}")
+        if i.folder is not None:
+            menu.append(_("Open folder"), f"plugin.folder::{i.id}")
+        if st and st.url:
+            menu.append(_("Open project page"), f"plugin.page::{i.id}")
+        if not i.built_in:
+            menu.append(_("Remove…"), f"plugin.remove::{i.id}")
+        if menu.get_n_items():
+            more = Gtk.MenuButton(icon_name="view-more-symbolic",
+                                  valign=Gtk.Align.CENTER, menu_model=menu)
+            more.add_css_class("flat")
+            _name(more, f"More actions for {i.name}")
+            row.add_suffix(more)
+
+        switch = Gtk.Switch(active=i.enabled, valign=Gtk.Align.CENTER,
+                            sensitive=i.can_disable)
+        _name(switch, f"{i.name} on" if i.enabled else f"{i.name} off")
+        if not i.can_disable:
+            switch.set_tooltip_text(_("Omarchy needs this one; it cannot be "
+                                      "switched off"))
+        switch.connect("state-set", lambda sw, on, i=i: self._plugin_switch(sw, on, i))
+        row.add_suffix(switch)
+        row.set_activatable_widget(switch)
+        return row
+
+    def _plugin_switch(self, switch, on: bool, i) -> bool:
+        """Switch a plugin through Omarchy, then show what actually holds.
+
+        The switch moves only once Omarchy's own list agrees; a refusal puts
+        it back and says why.
+        """
+        switch.set_sensitive(False)
+
+        def work():
+            r = subprocess.run(plugins_mod.toggle_argv(i.id, on),
+                               capture_output=True, text=True, timeout=60)
+            now = plugins_mod.enabled().get(i.id)
+            GLib.idle_add(done, r, now)
+
+        def done(r, now):
+            switch.set_sensitive(i.can_disable)
+            switch.set_state(bool(now))
+            switch.set_active(bool(now))
+            i.enabled = bool(now)
+            _name(switch, f"{i.name} on" if now else f"{i.name} off")
+            if now is on:
+                self._say(f"{i.name} {'on' if on else 'off'}")
+                history.record(history.ALMANAC,
+                               f"{i.name} switched {'on' if on else 'off'}")
+            else:
+                why = (r.stderr or r.stdout).strip().splitlines()
+                self._notify(f"{i.name} was not switched {'on' if on else 'off'}",
+                             why[-1] if why else _("Omarchy did not change it"))
+            if getattr(self, "_plugins", None):
+                store_mod.annotate(self._plugins)
+            return False
+        threading.Thread(target=work, daemon=True).start()
+        return True                     # the state is set when Omarchy answers
+
+    def _plugin_action(self, action: str, pid: str):
+        i = next((x for _r, x in getattr(self, "_plugin_rows", []) if x.id == pid), None)
+        if i is None:
+            return
+        if action == "shortcut":
+            self._edit_shortcut(i.id, i.name)
+        elif action == "folder" and i.folder is not None:
+            self.open_url(f"file://{i.folder}")
+        elif action == "page" and i.state and i.state.url:
+            self.open_url(inventory._github_page(i.state.url) or i.state.url)
+        elif action == "update" and i.folder is not None:
+            st = i.state
+            app = inventory.App(
+                name=i.id, version=i.version, source=inventory.LOCAL,
+                update=f"{st.behind} commits" if st else "",
+                extra={"repo": str(i.folder), "plugin_id": i.id,
+                       "plugin_state": st.kind if st else "",
+                       "plugin_detail": st.describe() if st else ""})
+            self.on_git_pull(None, app)
+        elif action == "remove":
+            argv = ["omarchy", "plugin", "remove", i.id, "--yes"]
+            tasks.confirm(
+                self, f"Remove {i.name}?",
+                _("Deletes the plugin's folder and takes it off the bar. Its "
+                  "settings in shell.json are removed with it."),
+                f"{i.folder}\n\n$ {' '.join(argv)}", _("Remove"), True,
+                lambda: tasks.run(
+                    self, f"Removing {i.name}", [(f"Removing {i.name}", argv)],
+                    self._checked(lambda: i.id in plugins_mod.enabled(),
+                                  lambda _b, a: verify.Outcome(
+                                      not a, f"{i.name} removed" if not a
+                                      else f"{i.name} is still installed"),
+                                  then=lambda ok: (self._plugins_reload(),
+                                                   self._after_pacman(ok)))))
 
     # ---- history ----------------------------------------------------------
     _HISTORY_ICONS = {
@@ -4688,6 +4953,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 try:
                     msg = shortcuts.set_shortcut(pid, combo)
                     history.record(history.ALMANAC, msg)
+                    if getattr(self, "_page", "") == "plugins":
+                        GLib.idle_add(self._plugins_reload)
                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                     msg = f"Shortcut not saved: {exc}"
                 GLib.idle_add(self._say, msg, 8)
@@ -5464,6 +5731,7 @@ class AlmanacApp(Adw.Application):
         "ai": inventory.AGENT, "agents": inventory.AGENT,
         "health": "maintenance", "maintenance": "maintenance",
         "history": "history", "timeline": "history",
+        "plugins": "plugins", "plugin": "plugins",
         "apps": "apps", "applications": "apps",
         "all": "all", "everything": "all",
         "orphans": inventory.ORPHAN,

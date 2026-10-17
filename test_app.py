@@ -1654,6 +1654,69 @@ class PluginShortcuts(unittest.TestCase):
             shortcuts.current("lxp.vitals")
 
 
+class PluginsPage(unittest.TestCase):
+    def test_every_plugin_is_listed_with_what_it_is(self):
+        import plugins
+        listed = [
+            {"id": "omarchy.clock", "name": "Clock", "kinds": ["bar-widget"],
+             "enabled": True, "canDisable": True, "firstParty": True},
+            {"id": "omarchy.bar", "name": "Bar", "kinds": ["bar"],
+             "enabled": True, "canDisable": False, "firstParty": True},
+            {"id": "me.thing", "name": "Thing", "kinds": ["panel"],
+             "enabled": False, "canDisable": True, "firstParty": False},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            shipped = Path(d, "omarchy/shell/plugins/clock")
+            shipped.mkdir(parents=True)
+            (shipped / "manifest.json").write_text(json.dumps(
+                {"id": "omarchy.clock", "description": "The time"}))
+            mine = Path(d, "config/omarchy/plugins/me.thing")
+            mine.mkdir(parents=True)
+            (mine / "manifest.json").write_text(json.dumps(
+                {"id": "me.thing", "version": "1.0"}))
+            with mock.patch.dict("os.environ", {"OMARCHY_PATH": f"{d}/omarchy",
+                                                "XDG_CONFIG_HOME": f"{d}/config"}), \
+                 mock.patch.object(plugins.subprocess, "run",
+                                   return_value=mock.Mock(stdout=json.dumps(listed))):
+                found = {i.id: i for i in plugins.installed(fetch=False)}
+        self.assertEqual(list(found)[0], "me.thing")         # yours first
+        self.assertFalse(found["me.thing"].built_in)
+        self.assertEqual(found["me.thing"].state.kind, plugins.LOCAL)   # no .git
+        self.assertTrue(found["omarchy.clock"].built_in)
+        self.assertEqual(found["omarchy.clock"].description, "The time")
+        self.assertFalse(found["omarchy.bar"].can_disable)
+        self.assertTrue(found["me.thing"].has_panel)
+
+    def test_plugins_leave_applications_and_local_builds(self):
+        import app as app_mod
+        win = _Stub()
+        win.query = ""
+        plugin = mock.Mock(source=inventory.LOCAL, has_update=True, haystack="",
+                           app=inventory.App(name="p", version="1",
+                                             source=inventory.LOCAL,
+                                             extra={"plugin_id": "p"}))
+        build = mock.Mock(source=inventory.LOCAL, has_update=False, haystack="",
+                          app=inventory.App(name="b", version="1",
+                                            source=inventory.LOCAL, extra={}))
+        for key, want in (("apps", False), (inventory.LOCAL, False),
+                          ("all", True), ("updates", True)):
+            win.filter_key = key
+            self.assertEqual(app_mod.AlmanacWindow._match(win, plugin, None), want, key)
+        win.filter_key = inventory.LOCAL
+        self.assertTrue(app_mod.AlmanacWindow._match(win, build, None))
+
+
+class WindowStarts(unittest.TestCase):
+    def test_every_page_shortcut_is_a_valid_accelerator(self):
+        """Ctrl+10 does not exist; an invalid accelerator stops the window
+        from being constructed at all."""
+        import app as app_mod
+        self.assertLessEqual(len(app_mod.AlmanacWindow.PAGE_KEYS), 10)
+        for i in range(1, len(app_mod.AlmanacWindow.PAGE_KEYS) + 1):
+            self.assertIsNotNone(
+                app_mod.Gtk.ShortcutTrigger.parse_string(f"<Control>{i % 10}"))
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
