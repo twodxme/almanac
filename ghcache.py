@@ -54,6 +54,9 @@ def token() -> str:
     memory only.
     """
     global _token, _token_checked
+    import settings
+    if not settings.get("net_gh_token"):
+        return ""                       # Preferences → Privacy says not to
     if _token_checked:
         return _token or ""
     _token_checked = True

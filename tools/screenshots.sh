@@ -47,3 +47,4 @@ shoot ai        ai.png        18
 shoot health    health.png    18
 shoot history   history.png   15
 shoot plugins   plugins.png   15
+shoot switchboard switchboard.png 15

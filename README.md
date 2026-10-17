@@ -294,6 +294,20 @@ Hyprland rejects it, and removed with the plugin. **☰ → Restart the
 shell** restarts it and clears the compiled QML cache, for a plugin that acts
 as if it had not been updated.
 
+### Switchboard — everything with an on/off, in one place
+
+<img src="docs/screenshots/switchboard.png" alt="Switchboard" width="820">
+
+Plugins, the apps that start when you log in, your session's background
+services, and Almanac's own background work — each with a switch, and each
+switched the standard way: `omarchy plugin enable/disable`, a per-user
+`Hidden=true` override in `~/.config/autostart` (the system's copy is never
+touched), and `systemctl --user enable/disable --now`. Every switch moves only
+once the change holds. Session plumbing — PipeWire, the portals, the keyring —
+is marked essential and asks first, saying what would stop working; services
+started on demand by something else are not offered, since their switch could
+not mean what it says.
+
 ### Major releases and local changes
 
 A new major version of an agent CLI is held back from "update all" and from
@@ -369,6 +383,21 @@ asks through polkit.
 
 ---
 
+## Preferences
+
+**☰ → Preferences** (Ctrl+,) has four pages:
+
+- **General** — which page Almanac opens on, and which desktop notifications
+  you want: an action that changed nothing, settings reset to defaults,
+  plugin updates available.
+- **Updates** — the scheduled update and what it includes, whether major
+  releases wait for you, and which plugins bulk updates may touch.
+- **Privacy** — a switch for everything Almanac fetches: each marketplace, the
+  Arch Security Tracker, logos, and using your `gh` sign-in. Switch one off and
+  that part of Almanac does without.
+- **Background** — the settings watcher, which also checks plugins for updates
+  every few hours and notifies you only when something new is waiting.
+
 ## Theming
 
 Almanac wears whatever Omarchy is wearing. It reads
@@ -419,7 +448,8 @@ about this:
   GitHub API, and the matching package names from the AUR's public API —
   only for the link you pasted, only when you ask.
 
-No analytics, no telemetry, no accounts. Nothing is sent about what you have
+Each of these can be switched off in **Preferences → Privacy**. No analytics,
+no telemetry, no accounts. Nothing is sent about what you have
 installed; icon requests reveal only that *somebody* asked that host for its
 favicon.
 
@@ -435,7 +465,7 @@ better than I can.
 python3 test_app.py
 ```
 
-151 tests, weighted toward the destructive paths — removal, orphan cleanup,
+164 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

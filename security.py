@@ -53,8 +53,16 @@ class Vuln:
         return SEVERITY_RANK.get(self.severity, 4)
 
 
+def enabled() -> bool:
+    import settings
+    return bool(settings.get("net_security_tracker"))
+
+
 def advisories(ttl: int = TTL):
-    """The tracker's advisory groups, or None when it cannot be reached."""
+    """The tracker's advisory groups, or None when it cannot be reached or
+    has been turned off in Preferences."""
+    if not enabled():
+        return None
     path = _cache_path()
     cached = None
     try:
@@ -171,6 +179,11 @@ def finding():
     """The Health check row."""
     import maintenance as m
 
+    if not enabled():
+        return m.Finding(
+            id="vulnerabilities", title="Known vulnerabilities",
+            detail="Checking against the Arch Security Tracker is turned off "
+                   "in Preferences → Privacy.", severity=m.OK)
     vulns = vulnerabilities()
     if vulns is None:
         return m.Finding(

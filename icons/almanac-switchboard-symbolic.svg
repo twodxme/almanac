@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Almanac's Switchboard glyph: two switches, one on and one off. Symbolic,
+     so GTK recolours it with the theme; MIT, like the rest of Almanac. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" d="M4.5 1h7a3.5 3.5 0 0 1 0 7h-7a3.5 3.5 0 0 1 0-7zm7 1.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>
+  <path fill="#222222" d="M4.5 8.5h7a3.5 3.5 0 0 1 0 7h-7a3.5 3.5 0 0 1 0-7zm0 1.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm4 1.25v1.5h3v-1.5z"/>
+</svg>

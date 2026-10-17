@@ -19,6 +19,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Settings, history and caches are read from XDG state: point the whole run at
+# an empty one, so neither the developer's own preferences nor a previous run
+# can change what a test sees.
+import os  # noqa: E402
+os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp(prefix="almanac-test-state-")
+
 import appimage  # noqa: E402
 import inventory  # noqa: E402
 import store  # noqa: E402
@@ -1789,6 +1795,173 @@ class PluginRemovalAndRecheck(unittest.TestCase):
             app_mod.AlmanacWindow.on_plugin_remove(win, None, p)
             fake.say_yes()
         self.assertEqual(fake.ran[1][0], "Removing its keyboard shortcut")
+
+
+class Settings(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict("os.environ", {"XDG_STATE_HOME": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_defaults_and_a_bad_file(self):
+        import settings
+        self.assertTrue(settings.get("net_vendor_icons"))
+        settings.path().parent.mkdir(parents=True, exist_ok=True)
+        settings.path().write_text('{"net_vendor_icons": "nope"')       # broken
+        self.assertTrue(settings.get("net_vendor_icons"))
+        settings.path().write_text('{"net_vendor_icons": "nope"}')      # wrong type
+        self.assertTrue(settings.get("net_vendor_icons"))
+        with self.assertRaises(KeyError):
+            settings.get("no_such_setting")
+
+    def test_switched_off_network_features_make_no_request(self):
+        import ghcache
+        import icons
+        import security
+        import settings
+        for key in ("net_vendor_icons", "net_security_tracker", "net_gh_token",
+                    "net_market_omarchy", "net_market_artcraft", "net_market_themes"):
+            settings.set(key, False)
+        with mock.patch.object(icons, "cached", return_value=None), \
+             mock.patch.object(icons, "_fetch", side_effect=AssertionError("fetched")):
+            self.assertIsNone(icons.fetch("tailscale.com", domain="tailscale.com"))
+        with mock.patch.object(security.urllib.request, "urlopen",
+                               side_effect=AssertionError("fetched")):
+            self.assertIsNone(security.advisories())
+            self.assertIn("turned off", security.finding().detail)
+        ghcache._token_checked = False
+        self.assertEqual(ghcache.token(), "")
+        self.assertEqual(store.enabled_markets(), [])
+
+    def test_major_releases_are_held_only_while_set(self):
+        import agents
+        import settings
+        self.assertTrue(agents.hold_major("1.0", "2.0"))
+        settings.set("hold_majors", False)
+        self.assertFalse(agents.hold_major("1.0", "2.0"))
+
+    def test_the_old_plugin_scope_file_is_carried_over(self):
+        import plugins
+        old = plugins._settings_path()
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text('{"scope": "verified"}')
+        self.assertEqual(plugins.scope(), "verified")
+        self.assertFalse(old.exists())
+        self.assertEqual(plugins.scope(), "verified")
+
+    def test_closing_preferences_reads_the_schedule_from_its_own_list(self):
+        """1.4.0 reused one name for the schedule and the plugin scope, so
+        closing the dialog saved a scope as the schedule."""
+        import inspect
+        import app as app_mod
+        src = inspect.getsource(app_mod.AlmanacWindow.on_preferences)
+        self.assertIn('want = sched_keys[combo.get_selected()]', src)
+        # No bare "keys" left for the two lists to share.
+        self.assertIsNone(re.search(r"^\s+keys = ", src, re.M))
+
+
+class PluginUpdateNotices(unittest.TestCase):
+    def test_only_something_new_is_announced(self):
+        import watcher
+        with mock.patch.object(watcher, "_notify") as notify:
+            seen = watcher.announce_plugin_updates(["a", "b"], set())
+            seen = watcher.announce_plugin_updates(["a", "b"], seen)   # same
+            seen = watcher.announce_plugin_updates(["a"], seen)        # fewer
+            watcher.announce_plugin_updates(["a", "c"], seen)          # new one
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(notify.call_args.kwargs["page"], "plugins")
+
+    def test_switched_off_in_preferences(self):
+        import settings
+        import watcher
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict("os.environ", {"XDG_STATE_HOME": d}), \
+             mock.patch.object(watcher, "_notify") as notify:
+            settings.set("notify_plugin_updates", False)
+            watcher.announce_plugin_updates(["a"], set())
+        notify.assert_not_called()
+
+
+class StartupApps(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.sysdir = root / "etc/xdg/autostart"
+        self.sysdir.mkdir(parents=True)
+        (self.sysdir / "keys.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Keys\nExec=keys\n")
+        (self.sysdir / "gnome-only.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=G\nExec=g\nOnlyShowIn=GNOME;\n")
+        self.env = mock.patch.dict("os.environ", {
+            "XDG_CONFIG_DIRS": str(root / "etc/xdg"),
+            "XDG_CONFIG_HOME": str(root / "home"),
+            "XDG_CURRENT_DESKTOP": "Hyprland"})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def entry(self, name):
+        import autostart
+        return next(e for e in autostart.entries() if e.filename == name)
+
+    def test_entries_that_would_not_run_here_are_left_out(self):
+        import autostart
+        self.assertEqual([e.filename for e in autostart.entries()], ["keys.desktop"])
+
+    def test_off_is_a_user_override_and_on_removes_only_ours(self):
+        import autostart
+        autostart.set_enabled(self.entry("keys.desktop"), False)
+        override = autostart.user_dir() / "keys.desktop"
+        self.assertIn("Hidden=true", override.read_text())
+        self.assertFalse(self.entry("keys.desktop").enabled)
+        self.assertNotIn("Hidden", (self.sysdir / "keys.desktop").read_text())
+        autostart.set_enabled(self.entry("keys.desktop"), True)
+        self.assertFalse(override.exists())
+        self.assertTrue(self.entry("keys.desktop").enabled)
+
+    def test_a_users_own_entry_is_edited_never_deleted(self):
+        import autostart
+        mine = autostart.user_dir() / "mine.desktop"
+        mine.parent.mkdir(parents=True)
+        mine.write_text("[Desktop Entry]\nType=Application\nName=Mine\nExec=m\n")
+        autostart.set_enabled(self.entry("mine.desktop"), False)
+        autostart.set_enabled(self.entry("mine.desktop"), True)
+        self.assertTrue(mine.exists())
+        self.assertTrue(self.entry("mine.desktop").enabled)
+
+
+class BackgroundServices(unittest.TestCase):
+    def test_essential_is_by_exact_name(self):
+        import services
+        self.assertTrue(services.essential_for("wireplumber.service"))
+        self.assertEqual(services.essential_for("hyprsunset.service"), "")
+        self.assertEqual(
+            services.essential_for("xdg-desktop-portal-rewrite-launchers.service"), "")
+
+    def test_on_demand_units_are_not_offered(self):
+        import services
+        files = json.dumps([
+            {"unit_file": "mine.service", "state": "enabled"},
+            {"unit_file": "socketed.service", "state": "disabled"}])
+        shown = ("Id=mine.service\nDescription=Mine\nActiveState=active\n\n"
+                 "Id=socketed.service\nDescription=S\nActiveState=active\n")
+        with mock.patch.object(services, "available", return_value=True), \
+             mock.patch.object(services, "_run",
+                               side_effect=lambda *a, **k: files if a[0] == "list-unit-files"
+                               else shown):
+            names = [s.unit for s in services.services()]
+        self.assertEqual(names, ["mine.service"])
+
+    def test_the_switch_means_now_and_at_login(self):
+        import services
+        self.assertEqual(services.toggle_argv("x.service", False),
+                         ["systemctl", "--user", "disable", "--now", "x.service"])
 
 
 class PackageIntegrity(unittest.TestCase):

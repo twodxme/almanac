@@ -397,6 +397,13 @@ def major_jump(current: str, latest: str) -> bool:
     return bool(latest) and inventory.versions_behind(current, latest)[1] == "major"
 
 
+def hold_major(current: str, latest: str) -> bool:
+    """A major release that update-all and scheduled runs leave for a person
+    -- unless Preferences says to update majors like anything else."""
+    import settings
+    return major_jump(current, latest) and bool(settings.get("hold_majors"))
+
+
 def release_notes(repo: str, limit: int = 2000) -> str:
     """The latest release's notes from GitHub, trimmed, or ''."""
     if not repo:

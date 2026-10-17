@@ -396,3 +396,24 @@ def plugins():
         rows.append(p.Installed(pid, name, desc, "1.0.0", kinds, on,
                                 can_disable=pid != "omarchy.bar", built_in=True))
     return rows
+
+
+def startup_apps():
+    from pathlib import Path as P
+    import autostart as a
+    return [a.Entry(f"{n.lower()}.desktop", n, c, i, on, P("/etc/xdg/autostart"),
+                    None, False)
+            for n, c, i, on in (
+                ("Password manager", "Unlocks with the session", "dialog-password-symbolic", True),
+                ("Input method", "Typing in other scripts", "preferences-desktop-keyboard-symbolic", False),
+                ("Print queue", "Shows printer jobs", "printer-symbolic", False))]
+
+
+def user_services():
+    import services as s
+    return [s.Service(u, d, on, on, s.essential_for(u), u.startswith("omarchy"))
+            for u, d, on in (
+                ("syncthing.service", "File synchronisation", True),
+                ("omarchy-sleep-lock.service", "Lock before suspend", True),
+                ("backup.timer", "Nightly backup", False),
+                ("wireplumber.service", "Multimedia session manager", True))]

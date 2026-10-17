@@ -544,7 +544,11 @@ MARKETS: dict[str, Market] = {
 
 
 def enabled_markets() -> list[Market]:
-    return [m for m in MARKETS.values() if m.enabled]
+    """Marketplaces to load: built in, and not turned off in Preferences."""
+    import settings
+    return [m for m in MARKETS.values()
+            if m.enabled and settings.DEFAULTS.get(f"net_market_{m.id}") is not None
+            and settings.get(f"net_market_{m.id}")]
 
 
 # ---- loading -----------------------------------------------------------------

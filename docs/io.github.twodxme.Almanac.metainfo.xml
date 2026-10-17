@@ -96,6 +96,22 @@
   </requires>
 
   <releases>
+    <release version="1.5.0" date="2026-10-17">
+      <description>
+        <p>A Switchboard for everything with an on/off, proper Preferences, and
+        notifications when plugin updates are waiting.</p>
+        <ul>
+          <li>Switchboard: plugins, startup apps, background services and
+          Almanac's own background work, each with a switch</li>
+          <li>Preferences in four pages, with a switch for everything Almanac
+          fetches over the network</li>
+          <li>The settings watcher notifies you when new plugin updates are
+          available</li>
+          <li>Fixed: closing the settings could save the plugin update scope as
+          the update schedule</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-10-17">
       <description>
         <p>A Plugins page: every plugin on the system, with a switch, a logo,

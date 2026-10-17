@@ -120,7 +120,9 @@ def _save_reported(seen: set) -> None:
 
 def announce(found, seen: set) -> set:
     """Notify about resets not already reported. Returns the updated set."""
-    new = [r for r in found if str(r.backup) not in seen]
+    import settings
+    new = ([r for r in found if str(r.backup) not in seen]
+           if settings.get("notify_resets") else [])
     for r in new:
         n = len(r.lost)
         lost = (f" {n} of your entries {'was' if n == 1 else 'were'} removed."
@@ -131,8 +133,41 @@ def announce(found, seen: set) -> set:
     return seen | {str(r.backup) for r in found}
 
 
-def _notify(title: str, body: str) -> None:
-    """A notification whose action opens Almanac on the Health check."""
+# ---- plugin updates --------------------------------------------------------
+
+PLUGIN_CHECK_EVERY = 6 * 3600
+
+
+def _plugins_seen_path() -> Path:
+    return xdg.state_home() / "almanac" / "plugin-updates-notified.json"
+
+
+def plugin_updates() -> list[str]:
+    """Plugins with a clean update waiting, fetched as Omarchy fetches."""
+    import plugins
+    pdir = plugins.plugins_dir()
+    out = []
+    for d in sorted(pdir.glob("*")) if pdir.is_dir() else []:
+        if (d / "manifest.json").is_file() and plugins.classify(d, {}).updatable:
+            out.append(d.name)
+    return out
+
+
+def announce_plugin_updates(waiting: list[str], last: set) -> set:
+    """Notify only when something new is waiting -- not the same list again,
+    and not when the count merely fell because some were updated."""
+    import settings
+    new = set(waiting) - last
+    if new and settings.get("notify_plugin_updates"):
+        names = ", ".join(sorted(waiting)[:4]) + ("…" if len(waiting) > 4 else "")
+        _notify(f"{len(waiting)} plugin update(s) available", names,
+                page="plugins", urgency="normal")
+    return set(waiting)
+
+
+def _notify(title: str, body: str, page: str = "health",
+            urgency: str = "critical") -> None:
+    """A notification whose action opens Almanac on the relevant page."""
     tool = shutil.which("notify-send")
     if not tool:
         return
@@ -140,13 +175,13 @@ def _notify(title: str, body: str) -> None:
     def run():
         try:
             out = subprocess.run(
-                [tool, "-u", "critical", "-i", "io.github.twodxme.Almanac",
+                [tool, "-u", urgency, "-i", "io.github.twodxme.Almanac",
                  "-A", "open=Open Almanac", "--wait", title, body],
                 capture_output=True, text=True, timeout=3600).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return
         if out == "open":
-            subprocess.Popen([*launcher(), "--page", "health"],
+            subprocess.Popen([*launcher(), "--page", page],
                              start_new_session=True)
     import threading
     threading.Thread(target=run, daemon=True).start()
@@ -204,6 +239,29 @@ def main() -> int:
             continue
         mon.connect("changed", changed)
         monitors.append(mon)        # a collected monitor stops delivering
+
+    # Plugin updates: shortly after login, then every few hours, off the
+    # main loop -- a fetch per plugin must not delay noticing a reset.
+    import threading
+
+    def load_seen() -> set:
+        try:
+            return set(json.loads(_plugins_seen_path().read_text()))
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def check_plugins():
+        def work():
+            seen = announce_plugin_updates(plugin_updates(), load_seen())
+            try:
+                _plugins_seen_path().parent.mkdir(parents=True, exist_ok=True)
+                _plugins_seen_path().write_text(json.dumps(sorted(seen)))
+            except OSError:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+        return True                     # keep the timer
+    GLib.timeout_add_seconds(120, lambda: check_plugins() and False)
+    GLib.timeout_add_seconds(PLUGIN_CHECK_EVERY, check_plugins)
 
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 15, loop.quit)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 2, loop.quit)

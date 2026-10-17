@@ -378,14 +378,20 @@ def _settings_path() -> Path:
 
 
 def scope() -> str:
-    try:
-        value = json.loads(_settings_path().read_text()).get("scope", "all")
-    except (OSError, ValueError, AttributeError):
-        value = "all"
+    import settings
+    value = settings.get("plugin_scope")
+    old = _settings_path()
+    if old.is_file():
+        # 1.4.0 kept this in its own file: carry it over once.
+        try:
+            value = json.loads(old.read_text()).get("scope", value)
+            settings.set("plugin_scope", value)
+            old.unlink()
+        except (OSError, ValueError, AttributeError):
+            pass
     return value if value in {k for k, _l, _s in SCOPES} else "all"
 
 
 def set_scope(value: str) -> None:
-    path = _settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"scope": value}))
+    import settings
+    settings.set("plugin_scope", value)

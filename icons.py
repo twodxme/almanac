@@ -110,6 +110,9 @@ def fetch(key: str, url: str = "", domain: str = "") -> Path | None:
     hit = cached(key)
     if hit:
         return hit
+    import settings
+    if not settings.get("net_vendor_icons"):
+        return None                     # what is cached still shows
 
     misses = _load_misses()
     if time.time() - misses.get(key, 0) < MISS_TTL:

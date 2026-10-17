@@ -58,6 +58,9 @@ import patches  # noqa: E402
 import snapshots  # noqa: E402
 import plugin_setup as setup_mod  # noqa: E402
 import plugins as plugins_mod  # noqa: E402
+import autostart  # noqa: E402
+import services  # noqa: E402
+import settings  # noqa: E402
 import shortcuts  # noqa: E402
 import sources  # noqa: E402
 import verify  # noqa: E402
@@ -392,6 +395,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         ("library", _("Library"), (
             ("apps", _("Applications"), "view-grid-symbolic"),
             ("plugins", _("Plugins"), "application-x-addon-symbolic"),
+            ("switchboard", _("Switchboard"), "almanac-switchboard-symbolic"),
             ("all", _("Everything"), "view-list-symbolic"),
         )),
         ("sources", _("Sources"), (
@@ -443,6 +447,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         "plugins":     dict(view="plugins", title=_("Plugins"),
                             search=_("Search plugins"), update=False, sort=False,
                             filters=False),
+        "switchboard": dict(view="switchboard", title=_("Switchboard"),
+                            search=_("Search the switchboard"), update=False,
+                            sort=False, filters=False),
         "history":     dict(view="history", title=_("History"),
                             search=None, update=False, sort=False, filters=False),
         inventory.AGENT: dict(view="ai", title=_("AI"),
@@ -450,7 +457,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     }
 
     PAGE_KEYS = ("featured", "discover", "themes", "updates", inventory.AGENT,
-                 "apps", "plugins", "all", "maintenance", "history")
+                 "apps", "plugins", "switchboard", "maintenance", "history")
 
     @property
     def CATEGORIES(self):
@@ -653,7 +660,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         maintenance.append(_("Refresh this page"), "win.rescan")
         menu.append_section(None, maintenance)
         settings = Gio.Menu()
-        settings.append(_("Automatic updates…"), "win.prefs")
+        settings.append(_("Preferences…"), "win.prefs")
         menu.append_section(None, settings)
         about_section = Gio.Menu()
         about_section.append(_("Update Almanac…"), "win.selfupdate")
@@ -775,6 +782,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.content_stack.add_named(self._build_maintenance(), "maintenance")
         self.content_stack.add_named(self._build_history(), "history")
         self.content_stack.add_named(self._build_plugins_page(), "plugins")
+        self.content_stack.add_named(self._build_switchboard(), "switchboard")
         self.content_stack.add_named(self._build_ai(), "ai")
         self.content_stack.add_named(self._build_featured(), "featured")
         self.content_stack.set_visible_child_name("list")
@@ -1229,6 +1237,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         add("F5", self._refresh_page)
         add("<Control>u", lambda: self.on_update_all(None))
         add("<Control>w", self.close)
+        add("<Control>comma", self.on_preferences)        # the GNOME convention
         add("Escape", self._clear_search)
 
         # The primary destinations are reachable without the mouse, in the
@@ -1264,6 +1273,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._collapsed = {g for g in st["collapsed"] if g in self.group_rows}
             self._apply_all_group_states()
         chip = st.get("chip")
+        start = settings.get("start_page")
+        if start != "last" and start in self.sidebar_rows:
+            chip = start
         if chip in self.sidebar_rows:
             self._select_category(chip)
         self._wanted_sort = (st.get("sort_col"), st.get("sort_desc", False))
@@ -1354,7 +1366,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         body = (f"{names} was replaced with the shipped defaults"
                 + (f", removing {lost} of your entries" if lost else "")
                 + ". Your version was kept — restore it from Health check.")
-        self._notify(_("Your settings were reset"), body, "critical")
+        if settings.get("notify_resets"):
+            self._notify(_("Your settings were reset"), body, "critical")
         self._say(_("Settings reset to defaults — see Health check"), 10)
         if self.content_stack.get_visible_child_name() == "maintenance":
             self._maint_reload()
@@ -1882,8 +1895,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 header._chevron.set_tooltip_text(None)
         for key, row in self.sidebar_rows.items():
-            if key in ("maintenance", "history", "plugins", inventory.AGENT,
-                       "featured", "themes"):
+            if key in ("maintenance", "history", "plugins", "switchboard",
+                       inventory.AGENT, "featured", "themes"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
             # An empty category stays visible but recedes, so the layout does
@@ -1893,6 +1906,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # a count. Greying out the App Store is what made it unclickable.
             row.set_sensitive(
                 n > 0 or key in ("all", "updates", "discover", "themes", "plugins",
+                                 "switchboard",
                                  "maintenance", "featured", inventory.AGENT))
             # Red means "a security update is waiting", nothing else. Pending
             # updates are a number, not an emergency.
@@ -1979,6 +1993,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def on_search(self, entry):
         if getattr(self, "_page", "") == "plugins":
             self._plugins_filter(entry.get_text())
+            return
+        if getattr(self, "_page", "") == "switchboard":
+            self._switchboard_filter(entry.get_text())
             return
         if self.filter_key == "discover":
             if self.content_stack.get_visible_child_name() == "store":
@@ -2079,6 +2096,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._plugins_reload()
             return
 
+        if row._key == "switchboard":
+            self._leave_store()
+            self._show_page("switchboard")
+            self._switchboard_reload()
+            return
+
         if row._key == "maintenance":
             self._leave_store()
             self._show_page("maintenance")
@@ -2169,6 +2192,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._history_reload()
         elif page == "plugins":
             self._plugins_reload()
+        elif page == "switchboard":
+            self._switchboard_reload()
         elif page == inventory.AGENT:
             self._ai_reload()
         else:
@@ -3851,6 +3876,239 @@ class AlmanacWindow(Adw.ApplicationWindow):
                                   then=lambda ok: (self._plugins_reload(),
                                                    self._after_pacman(ok)))))
 
+    # ---- switchboard -------------------------------------------------------
+    def _build_switchboard(self):
+        """Everything with an on/off, in one place: plugins, startup apps,
+        background services and Almanac's own background work."""
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.switch_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                   spacing=20, margin_start=12, margin_end=12,
+                                   margin_bottom=16)
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self.switch_body)
+        page.append(scroller)
+        self._switch_rows: list = []
+        return page
+
+    def _switchboard_reload(self):
+        self._summarize(_("Reading what can be switched…"), "switchboard")
+
+        def work():
+            found = plugins_mod.installed(fetch=False)
+            starts = autostart.entries()
+            units = services.services()
+            try:
+                listings = {c.id: c for c in
+                            getattr(self, "_plugins", None) or store_mod.catalog()}
+            except Exception:                           # noqa: BLE001
+                listings = {}
+            GLib.idle_add(self._switchboard_show, found, starts, units, listings)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _switchboard_show(self, found, starts, units, listings=None):
+        while (child := self.switch_body.get_first_child()) is not None:
+            self.switch_body.remove(child)
+        self._switch_rows = []
+
+        def section(title, note, rows):
+            if not rows:
+                return
+            box = self._section(f"{title} ({len(rows)})", note)
+            for row, text in rows:
+                box._rows.append(row)
+                self._switch_rows.append((row, text))
+            self.switch_body.append(box)
+
+        # Yours first and the 37-odd built-ins last, so startup apps and
+        # services are not buried under the shell's own parts.
+        listings = listings or {}
+        section(_("Your plugins"),
+                _("Updates, shortcuts and removal are on the Plugins page."),
+                [(self._switch_plugin_row(i, listings.get(i.id)),
+                  f"{i.name} {i.id} {i.description}")
+                 for i in found if not i.built_in])
+        section(_("Startup apps"),
+                _("Started when you log in. Switching one off writes a "
+                  "per-user override; the system's copy is never touched."),
+                [(self._switch_autostart_row(e), f"{e.name} {e.filename} {e.comment}")
+                 for e in starts])
+        section(_("Background services"),
+                _("Your session's systemd services and timers. Off stops it "
+                  "now and at every login. Essential ones ask first."),
+                [(self._switch_service_row(u), f"{u.description} {u.unit}")
+                 for u in units])
+        section(_("Almanac"),
+                _("Almanac's own background work."),
+                self._switch_almanac_rows())
+        section(_("Built-in plugins"),
+                _("The parts of Omarchy's shell that can be switched off."),
+                [(self._switch_plugin_row(i), f"{i.name} {i.id} {i.description}")
+                 for i in found if i.built_in])
+
+        n = len(self._switch_rows)
+        self._summarize(f"{n} switches · {len(found)} plugins · {len(starts)} "
+                        f"startup apps · {len(units)} services", "switchboard")
+        self._switchboard_filter(self.search.get_text())
+        return False
+
+    def _switchboard_filter(self, text: str):
+        q = (text or "").strip().lower()
+        for row, hay in getattr(self, "_switch_rows", []):
+            row.set_visible(not q or q in hay.lower())
+
+    def _switch_row(self, title, subtitle, active, apply, *, prefix=None,
+                    pills=(), confirm_off="", sensitive=True):
+        """One row with a switch that moves only when the change holds.
+
+        `apply(on)` runs off the UI thread and returns the state now in
+        effect (or None when it cannot tell). `confirm_off` is asked before
+        switching off something that matters.
+        """
+        row = self._plain(title=title, subtitle=subtitle)
+        row.set_subtitle_lines(2)
+        if prefix is not None:
+            row.add_prefix(prefix)
+        for label, css in pills:
+            pill = Gtk.Label(label=label, valign=Gtk.Align.CENTER)
+            pill.add_css_class(css)
+            row.add_suffix(pill)
+        switch = Gtk.Switch(active=active, valign=Gtk.Align.CENTER,
+                            sensitive=sensitive)
+        _name(switch, f"{title} on" if active else f"{title} off")
+
+        def go(on):
+            switch.set_sensitive(False)
+
+            def work():
+                try:
+                    now = apply(on)
+                    err = ""
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    now, err = None, str(exc)
+                GLib.idle_add(done, on, now, err)
+            threading.Thread(target=work, daemon=True).start()
+
+        def done(on, now, err):
+            switch.set_sensitive(sensitive)
+            held = (now if now is not None else not on)
+            switch.set_state(held)
+            switch.set_active(held)
+            _name(switch, f"{title} on" if held else f"{title} off")
+            if now is on:
+                self._say(f"{title} {'on' if on else 'off'}")
+                history.record(history.ALMANAC,
+                               f"{title} switched {'on' if on else 'off'}")
+            else:
+                self._notify(f"{title} was not switched {'on' if on else 'off'}",
+                             err or _("The change did not take effect"))
+            return False
+
+        def state_set(_sw, on):
+            if not on and confirm_off:
+                dialog = Adw.AlertDialog(
+                    heading=f"Switch off {title}?",
+                    body=f"{confirm_off}\n\n" + _("You can switch it back on here."))
+                dialog.add_response("cancel", _("Keep it on"))
+                dialog.add_response("off", _("Switch off"))
+                dialog.set_response_appearance("off",
+                                               Adw.ResponseAppearance.DESTRUCTIVE)
+                dialog.set_default_response("cancel")
+                dialog.set_close_response("cancel")
+
+                def respond(_d, resp):
+                    if resp == "off":
+                        go(False)
+                    else:
+                        switch.set_active(True)
+                dialog.connect("response", respond)
+                dialog.present(self)
+                return True
+            go(on)
+            return True
+        switch.connect("state-set", state_set)
+        row.add_suffix(switch)
+        row.set_activatable_widget(switch)
+        return row
+
+    def _switch_plugin_row(self, i, listing=None):
+        def apply(on):
+            subprocess.run(plugins_mod.toggle_argv(i.id, on), capture_output=True,
+                           text=True, timeout=60)
+            return plugins_mod.enabled().get(i.id)
+        return self._switch_row(
+            i.name, i.description or i.id, i.enabled, apply,
+            prefix=self._plugin_logo(i, listing), sensitive=i.can_disable)
+
+    def _switch_autostart_row(self, e):
+        icon = Gtk.Image(pixel_size=28, valign=Gtk.Align.CENTER)
+        if e.icon.startswith("/"):
+            icon.set_from_file(e.icon)
+        else:
+            icon.set_from_icon_name(e.icon or "application-x-executable-symbolic")
+        icon.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+
+        def apply(on):
+            autostart.set_enabled(e, on)
+            return next((x.enabled for x in autostart.entries()
+                         if x.filename == e.filename), None)
+        return self._switch_row(e.name, e.comment or e.filename, e.enabled, apply,
+                                prefix=icon)
+
+    def _switch_service_row(self, u):
+        pills = []
+        if u.essential:
+            pills.append((_("Essential"), "pill-warn"))
+        if u.omarchy:
+            pills.append((_("Omarchy"), "pill-quiet"))
+        if u.active and u.enabled:
+            pills.append((_("Running"), "pill-ok"))
+        warn = ""
+        if u.essential:
+            warn = f"Without it: {u.essential.lower()} stops working."
+        elif u.omarchy:
+            warn = _("Omarchy set this up, and a later omarchy update may expect "
+                     "it to be on.")
+
+        def apply(on):
+            r = subprocess.run(services.toggle_argv(u.unit, on), capture_output=True,
+                               text=True, timeout=60)
+            if r.returncode != 0:
+                raise ValueError((r.stderr or r.stdout).strip().splitlines()[-1]
+                                 if (r.stderr or r.stdout).strip() else "systemctl failed")
+            return services.is_enabled(u.unit)
+        icon = Gtk.Image(icon_name="system-run-symbolic", pixel_size=22,
+                         valign=Gtk.Align.CENTER)
+        icon.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+        return self._switch_row(u.description, u.unit, u.enabled, apply,
+                                prefix=icon, pills=pills, confirm_off=warn)
+
+    def _switch_almanac_rows(self):
+        icon = lambda: Gtk.Image(icon_name="io.github.twodxme.Almanac",  # noqa: E731
+                                 pixel_size=28, valign=Gtk.Align.CENTER)
+
+        def guard(on):
+            watcher.enable() if on else watcher.disable()
+            return watcher.enabled()
+
+        def schedule(on):
+            ok, msg = autoupdate.set_enabled(on)
+            if not ok:
+                raise ValueError(msg)
+            return autoupdate.status()["enabled"]
+        return [
+            (self._switch_row(
+                _("Settings watcher"),
+                _("Notices settings reset to defaults, and plugin updates, "
+                  "while Almanac is closed"),
+                watcher.enabled(), guard, prefix=icon()), "settings watcher guard"),
+            (self._switch_row(
+                _("Scheduled updates"),
+                _("What runs and how often: Preferences → Updates"),
+                autoupdate.status()["enabled"], schedule, prefix=icon()),
+             "scheduled updates timer"),
+        ]
+
     # ---- history ----------------------------------------------------------
     _HISTORY_ICONS = {
         history.PACKAGES: "package-x-generic-symbolic",
@@ -4451,7 +4709,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         upd = [e for _t, _d, es in getattr(self, "_ai_survey", [])
                for e in es if e.kind == ai.HARNESS and e.update and e.action]
         # Major releases are updated one at a time, with their notes shown.
-        held = [e for e in upd if agents_mod.major_jump(e.version, e.update)]
+        held = [e for e in upd if agents_mod.hold_major(e.version, e.update)]
         upd = [e for e in upd if e not in held]
         if held:
             self._say(_("Held back (major release, update it on its own): ")
@@ -4472,40 +4730,81 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     # ---- settings ---------------------------------------------------------
     def on_preferences(self, *_a):
-        """Scheduled updates: what runs unattended, and how often."""
+        """Almanac's preferences: General, Updates, Privacy, Background.
+
+        Scheduled-update changes are applied when the dialog closes (one
+        daemon-reload, not one per switch); everything else on change.
+        """
         cfg = autoupdate.load()
         st = autoupdate.status()
+        dialog = Adw.PreferencesDialog(title=_("Preferences"))
 
-        dialog = Adw.PreferencesDialog(title=_("Settings"))
-        page = Adw.PreferencesPage(title=_("Updates"),
-                                   icon_name="software-update-available-symbolic")
+        def switch(group, key, title, subtitle="", after=None):
+            row = Adw.SwitchRow(title=title, subtitle=subtitle,
+                                active=bool(settings.get(key)))
 
+            def changed(r, _p):
+                settings.set(key, r.get_active())
+                if after:
+                    after()
+            row.connect("notify::active", changed)
+            group.add(row)
+            return row
+
+        # ---- General
+        general = Adw.PreferencesPage(title=_("General"),
+                                      icon_name="preferences-system-symbolic")
+        start = Adw.PreferencesGroup(title=_("Starting up"))
+        pages = settings.START_PAGES
+        start_row = Adw.ComboRow(title=_("Open on"),
+                                 model=Gtk.StringList.new([_(l) for _k, l in pages]))
+        page_keys = [k for k, _l in pages]
+        cur = settings.get("start_page")
+        start_row.set_selected(page_keys.index(cur) if cur in page_keys else 0)
+        start_row.connect("notify::selected", lambda r, _p: settings.set(
+            "start_page", page_keys[r.get_selected()]))
+        start.add(start_row)
+        general.add(start)
+
+        notes = Adw.PreferencesGroup(
+            title=_("Notifications"),
+            description=_("Desktop notifications. Results still show inside the "
+                          "window either way."))
+        switch(notes, "notify_no_change", _("When an action changes nothing"),
+               _("An update or cleanup that ran but left things as they were"))
+        switch(notes, "notify_resets", _("When settings are reset to defaults"),
+               _("A tool replaced one of your config files with its default"))
+        switch(notes, "notify_plugin_updates", _("When plugin updates are available"),
+               _("Checked every few hours by the settings watcher (Background)"))
+        general.add(notes)
+        dialog.add(general)
+
+        # ---- Updates
+        updates = Adw.PreferencesPage(title=_("Updates"),
+                                      icon_name="software-update-available-symbolic")
         sched = Adw.PreferencesGroup(
             title=_("Automatic updates"),
             description=_("A systemd user timer runs the update in the "
                         "background. Anything that could stop the machine "
                         "booting is always held for you to run by hand, "
                         "whatever is set here."))
-
         enabled = Adw.SwitchRow(title=_("Run updates on a schedule"),
                                 active=st["enabled"])
         sched.add(enabled)
-
-        labels = [label for _k, label, _c in autoupdate.SCHEDULES]
-        keys = [k for k, _l, _c in autoupdate.SCHEDULES]
+        # Its own names: the plugin-scope list below once reused "keys", and
+        # closing the dialog saved a scope ("verified") as the schedule.
+        sched_labels = [label for _k, label, _c in autoupdate.SCHEDULES]
+        sched_keys = [k for k, _l, _c in autoupdate.SCHEDULES]
         current = autoupdate.current_schedule()
         combo = Adw.ComboRow(title=_("How often"),
-                             model=Gtk.StringList.new(labels))
-        combo.set_selected(keys.index(current) if current in keys else 1)
+                             model=Gtk.StringList.new(sched_labels))
+        combo.set_selected(sched_keys.index(current) if current in sched_keys else 1)
         sched.add(combo)
-
-        next_row = Adw.ActionRow(title=_("Next run"), subtitle=st["next"])
-        next_row.set_subtitle_selectable(True)
-        sched.add(next_row)
-        last_row = Adw.ActionRow(title=_("Last run"), subtitle=st["last"])
-        last_row.set_subtitle_selectable(True)
-        sched.add(last_row)
-        page.add(sched)
+        for title, value in ((_("Next run"), st["next"]), (_("Last run"), st["last"])):
+            r = Adw.ActionRow(title=title, subtitle=value)
+            r.set_subtitle_selectable(True)
+            sched.add(r)
+        updates.add(sched)
 
         include = Adw.PreferencesGroup(
             title=_("What the scheduled run updates"),
@@ -4529,43 +4828,21 @@ class AlmanacWindow(Adw.ApplicationWindow):
                                 active=bool(cfg.get(key)))
             rows[key] = row
             include.add(row)
-        page.add(include)
+        updates.add(include)
 
-        # Which plugins "Update plugins" may touch, by provenance.
-        plug = Adw.PreferencesGroup(
-            title=_("Plugin updates"),
-            description=_("Which plugins ☰ → Update plugins and scheduled runs "
-                          "update. Any plugin can still be updated on its own."))
-        scope_row = Adw.ComboRow(title=_("Update"),
+        care = Adw.PreferencesGroup(title=_("Care"))
+        switch(care, "hold_majors", _("Hold back major releases"),
+               _("A new major version of an agent CLI waits for you to update "
+                 "it on its own, with its release notes"))
+        scope_keys = [k for k, _l, _s in plugins_mod.SCOPES]
+        scope_row = Adw.ComboRow(title=_("Plugins that bulk updates touch"),
                                  model=Gtk.StringList.new(
                                      [lbl for _k, lbl, _s in plugins_mod.SCOPES]))
-        keys = [k for k, _l, _s in plugins_mod.SCOPES]
-        scope_row.set_selected(keys.index(plugins_mod.scope()))
+        scope_row.set_selected(scope_keys.index(plugins_mod.scope()))
         scope_row.connect("notify::selected", lambda r, _p: plugins_mod.set_scope(
-            keys[r.get_selected()]))
-        plug.add(scope_row)
-        page.add(plug)
-
-        # The settings watcher, for while this window is closed.
-        watch = Adw.PreferencesGroup(
-            title=_("While Almanac is closed"),
-            description=_("A small background process with no window. It only "
-                        "watches config folders, and notifies you the moment "
-                        "a tool resets one of your files to its defaults."))
-        guard_row = Adw.SwitchRow(
-            title=_("Watch for settings reset to defaults"),
-            subtitle=_("Starts with your session, through the standard autostart "
-                     "folder"),
-            active=watcher.enabled())
-
-        def toggle_guard(row, _pspec):
-            try:
-                watcher.enable() if row.get_active() else watcher.disable()
-            except OSError as exc:
-                self._say(f"Could not change the autostart entry: {exc}")
-        guard_row.connect("notify::active", toggle_guard)
-        watch.add(guard_row)
-        page.add(watch)
+            scope_keys[r.get_selected()]))
+        care.add(scope_row)
+        updates.add(care)
 
         actions = Adw.PreferencesGroup()
         run_row = Adw.ActionRow(
@@ -4579,23 +4856,70 @@ class AlmanacWindow(Adw.ApplicationWindow):
         run_btn.connect("clicked", lambda _b: self._run_scheduled_now())
         run_row.add_suffix(run_btn)
         actions.add(run_row)
-
         log_row = Adw.ActionRow(
             title=_("Last run log"),
-            subtitle=str(Path.home() / ".local/state/omarchy-auto-update/last-run.log"))
+            subtitle=str(xdg.state_home() / "omarchy-auto-update/last-run.log"))
         log_row.set_subtitle_selectable(True)
         actions.add(log_row)
-        page.add(actions)
+        updates.add(actions)
+        dialog.add(updates)
 
-        dialog.add(page)
+        # ---- Privacy
+        privacy = Adw.PreferencesPage(title=_("Privacy"),
+                                      icon_name="preferences-system-privacy-symbolic")
+        net = Adw.PreferencesGroup(
+            title=_("What Almanac fetches"),
+            description=_("Each is a request to the named service, made only to "
+                          "show you something. Nothing about this machine is "
+                          "sent with any of them. Switch one off and that part "
+                          "of Almanac does without."))
+        reload_store = lambda: setattr(self, "_plugins", None)  # noqa: E731
+        switch(net, "net_market_omarchy", _("Omarchy plugin marketplace"),
+               "plugins.omarchy.org", reload_store)
+        switch(net, "net_market_themes", _("Omarchy themes"),
+               _("GitHub, the omarchy-theme topic"), reload_store)
+        switch(net, "net_market_artcraft", _("ArtCraft apps"),
+               _("getartcraft.com and its GitHub releases"), reload_store)
+        switch(net, "net_security_tracker", _("Arch Security Tracker"),
+               _("security.archlinux.org — the whole advisory list, matched here"))
+        switch(net, "net_vendor_icons", _("Logos"),
+               _("Each from its vendor's own site, or GitHub for avatars; "
+                 "logos already saved still show"))
+        switch(net, "net_gh_token", _("Use your GitHub sign-in"),
+               _("Your existing gh login raises GitHub's limit from 60 requests "
+                 "an hour to 5,000. Held in memory, never saved or logged."))
+        privacy.add(net)
+        dialog.add(privacy)
 
-        # Applied on close rather than per-keystroke: flipping four switches
-        # should not mean four daemon-reloads.
+        # ---- Background
+        background = Adw.PreferencesPage(title=_("Background"),
+                                         icon_name="emblem-system-symbolic")
+        watch = Adw.PreferencesGroup(
+            title=_("While Almanac is closed"),
+            description=_("A small background process with no window. It watches "
+                          "config folders for a reset to defaults, and checks "
+                          "plugins for updates every few hours."))
+        guard_row = Adw.SwitchRow(
+            title=_("Settings watcher"),
+            subtitle=_("Starts with your session, through the standard autostart "
+                     "folder"),
+            active=watcher.enabled())
+
+        def toggle_guard(row, _pspec):
+            try:
+                watcher.enable() if row.get_active() else watcher.disable()
+            except OSError as exc:
+                self._say(f"Could not change the autostart entry: {exc}")
+        guard_row.connect("notify::active", toggle_guard)
+        watch.add(guard_row)
+        background.add(watch)
+        dialog.add(background)
+
         def apply(*_a):
             new = dict(cfg)
             for key, row in rows.items():
                 new[key] = row.get_active()
-            want = keys[combo.get_selected()]
+            want = sched_keys[combo.get_selected()]
             new["schedule"] = want
             autoupdate.save(new)
             if want != current:
@@ -4606,8 +4930,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 ok, msg = autoupdate.set_enabled(enabled.get_active())
                 if not ok:
                     self._say(f"Could not change the timer: {msg}")
-            state = "on" if enabled.get_active() else "off"
-            self._say(f"Scheduled updates {state}")
+            if getattr(self, "_plugins", None) is None and \
+                    self.content_stack.get_visible_child_name() == "store":
+                self._store_reload(force=True)
 
         dialog.connect("closed", apply)
         dialog.present(self)
@@ -5375,7 +5700,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if out.changed is False:
             # Something the user asked for did not happen. A toast can be
             # missed; this is the one result that must not be.
-            self._notify(_("Nothing changed"), out.message)
+            if settings.get("notify_no_change"):
+                self._notify(_("Nothing changed"), out.message)
             self._say(out.message, 10)
         else:
             self._say(out.message)
@@ -5850,6 +6176,7 @@ class AlmanacApp(Adw.Application):
         "health": "maintenance", "maintenance": "maintenance",
         "history": "history", "timeline": "history",
         "plugins": "plugins", "plugin": "plugins",
+        "switchboard": "switchboard", "switches": "switchboard",
         "apps": "apps", "applications": "apps",
         "all": "all", "everything": "all",
         "orphans": inventory.ORPHAN,
