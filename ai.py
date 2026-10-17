@@ -365,6 +365,10 @@ def survey() -> list[tuple[str, str, list[Entry]]]:
     `claude mcp list` health-checks 28 servers and takes most of the time
     here; the file scans should not be queued behind it.
     """
+    import demo
+    if demo.active():
+        return demo.ai_groups()
+
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=len(GROUPS)) as pool:

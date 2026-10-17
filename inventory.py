@@ -662,6 +662,10 @@ def collect() -> list[App]:
     checkupdates and yay on the network, git on disk, agents on process
     start-up. Run together the total is the slowest one rather than the sum.
     """
+    import demo
+    if demo.active():
+        return demo.collect()
+
     import agents
     from concurrent.futures import ThreadPoolExecutor
 

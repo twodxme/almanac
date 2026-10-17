@@ -421,6 +421,10 @@ CHECKS = (disk_space, pacman_cache, journal, yay_cache, orphan_packages,
 
 def run_all() -> list[Finding]:
     """Every check. Read-only; safe to run on a timer."""
+    import demo
+    if demo.active():
+        return demo.findings()
+
     out = []
     for check in CHECKS:
         try:

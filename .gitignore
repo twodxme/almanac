@@ -2,6 +2,3 @@ __pycache__/
 *.pyc
 *.bak.*
 
-# Screenshots are not published: they would show this machine’s own
-# installed software, which has nothing to do with the project.
-docs/screenshots/

@@ -469,7 +469,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     row = Adw.ActionRow(title=label)
                     row.set_title_lines(1)
                     row.add_prefix(Gtk.Image(icon_name=icon))
-                    count = Gtk.Label(valign=Gtk.Align.CENTER)
+                    count = Gtk.Label(valign=Gtk.Align.CENTER, visible=False)
                     count.add_css_class("count-badge")
                     row.add_suffix(count)
                     row._key, row._count, row._group = key, count, gkey
@@ -501,7 +501,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 row = Adw.ActionRow(title=label)
                 row.set_title_lines(1)
                 row.add_prefix(Gtk.Image(icon_name=icon))
-                count = Gtk.Label(valign=Gtk.Align.CENTER)
+                count = Gtk.Label(valign=Gtk.Align.CENTER, visible=False)
                 count.add_css_class("count-badge")
                 row.add_suffix(count)
                 row._key, row._count, row._group = key, count, gkey
@@ -1646,6 +1646,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     @staticmethod
     def _uptime() -> str:
+        import demo
+        if demo.active():
+            return "6d 2h"
         try:
             with open("/proc/uptime") as f:
                 seconds = float(f.read().split()[0])
@@ -1819,12 +1822,23 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._apply_group_state(gkey)
 
     def _select_category(self, key: str):
+        """Go to a category, whether or not its row is already selected.
+
+        GtkListBox emits nothing when you select the row that is already
+        selected, so the page never got applied in that case -- which is
+        exactly what happens when a restored category and `--page` name the
+        same destination, or when another path has already moved the
+        selection. Applying it directly makes the call mean what it says.
+        """
         row = self.sidebar_rows.get(key)
         if row is None:
             return
         self._collapsed.discard(getattr(row, "_group", ""))
         self._apply_all_group_states()
-        row.get_parent().select_row(row)
+        if row.is_selected():
+            self._on_sidebar_selected(row.get_parent(), row)
+        else:
+            row.get_parent().select_row(row)
 
     def _on_sidebar_selected(self, _list, row):
         if row is None:
@@ -3362,6 +3376,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._busy(True)
         self._summarize("Reading the AI setup…", inventory.AGENT)
 
+        import demo
+        if demo.active():
+            # One shot, no threads: the fixtures are already in memory.
+            self._ai_show(ai.survey(), final=True)
+            self._busy(False)
+            return
+
         specs = ai.group_specs()
         self._ai_survey = [(title, desc, []) for title, desc, _fn in specs]
         self._ai_pending = len(specs)
@@ -3389,6 +3410,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
     }
 
     def _ai_show(self, groups, final=True):
+        # Keep what was rendered: revisiting the page re-renders from this
+        # rather than reloading, and an unrecorded result showed as empty.
+        if final:
+            self._ai_survey = groups
         while (child := self.ai_page.get_first_child()) is not None:
             self.ai_page.remove(child)
 
@@ -4511,7 +4536,10 @@ class AlmanacApp(Adw.Application):
             win = AlmanacWindow(application=self)
             win.connect("close-request", self._on_close)
         if self.start_page:
-            win._select_category(self.start_page)
+            # After the restored category and the first inventory pass, so a
+            # late callback cannot pull the window off the requested page.
+            GLib.idle_add(win._select_category, self.start_page,
+                          priority=GLib.PRIORITY_LOW)
         win.present()
 
     @staticmethod

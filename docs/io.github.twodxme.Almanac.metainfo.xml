@@ -50,6 +50,33 @@
   </keywords>
 
 
+  <screenshots>
+    <screenshot type="default">
+      <caption>What needs attention today</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/featured.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Plugins, apps and themes with provenance on every card</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/app-store.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Themes previewed in their own colours</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/themes.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>One update list for six package managers</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/updates.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Agent CLIs, MCP servers, skills and hooks</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/ai.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>System health, each check with the command that acts on it</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/health.png</image>
+    </screenshot>
+  </screenshots>
+
   <url type="homepage">https://github.com/twodxme/almanac</url>
   <url type="bugtracker">https://github.com/twodxme/almanac/issues</url>
   <url type="vcs-browser">https://github.com/twodxme/almanac</url>

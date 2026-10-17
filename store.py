@@ -582,6 +582,21 @@ def installed_appimages() -> dict[str, str]:
 
 def annotate(plugins: list[Plugin]) -> None:
     """Mark what is already on the system, so cards can say so."""
+    import demo
+    if demo.active():
+        # The catalogue stays real -- it is public data -- but what counts as
+        # installed comes from the fixtures, so a screenshot never discloses
+        # what is actually on the machine taking it.
+        for p in plugins:
+            p.installed = (p.id in demo.INSTALLED_PLUGIN_IDS
+                           or (p.install_kind == "theme"
+                               and p.name.lower() in demo.INSTALLED_THEMES))
+            p.enabled = p.installed
+            p.local_version = p.version if p.installed else ""
+            if p.install_kind == "theme":
+                p.built_in = False
+        return
+
     have = installed_ids()
     images = installed_appimages()
     has_themes = any(p.install_kind == "theme" for p in plugins)
