@@ -412,6 +412,66 @@ def _usage(path: str):
     return free, total, 100 * (1 - free / total)
 
 
+def package_integrity() -> Finding:
+    """Files a package owns that are no longer where it put them.
+
+    `pacman -Qk` reports two completely different things in the same breath:
+    a file that is genuinely gone, and a file this process is not allowed to
+    look at. Most of /etc and all of /boot is root-only, so an unprivileged
+    run cannot see a large part of what it is checking -- and counting those
+    as faults reports a healthy system as broken. They are counted and
+    stated separately, never as problems.
+    """
+    # pacman writes the per-file warnings to stderr and the per-package
+    # summary to stdout. Reading only stdout silently reports full coverage
+    # of a check that could not open a quarter of what it looked at.
+    try:
+        proc = subprocess.run(["pacman", "-Qk"], capture_output=True,
+                              text=True, timeout=240)
+        out = (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if not out.strip():
+        return Finding(id="integrity", title="Package files",
+                       detail="Could not run the integrity check.",
+                       severity=OK)
+
+    missing, unreadable = [], 0
+    for line in out.splitlines():
+        if "warning:" not in line or "(" not in line:
+            continue
+        reason = line.rsplit("(", 1)[-1].rstrip(")").strip().lower()
+        body = line.split("warning:", 1)[1].strip()
+        path = body.rsplit("(", 1)[0].strip()
+        if "permission denied" in reason:
+            unreadable += 1
+        elif "no such file" in reason or "missing" in reason:
+            missing.append(path)
+        else:
+            missing.append(f"{path} — {reason}")
+
+    checked = sum(int(m) for m in re.findall(r"(\d+) total files", out))
+    note = (f" {unreadable} file(s) could not be read without root and were "
+            f"not checked." if unreadable else "")
+
+    if missing:
+        return Finding(
+            id="integrity", title="Package files",
+            detail=(f"{len(missing)} file(s) a package owns are missing from "
+                    f"disk, out of {checked:,} checked.{note} A package that "
+                    f"has lost files usually needs reinstalling."),
+            severity=WARN, count=len(missing), items=missing[:40],
+            fix_label="", fix=None,
+            fix_note="Reinstall the owning package with "
+                     "`pacman -S <name>` once you know which it is.")
+
+    return Finding(
+        id="integrity", title="Package files",
+        detail=f"All {checked:,} readable files are where their packages put "
+               f"them.{note}",
+        severity=OK)
+
+
 def disk_space() -> Finding:
     """Every filesystem that matters, not just the root one.
 
@@ -560,8 +620,8 @@ def _clear_runtime_logs(log):
     log("done")
 
 
-CHECKS = (disk_space, runtime_logs, pacman_cache, journal, yay_cache,
-          orphan_packages,
+CHECKS = (disk_space, runtime_logs, package_integrity, pacman_cache,
+          journal, yay_cache, orphan_packages,
           unmaintained_aur, failed_units, pacnew, dangling_desktop,
           broken_symlinks, rollbacks, trash)
 

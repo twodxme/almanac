@@ -537,6 +537,69 @@ class DiskChecks(unittest.TestCase):
             self.assertTrue(f.fix_label)
 
 
+class PackageIntegrity(unittest.TestCase):
+    """"Permission denied" and "missing" are not the same answer.
+
+    Most of /etc and all of /boot is root-only, so an unprivileged check
+    cannot see a large share of what it inspects. Counting those as faults
+    reports a healthy system as broken -- which is exactly the conclusion a
+    hand-run check reached on this machine before the distinction existed.
+    """
+
+    DENIED = ("warning: omarchy-settings: /etc/sudoers.d/omarchy-dns "
+              "(Permission denied)\n"
+              "warning: intel-ucode: /boot/intel-ucode.img (Permission denied)\n"
+              "omarchy-settings: 643 total files, 4 missing files\n")
+    GONE = ("warning: somepkg: /usr/share/somepkg/data.bin "
+            "(No such file or directory)\n"
+            "somepkg: 12 total files, 1 missing file\n")
+
+    @staticmethod
+    def _run_with(output):
+        import maintenance
+        class Result:
+            stdout = output
+            stderr = ""
+        with mock.patch.object(maintenance.subprocess, "run",
+                               return_value=Result()):
+            return maintenance.package_integrity()
+
+    def test_unreadable_files_are_not_faults(self):
+        import maintenance
+        f = self._run_with(self.DENIED)
+        self.assertEqual(f.severity, maintenance.OK,
+                         "permission denied is not a broken package")
+        self.assertEqual(f.items, [])
+        self.assertIn("without root", f.detail,
+                      "the check must disclose what it could not inspect")
+
+    def test_genuinely_missing_files_are_reported(self):
+        import maintenance
+        f = self._run_with(self.GONE)
+        self.assertEqual(f.severity, maintenance.WARN)
+        self.assertEqual(len(f.items), 1)
+        self.assertIn("data.bin", f.items[0])
+
+    def test_both_at_once_counts_them_separately(self):
+        f = self._run_with(self.DENIED + self.GONE)
+        self.assertEqual(len(f.items), 1, "only the real miss is flagged")
+        self.assertIn("2 file(s) could not be read", f.detail)
+
+    def test_stderr_is_read_too(self):
+        # pacman writes the per-file warnings to stderr; reading only stdout
+        # reports full coverage of a check that saw none of them.
+        import maintenance
+        class Split:
+            stdout = "somepkg: 12 total files, 1 missing file\n"
+            stderr = ("warning: somepkg: /usr/share/somepkg/data.bin "
+                      "(No such file or directory)\n")
+        with mock.patch.object(maintenance.subprocess, "run",
+                               return_value=Split()):
+            f = maintenance.package_integrity()
+        self.assertEqual(f.severity, maintenance.WARN,
+                         "the warning only exists on stderr")
+
+
 class VisualSystem(unittest.TestCase):
     """The two conventions an interface drifts away from first.
 
