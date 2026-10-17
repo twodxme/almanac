@@ -360,3 +360,39 @@ def history():
         by_day.setdefault(datetime.fromtimestamp(e.ts).date(), []).append(e)
     return [h.Day(d, evs, any(e.kind == h.SNAPSHOT for e in evs))
             for d, evs in sorted(by_day.items(), reverse=True)]
+
+
+def plugins():
+    """A believable plugin list, so the Plugins page shows no one's own."""
+    import plugins as p
+    up = p.State("example.weather", p.UPDATE, "behind", 23,
+                 "https://github.com/example/weather")
+    # No address: a real account's avatar must not appear in a screenshot.
+    edits = p.State("example.scratchpad", p.LOCAL_CHANGES, "modified", 7)
+    current = p.State("example.bar-clock", p.CURRENT, "",
+                      url="https://github.com/example/bar-clock")
+    dev = p.State("example.devtool", p.LOCAL, "symlink")
+    rows = [
+        p.Installed("example.weather", "Weather", "Current conditions and the "
+                    "next few hours, in the bar", "1.4.2", ("bar-widget",),
+                    True, state=up),
+        p.Installed("example.scratchpad", "Scratchpad", "A scratch buffer that "
+                    "follows you between workspaces", "0.9.1", ("panel",),
+                    True, state=edits),
+        p.Installed("example.bar-clock", "Bar clock", "A clock for the bar",
+                    "2.1.0", ("bar-widget",), False, state=current),
+        p.Installed("example.devtool", "Plugin I am writing", "Linked from a "
+                    "workspace", "0.1.0", ("panel",), True, state=dev),
+    ]
+    for pid, name, desc, kinds, on in (
+            ("omarchy.clock", "Clock", "The time and date", ("bar-widget",), True),
+            ("omarchy.bluetooth", "Bluetooth", "Devices and pairing",
+             ("bar-widget",), True),
+            ("omarchy.network", "Network", "Wi-Fi and wired", ("bar-widget",), True),
+            ("omarchy.battery", "Battery", "Charge and power profile",
+             ("bar-widget",), True),
+            ("omarchy.weather", "Weather", "Forecast in the bar", ("bar-widget",), False),
+            ("omarchy.bar", "Bar", "The bar itself", ("bar",), True)):
+        rows.append(p.Installed(pid, name, desc, "1.0.0", kinds, on,
+                                can_disable=pid != "omarchy.bar", built_in=True))
+    return rows

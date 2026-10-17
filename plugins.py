@@ -194,6 +194,9 @@ def installed(fetch: bool = True, cache: dict | None = None) -> list[Installed]:
     supply the description, and the user's own plugins are classified so the
     page can say whether each can be updated.
     """
+    import demo
+    if demo.active():
+        return demo.plugins()
     try:
         out = subprocess.run(["omarchy", "plugin", "list", "--json"],
                              capture_output=True, text=True, timeout=25).stdout

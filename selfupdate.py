@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 NAME = "Almanac"
 # Bumped by hand at release. git describe supersedes it in a checkout, so this
 # is only what a tarball install reports.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 GIT, PACKAGE, PLAIN = "git", "package", "plain"
 

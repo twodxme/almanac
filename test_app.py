@@ -1337,6 +1337,13 @@ class DemoModeHidesTheMachine(unittest.TestCase):
         self.assertNotIn(os.uname().release.split("-")[0], kernel)
         self.assertEqual(uptime, "6d 2h")
 
+    def test_plugins_are_synthetic(self):
+        import plugins
+        with mock.patch.dict("os.environ", {"ALMANAC_DEMO": "1"}), \
+             mock.patch.object(plugins.subprocess, "run",
+                               side_effect=AssertionError("asked omarchy")):
+            self.assertTrue(plugins.installed())
+
     def test_history_is_synthetic(self):
         import history
         with mock.patch.dict("os.environ", {"ALMANAC_DEMO": "1"}), \

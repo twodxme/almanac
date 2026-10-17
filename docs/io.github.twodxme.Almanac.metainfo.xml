@@ -96,6 +96,20 @@
   </requires>
 
   <releases>
+    <release version="1.4.0" date="2026-10-17">
+      <description>
+        <p>A Plugins page: every plugin on the system, with a switch, a logo,
+        and what state it is in.</p>
+        <ul>
+          <li>Switch any plugin on or off, built-in or your own</li>
+          <li>Plugins are classified before updating; a development link is
+          never updated</li>
+          <li>Update every plugin at once, within a trust scope you choose</li>
+          <li>Keyboard shortcuts for a plugin's panel, checked for conflicts</li>
+          <li>Restart the shell, clearing its compiled cache</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.3.0" date="2026-10-17">
       <description>
         <p>Over a thousand plugins that used to say "Manual setup" install in one

@@ -268,13 +268,18 @@ uninstall instructions are never offered. Plugins whose install itself cannot
 be done safely (a failed compatibility check, a version-matched helper, a
 monorepo, a suite with its own installer) still say "Manual setup", and why.
 
-### Installed plugins
+### Plugins — every one on the system, with a switch
 
-Every installed plugin can be switched on or off (through `omarchy plugin
-enable/disable`) from its row or its page, without removing it. Before
-anything offers to update one, it is classified: up to date, update waiting,
-local changes (edited, ahead of upstream, diverged, detached), local, or
-error. A **symlinked development plugin** — a link to its author's workspace —
+<img src="docs/screenshots/plugins.png" alt="Plugins" width="820">
+
+Library → Plugins lists every plugin Omarchy knows about, yours first and the
+built-ins after, each with a switch (`omarchy plugin enable/disable`) that
+moves only once Omarchy agrees. Each carries a logo — the vendor's own for a
+plugin about a service, the marketplace artwork for a listed one, otherwise an
+icon for what it does — and, for yours, its update state and provenance.
+Before anything offers to update one, it is classified: up to date, update
+waiting, local changes (edited, ahead of upstream, diverged, detached), local,
+or error. A **symlinked development plugin** — a link to its author's workspace —
 is never updated here, though `omarchy plugin update` would fast-forward it.
 Updates go through `omarchy plugin update`, which validates the result and
 rolls back a plugin that fails.
@@ -282,9 +287,10 @@ rolls back a plugin that fails.
 **☰ → Update plugins** updates every clean pending update at once, within a
 scope set in Preferences — verified only, verified and changed since review,
 or all — and lists what it held back and why. Scheduled runs honour the same
-scope. A plugin with a panel can be given a **keyboard shortcut**: checked
-against every binding Hyprland has, written to its own block in
-`bindings.lua`, and put back if Hyprland rejects it. **☰ → Restart the
+scope, and each plugin is checked again at the moment it is updated. A plugin
+with a panel can be given a **keyboard shortcut**: checked against every
+binding Hyprland has, written to its own block in `bindings.lua`, put back if
+Hyprland rejects it, and removed with the plugin. **☰ → Restart the
 shell** restarts it and clears the compiled QML cache, for a plugin that acts
 as if it had not been updated.
 
@@ -429,7 +435,7 @@ better than I can.
 python3 test_app.py
 ```
 
-140 tests, weighted toward the destructive paths — removal, orphan cleanup,
+151 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.
