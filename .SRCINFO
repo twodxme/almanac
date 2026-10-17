@@ -1,11 +1,12 @@
 pkgbase = almanac-git
 	pkgdesc = See everything installed, where it came from, and what needs you
-	pkgver = r26.1e92810
+	pkgver = r35.9a12c1b
 	pkgrel = 1
 	url = https://github.com/twodxme/almanac
 	arch = any
 	license = MIT
 	makedepends = git
+	makedepends = gettext
 	depends = python
 	depends = gtk4
 	depends = libadwaita

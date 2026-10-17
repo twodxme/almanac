@@ -1,7 +1,7 @@
 # Maintainer: twodxme <tim@wraplabs.com>
 pkgname=almanac-git
 _pkgname=almanac
-pkgver=r26.1e92810
+pkgver=r35.9a12c1b
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('any')
