@@ -1472,6 +1472,30 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._detail_row(vg, "Latest upstream commit", extra["git_subject"])
         page.add(vg)
 
+        # Advisories from the Arch Security Tracker, each linked to its page.
+        if extra.get("vulns"):
+            sg = Adw.PreferencesGroup(
+                title="Known vulnerabilities",
+                description="From the Arch Security Tracker, for the installed "
+                            "version.")
+            for v in extra["vulns"]:
+                cves = ", ".join(v["cves"][:4]) + ("…" if len(v["cves"]) > 4 else "")
+                fix = f"fixed in {v['fixed']}" if v["fixed"] else "no fix released yet"
+                row = self._plain(title=f"{v['group']} · {v['severity']} · {v['kind']}",
+                                  subtitle=f"{fix} · {cves}")
+                row.set_subtitle_lines(2)
+                link = Gtk.Button(icon_name="adw-external-link-symbolic",
+                                  valign=Gtk.Align.CENTER,
+                                  tooltip_text="Open the advisory")
+                link.add_css_class("flat")
+                link.update_property([Gtk.AccessibleProperty.LABEL],
+                                     [f"Open advisory {v['group']}"])
+                link.connect("clicked", lambda _b, g=v["group"]:
+                             self.open_url(f"https://security.archlinux.org/{g}"))
+                row.add_suffix(link)
+                sg.add(row)
+            page.add(sg)
+
         # --- where it came from ---
         og = Adw.PreferencesGroup(title="Origin")
         self._detail_row(og, "Source", SOURCE_LABEL.get(item.source, item.source))

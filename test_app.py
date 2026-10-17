@@ -1120,6 +1120,68 @@ class AboutWindow(unittest.TestCase):
         self.assertTrue(markup.startswith("<p>"))
 
 
+class KnownVulnerabilities(unittest.TestCase):
+    """Matched against the Arch Security Tracker with pacman's own vercmp."""
+    GROUPS = [
+        {"name": "AVG-1", "packages": ["openssl"], "status": "Fixed",
+         "severity": "High", "type": "arbitrary code execution",
+         "affected": "3.0.0-1", "fixed": "3.0.2-1", "issues": ["CVE-1"]},
+        {"name": "AVG-2", "packages": ["libxml2"], "status": "Vulnerable",
+         "severity": "Medium", "type": "denial of service",
+         "affected": "2.14.0-1", "fixed": None, "issues": ["CVE-2"]},
+        {"name": "AVG-3", "packages": ["curl"], "status": "Not affected",
+         "severity": "Low", "type": "", "affected": "1-1", "fixed": None,
+         "issues": []},
+    ]
+
+    def test_older_than_the_fix_is_vulnerable(self):
+        import security
+        v = security.vulnerabilities({"openssl": "3.0.1-1"}, self.GROUPS)
+        self.assertEqual([x.group for x in v], ["AVG-1"])
+
+    def test_the_fixed_version_is_not(self):
+        import security
+        self.assertEqual(security.vulnerabilities({"openssl": "3.0.2-1"},
+                                                  self.GROUPS), [])
+        # pkgrel and epoch are compared the way pacman compares them.
+        self.assertEqual(security.vulnerabilities({"openssl": "1:2.0-1"},
+                                                  self.GROUPS), [])
+
+    def test_no_fix_yet_counts_from_the_first_affected_version(self):
+        import security
+        self.assertEqual(len(security.vulnerabilities({"libxml2": "2.15.0-1"},
+                                                      self.GROUPS)), 1)
+        self.assertEqual(security.vulnerabilities({"libxml2": "2.13.0-1"},
+                                                  self.GROUPS), [])
+
+    def test_not_affected_is_ignored(self):
+        import security
+        self.assertEqual(security.vulnerabilities({"curl": "8-1"}, self.GROUPS), [])
+
+    def test_a_pending_update_that_fixes_it_is_a_security_update(self):
+        import security
+        v = security.vulnerabilities({"openssl": "3.0.1-1"}, self.GROUPS)
+        self.assertTrue(security.fixed_by(v, "3.0.2-1"))
+        self.assertFalse(security.fixed_by(v, "3.0.1-2"))
+
+    def test_unfixable_advisories_are_not_a_warning(self):
+        import maintenance as m
+        import security
+        v = security.vulnerabilities({"libxml2": "2.15.0-1"}, self.GROUPS)
+        with mock.patch.object(security, "vulnerabilities", return_value=v):
+            self.assertEqual(security.finding().severity, m.INFO)
+        v = security.vulnerabilities({"openssl": "3.0.1-1"}, self.GROUPS)
+        with mock.patch.object(security, "vulnerabilities", return_value=v):
+            self.assertEqual(security.finding().severity, m.CRIT)
+
+    def test_an_unreachable_tracker_is_not_a_clean_bill(self):
+        import maintenance as m
+        import security
+        with mock.patch.object(security, "vulnerabilities", return_value=None):
+            f = security.finding()
+        self.assertNotEqual(f.severity, m.OK)
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

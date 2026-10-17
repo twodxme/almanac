@@ -325,6 +325,22 @@ def packages() -> list[App]:
     up_repo, up_aur = up_repo_pre, up_aur_pre
     explicit = set(_run(["pacman", "-Qentq"]).split()) | set(_run(["pacman", "-Qemq"]).split())
 
+    # "Security update" means the update fixes a known vulnerability in the
+    # installed version, per the Arch Security Tracker. Only when the tracker
+    # cannot be reached does the old guess-by-name stand in.
+    import security
+    vulns = security.vulnerabilities(installed=versions)
+    vuln_map = security.by_package(vulns) if vulns is not None else None
+
+    def critical_for(name: str, pend: str) -> str:
+        if not pend:
+            return ""
+        if vuln_map is None:
+            return criticality(name)
+        if security.fixed_by(vuln_map.get(name, []), pend):
+            return "security"
+        return "core" if criticality(name) == "core" else ""
+
     apps = []
     for names, source, pending in ((repo_names, REPO, up_repo), (aur_names, AUR, up_aur)):
         for n in names:
@@ -356,7 +372,11 @@ def packages() -> list[App]:
                     "real_source": source,
                     # Numeric twins of size/installed, purely so the columns
                     # can sort on magnitude rather than on their text form.
-                    "critical": criticality(n) if pending.get(n) else "",
+                    "critical": critical_for(n, pending.get(n, "")),
+                    "vulns": [{"group": v.group, "severity": v.severity,
+                               "kind": v.kind, "fixed": v.fixed,
+                               "cves": v.cves}
+                              for v in (vuln_map or {}).get(n, [])],
                     "behind": versions_behind(versions.get(n, ""), pending.get(n, ""))
                               if pending.get(n) else (0, ""),
                     "maintainer": aur.get(n, {}).get("maintainer", ""),

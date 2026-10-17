@@ -665,10 +665,16 @@ def update_snapshots() -> Finding:
     return snapshots.finding()
 
 
+def known_vulnerabilities() -> Finding:
+    import security
+    return security.finding()
+
+
 CHECKS = (disk_space, runtime_logs, package_integrity, pacman_cache,
           journal, yay_cache, orphan_packages,
           unmaintained_aur, failed_units, pacnew, dangling_desktop,
-          broken_symlinks, rollbacks, trash, config_resets, update_snapshots)
+          broken_symlinks, rollbacks, trash, config_resets, update_snapshots,
+          known_vulnerabilities)
 
 
 # Which check produced which finding, so one can be asked again after its fix
@@ -682,6 +688,7 @@ CHECK_BY_ID = {
     "pacnew": pacnew, "dangling-desktop": dangling_desktop,
     "broken-symlinks": broken_symlinks, "rollbacks": rollbacks, "trash": trash,
     "config-reset": config_resets, "snapshot": update_snapshots,
+    "vulnerabilities": known_vulnerabilities,
 }
 
 
