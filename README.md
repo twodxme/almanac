@@ -64,9 +64,10 @@ Three catalogues in one grid, each entry carrying where it actually came from:
 - **[Omarchy Plugins](https://plugins.omarchy.org)** — the official marketplace,
   read from the same `catalog.json` the website's own front end uses, so the
   cards here carry the real artwork, descriptions, stars and install commands.
-- **Omarchy Themes** — 345 community themes from the `omarchy-theme` topic.
-  Install clones it; applying it is a separate, explicit second step, because
-  nobody wants their whole desktop re-skinned by a curious click.
+- **Omarchy Themes** — 345 community themes from the `omarchy-theme` topic,
+  with its own sidebar entry. Install clones it; applying it is a separate,
+  explicit second step, because nobody wants their whole desktop re-skinned by
+  a curious click.
 - **[ArtCraft](https://getartcraft.com)** — the Craft apps, installed as
   AppImages and tracked for updates afterwards.
 
@@ -83,6 +84,20 @@ Every card shows a **provenance chip**:
 | `Source unreachable` | The marketplace could not reach the repository on its last check |
 
 Sort and filter by provenance, publisher, marketplace, category or stars.
+
+### Themes — what the theme actually looks like
+
+<img src="docs/screenshots/themes.png" alt="Themes" width="820">
+
+GitHub's social card shows a repository, which tells you nothing about the only
+question you have. Every Omarchy theme publishes `colors.toml`, so Almanac
+fetches it — from `raw.githubusercontent.com`, which costs no API quota — and
+draws a miniature desktop in the theme's own colours: its bar, its window, its
+text, its accent, and the palette your terminal will use.
+
+Stock themes that ship with Omarchy are marked `Official` and offer **Apply**;
+community ones you installed also offer **Remove**. Same card, same slots, same
+vocabulary as every other listing.
 
 ### Updates — one list for six package managers
 

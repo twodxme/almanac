@@ -584,12 +584,16 @@ def annotate(plugins: list[Plugin]) -> None:
     """Mark what is already on the system, so cards can say so."""
     have = installed_ids()
     images = installed_appimages()
-    themes = installed_themes() if any(
-        p.install_kind == "theme" for p in plugins) else set()
+    has_themes = any(p.install_kind == "theme" for p in plugins)
+    themes = installed_themes() if has_themes else set()
+    mine = removable_themes() if has_themes else set()
     for p in plugins:
         if p.install_kind == "theme":
             p.installed = p.name.lower() in themes
             p.enabled = p.installed
+            # A stock theme is "built in" in exactly the sense a built-in
+            # plugin is: it is there, it works, and Remove does not apply.
+            p.built_in = p.installed and p.name.lower() not in mine
         elif p.install_kind == "appimage":
             p.installed = p.id in images
             p.enabled = p.installed
@@ -715,6 +719,9 @@ def browse(plugins: list[Plugin], query: str = "", category: str = "",
 
 def thumb_path(p: Plugin, detail: bool = False) -> Path | None:
     """Local path for a card image, or None when the entry has no artwork."""
+    if p.install_kind == "theme":
+        import themeart
+        return themeart.art_path(p.repo)
     rel = p.preview if detail else p.thumb
     if not rel:
         return None
@@ -725,6 +732,9 @@ def thumb_path(p: Plugin, detail: bool = False) -> Path | None:
 
 def fetch_thumb(p: Plugin, detail: bool = False) -> Path | None:
     """Download a card image if it is not already cached. Blocking."""
+    if p.install_kind == "theme":
+        import themeart
+        return themeart.thumbnail(p.repo)
     dest = thumb_path(p, detail)
     if dest is None:
         return None
@@ -839,6 +849,22 @@ MARKETS["themes"] = Market(
     loader=_theme_rows,
     listing="",
 )
+
+
+def removable_themes() -> set:
+    """Themes the user installed, as opposed to the ones Omarchy ships.
+
+    `omarchy theme remove` only accepts user-installed themes, so a stock
+    theme is treated exactly like a built-in plugin: present, applicable,
+    and not yours to delete.
+    """
+    try:
+        out = subprocess.run(["omarchy", "theme", "extras"],
+                             capture_output=True, text=True, timeout=20)
+        return {line.strip().lower() for line in out.stdout.splitlines()
+                if line.strip()}
+    except Exception:
+        return set()
 
 
 def installed_themes() -> set:

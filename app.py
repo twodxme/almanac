@@ -323,6 +323,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         ("primary", None, (
             ("featured", "Featured", "starred-symbolic"),
             ("discover", "App Store", "software-store-symbolic"),
+            ("themes", "Themes", "preferences-desktop-wallpaper-symbolic"),
             ("updates", "Updates", "software-update-available-symbolic"),
             (inventory.AGENT, "AI", "applications-science-symbolic"),
         )),
@@ -362,6 +363,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         "discover":    dict(view="store", title="App Store",
                             search="Search plugins and apps…",
                             update=False, sort=False, filters=True),
+        # The same view, pinned to one marketplace. Without this themes were
+        # reachable only through the filter drawer, and the first one did not
+        # appear until the thirtieth card of the default ordering.
+        "themes":      dict(view="store", title="Themes",
+                            search="Search Omarchy themes…",
+                            update=False, sort=False, filters=True,
+                            market="themes"),
         "packages":    dict(view="list", title="Software",
                             search="Search installed software",
                             update=True, sort=True, filters=False),
@@ -696,6 +704,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._store_cat_key = ""
         self._store_timer = None
         self._store_loaded_once = False
+        self._pinning = False
         self._findings = []
         self._maint_loaded_once = False
         self._ai_survey = []
@@ -1086,7 +1095,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         # The primary destinations are reachable without the mouse, in the
         # order they appear in the sidebar.
-        for i, key in enumerate(("featured", "discover", "updates",
+        for i, key in enumerate(("featured", "discover", "themes", "updates",
                                  inventory.AGENT, "apps", "all",
                                  "maintenance"), start=1):
             add(f"<Control>{i}", lambda k=key: self._select_category(k))
@@ -1601,7 +1610,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 header._chevron.set_tooltip_text(None)
         for key, row in self.sidebar_rows.items():
-            if key in ("maintenance", inventory.AGENT, "featured"):
+            if key in ("maintenance", inventory.AGENT, "featured", "themes"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
             row._count.set_text(str(n) if n else "")
@@ -1611,8 +1620,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # must stay reachable when empty, so none of the three is gated on
             # a count. Greying out the App Store is what made it unclickable.
             row.set_sensitive(
-                n > 0 or key in ("all", "updates", "discover", "maintenance",
-                                 "featured", inventory.AGENT))
+                n > 0 or key in ("all", "updates", "discover", "themes",
+                                 "maintenance", "featured", inventory.AGENT))
             row._count.remove_css_class("count-badge")
             row._count.remove_css_class("dim-label")
             if key == "updates" and n:
@@ -1778,14 +1787,15 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 self._maint_show(self._findings)
             return
 
-        if row._key == "discover":
+        if row._key in ("discover", "themes"):
             self._discovering = True
-            self._show_page("discover")
+            self._show_page(row._key)
             self.search.grab_focus()
             if not self._store_loaded_once:
                 self._store_loaded_once = True
                 self._store_reload()
             else:
+                self._pin_market(row._key)
                 self._store_refresh()
             return
         if self._leave_store():
@@ -1821,6 +1831,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if spec["search"]:
             self.search.set_placeholder_text(spec["search"])
         self.store_back.set_visible(False)
+        if spec["view"] == "store":
+            self._pin_market(key)
         self._sync_primary()
 
     def _refresh_page(self):
@@ -1836,6 +1848,48 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._ai_reload()
         else:
             self.reload()
+
+    def _pin_market(self, page: str):
+        """Point the marketplace filter at whatever this page is about.
+
+        The App Store shows every catalogue; Themes is the same view with one
+        of them selected. Changing the filter by hand afterwards re-titles the
+        page, so the header never claims to be showing something it is not.
+        """
+        wanted = (self.PAGES.get(page) or {}).get("market", "")
+        keys = getattr(self, "_store_markets", [""])
+        index = keys.index(wanted) if wanted in keys else 0
+        if self.store_market.get_selected() != index:
+            self._pinning = True
+            self.store_market.set_selected(index)
+            self._pinning = False
+
+    def _retitle_store(self):
+        """Say what the store is showing when the marketplace filter changes.
+
+        This only edits the title. It used to also select the matching
+        sidebar row, which re-entered the selection handler and rebuilt the
+        page -- so opening Themes, then letting the catalogue finish loading,
+        put you back on the App Store. Which page you are on is the sidebar's
+        business and nothing else's.
+        """
+        if self.content_stack.get_visible_child_name() != "store":
+            return
+        if getattr(self, "_pinning", False):
+            return
+        keys = getattr(self, "_store_markets", [""])
+        if len(keys) <= 1:
+            return
+        i = self.store_market.get_selected()
+        market = keys[i] if 0 <= i < len(keys) else ""
+        page = getattr(self, "_page", "discover")
+        if market == "themes":
+            self.title.set_title("Themes")
+        elif page == "themes" and not market:
+            # Un-pinned from the Themes page: it is the whole store now.
+            self.title.set_title("App Store")
+        else:
+            self.title.set_title(self.PAGES.get(page, {}).get("title", "App Store"))
 
     def _sync_primary(self):
         """Put the current page's main action in the header button."""
@@ -1994,7 +2048,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.store_market = Gtk.DropDown.new_from_strings(["All marketplaces"])
         self.store_market.set_tooltip_text("Marketplace")
         self.store_market.set_visible(len(store_mod.enabled_markets()) > 1)
-        self.store_market.connect("notify::selected", lambda *_: self._store_refresh())
+        self.store_market.connect(
+            "notify::selected",
+            lambda *_: (self._retitle_store(), self._store_refresh()))
         bar.append(self._labelled("Marketplace", self.store_market))
 
         toggles = Gtk.Box(spacing=8, homogeneous=True)
@@ -2092,25 +2148,43 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     def _store_count(self):
+        """The store's standing summary, worded for whichever page is showing.
+
+        Themes pin the marketplace filter, so "a filter is set" is always true
+        there and cannot be what decides the wording -- the page has to.
+        """
+        page = getattr(self, "_page", "discover")
         shown = self.store_model.get_n_items()
         results = getattr(self, "_store_results", [])
-        total = len(getattr(self, "_plugins", []))
-        installed = sum(1 for p in getattr(self, "_plugins", []) if p.installed)
-        filtered = (self.search.get_text().strip()
+        noun = "themes" if page == "themes" else "plugins"
+
+        # A pinned marketplace is the page, not a filter the user applied.
+        pinned = bool((self.PAGES.get(page) or {}).get("market"))
+        narrowed = (self.search.get_text().strip()
                     or getattr(self, "_store_cat_key", "")
                     or self.store_verified.get_active()
                     or self.store_installed.get_active()
                     or self.store_trust.get_selected() > 0
-                    or self.store_market.get_selected() > 0)
+                    or (self.store_market.get_selected() > 0 and not pinned))
+
+        pool = ([p for p in getattr(self, "_plugins", [])
+                 if p.install_kind == "theme"] if page == "themes"
+                else getattr(self, "_plugins", []))
+        total = len(pool)
+        installed = sum(1 for p in pool if p.installed)
+
         if shown < len(results):
-            self._summarize(f"{shown} of {len(results)} shown", "discover")
-        elif filtered:
-            self._summarize(f"{len(results)} of {total} plugins", "discover")
+            self._summarize(f"{shown} of {len(results)} shown", page)
+        elif narrowed:
+            self._summarize(f"{len(results)} of {total} {noun}", page)
+        elif page == "themes":
+            self._summarize(
+                f"{total} Omarchy themes · {installed} installed", page)
         else:
             markets = ", ".join(m.name for m in store_mod.enabled_markets())
             self._summarize(
-                f"{total} plugins from {markets} · {installed} installed here",
-                "discover")
+                f"{total} listings from {markets} · {installed} installed here",
+                page)
 
     # ---- card widgets ----------------------------------------------------
     def _card_setup(self, _factory, item):
@@ -2293,17 +2367,21 @@ class AlmanacWindow(Adw.ApplicationWindow):
         btn.remove_css_class("suggested-action")
         btn.remove_css_class("destructive-action")
         if p.installed and p.install_kind == "theme":
+            # An installed theme's useful action is wearing it; removing one
+            # is rare enough to belong in the detail sheet, where Remove sits
+            # for every other kind too.
             btn.set_label("Apply")
             btn.set_sensitive(True)
             btn.add_css_class("suggested-action")
-            btn.set_tooltip_text(f"Switch the desktop to {p.name}")
+            btn.set_tooltip_text(f"Switch the whole desktop to {p.name}")
             item._handler = btn.connect(
                 "clicked", lambda _b, pl=p: self._apply_theme_now(pl))
         elif p.installed:
             btn.set_label("Remove")
             btn.set_sensitive(not p.built_in)
-            btn.set_tooltip_text("Built-in plugins cannot be removed, only disabled"
-                                 if p.built_in else f"omarchy plugin remove {p.id}")
+            btn.set_tooltip_text(
+                "Ships with Omarchy — cannot be removed" if p.built_in
+                else f"Remove {p.name}")
             item._handler = btn.connect("clicked", self.on_plugin_remove, p)
         elif p.installable and p.install_cmd:
             btn.set_label("Install")
@@ -2432,11 +2510,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
             ["Any provenance"] + [f"{lbl} ({n})" for _k, lbl, n in trusts]))
 
         markets = store_mod.market_counts(plugins)
+        self._pinning = True
         self._store_markets = [""] + [mid for mid, _nm, _n in markets]
         self.store_market.set_model(Gtk.StringList.new(
             ["All marketplaces"] + [f"{nm} ({n})" for _mid, nm, n in markets]))
         self.store_market.set_visible(len(markets) > 1)
+        self._pinning = False
 
+        self._pin_market(getattr(self, "_page", "discover"))
         self._store_refresh()
         return False
 
@@ -2537,8 +2618,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               lambda ok: self._store_after(ok, p, "installed")))
 
     def on_plugin_remove(self, _button, p):
+        """Remove, with the command that kind of entry actually uses.
+
+        Three catalogues, three removal mechanisms. Dispatching on the kind
+        rather than assuming `omarchy plugin remove` matters: run against a
+        theme that command addresses something that does not exist.
+        """
         if p.install_kind == "appimage":
             self._remove_store_appimage(p)
+            return
+        if p.install_kind == "theme":
+            self._remove_theme(p)
             return
         tasks.confirm(
             self, f"Remove {p.name}?",
@@ -2608,6 +2698,20 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 self._refresh_hero()
             self._say(f"Now wearing {p.name}")
         return False
+
+    def _remove_theme(self, p):
+        if p.built_in:
+            self._say(f"{p.name} ships with Omarchy and cannot be removed", 6)
+            return
+        tasks.confirm(
+            self, f"Remove the {p.name} theme?",
+            "Deletes the cloned theme from ~/.config/omarchy/themes. If it is "
+            "the theme you are wearing, Omarchy falls back to another one.",
+            f"$ omarchy theme remove {p.name}", "Remove", True,
+            lambda: tasks.run(self, f"Removing {p.name}",
+                              [(f"Removing {p.name}",
+                                ["omarchy", "theme", "remove", p.name])],
+                              lambda ok: self._store_after(ok, p, "removed")))
 
     # ---- store entries that are AppImages, not plugins ----
     def _install_store_appimage(self, p):
@@ -2816,7 +2920,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
         bottom = Gtk.Box(spacing=8, margin_start=14, margin_end=14,
                          margin_top=8, margin_bottom=12,
                          halign=Gtk.Align.END)
-        if p.installed and not p.built_in:
+        if p.installed and p.install_kind == "theme":
+            apply = Gtk.Button(label="Apply")
+            apply.add_css_class("suggested-action")
+            apply.connect("clicked", lambda b: (dialog.close(),
+                                                self._apply_theme_now(p)))
+            if not p.built_in:
+                rm = Gtk.Button(label="Remove")
+                rm.add_css_class("destructive-action")
+                rm.connect("clicked", lambda b: (dialog.close(),
+                                                 self.on_plugin_remove(b, p)))
+                bottom.append(rm)
+            bottom.append(apply)
+        elif p.installed and not p.built_in:
             rm = Gtk.Button(label="Remove")
             rm.add_css_class("destructive-action")
             rm.connect("clicked", lambda b: (dialog.close(),
@@ -4203,6 +4319,7 @@ class AlmanacApp(Adw.Application):
     PAGE_ALIASES = {
         "featured": "featured", "home": "featured",
         "store": "discover", "app-store": "discover", "discover": "discover",
+        "themes": "themes", "theme": "themes",
         "updates": "updates", "update": "updates",
         "ai": inventory.AGENT, "agents": inventory.AGENT,
         "health": "maintenance", "maintenance": "maintenance",
