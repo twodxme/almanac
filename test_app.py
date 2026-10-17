@@ -1283,6 +1283,47 @@ class Accessibility(unittest.TestCase):
         self.assertEqual(unnamed, [])
 
 
+class Translations(unittest.TestCase):
+    def test_the_template_is_current(self):
+        """po/almanac.pot must hold every marked string, or translators work
+        from a stale list. Run po/update.sh after changing UI text."""
+        import shutil
+        import subprocess
+        if not shutil.which("xgettext"):
+            self.skipTest("gettext is not installed")
+        here = Path(__file__).parent
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["xgettext", "--language=Python", "--keyword=_",
+                            "--keyword=ngettext:1,2", "--from-code=UTF-8",
+                            "-o", f"{d}/now.pot", *sorted(map(str, here.glob("*.py")))],
+                           check=True, capture_output=True)
+            ids = lambda f: set(re.findall(r'^msgid "(.+)"$', Path(f).read_text(), re.M))
+            missing = ids(f"{d}/now.pot") - ids(here / "po/almanac.pot")
+        self.assertEqual(missing, set(), "run po/update.sh")
+
+    def test_a_compiled_translation_is_used(self):
+        import gettext
+        import shutil
+        import subprocess
+        import i18n
+        if not shutil.which("msgfmt"):
+            self.skipTest("gettext is not installed")
+        with tempfile.TemporaryDirectory() as d:
+            po = Path(d, "de.po")
+            po.write_text('msgid ""\nmsgstr "Content-Type: text/plain; charset=UTF-8\\n"\n\n'
+                          'msgid "History"\nmsgstr "Verlauf"\n')
+            Path(d, "de/LC_MESSAGES").mkdir(parents=True)
+            subprocess.run(["msgfmt", "-o", f"{d}/de/LC_MESSAGES/almanac.mo", str(po)],
+                           check=True)
+            t = gettext.translation(i18n.DOMAIN, localedir=d, languages=["de"])
+        self.assertEqual(t.gettext("History"), "Verlauf")
+
+    def test_untranslated_falls_back_to_english(self):
+        import i18n
+        self.assertEqual(i18n._("No string anyone has translated"),
+                         "No string anyone has translated")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

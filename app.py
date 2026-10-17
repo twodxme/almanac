@@ -17,6 +17,7 @@ if __name__ == "__main__" and "--guard" in sys.argv[1:]:
     import watcher
     sys.exit(watcher.main())
 
+from i18n import _  # noqa: E402
 import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
@@ -370,29 +371,29 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # keeping it current are what the app is for, and a header above them
         # would rank them as peers of "Sources".
         ("primary", None, (
-            ("featured", "Featured", "starred-symbolic"),
-            ("discover", "App Store", "software-store-symbolic"),
-            ("themes", "Themes", "preferences-desktop-wallpaper-symbolic"),
-            ("updates", "Updates", "software-update-available-symbolic"),
-            (inventory.AGENT, "AI", "applications-science-symbolic"),
+            ("featured", _("Featured"), "starred-symbolic"),
+            ("discover", _("App Store"), "software-store-symbolic"),
+            ("themes", _("Themes"), "preferences-desktop-wallpaper-symbolic"),
+            ("updates", _("Updates"), "software-update-available-symbolic"),
+            (inventory.AGENT, _("AI"), "applications-science-symbolic"),
         )),
-        ("library", "Library", (
-            ("apps", "Applications", "view-grid-symbolic"),
-            ("all", "Everything", "view-list-symbolic"),
+        ("library", _("Library"), (
+            ("apps", _("Applications"), "view-grid-symbolic"),
+            ("all", _("Everything"), "view-list-symbolic"),
         )),
-        ("sources", "Sources", (
-            (inventory.SYSTEM, "System", "preferences-system-symbolic"),
-            (inventory.REPO, "Repositories", "package-x-generic-symbolic"),
-            (inventory.AUR, "AUR", "package-x-generic-symbolic"),
-            (inventory.APPIMAGE, "AppImages", "application-x-executable-symbolic"),
-            (inventory.FLATPAK, "Flatpak", "application-x-executable-symbolic"),
-            (inventory.LOCAL, "Local builds", "applications-engineering-symbolic"),
-            (inventory.TOOL, "Dev tools", "utilities-terminal-symbolic"),
+        ("sources", _("Sources"), (
+            (inventory.SYSTEM, _("System"), "preferences-system-symbolic"),
+            (inventory.REPO, _("Repositories"), "package-x-generic-symbolic"),
+            (inventory.AUR, _("AUR"), "package-x-generic-symbolic"),
+            (inventory.APPIMAGE, _("AppImages"), "application-x-executable-symbolic"),
+            (inventory.FLATPAK, _("Flatpak"), "application-x-executable-symbolic"),
+            (inventory.LOCAL, _("Local builds"), "applications-engineering-symbolic"),
+            (inventory.TOOL, _("Dev tools"), "utilities-terminal-symbolic"),
         )),
-        ("maintenance", "Maintenance", (
-            ("maintenance", "Health check", "emblem-ok-symbolic"),
-            ("history", "History", "document-open-recent-symbolic"),
-            (inventory.ORPHAN, "Orphans", "user-trash-symbolic"),
+        ("maintenance", _("Maintenance"), (
+            ("maintenance", _("Health check"), "emblem-ok-symbolic"),
+            ("history", _("History"), "document-open-recent-symbolic"),
+            (inventory.ORPHAN, _("Orphans"), "user-trash-symbolic"),
         )),
     )
     # Sources collapse by default: they answer "where did this come from",
@@ -408,27 +409,27 @@ class AlmanacWindow(Adw.ApplicationWindow):
     #   update   show the "Update all" button
     #   sort     show the sort menu
     PAGES = {
-        "featured":    dict(view="featured", title="Featured",
+        "featured":    dict(view="featured", title=_("Featured"),
                             search=None, update=False, sort=False,
                             filters=False),
-        "discover":    dict(view="store", title="App Store",
+        "discover":    dict(view="store", title=_("App Store"),
                             search="Search plugins and apps…",
                             update=False, sort=False, filters=True),
         # The same view, pinned to one marketplace. Without this themes were
         # reachable only through the filter drawer, and the first one did not
         # appear until the thirtieth card of the default ordering.
-        "themes":      dict(view="store", title="Themes",
+        "themes":      dict(view="store", title=_("Themes"),
                             search="Search Omarchy themes…",
                             update=False, sort=False, filters=True,
                             market="themes"),
-        "packages":    dict(view="list", title="Software",
+        "packages":    dict(view="list", title=_("Software"),
                             search="Search installed software",
                             update=True, sort=True, filters=False),
-        "maintenance": dict(view="maintenance", title="Health check",
+        "maintenance": dict(view="maintenance", title=_("Health check"),
                             search=None, update=False, sort=False, filters=False),
-        "history":     dict(view="history", title="History",
+        "history":     dict(view="history", title=_("History"),
                             search=None, update=False, sort=False, filters=False),
-        inventory.AGENT: dict(view="ai", title="AI",
+        inventory.AGENT: dict(view="ai", title=_("AI"),
                               search=None, update=False, sort=False, filters=False),
     }
 
@@ -438,7 +439,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.set_title("Almanac")
+        self.set_title(_("Almanac"))
         self.set_icon_name("io.github.twodxme.Almanac")
         self.set_default_size(1320, 800)
         # Nothing here should ever need a horizontal scrollbar, so the window
@@ -562,13 +563,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # appeared only in a launcher and an alt-tab switcher.
         brand = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         mark = Gtk.Image(icon_name="io.github.twodxme.Almanac", pixel_size=18)
-        wordmark = Gtk.Label(label="Almanac")
+        wordmark = Gtk.Label(label=_("Almanac"))
         wordmark.add_css_class("heading")
         brand.append(mark)
         brand.append(wordmark)
         # Clicking an app's own mark opens its About, as it does in most
         # desktop apps; the menu entry stays for keyboard users.
-        brand_btn = Gtk.Button(child=brand, tooltip_text="About Almanac")
+        brand_btn = Gtk.Button(child=brand, tooltip_text=_("About Almanac"))
         brand_btn.add_css_class("flat")
         brand_btn.update_property([Gtk.AccessibleProperty.LABEL],
                                   ["About Almanac"])
@@ -588,7 +589,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         self.sidebar_toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic")
         self.sidebar_toggle.set_active(True)
-        _name(self.sidebar_toggle, "Show categories")
+        _name(self.sidebar_toggle, _("Show categories"))
         self.sidebar_toggle.connect(
             "toggled", lambda b: self.split.set_show_sidebar(b.get_active()))
         header.pack_start(self.sidebar_toggle)
@@ -597,7 +598,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # entry was the title widget, so no page had a name and the four
         # status labels were the only thing describing what you were looking
         # at -- each in a different place on the page.
-        self.title = Adw.WindowTitle(title="Almanac", subtitle="")
+        self.title = Adw.WindowTitle(title=_("Almanac"), subtitle="")
         title_box = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         self.busy = Gtk.Spinner(valign=Gtk.Align.CENTER)
         self.busy.set_visible(False)
@@ -605,7 +606,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         title_box.append(self.title)
         header.set_title_widget(title_box)
 
-        self.search = Gtk.SearchEntry(placeholder_text="Search installed software")
+        self.search = Gtk.SearchEntry(placeholder_text=_("Search installed software"))
         self.search.set_hexpand(True)
         self.search.connect("search-changed", self.on_search)
 
@@ -613,7 +614,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # it is; before this, "Update all" lived in the header while the AI
         # and Maintenance pages had their own button in their own toolbar, in
         # a different position with different alignment.
-        self.update_btn = Gtk.Button(label="Update all")
+        self.update_btn = Gtk.Button(label=_("Update all"))
         self.update_btn.add_css_class("suggested-action")
         self.update_btn.connect("clicked", self._on_primary)
         header.pack_end(self.update_btn)
@@ -621,38 +622,38 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         menu = Gio.Menu()
         actions = Gio.Menu()
-        actions.append("Install what’s in the search box…", "win.install")
-        actions.append("Install from a link…", "win.fromlink")
-        actions.append("Track an AppImage file…", "win.track")
+        actions.append(_("Install what’s in the search box…"), "win.install")
+        actions.append(_("Install from a link…"), "win.fromlink")
+        actions.append(_("Track an AppImage file…"), "win.track")
         menu.append_section(None, actions)
         maintenance = Gio.Menu()
-        maintenance.append("Review orphaned packages…", "win.clean")
-        maintenance.append("Refresh this page", "win.rescan")
+        maintenance.append(_("Review orphaned packages…"), "win.clean")
+        maintenance.append(_("Refresh this page"), "win.rescan")
         menu.append_section(None, maintenance)
         settings = Gio.Menu()
-        settings.append("Automatic updates…", "win.prefs")
+        settings.append(_("Automatic updates…"), "win.prefs")
         menu.append_section(None, settings)
         about_section = Gio.Menu()
-        about_section.append("Update Almanac…", "win.selfupdate")
-        about_section.append("About Almanac", "win.about")
+        about_section.append(_("Update Almanac…"), "win.selfupdate")
+        about_section.append(_("About Almanac"), "win.about")
         menu.append_section(None, about_section)
 
         self.SORTS_INSTALLED = (
-            ("default", "Priority (default)"), ("name", "Name A → Z"),
-            ("name_desc", "Name Z → A"), ("size", "Size"),
-            ("installed", "Install date"), ("category", "Category"),
-            ("behind", "Versions behind"))
+            ("default", _("Priority (default)")), ("name", _("Name A → Z")),
+            ("name_desc", _("Name Z → A")), ("size", _("Size")),
+            ("installed", _("Install date")), ("category", _("Category")),
+            ("behind", _("Versions behind")))
         # Only sorts the registry data can actually support: there is no
         # category for 5,576 of the 5,578 plugins, so offering one would be a
         # menu item that silently does nothing.
         self.SORTS_DISCOVER = (
-            ("default", "Best match (default)"), ("popular", "Most popular"),
-            ("trending", "Trending"), ("newest", "Recently added"),
-            ("name", "Name A → Z"), ("name_desc", "Name Z → A"))
+            ("default", _("Best match (default)")), ("popular", _("Most popular")),
+            ("trending", _("Trending")), ("newest", _("Recently added")),
+            ("name", _("Name A → Z")), ("name_desc", _("Name Z → A")))
 
         self.sort_btn = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
         self._rebuild_sort_menu(self.SORTS_INSTALLED)
-        _name(self.sort_btn, "Sort by")
+        _name(self.sort_btn, _("Sort by"))
         header.pack_end(self.sort_btn)
 
         # The store has no second button: the same control in the same place
@@ -668,7 +669,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
         menu_btn.set_menu_model(menu)
-        _name(menu_btn, "More actions")
+        _name(menu_btn, _("More actions"))
         header.pack_end(menu_btn)
 
         for name, fn in (("install", self.on_install), ("track", self.on_add_appimage),
@@ -697,12 +698,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # The way back from the repo/AUR search, which the sidebar cannot
         # offer: App Store is still the selected row, so re-selecting it
         # emits nothing.
-        self.store_back = Gtk.Button(label="Back to the App Store",
+        self.store_back = Gtk.Button(label=_("Back to the App Store"),
                                      icon_name="go-previous-symbolic",
                                      halign=Gtk.Align.START,
                                      margin_start=12, margin_bottom=6)
         self.store_back.add_css_class("flat")
-        self.store_back.set_tooltip_text("Return to the plugin marketplace")
+        self.store_back.set_tooltip_text(_("Return to the plugin marketplace"))
         self.store_back.set_visible(False)
         self.store_back.connect("clicked", lambda *_: self._store_return())
         box.append(self.store_back)
@@ -736,7 +737,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.list_stack.set_vexpand(True)
         self.list_stack.add_named(scroller, "list")
         self.list_empty = self._status_page(
-            "emblem-ok-symbolic", "Nothing here", "")
+            "emblem-ok-symbolic", _("Nothing here"), "")
         self.list_stack.add_named(self.list_empty, "empty")
         box.append(self.list_stack)
 
@@ -919,23 +920,23 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 pill.set_text("local edits")
                 pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
-                    "This checkout has uncommitted changes. Pulling upstream "
-                    "would overwrite them — commit or stash first.")
+                    _("This checkout has uncommitted changes. Pulling upstream "
+                    "would overwrite them — commit or stash first."))
                 pill.set_visible(True)
             elif it.source == inventory.SYSTEM and it.has_update:
                 pill.set_text("system")
                 pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
-                    "Omarchy itself — update with the whole system "
-                    "(Update all), never on its own")
+                    _("Omarchy itself — update with the whole system "
+                    "(Update all), never on its own"))
                 pill.set_visible(True)
             elif it.source == inventory.ORPHAN:
                 keep = it.advice == "keep"
                 pill.set_text("keep" if keep else "safe to remove")
                 pill.add_css_class("pill-warn" if keep else "pill-warn")
                 pill.set_tooltip_text(
-                    "Build tooling or a debug package — the next AUR build will "
-                    "want it back" if keep else "Nothing requires this any more")
+                    _("Build tooling or a debug package — the next AUR build will "
+                    "want it back") if keep else _("Nothing requires this any more"))
                 pill.set_visible(True)
             elif it.stale and not it.critical:
                 label, tip = {
@@ -954,13 +955,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
             elif it.critical == "security":
                 pill.set_text("security")
                 pill.set_tooltip_text(
-                    "Network-facing or credential-handling: a stale version is exposure")
+                    _("Network-facing or credential-handling: a stale version is exposure"))
                 pill.set_visible(True)
             elif it.critical == "core":
                 pill.set_text("core")
                 pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
-                    "Touches boot or needs a reboot — update with the full system, not alone")
+                    _("Touches boot or needs a reboot — update with the full system, not alone"))
                 pill.set_visible(True)
             else:
                 pill.set_visible(False)
@@ -1022,7 +1023,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     "clicked", lambda _b, u=url: self.open_url(u))
             else:
                 # Local builds and AppImages often have nowhere to point.
-                btn.set_tooltip_text("No upstream URL recorded")
+                btn.set_tooltip_text(_("No upstream URL recorded"))
                 btn.set_sensitive(False)
                 btn.remove_css_class("link-ish")
 
@@ -1071,7 +1072,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     upd.set_icon_name(INSTALL_ICON)
                     _name(upd, 
                         f"Install {it.name}"
-                        + (" (Omarchy plugin)" if it.source == inventory.PLUGIN else ""))
+                        + (_(" (Omarchy plugin)") if it.source == inventory.PLUGIN else ""))
                     upd._handler = upd.connect("clicked", self.on_install_item, it.app)
                 if it.app.extra.get("url"):
                     m = Gio.Menu()
@@ -1307,8 +1308,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         body = (f"{names} was replaced with the shipped defaults"
                 + (f", removing {lost} of your entries" if lost else "")
                 + ". Your version was kept — restore it from Health check.")
-        self._notify("Your settings were reset", body, "critical")
-        self._say("Settings reset to defaults — see Health check", 10)
+        self._notify(_("Your settings were reset"), body, "critical")
+        self._say(_("Settings reset to defaults — see Health check"), 10)
         if self.content_stack.get_visible_child_name() == "maintenance":
             self._maint_reload()
         return False
@@ -1324,7 +1325,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # Logged as well as shown, so the watch can be verified from a terminal
         # rather than only by staring at the window.
         print("pacman.log changed — rescanning", flush=True)
-        self._summarize("Packages changed — rescanning…")
+        self._summarize(_("Packages changed — rescanning…"))
         self.reload()
         return False                    # one-shot
 
@@ -1332,7 +1333,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def reload(self):
         if (act := self.lookup_action("rescan")):
             act.set_enabled(False)
-        self._summarize("Scanning…")
+        self._summarize(_("Scanning…"))
 
         def work():
             apps = inventory.collect()
@@ -1379,12 +1380,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
                      + ("no maintainer in the AUR" if a.extra["stale"] == "orphaned"
                         else "flagged out of date by its maintainer")
                      for a in abandoned]
-            self._notify("Software no longer maintained",
+            self._notify(_("Software no longer maintained"),
                          "\n".join(lines[:5]), "critical")
 
         if dupes and any(f.startswith("dupe:") for f in new):
             lines = [f"{k}: {', '.join(v)}" for k, v in list(dupes.items())[:5]]
-            self._notify("Duplicate software installed", "\n".join(lines))
+            self._notify(_("Duplicate software installed"), "\n".join(lines))
 
     def _apply(self, apps):
         self.store.remove_all()
@@ -1438,7 +1439,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                         and self.store.get_item(i).advice != "keep")
         if (act := self.lookup_action("clean")):
             act.set_enabled(removable > 0)
-        self.update_btn.set_label(f"Update all ({updates})" if updates else "Update all")
+        self.update_btn.set_label(f"Update all ({updates})" if updates else _("Update all"))
 
     def _on_row_activated(self, _view, position):
         item = self.sorted.get_item(position)
@@ -1486,8 +1487,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         page.add(hero)
 
         # --- version ---
-        vg = Adw.PreferencesGroup(title="Version")
-        self._detail_row(vg, "Installed", app.version)
+        vg = Adw.PreferencesGroup(title=_("Version"))
+        self._detail_row(vg, _("Installed"), app.version)
         if app.update:
             label = app.update
             if item.behind and item.behind_kind in ("major", "minor", "patch", "point"):
@@ -1495,19 +1496,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 label += "s behind)" if item.behind > 1 else " behind)"
             elif item.behind_kind == "rel":
                 label += "  (rebuild only)"
-            self._detail_row(vg, "Available", label)
+            self._detail_row(vg, _("Available"), label)
         if extra.get("published"):
-            self._detail_row(vg, "Released", extra["published"])
+            self._detail_row(vg, _("Released"), extra["published"])
         if extra.get("git_subject"):
-            self._detail_row(vg, "Latest upstream commit", extra["git_subject"])
+            self._detail_row(vg, _("Latest upstream commit"), extra["git_subject"])
         page.add(vg)
 
         # Advisories from the Arch Security Tracker, each linked to its page.
         if extra.get("vulns"):
             sg = Adw.PreferencesGroup(
-                title="Known vulnerabilities",
-                description="From the Arch Security Tracker, for the installed "
-                            "version.")
+                title=_("Known vulnerabilities"),
+                description=_("From the Arch Security Tracker, for the installed "
+                            "version."))
             for v in extra["vulns"]:
                 cves = ", ".join(v["cves"][:4]) + ("…" if len(v["cves"]) > 4 else "")
                 fix = f"fixed in {v['fixed']}" if v["fixed"] else "no fix released yet"
@@ -1516,7 +1517,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 row.set_subtitle_lines(2)
                 link = Gtk.Button(icon_name="adw-external-link-symbolic",
                                   valign=Gtk.Align.CENTER,
-                                  tooltip_text="Open the advisory")
+                                  tooltip_text=_("Open the advisory"))
                 link.add_css_class("flat")
                 link.update_property([Gtk.AccessibleProperty.LABEL],
                                      [f"Open advisory {v['group']}"])
@@ -1527,8 +1528,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             page.add(sg)
 
         # --- where it came from ---
-        og = Adw.PreferencesGroup(title="Origin")
-        self._detail_row(og, "Source", SOURCE_LABEL.get(item.source, item.source))
+        og = Adw.PreferencesGroup(title=_("Origin"))
+        self._detail_row(og, _("Source"), SOURCE_LABEL.get(item.source, item.source))
         for key, label in (("category", "Category"), ("size", "Installed size"),
                            ("license", "Licence"), ("Packager", "Packager"),
                            ("Architecture", "Architecture"), ("repo", "Checkout")):
@@ -1536,17 +1537,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if val:
                 self._detail_row(og, label, str(val))
         if item.installed_ts:
-            self._detail_row(og, "Installed",
+            self._detail_row(og, _("Installed"),
                              datetime.fromtimestamp(item.installed_ts)
                              .strftime("%d %b %Y, %H:%M"))
         if extra.get("built_ts"):
-            self._detail_row(og, "Built",
+            self._detail_row(og, _("Built"),
                              datetime.fromtimestamp(extra["built_ts"])
                              .strftime("%d %b %Y"))
         if extra.get("files"):
-            self._detail_row(og, "Files", f"{extra['files']:,}")
+            self._detail_row(og, _("Files"), f"{extra['files']:,}")
         if extra.get("url"):
-            r = Adw.ActionRow(title="Project page", subtitle=extra["url"])
+            r = Adw.ActionRow(title=_("Project page"), subtitle=extra["url"])
             r.set_subtitle_selectable(True)
             btn = Gtk.Button(icon_name="adw-external-link-symbolic", valign=Gtk.Align.CENTER)
             btn.add_css_class("flat")
@@ -1557,7 +1558,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         page.add(og)
 
         # --- relationships ---
-        deps = Adw.PreferencesGroup(title="Dependencies")
+        deps = Adw.PreferencesGroup(title=_("Dependencies"))
         added = False
         for key, label in (("Depends On", "Requires"), ("Required By", "Required by"),
                            ("Optional Deps", "Optional"), ("Provides", "Provides"),
@@ -1581,7 +1582,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         hb = Adw.HeaderBar()
 
         if app.update and item.source not in (inventory.SYSTEM,):
-            up = Gtk.Button(label="Update")
+            up = Gtk.Button(label=_("Update"))
             up.add_css_class("suggested-action")
             up.connect("clicked", lambda _b: (dialog.close(), self._update_from_detail(item)))
             hb.pack_end(up)
@@ -1878,7 +1879,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._discover_timer = None
         query = self.search.get_text().strip()
         browsing = len(query) < 2
-        self._summarize("Loading the plugin marketplace…" if browsing
+        self._summarize(_("Loading the plugin marketplace…") if browsing
                              else f"Searching for “{query}”…")
 
         def work():
@@ -2047,7 +2048,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.split.set_show_sidebar(not narrow)
         self.sidebar_toggle.set_active(not narrow)
         self.sidebar_toggle.set_tooltip_text(
-            "Show categories" if narrow else "Hide categories")
+            _("Show categories") if narrow else _("Hide categories"))
         # One column of cards is the right answer on a narrow window; four
         # would each be 110px wide.
         if hasattr(self, "store_grid"):
@@ -2073,7 +2074,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         drawer = spec.get("filters", False)
         self.sort_btn.set_visible(spec["sort"] or drawer)
         _name(self.sort_btn,
-              "Filter and sort the marketplace" if drawer else "Sort by")
+              _("Filter and sort the marketplace") if drawer else _("Sort by"))
         if drawer:
             self.sort_btn.set_menu_model(None)
             self.sort_btn.set_popover(self.store_drawer)
@@ -2139,10 +2140,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         market = keys[i] if 0 <= i < len(keys) else ""
         page = getattr(self, "_page", "discover")
         if market == "themes":
-            self.title.set_title("Themes")
+            self.title.set_title(_("Themes"))
         elif page == "themes" and not market:
             # Un-pinned from the Themes page: it is the whole store now.
-            self.title.set_title("App Store")
+            self.title.set_title(_("App Store"))
         else:
             self.title.set_title(self.PAGES.get(page, {}).get("title", "App Store"))
 
@@ -2283,25 +2284,25 @@ class AlmanacWindow(Adw.ApplicationWindow):
                       margin_top=8, margin_bottom=12)
 
         self.store_cat = Gtk.DropDown.new_from_strings(["All categories"])
-        self.store_cat.set_tooltip_text("Category")
+        self.store_cat.set_tooltip_text(_("Category"))
         self.store_cat.connect("notify::selected", lambda *_: self._store_refresh())
         bar.append(self._labelled("Category", self.store_cat))
 
         self.store_sort = Gtk.DropDown.new_from_strings(
             [label for _k, label, _f in store_mod.SORTS])
-        self.store_sort.set_tooltip_text("Sort by")
+        self.store_sort.set_tooltip_text(_("Sort by"))
         self.store_sort.connect("notify::selected", lambda *_: self._store_refresh())
         bar.append(self._labelled("Sort by", self.store_sort))
 
         self.store_trust = Gtk.DropDown.new_from_strings(["Any provenance"])
-        self.store_trust.set_tooltip_text("Filter by what is known about the source")
+        self.store_trust.set_tooltip_text(_("Filter by what is known about the source"))
         self.store_trust.connect("notify::selected", lambda *_: self._store_refresh())
         bar.append(self._labelled("Provenance", self.store_trust))
 
         # One marketplace today, so the control would be a dropdown with a
         # single entry. It appears on its own once a second one is registered.
         self.store_market = Gtk.DropDown.new_from_strings(["All marketplaces"])
-        self.store_market.set_tooltip_text("Marketplace")
+        self.store_market.set_tooltip_text(_("Marketplace"))
         self.store_market.set_visible(len(store_mod.enabled_markets()) > 1)
         self.store_market.connect(
             "notify::selected",
@@ -2309,31 +2310,31 @@ class AlmanacWindow(Adw.ApplicationWindow):
         bar.append(self._labelled("Marketplace", self.store_market))
 
         toggles = Gtk.Box(spacing=8, homogeneous=True)
-        self.store_verified = Gtk.ToggleButton(label="Verified")
+        self.store_verified = Gtk.ToggleButton(label=_("Verified"))
         self.store_verified.set_tooltip_text(
-            "Only entries with a review that still applies to the current "
-            "upstream commit")
+            _("Only entries with a review that still applies to the current "
+            "upstream commit"))
         self.store_verified.connect("toggled", lambda *_: self._store_refresh())
         toggles.append(self.store_verified)
 
-        self.store_installed = Gtk.ToggleButton(label="Installed")
-        self.store_installed.set_tooltip_text("Only what is already on this system")
+        self.store_installed = Gtk.ToggleButton(label=_("Installed"))
+        self.store_installed.set_tooltip_text(_("Only what is already on this system"))
         self.store_installed.connect("toggled", lambda *_: self._store_refresh())
         toggles.append(self.store_installed)
         bar.append(toggles)
 
         # Packages are not plugins, and mixing 15,000 of them into the
         # marketplace would bury it. The escape hatch stays explicit.
-        reset = Gtk.Button(label="Reset filters")
+        reset = Gtk.Button(label=_("Reset filters"))
         reset.add_css_class("flat")
-        reset.set_tooltip_text("Clear every filter and go back to Most popular")
+        reset.set_tooltip_text(_("Clear every filter and go back to Most popular"))
         reset.connect("clicked", lambda *_: self._store_reset_filters())
 
-        self.store_pkgs = Gtk.Button(label="Search repos and the AUR instead")
+        self.store_pkgs = Gtk.Button(label=_("Search repos and the AUR instead"))
         self.store_pkgs.add_css_class("flat")
         self.store_pkgs.set_tooltip_text(
-            "Packages are not plugins; 15,000 of them would bury the "
-            "marketplace, so they are searched separately")
+            _("Packages are not plugins; 15,000 of them would bury the "
+            "marketplace, so they are searched separately"))
         self.store_pkgs.connect("clicked", lambda *_: self._store_packages())
 
         bar.append(reset)
@@ -2377,17 +2378,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.store_stack = Gtk.Stack()
         self.store_stack.set_vexpand(True)
         self.store_stack.add_named(scroller, "grid")
-        retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER)
+        retry = Gtk.Button(label=_("Try again"), halign=Gtk.Align.CENTER)
         retry.add_css_class("suggested-action")
         retry.add_css_class("pill")
         retry.connect("clicked", lambda *_: self._store_reload(force=True))
         self.store_empty = self._status_page(
-            "system-search-symbolic", "Nothing matches",
-            "Try a different search, or clear the filters.", None)
+            "system-search-symbolic", _("Nothing matches"),
+            _("Try a different search, or clear the filters."), None)
         self.store_offline = self._status_page(
-            "network-offline-symbolic", "The catalogue could not be loaded",
-            "Almanac could not reach the marketplaces. It will use the last "
-            "copy it has as soon as one exists.", retry)
+            "network-offline-symbolic", _("The catalogue could not be loaded"),
+            _("Almanac could not reach the marketplaces. It will use the last "
+            "copy it has as soon as one exists."), retry)
         self.store_stack.add_named(self.store_empty, "empty")
         self.store_stack.add_named(self.store_offline, "offline")
         page.append(self.store_stack)
@@ -2506,9 +2507,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         name.set_hexpand(True)
         check = Gtk.Image(icon_name="emblem-ok-symbolic", pixel_size=12)
         check.add_css_class("store-verified")
-        check.set_tooltip_text("Source reviewed by the marketplace")
+        check.set_tooltip_text(_("Source reviewed by the marketplace"))
         spacer = Gtk.Box(hexpand=True)
-        installed = Gtk.Label(label="Installed",
+        installed = Gtk.Label(label=_("Installed"),
                               ellipsize=Pango.EllipsizeMode.END)
         installed.set_max_width_chars(10)
         installed.add_css_class("pill-ok")
@@ -2651,19 +2652,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # An installed theme's useful action is wearing it; removing one
             # is rare enough to belong in the detail sheet, where Remove sits
             # for every other kind too.
-            btn.set_label("Apply")
+            btn.set_label(_("Apply"))
             btn.set_sensitive(True)
             btn.add_css_class("suggested-action")      # filled: the main action
             btn.set_tooltip_text(f"Switch the whole desktop to {p.name}")
             item._handler = btn.connect(
                 "clicked", lambda _b, pl=p: self._apply_theme_now(pl))
         elif p.installed:
-            btn.set_label("Remove")
+            btn.set_label(_("Remove"))
             btn.set_sensitive(not p.built_in)
             # Low emphasis: removal should never be the loudest thing on a card.
             btn.add_css_class("flat")
             btn.set_tooltip_text(
-                "Ships with Omarchy — cannot be removed" if p.built_in
+                _("Ships with Omarchy — cannot be removed") if p.built_in
                 else f"Remove {p.name}")
             item._handler = btn.connect("clicked", self.on_plugin_remove, p)
         elif p.installable and p.install_cmd:
@@ -2683,7 +2684,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # These are listed but have no one-command install -- suites with
             # their own installers, mostly. "Manual setup" is what the
             # marketplace calls it, and it beats an Install that cannot work.
-            btn.set_label("Manual setup")
+            btn.set_label(_("Manual setup"))
             btn.set_sensitive(True)
             btn.add_css_class("flat")                  # not an install: quieter
             btn.set_tooltip_text(p.install_note or "Not installable from here")
@@ -2760,7 +2761,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     # ---- marketplace data ------------------------------------------------
     def _store_reload(self, force: bool = False):
         self._busy(True)
-        self._summarize("Loading the plugin marketplace…", "discover")
+        self._summarize(_("Loading the plugin marketplace…"), "discover")
 
         def work():
             try:
@@ -2840,8 +2841,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                          or self.store_installed.get_active()
                          or self.store_trust.get_selected() > 0)
             self.store_empty.set_description(
-                "Try a different search, or clear the filters." if clearable
-                else "This marketplace has nothing listed right now.")
+                _("Try a different search, or clear the filters.") if clearable
+                else _("This marketplace has nothing listed right now."))
             self.store_stack.set_visible_child_name("empty")
         else:
             self.store_stack.set_visible_child_name("grid")
@@ -2868,10 +2869,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         query = self.search.get_text().strip()
         if len(query) < 2:
             self._say(
-                "Type at least two characters to search repos and the AUR")
+                _("Type at least two characters to search repos and the AUR"))
             return
         self.content_stack.set_visible_child_name("list")
-        self.title.set_title("Repositories and AUR")
+        self.title.set_title(_("Repositories and AUR"))
         self.update_btn.set_visible(False)
         self.store_back.set_visible(True)
         self._rebuild_sort_menu(self.SORTS_DISCOVER)
@@ -2912,9 +2913,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                   f"$ {' '.join(argv)}")
         tasks.confirm(
             self, f"Install {p.name}?",
-            "Omarchy shell plugins run inside the shell process with your "
-            "permissions — there is no sandbox. Install what you trust.",
-            detail, "Install", False,
+            _("Omarchy shell plugins run inside the shell process with your "
+            "permissions — there is no sandbox. Install what you trust."),
+            detail, _("Install"), False,
             lambda: tasks.run(self, f"Installing {p.name}",
                               [(f"Installing {p.name}", argv)],
                               lambda ok: self._store_after(ok, p, "installed")))
@@ -2937,7 +2938,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"The plugin and its cloned repository are deleted from "
             f"~/.config/omarchy/plugins.",
             f"$ omarchy plugin remove {p.id} --yes",
-            "Remove", True,
+            _("Remove"), True,
             lambda: tasks.run(self, f"Removing {p.name}",
                               [(f"Removing {p.name}",
                                 ["omarchy", "plugin", "remove", p.id, "--yes"])],
@@ -2957,13 +2958,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         url = p.install_cmd.split()[-1]
         tasks.confirm(
             self, f"Install the {p.name} theme?",
-            "The theme is cloned into ~/.config/omarchy/themes. Nothing "
-            "changes appearance until you apply it.",
+            _("The theme is cloned into ~/.config/omarchy/themes. Nothing "
+            "changes appearance until you apply it."),
             f"Publisher  {p.publisher}\n"
             f"Licence    {p.license or 'unstated'}\n"
             f"Stars      {p.stars}\n\n"
             f"$ omarchy theme install {url}",
-            "Install", False,
+            _("Install"), False,
             lambda: tasks.run(
                 self, f"Installing {p.name}",
                 [(f"Installing {p.name}",
@@ -2985,9 +2986,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _apply_theme_now(self, p):
         tasks.confirm(
             self, f"Switch to {p.name}?",
-            "Applies the theme to the whole desktop — bar, terminal, editor "
-            "and this window. Your previous theme stays installed.",
-            f"$ omarchy theme set {p.name}", "Apply", False,
+            _("Applies the theme to the whole desktop — bar, terminal, editor "
+            "and this window. Your previous theme stays installed."),
+            f"$ omarchy theme set {p.name}", _("Apply"), False,
             lambda: tasks.run(self, f"Applying {p.name}",
                               [(f"Applying {p.name}",
                                 ["omarchy", "theme", "set", p.name])],
@@ -3007,9 +3008,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             return
         tasks.confirm(
             self, f"Remove the {p.name} theme?",
-            "Deletes the cloned theme from ~/.config/omarchy/themes. If it is "
-            "the theme you are wearing, Omarchy falls back to another one.",
-            f"$ omarchy theme remove {p.name}", "Remove", True,
+            _("Deletes the cloned theme from ~/.config/omarchy/themes. If it is "
+            "the theme you are wearing, Omarchy falls back to another one."),
+            f"$ omarchy theme remove {p.name}", _("Remove"), True,
             lambda: tasks.run(self, f"Removing {p.name}",
                               [(f"Removing {p.name}",
                                 ["omarchy", "theme", "remove", p.name])],
@@ -3028,7 +3029,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self, f"Install {p.name}?",
             f"{p.size_mb:.0f} MB will be downloaded from GitHub and kept "
             f"with Almanac's apps, with a launcher entry.",
-            detail, "Install", False,
+            detail, _("Install"), False,
             lambda: tasks.run(
                 self, f"Installing {p.name}",
                 [(f"Downloading {p.name} {p.version}",
@@ -3078,10 +3079,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               extra={"key": p.id})
         tasks.confirm(
             self, f"Remove {p.name}?",
-            "The AppImage, its rollback copy and its launcher entry are "
-            "deleted. Documents you created with it are untouched.",
+            _("The AppImage, its rollback copy and its launcher entry are "
+            "deleted. Documents you created with it are untouched."),
             f"{entry.exec_path}\n{entry.exec_path.replace('.AppImage', '.previous')}",
-            "Remove", True,
+            _("Remove"), True,
             lambda: (self._remove_appimage(entry),
                      self._store_after(True, p, "removed")))
 
@@ -3165,33 +3166,33 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         t = p.trust
         prov = Adw.PreferencesGroup(
-            title="Provenance",
-            description="Where this comes from and what has actually been "
-                        "checked about it")
-        self._detail_row(prov, "Marketplace", p.market_name)
-        self._detail_row(prov, "Publisher", p.publisher)
-        self._detail_row(prov, "Declared author", p.author)
-        self._detail_row(prov, "Assurance", f"{t.label} — {t.why}")
+            title=_("Provenance"),
+            description=_("Where this comes from and what has actually been "
+                        "checked about it"))
+        self._detail_row(prov, _("Marketplace"), p.market_name)
+        self._detail_row(prov, _("Publisher"), p.publisher)
+        self._detail_row(prov, _("Declared author"), p.author)
+        self._detail_row(prov, _("Assurance"), f"{t.label} — {t.why}")
         if p.review_method:
-            self._detail_row(prov, "Review", p.review_method.replace("-", " "))
-        self._detail_row(prov, "Reviewed by", p.reviewed_by)
-        self._detail_row(prov, "Validated commit",
+            self._detail_row(prov, _("Review"), p.review_method.replace("-", " "))
+        self._detail_row(prov, _("Reviewed by"), p.reviewed_by)
+        self._detail_row(prov, _("Validated commit"),
                          f"{p.validated_commit[:12]} on {p.validated_branch}"
                          if p.validated_commit else "")
-        self._detail_row(prov, "Validated", p.validated_at[:10])
-        self._detail_row(prov, "Upstream commit now",
+        self._detail_row(prov, _("Validated"), p.validated_at[:10])
+        self._detail_row(prov, _("Upstream commit now"),
                          f"{p.upstream_commit[:12]}"
                          + ("  (differs from what was validated)"
                             if p.drifted else "  (matches)")
                          if p.upstream_commit else "")
-        self._detail_row(prov, "Upstream last checked",
+        self._detail_row(prov, _("Upstream last checked"),
                          f"{p.upstream_checked_at[:10]}"
                          + (f" — {p.upstream_status}" if p.upstream_status else "")
                          if p.upstream_checked_at else "")
-        self._detail_row(prov, "Manifest", p.manifest_path)
+        self._detail_row(prov, _("Manifest"), p.manifest_path)
         page.add(prov)
 
-        facts = Adw.PreferencesGroup(title="Listing")
+        facts = Adw.PreferencesGroup(title=_("Listing"))
         for label, value in (
                 ("Identifier", p.id),
                 ("Version", p.version),
@@ -3225,30 +3226,30 @@ class AlmanacWindow(Adw.ApplicationWindow):
                          margin_top=8, margin_bottom=12,
                          halign=Gtk.Align.END)
         if p.installed and p.install_kind == "theme":
-            apply = Gtk.Button(label="Apply")
+            apply = Gtk.Button(label=_("Apply"))
             apply.add_css_class("suggested-action")
             apply.connect("clicked", lambda b: (dialog.close(),
                                                 self._apply_theme_now(p)))
             if not p.built_in:
-                rm = Gtk.Button(label="Remove")
+                rm = Gtk.Button(label=_("Remove"))
                 rm.add_css_class("destructive-action")
                 rm.connect("clicked", lambda b: (dialog.close(),
                                                  self.on_plugin_remove(b, p)))
                 bottom.append(rm)
             bottom.append(apply)
         elif p.installed and not p.built_in:
-            rm = Gtk.Button(label="Remove")
+            rm = Gtk.Button(label=_("Remove"))
             rm.add_css_class("destructive-action")
             rm.connect("clicked", lambda b: (dialog.close(),
                                              self.on_plugin_remove(b, p)))
             bottom.append(rm)
         elif p.installed and p.built_in:
-            lbl = Gtk.Label(label="Built in")
+            lbl = Gtk.Label(label=_("Built in"))
             lbl.add_css_class("pill-ok")
             bottom.append(lbl)
         elif p.installable and p.install_cmd:
             ins = Gtk.Button(child=Adw.ButtonContent(icon_name=INSTALL_ICON,
-                                                     label="Install"))
+                                                     label=_("Install")))
             ins.add_css_class("suggested-action")
             ins.connect("clicked", lambda b: (dialog.close(),
                                               self.on_plugin_install(b, p)))
@@ -3281,9 +3282,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
                        margin_start=12, margin_end=12, margin_bottom=16)
         section = self._section(
-            "System health",
-            "Each check reads the system and offers the one command that acts "
-            "on what it found. Nothing here runs until you ask it to.")
+            _("System health"),
+            _("Each check reads the system and offers the one command that acts "
+            "on what it found. Nothing here runs until you ask it to."))
         self.maint_list = section._rows
         body.append(section)
 
@@ -3314,7 +3315,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return page
 
     def _history_reload(self):
-        self._summarize("Reading the last 30 days…", "history")
+        self._summarize(_("Reading the last 30 days…"), "history")
 
         def work():
             days = history.timeline()
@@ -3326,10 +3327,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self.history_body.remove(child)
         if not days:
             self.history_body.append(self._status_page(
-                "document-open-recent-symbolic", "Nothing recorded yet",
-                "Package changes, snapshots and settings resets from the last "
-                "30 days appear here."))
-            self._summarize("Nothing in the last 30 days", "history")
+                "document-open-recent-symbolic", _("Nothing recorded yet"),
+                _("Package changes, snapshots and settings resets from the last "
+                "30 days appear here.")))
+            self._summarize(_("Nothing in the last 30 days"), "history")
             return False
         for day in days:
             note = ("A snapshot was taken this day — changes after it can be "
@@ -3362,7 +3363,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _maint_reload(self):
         self._busy(True)
-        self._summarize("Checking the system…", "maintenance")
+        self._summarize(_("Checking the system…"), "maintenance")
 
         def work():
             try:
@@ -3402,30 +3403,30 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     EMPTY_STATES = {
-        "updates": ("emblem-ok-symbolic", "Everything is up to date",
-                    "Nothing installed has a newer version waiting."),
-        inventory.ORPHAN: ("emblem-ok-symbolic", "No orphans",
-                           "Every installed package is either asked for "
-                           "directly or needed by something that is."),
-        inventory.FLATPAK: ("package-x-generic-symbolic", "No Flatpaks",
-                            "Nothing is installed through Flatpak on this "
-                            "machine."),
+        "updates": ("emblem-ok-symbolic", _("Everything is up to date"),
+                    _("Nothing installed has a newer version waiting.")),
+        inventory.ORPHAN: ("emblem-ok-symbolic", _("No orphans"),
+                           _("Every installed package is either asked for "
+                           "directly or needed by something that is.")),
+        inventory.FLATPAK: ("package-x-generic-symbolic", _("No Flatpaks"),
+                            _("Nothing is installed through Flatpak on this "
+                            "machine.")),
         inventory.APPIMAGE: ("application-x-executable-symbolic",
-                             "No AppImages tracked",
-                             "Install one from the App Store, or add an "
-                             "existing file with ☰ → Track an AppImage."),
+                             _("No AppImages tracked"),
+                             _("Install one from the App Store, or add an "
+                             "existing file with ☰ → Track an AppImage.")),
         inventory.LOCAL: ("applications-engineering-symbolic",
-                          "No local builds",
-                          "Nothing here is running from a git checkout."),
-        inventory.AUR: ("package-x-generic-symbolic", "No AUR packages",
-                        "Nothing foreign is installed."),
+                          _("No local builds"),
+                          _("Nothing here is running from a git checkout.")),
+        inventory.AUR: ("package-x-generic-symbolic", _("No AUR packages"),
+                        _("Nothing foreign is installed.")),
     }
 
     _SEVERITY_CSS = {
-        maintenance.CRIT: ("Critical", "pill-crit"),
-        maintenance.WARN: ("Attention", "pill-warn"),
-        maintenance.INFO: ("Optional", "pill"),
-        maintenance.OK: ("OK", "pill-ok"),
+        maintenance.CRIT: (_("Critical"), "pill-crit"),
+        maintenance.WARN: (_("Attention"), "pill-warn"),
+        maintenance.INFO: (_("Optional"), "pill"),
+        maintenance.OK: (_("OK"), "pill-ok"),
     }
 
     def _maint_row(self, f):
@@ -3462,9 +3463,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 btn.add_css_class("suggested-action")
             btn.connect("clicked", lambda _b, f=f: self._maint_fix(f))
             row.add_suffix(btn)
-        elif f.fix_note and not f.fix:
+        elif f.fix_note and not f.fix and f.severity != maintenance.OK:
             # No button, but say what the human would have to do.
-            hint = Gtk.Label(label="manual", valign=Gtk.Align.CENTER)
+            hint = Gtk.Label(label=_("manual"), valign=Gtk.Align.CENTER)
             hint.add_css_class("dim-label")
             hint.add_css_class("caption")
             hint.set_tooltip_text(f.fix_note)
@@ -3520,13 +3521,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               f"   {f.fix_note}")
                 total += f.size_mb
         if not steps:
-            self._say("Nothing to reclaim")
+            self._say(_("Nothing to reclaim"))
             return
         tasks.confirm(
             self, f"Reclaim about {maintenance.fmt_size(total)}?",
-            "These free cached downloads, build artefacts and old logs. "
-            "Nothing you created is touched, and nothing installed is removed.",
-            "\n\n".join(detail), "Reclaim", False,
+            _("These free cached downloads, build artefacts and old logs. "
+            "Nothing you created is touched, and nothing installed is removed."),
+            "\n\n".join(detail), _("Reclaim"), False,
             lambda: tasks.run(self, "Reclaiming space", steps,
                               self._findings_done(
                                   [f for f in getattr(self, "_findings", [])
@@ -3619,7 +3620,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         behind it.
         """
         self._busy(True)
-        self._summarize("Reading the AI setup…", inventory.AGENT)
+        self._summarize(_("Reading the AI setup…"), inventory.AGENT)
 
         import demo
         if demo.active():
@@ -3668,14 +3669,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
             section = self._section(
                 f"{title} …" if pending else f"{title} ({len(entries)})", desc)
             if pending:
-                row = self._plain(title="Checking…")
+                row = self._plain(title=_("Checking…"))
                 spinner = Gtk.Spinner(valign=Gtk.Align.CENTER)
                 spinner.start()
                 row.add_prefix(spinner)
                 section._rows.append(row)
             elif not entries:
                 section._rows.append(self._plain(
-                    title="None", subtitle="Nothing of this kind is set up."))
+                    title=_("None"), subtitle=_("Nothing of this kind is set up.")))
             # Trouble first: a broken hook among thirty healthy skills is the
             # whole reason to open this page.
             order = {"warn": 0, "info": 1, "ok": 2, "": 2}
@@ -3748,7 +3749,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.add_suffix(btn)
         elif e.action_note and e.action is None and e.action_label:
             # There is something to do, but not something this app can do.
-            hint = Gtk.Label(label="manual", valign=Gtk.Align.CENTER)
+            hint = Gtk.Label(label=_("manual"), valign=Gtk.Align.CENTER)
             hint.add_css_class("dim-label")
             hint.add_css_class("caption")
             hint.set_tooltip_text(e.action_note)
@@ -3895,7 +3896,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         held = [e for e in upd if agents_mod.major_jump(e.version, e.update)]
         upd = [e for e in upd if e not in held]
         if held:
-            self._say("Held back (major release, update it on its own): "
+            self._say(_("Held back (major release, update it on its own): ")
                       + ", ".join(f"{e.name} {e.update}" for e in held), 8)
         if not upd:
             return
@@ -3905,9 +3906,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             for e in upd)
         tasks.confirm(
             self, f"Update {len(upd)} agent CLI(s)?",
-            "Each replaces its own binary. None of this needs root, and none "
-            "of it touches your agent configuration.",
-            detail, "Update", False,
+            _("Each replaces its own binary. None of this needs root, and none "
+            "of it touches your agent configuration."),
+            detail, _("Update"), False,
             lambda: tasks.run(self, "Updating agent CLIs", steps,
                               lambda ok: self._ai_after(ok)))
 
@@ -3917,41 +3918,41 @@ class AlmanacWindow(Adw.ApplicationWindow):
         cfg = autoupdate.load()
         st = autoupdate.status()
 
-        dialog = Adw.PreferencesDialog(title="Settings")
-        page = Adw.PreferencesPage(title="Updates",
+        dialog = Adw.PreferencesDialog(title=_("Settings"))
+        page = Adw.PreferencesPage(title=_("Updates"),
                                    icon_name="software-update-available-symbolic")
 
         sched = Adw.PreferencesGroup(
-            title="Automatic updates",
-            description="A systemd user timer runs the update in the "
+            title=_("Automatic updates"),
+            description=_("A systemd user timer runs the update in the "
                         "background. Anything that could stop the machine "
                         "booting is always held for you to run by hand, "
-                        "whatever is set here.")
+                        "whatever is set here."))
 
-        enabled = Adw.SwitchRow(title="Run updates on a schedule",
+        enabled = Adw.SwitchRow(title=_("Run updates on a schedule"),
                                 active=st["enabled"])
         sched.add(enabled)
 
         labels = [label for _k, label, _c in autoupdate.SCHEDULES]
         keys = [k for k, _l, _c in autoupdate.SCHEDULES]
         current = autoupdate.current_schedule()
-        combo = Adw.ComboRow(title="How often",
+        combo = Adw.ComboRow(title=_("How often"),
                              model=Gtk.StringList.new(labels))
         combo.set_selected(keys.index(current) if current in keys else 1)
         sched.add(combo)
 
-        next_row = Adw.ActionRow(title="Next run", subtitle=st["next"])
+        next_row = Adw.ActionRow(title=_("Next run"), subtitle=st["next"])
         next_row.set_subtitle_selectable(True)
         sched.add(next_row)
-        last_row = Adw.ActionRow(title="Last run", subtitle=st["last"])
+        last_row = Adw.ActionRow(title=_("Last run"), subtitle=st["last"])
         last_row.set_subtitle_selectable(True)
         sched.add(last_row)
         page.add(sched)
 
         include = Adw.PreferencesGroup(
-            title="What the scheduled run updates",
-            description="Each of these updates independently. Turning one off "
-                        "does not stop you updating it by hand here.")
+            title=_("What the scheduled run updates"),
+            description=_("Each of these updates independently. Turning one off "
+                        "does not stop you updating it by hand here."))
         rows = {}
         for key, title, subtitle in (
                 ("packages", "Repository and AUR packages",
@@ -3974,14 +3975,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         # The settings watcher, for while this window is closed.
         watch = Adw.PreferencesGroup(
-            title="While Almanac is closed",
-            description="A small background process with no window. It only "
+            title=_("While Almanac is closed"),
+            description=_("A small background process with no window. It only "
                         "watches config folders, and notifies you the moment "
-                        "a tool resets one of your files to its defaults.")
+                        "a tool resets one of your files to its defaults."))
         guard_row = Adw.SwitchRow(
-            title="Watch for settings reset to defaults",
-            subtitle="Starts with your session, through the standard autostart "
-                     "folder",
+            title=_("Watch for settings reset to defaults"),
+            subtitle=_("Starts with your session, through the standard autostart "
+                     "folder"),
             active=watcher.enabled())
 
         def toggle_guard(row, _pspec):
@@ -3995,19 +3996,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         actions = Adw.PreferencesGroup()
         run_row = Adw.ActionRow(
-            title="Run the update now",
-            subtitle="Runs exactly what the schedule would run, in a window "
-                     "you can watch.")
-        run_btn = Gtk.Button(label="Run now", valign=Gtk.Align.CENTER)
+            title=_("Run the update now"),
+            subtitle=_("Runs exactly what the schedule would run, in a window "
+                     "you can watch."))
+        run_btn = Gtk.Button(label=_("Run now"), valign=Gtk.Align.CENTER)
         run_btn.set_tooltip_text(
-            "Run the scheduled update immediately, in a window you can watch")
+            _("Run the scheduled update immediately, in a window you can watch"))
         run_btn.add_css_class("suggested-action")
         run_btn.connect("clicked", lambda _b: self._run_scheduled_now())
         run_row.add_suffix(run_btn)
         actions.add(run_row)
 
         log_row = Adw.ActionRow(
-            title="Last run log",
+            title=_("Last run log"),
             subtitle=str(Path.home() / ".local/state/omarchy-auto-update/last-run.log"))
         log_row.set_subtitle_selectable(True)
         actions.add(log_row)
@@ -4138,7 +4139,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _feat_reload(self):
         self._busy(True)
-        self._summarize("Working out what needs you…", "featured")
+        self._summarize(_("Working out what needs you…"), "featured")
 
         def work():
             apps = [self.store.get_item(i).app
@@ -4189,7 +4190,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._hero_text(problems)
         self._summarize(
             f"{problems} thing(s) need you" if problems
-            else "Nothing needs you right now", "featured")
+            else _("Nothing needs you right now"), "featured")
         row = self.sidebar_rows.get("featured")
         if row is not None:
             # Featured's shelves are Shelf objects; the AI page's are
@@ -4338,19 +4339,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"Remote    {info['remote']}\n"
             f"Newest    {info['latest']}\n\n"
             f"$ git pull --ff-only",
-            "Update", False,
+            _("Update"), False,
             lambda: tasks.run(self, "Updating Almanac",
                               selfupdate.update_steps(),
                               self._after_self_update))
 
     def _after_self_update(self, ok: bool):
         if not ok:
-            self._say("Almanac was not updated", 8)
+            self._say(_("Almanac was not updated"), 8)
             return
         # The running process cannot adopt the new source, so say so rather
         # than letting the version in the list disagree with what is running.
-        toast = Adw.Toast(title="Almanac updated — restart to use the new "
-                                "version", timeout=0)
+        toast = Adw.Toast(title=_("Almanac updated — restart to use the new "
+                                "version"), timeout=0)
         toast.set_button_label("Restart")
         toast.connect("button-clicked", lambda *_: selfupdate.restart())
         self.toasts.add_toast(toast)
@@ -4364,9 +4365,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             application_icon="io.github.twodxme.Almanac",
             version=info["version"],
             developer_name="twodxme",
-            comments="A catalogue of everything installed on this machine: "
+            comments=_("A catalogue of everything installed on this machine: "
                      "where each thing came from, how old it is, whether it "
-                     "still has a maintainer, and what needs attention.",
+                     "still has a maintainer, and what needs attention."),
             website="https://github.com/twodxme/almanac",
             issue_url="https://github.com/twodxme/almanac/issues",
             license_type=Gtk.License.MIT_X11)
@@ -4437,7 +4438,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             ["bash", "-lc",
              script + "; echo; read -n1 -r -p 'Done — press any key to close'"])
         if not argv:
-            self._say("No terminal found to run that in")
+            self._say(_("No terminal found to run that in"))
             return False
         try:
             subprocess.Popen(argv, start_new_session=True)
@@ -4475,9 +4476,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                      if kept else "")
         tasks.confirm(
             self, f"Remove {len(safe)} orphaned package(s)?",
-            "These are installed as dependencies but nothing needs them any "
-            "more. Everything that would go is listed below." + kept_note,
-            preview, "Remove", True,
+            _("These are installed as dependencies but nothing needs them any "
+            "more. Everything that would go is listed below.") + kept_note,
+            preview, _("Remove"), True,
             lambda: tasks.run(
                 self, "Removing orphans",
                 [("Removing orphaned packages",
@@ -4492,10 +4493,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 return
             tasks.confirm(
                 self, f"Install the {app.name} plugin?",
-                "Omarchy shell plugins run inside the shell process with your "
-                "permissions — there is no sandbox.",
+                _("Omarchy shell plugins run inside the shell process with your "
+                "permissions — there is no sandbox."),
                 f"Source: {url}\n\n$ omarchy plugin add {url} --enable --yes",
-                "Install", False,
+                _("Install"), False,
                 lambda: tasks.run(
                     self, f"Installing {app.name}",
                     [(f"Installing {app.name}",
@@ -4513,7 +4514,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"AUR packages are built from source on this machine.",
             f"{app.name} {app.version}\n{app.description}\n\n"
             f"$ {' '.join(argv)}",
-            "Install", False,
+            _("Install"), False,
             lambda: self._install_package(app.name, argv))
 
     def on_install(self, _button):
@@ -4525,7 +4526,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         text = self.search.get_text().strip()
         if not text:
             self.search.grab_focus()
-            self._say("Type what to search for, then press Install")
+            self._say(_("Type what to search for, then press Install"))
             return
         if sources.parse(text):
             self.on_install_link(link=text)
@@ -4533,9 +4534,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         argv = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", text]
         tasks.confirm(
             self, f"Install “{text}”?",
-            "This installs a package by exact name. To browse what matches "
-            "first, use the App Store and search there.",
-            f"$ {' '.join(argv)}", "Install", False,
+            _("This installs a package by exact name. To browse what matches "
+            "first, use the App Store and search there."),
+            f"$ {' '.join(argv)}", _("Install"), False,
             lambda: self._install_package(text, argv))
 
     def _install_package(self, name: str, argv: list):
@@ -4570,8 +4571,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if app.source == inventory.FLATPAK:
             appid = app.extra.get("appid", app.name)
             tasks.confirm(
-                self, f"Remove {app.name}?", "The Flatpak and its data are removed.",
-                f"$ flatpak uninstall --assumeyes {appid}", "Remove", True,
+                self, f"Remove {app.name}?", _("The Flatpak and its data are removed."),
+                f"$ flatpak uninstall --assumeyes {appid}", _("Remove"), True,
                 lambda: tasks.run(self, f"Removing {app.name}",
                                   [(f"Removing {app.name}",
                                     ["flatpak", "uninstall", "--assumeyes", appid])],
@@ -4588,7 +4589,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"-Rns also takes dependencies nothing else needs. "
             f"{count} package(s) would be removed, listed below. "
             f"Configuration files are not kept.",
-            preview, "Remove", True,
+            preview, _("Remove"), True,
             lambda: tasks.run(self, f"Removing {app.name}",
                               [(f"Removing {app.name}",
                                 ["pacman", "-Rns", "--noconfirm", app.name])],
@@ -4622,7 +4623,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if out.changed is False:
             # Something the user asked for did not happen. A toast can be
             # missed; this is the one result that must not be.
-            self._notify("Nothing changed", out.message)
+            self._notify(_("Nothing changed"), out.message)
             self._say(out.message, 10)
         else:
             self._say(out.message)
@@ -4655,13 +4656,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _offer_defaults_back(self, moved):
         returnable = [m for m in moved if m[1]]
         dialog = Adw.AlertDialog(
-            heading="Some files now open in a different app",
+            heading=_("Some files now open in a different app"),
             body=("\n".join(mimeguard.summary(moved))
-                  + ("\n\nGive them back to what opened them before?"
+                  + (_("\n\nGive them back to what opened them before?")
                      if returnable else "")))
-        dialog.add_response("keep", "Keep the new app")
+        dialog.add_response("keep", _("Keep the new app"))
         if returnable:
-            dialog.add_response("restore", "Give them back")
+            dialog.add_response("restore", _("Give them back"))
             dialog.set_response_appearance(
                 "restore", Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("keep")
@@ -4687,13 +4688,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
                           activates_default=True, hexpand=True)
         entry.set_text(link)
         dialog = Adw.AlertDialog(
-            heading="Install from a link",
-            body="Paste a GitHub project link. Every way it is published is "
+            heading=_("Install from a link"),
+            body=_("Paste a GitHub project link. Every way it is published is "
                  "compared, and one is recommended, before anything is "
-                 "downloaded.")
+                 "downloaded."))
         dialog.set_extra_child(entry)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("find", "Look it up")
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("find", _("Look it up"))
         dialog.set_response_appearance("find", Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("find")
         dialog.set_close_response("cancel")
@@ -4703,9 +4704,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 return
             text = entry.get_text().strip()
             if not sources.parse(text):
-                self._say("That is not a GitHub repository link")
+                self._say(_("That is not a GitHub repository link"))
                 return
-            self._say("Looking it up…")
+            self._say(_("Looking it up…"))
 
             def work():
                 res = sources.resolve(text)
@@ -4741,7 +4742,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.add_prefix(check)
             row.set_activatable_widget(check)
             if i == 0:
-                pill = Gtk.Label(label="Recommended", valign=Gtk.Align.CENTER)
+                pill = Gtk.Label(label=_("Recommended"), valign=Gtk.Align.CENTER)
                 pill.add_css_class("pill-ok")
                 row.add_suffix(pill)
             rows.append(row)
@@ -4763,8 +4764,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if hasattr(dialog, "set_prefer_wide_layout"):        # libadwaita 1.6+
             dialog.set_prefer_wide_layout(True)
         dialog.set_extra_child(scroll)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("install", "Install")
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("install", _("Install"))
         dialog.set_response_appearance("install",
                                        Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("install")
@@ -4843,7 +4844,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 f"database was last refreshed, so it cannot be installed on "
                 f"its own. “Update all” refreshes the database and installs "
                 f"it along with everything it depends on.",
-                "", "Update all", False,
+                "", _("Update all"), False,
                 lambda: self.on_update_all(None))
             return
 
@@ -4853,11 +4854,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
         argv = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", app.name]
         tasks.confirm(
             self, f"Update {app.name} only?",
-            "Arch prefers full system upgrades. Updating one package against "
+            _("Arch prefers full system upgrades. Updating one package against "
             "a database that has moved on is a partial upgrade, which can "
-            "break linking. “Update all” is the safer choice.",
+            "break linking. “Update all” is the safer choice."),
             f"{app.name}  {app.version} → {app.update}\n\n$ {' '.join(argv)}",
-            "Update anyway", False,
+            _("Update anyway"), False,
             lambda: tasks.run(
                 self, f"Updating {app.name}",
                 self._snapshot_first([(f"Updating {app.name}", argv)],
@@ -4901,7 +4902,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             detail += "\n\nWhat changed\n" + notes
         tasks.confirm(
             self, heading, body, detail,
-            "Update" if not major else f"Update to {app.update}", False,
+            _("Update") if not major else f"Update to {app.update}", False,
             lambda: tasks.run(self, f"Updating {app.name}",
                               [(f"Updating {app.name}", cmd)],
                               self._checked(verify.for_app(app),
@@ -4994,7 +4995,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             ["bash", "-lc",
              f"{command}; echo; read -n1 -r -p 'Done — press any key to close'"])
         if not argv:
-            self._say("No terminal found to run the update in")
+            self._say(_("No terminal found to run the update in"))
             return
         try:
             started = time.monotonic()
@@ -5002,7 +5003,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         except OSError as e:
             self._say(f"Could not start the update: {e}")
             return
-        self._say("Update running in a terminal — the list refreshes when it closes")
+        self._say(_("Update running in a terminal — the list refreshes when it closes"))
         probe = verify.pending_updates()
 
         def wait():
@@ -5022,7 +5023,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         threading.Thread(target=wait, daemon=True).start()
 
     def on_add_appimage(self, _button):
-        dialog = Gtk.FileDialog(title="Choose an AppImage to track")
+        dialog = Gtk.FileDialog(title=_("Choose an AppImage to track"))
         dialog.open(self, None, self._on_appimage_chosen)
 
     def _on_appimage_chosen(self, dialog, result):

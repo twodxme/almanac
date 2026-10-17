@@ -368,10 +368,27 @@ better than I can.
 python3 test_app.py
 ```
 
-99 tests, weighted toward the destructive paths — removal, orphan cleanup,
+118 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.
+
+### Translating
+
+Interface text is marked for GNU gettext and collected in
+[`po/almanac.pot`](po/almanac.pot). To add a language:
+
+```bash
+msginit -i po/almanac.pot -o po/<lang>.po -l <lang>   # e.g. de, pt_BR
+# translate po/<lang>.po, then:
+po/update.sh                                            # merges and compiles
+```
+
+Run from a checkout, Almanac picks up `./locale` straight away; the package
+build installs every `po/*.po` into the system locale directory. The window,
+menus, dialogs and Health check headings are translatable today; sentences
+built around a value (versions, counts, names) are still being converted, and
+pull requests that rewrite them as whole translatable sentences are welcome.
 
 There is a measured [UI/UX audit and gap analysis](docs/audit.md) covering the
 conventions the interface follows and the gaps still open. New UI should match

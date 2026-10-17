@@ -22,7 +22,7 @@ optdepends=(
   'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
   'webp-pixbuf-loader: marketplace card artwork'
 )
-makedepends=('git')
+makedepends=('git' 'gettext')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 source=("git+$url.git")
@@ -46,6 +46,14 @@ package() {
   install -dm755 "$appdir"
   install -Dm644 *.py "$appdir/"
   install -Dm644 icons/*.svg -t "$appdir/icons/"
+
+  # Translations, compiled into the system locale directory.
+  for po in po/*.po; do
+    [ -e "$po" ] || continue
+    lang=$(basename "$po" .po)
+    install -dm755 "$pkgdir/usr/share/locale/$lang/LC_MESSAGES"
+    msgfmt -o "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/almanac.mo" "$po"
+  done
 
   # Installed this way, Almanac detects that pacman owns it and defers its
   # own updates to the package manager rather than offering a git pull.
