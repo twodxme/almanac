@@ -58,21 +58,19 @@ someone has to keep writing:
 The hero is your own Omarchy wallpaper, so it re-skins with your theme and
 downloads nothing.
 
-### App Store — plugins, apps and themes, with provenance
+### App Store — plugins and apps, with provenance
 
 <img src="docs/screenshots/app-store.png" alt="App Store" width="820">
 
-Three catalogues in one grid, each entry carrying where it actually came from:
+Two catalogues in one grid, each entry carrying where it actually came from:
 
 - **[Omarchy Plugins](https://plugins.omarchy.org)** — the official marketplace,
   read from the same `catalog.json` the website's own front end uses, so the
   cards here carry the real artwork, descriptions, stars and install commands.
-- **Omarchy Themes** — 345 community themes from the `omarchy-theme` topic,
-  with its own sidebar entry. Install clones it; applying it is a separate,
-  explicit second step, because nobody wants their whole desktop re-skinned by
-  a curious click.
 - **[ArtCraft](https://getartcraft.com)** — the Craft apps, installed as
   AppImages and tracked for updates afterwards.
+
+Themes are not listed here: they have their own page, below.
 
 Every card shows a **provenance chip**:
 
@@ -89,6 +87,10 @@ Every card shows a **provenance chip**:
 Sort and filter by provenance, publisher, marketplace, category or stars.
 
 ### Themes — what the theme actually looks like
+
+345 community themes from the `omarchy-theme` topic, on their own page.
+Install clones a theme; applying it is a separate, explicit second step,
+because nobody wants their whole desktop re-skinned by a curious click.
 
 <img src="docs/screenshots/themes.png" alt="Themes" width="820">
 
@@ -407,7 +409,7 @@ better than I can.
 python3 test_app.py
 ```
 
-127 tests, weighted toward the destructive paths — removal, orphan cleanup,
+128 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

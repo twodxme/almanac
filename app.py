@@ -2117,8 +2117,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         of them selected. Changing the filter by hand afterwards re-titles the
         page, so the header never claims to be showing something it is not.
         """
+        if getattr(self, "_plugins", None) and \
+                getattr(self, "_filters_for", None) != (page == "themes"):
+            self._store_filters()
         wanted = (self.PAGES.get(page) or {}).get("market", "")
         keys = getattr(self, "_store_markets", [""])
+        # Themes is one catalogue already; the App Store chooses among the rest.
+        self.store_market.set_visible(page != "themes" and len(keys) > 2)
         index = keys.index(wanted) if wanted in keys else 0
         if self.store_market.get_selected() != index:
             self._pinning = True
@@ -2427,6 +2432,47 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._store_extend()
         return False
 
+    def _store_filters(self):
+        """Category, provenance and marketplace lists for the page showing.
+
+        Built from what the page draws from, so the App Store's counts do not
+        include the 345 themes it no longer lists, and rebuilt on switching
+        between it and Themes.
+        """
+        pool = self._store_pool()
+        self._filters_for = getattr(self, "_page", "discover") == "themes"
+        self._pinning = True
+        cats = store_mod.categories(pool)
+        self._store_cats = [""] + [c for c, _n in cats]
+        # Setting a model resets the selection; keep the chosen category.
+        want = getattr(self, "_store_cat_key", "")
+        self.store_cat.set_model(Gtk.StringList.new(
+            ["All categories"] + [f"{c} ({n})" for c, n in cats]))
+        if want in self._store_cats:
+            self.store_cat.set_selected(self._store_cats.index(want))
+
+        trusts = store_mod.trust_counts(pool)
+        self._store_trusts = [""] + [k for k, _l, _n in trusts]
+        self.store_trust.set_model(Gtk.StringList.new(
+            ["Any provenance"] + [f"{lbl} ({n})" for _k, lbl, n in trusts]))
+
+        markets = store_mod.market_counts(
+            [p for p in (getattr(self, "_plugins", None) or [])
+             if p.install_kind != "theme"])
+        self._store_markets = [""] + [mid for mid, _nm, _n in markets]
+        self.store_market.set_model(Gtk.StringList.new(
+            ["All marketplaces"] + [f"{nm} ({n})" for _mid, nm, n in markets]))
+        self._pinning = False
+
+    def _store_pool(self, page: str | None = None) -> list:
+        """What a store page draws from. Themes have their own page, so the
+        App Store leaves them out rather than listing them twice."""
+        page = page or getattr(self, "_page", "discover")
+        plugins = getattr(self, "_plugins", None) or []
+        if page == "themes":
+            return [p for p in plugins if p.install_kind == "theme"]
+        return [p for p in plugins if p.install_kind != "theme"]
+
     def _store_count(self):
         """The store's standing summary, worded for whichever page is showing.
 
@@ -2447,9 +2493,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     or self.store_trust.get_selected() > 0
                     or (self.store_market.get_selected() > 0 and not pinned))
 
-        pool = ([p for p in getattr(self, "_plugins", [])
-                 if p.install_kind == "theme"] if page == "themes"
-                else getattr(self, "_plugins", []))
+        pool = self._store_pool(page)
         total = len(pool)
         installed = sum(1 for p in pool if p.installed)
 
@@ -2789,30 +2833,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _store_loaded(self, plugins):
         self._busy(False)
         self._plugins = plugins
-        names = ["All categories"] + [
-            f"{c} ({n})" for c, n in store_mod.categories(plugins)]
-        self._store_cats = [""] + [c for c, _n in store_mod.categories(plugins)]
-        model = Gtk.StringList.new(names)
-        # Setting the model resets the selection, which would re-enter the
-        # refresh; restore the chosen category afterwards instead.
-        want = getattr(self, "_store_cat_key", "")
-        self.store_cat.set_model(model)
-        if want in self._store_cats:
-            self.store_cat.set_selected(self._store_cats.index(want))
-
-        trusts = store_mod.trust_counts(plugins)
-        self._store_trusts = [""] + [k for k, _l, _n in trusts]
-        self.store_trust.set_model(Gtk.StringList.new(
-            ["Any provenance"] + [f"{lbl} ({n})" for _k, lbl, n in trusts]))
-
-        markets = store_mod.market_counts(plugins)
-        self._pinning = True
-        self._store_markets = [""] + [mid for mid, _nm, _n in markets]
-        self.store_market.set_model(Gtk.StringList.new(
-            ["All marketplaces"] + [f"{nm} ({n})" for _mid, nm, n in markets]))
-        self.store_market.set_visible(len(markets) > 1)
-        self._pinning = False
-
+        self._store_filters()
         self._pin_market(getattr(self, "_page", "discover"))
         self._store_refresh()
         return False
@@ -2832,7 +2853,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             return keys[i] if 0 <= i < len(keys) else ""
 
         results = store_mod.browse(
-            self._plugins, query=self.search.get_text(), category=category,
+            self._store_pool(), query=self.search.get_text(), category=category,
             sort=sort, installed_only=self.store_installed.get_active(),
             verified_only=self.store_verified.get_active(),
             trust=pick(self.store_trust, getattr(self, "_store_trusts", [""])),

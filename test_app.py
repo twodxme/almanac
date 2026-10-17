@@ -1462,6 +1462,22 @@ make build
         win._offer_setup.assert_called_once_with(p)
 
 
+class StorePages(unittest.TestCase):
+    """Themes have their own page; the App Store does not list them again."""
+
+    def test_each_page_draws_from_its_own_catalogue(self):
+        import app as app_mod
+        theme = store.Plugin(id="t", name="T", description="", author="",
+                             install_kind="theme", market="themes")
+        plugin = store.Plugin(id="p", name="P", description="", author="",
+                              market="omarchy")
+        win = _Stub()
+        win._plugins = [theme, plugin]
+        win._page = "discover"
+        self.assertEqual(app_mod.AlmanacWindow._store_pool(win), [plugin])
+        self.assertEqual(app_mod.AlmanacWindow._store_pool(win, "themes"), [theme])
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
