@@ -9,6 +9,7 @@ whether anyone still maintains it, and what needs you today.**
 
 A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch.
 
+[![CI](https://github.com/twodxme/almanac/actions/workflows/ci.yml/badge.svg)](https://github.com/twodxme/almanac/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-78b4ff.svg)](LICENSE)
 ![GTK4](https://img.shields.io/badge/GTK-4-86d39b.svg)
 ![libadwaita 1.9](https://img.shields.io/badge/libadwaita-1.9%2B-86d39b.svg)
