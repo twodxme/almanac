@@ -1261,6 +1261,28 @@ class BackgroundGuard(unittest.TestCase):
         self.assertIn("1 of your entries was removed", notify.call_args[0][1])
 
 
+class Accessibility(unittest.TestCase):
+    def test_every_icon_only_button_is_named(self):
+        """A button that is only an icon is announced as just "button"
+        unless it carries an accessible name -- _name() sets it together
+        with the tooltip, so each one must reach _name or set LABEL itself
+        within a few lines of being created."""
+        lines = (Path(__file__).parent / "app.py").read_text().splitlines()
+        made = re.compile(r"(\w+(?:\.\w+)?) = \(?Gtk\.(?:Menu|Toggle)?Button\(icon_name=")
+        unnamed = []
+        for i, line in enumerate(lines):
+            m = made.search(line)
+            if not m:
+                continue
+            var = m.group(1)
+            window = "\n".join(lines[i:i + 12])
+            if (f"_name({var}" not in window
+                    and "AccessibleProperty.LABEL" not in window
+                    and var not in ("upd", "play", "menu")):   # named on bind
+                unnamed.append(f"app.py:{i + 1} {var}")
+        self.assertEqual(unnamed, [])
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

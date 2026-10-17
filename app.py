@@ -64,6 +64,17 @@ import shlex  # noqa: E402
 # icon is a folder, which reads as "the Downloads folder".
 INSTALL_ICON = "almanac-install-symbolic"
 
+
+def _name(widget, text: str):
+    """Tooltip and accessible name at once, for a control that is only an icon.
+
+    A tooltip helps a pointer; a screen reader needs the accessible label, and
+    an icon-only button without one is announced as just "button". Setting
+    both from one place keeps them from drifting apart.
+    """
+    widget.set_tooltip_text(text)
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [text])
+
 _CSS = b"""
 /* Sidebar counts. Three levels: a count is usually just a number, an
    amber one wants looking at, and only a security update earns red. The
@@ -81,8 +92,9 @@ _CSS = b"""
   min-height: 0;
 }
 .count-badge.is-warn {
-  background: alpha(@warning_color, 0.22);
-  color: @warning_color;
+  /* Same measured pair as .pill-warn: AA in both palettes. */
+  background: alpha(@warning_color, 0.12);
+  color: mix(@warning_color, @window_fg_color, 0.15);
 }
 .count-badge.is-crit {
   /* The only solid fill in the sidebar, so it is the only thing that
@@ -106,6 +118,9 @@ row:selected .count-badge.is-crit {
 
    Each modifier carries the base declarations too, so a single class name is
    enough at every call site and nothing has to remember to add two. */
+/* Status pills: small text, so held to WCAG AA (4.5:1). A 12% tint with the
+   text mixed 15% toward the foreground measures at least 5.07:1 in both
+   libadwaita's light and dark palettes; a fuller tint fell to 4.03:1. */
 .pill, .pill-crit, .pill-warn, .pill-ok, .pill-accent, .pill-quiet {
   background: alpha(@window_fg_color, 0.09);
   border-radius: 999px;
@@ -113,22 +128,22 @@ row:selected .count-badge.is-crit {
   font-size: 0.70rem;
 }
 .pill-crit {
-  background: alpha(@error_color, 0.18);
-  color: @error_color;
+  background: alpha(@error_color, 0.12);
+  color: mix(@error_color, @window_fg_color, 0.15);
   font-weight: bold;
 }
 .pill-warn {
-  background: alpha(@warning_color, 0.20);
-  color: @warning_color;
+  background: alpha(@warning_color, 0.12);
+  color: mix(@warning_color, @window_fg_color, 0.15);
 }
 .pill-ok {
-  background: alpha(@success_color, 0.18);
-  color: @success_color;
+  background: alpha(@success_color, 0.12);
+  color: mix(@success_color, @window_fg_color, 0.15);
   font-weight: bold;
 }
 .pill-accent {
-  background: alpha(@accent_color, 0.20);
-  color: @accent_color;
+  background: alpha(@accent_color, 0.12);
+  color: mix(@accent_color, @window_fg_color, 0.15);
   font-weight: bold;
 }
 .pill-quiet {
@@ -573,7 +588,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         self.sidebar_toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic")
         self.sidebar_toggle.set_active(True)
-        self.sidebar_toggle.set_tooltip_text("Show categories")
+        _name(self.sidebar_toggle, "Show categories")
         self.sidebar_toggle.connect(
             "toggled", lambda b: self.split.set_show_sidebar(b.get_active()))
         header.pack_start(self.sidebar_toggle)
@@ -637,7 +652,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         self.sort_btn = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
         self._rebuild_sort_menu(self.SORTS_INSTALLED)
-        self.sort_btn.set_tooltip_text("Sort by")
+        _name(self.sort_btn, "Sort by")
         header.pack_end(self.sort_btn)
 
         # The store has no second button: the same control in the same place
@@ -653,7 +668,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
         menu_btn.set_menu_model(menu)
-        menu_btn.set_tooltip_text("More actions")
+        _name(menu_btn, "More actions")
         header.pack_end(menu_btn)
 
         for name, fn in (("install", self.on_install), ("track", self.on_add_appimage),
@@ -1036,6 +1051,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             upd = row.get_first_child()
             play = upd.get_next_sibling()
             menu = play.get_next_sibling()
+            _name(menu, f"More actions for {it.name}")
 
             # Rows are recycled as the list scrolls, so a stale handler would
             # fire for whichever item later lands in this widget.
@@ -1053,7 +1069,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     upd.remove_css_class("error")
                     upd.add_css_class("accent")
                     upd.set_icon_name(INSTALL_ICON)
-                    upd.set_tooltip_text(
+                    _name(upd, 
                         f"Install {it.name}"
                         + (" (Omarchy plugin)" if it.source == inventory.PLUGIN else ""))
                     upd._handler = upd.connect("clicked", self.on_install_item, it.app)
@@ -1077,7 +1093,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 can_update = bool(it.git_behind) and not it.git_dirty
             upd.set_visible(can_update)
             if can_update:
-                upd.set_tooltip_text(
+                _name(upd, 
                     f"Update {it.name} alone, in a terminal.\n"
                     "Arch discourages partial upgrades: prefer Update all "
                     "unless you need just this one.")
@@ -1087,17 +1103,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 upd.remove_css_class("accent")
                 upd.add_css_class("error" if it.critical == "security" else "accent")
                 if it.app.extra.get("self"):
-                    upd.set_tooltip_text(
+                    _name(upd, 
                         f"Update Almanac itself — {it.app.extra.get('note', '')}")
                     upd._handler = upd.connect(
                         "clicked", lambda _b: self.on_self_update())
                 elif it.source == inventory.LOCAL:
-                    upd.set_tooltip_text(
+                    _name(upd, 
                         f"git pull in {it.app.extra.get('repo', '')}\n"
                         f"Latest upstream: {it.app.extra.get('git_subject', '')}")
                     upd._handler = upd.connect("clicked", self.on_git_pull, it.app)
                 elif it.source == inventory.APPIMAGE:
-                    upd.set_tooltip_text(
+                    _name(upd, 
                         f"Download {it.name} {it.app.update} and replace the "
                         "current build (the old one is kept as .previous)")
                     upd._handler = upd.connect(
@@ -1111,7 +1127,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 inventory.APPIMAGE, inventory.LOCAL)
             play.set_visible(launchable and not missing)
             if play.get_visible():
-                play.set_tooltip_text(f"Launch {it.name}")
+                _name(play, f"Launch {it.name}")
                 play._handler = play.connect("clicked", self.on_launch, it.app)
 
             # Destructive actions sit behind a menu, never a bare button where
@@ -1534,6 +1550,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             r.set_subtitle_selectable(True)
             btn = Gtk.Button(icon_name="adw-external-link-symbolic", valign=Gtk.Align.CENTER)
             btn.add_css_class("flat")
+            _name(btn, f"Open {extra['url']}")
             btn.connect("clicked", lambda _b, u=extra["url"]: self.open_url(u))
             r.add_suffix(btn)
             og.add(r)
@@ -2055,8 +2072,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else spec["title"])
         drawer = spec.get("filters", False)
         self.sort_btn.set_visible(spec["sort"] or drawer)
-        self.sort_btn.set_tooltip_text(
-            "Filter and sort the marketplace" if drawer else "Sort by")
+        _name(self.sort_btn,
+              "Filter and sort the marketplace" if drawer else "Sort by")
         if drawer:
             self.sort_btn.set_menu_model(None)
             self.sort_btn.set_popover(self.store_drawer)
@@ -2626,6 +2643,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # measured 1.41:1 against the card. Filled, the same pair is 8.65:1.
         for css in ("suggested-action", "destructive-action", "flat"):
             btn.remove_css_class(css)
+        # Cards are recycled: a name set for the Install glyph must not stay
+        # on the same button once it reads "Remove". Text buttons are named
+        # by their label.
+        btn.reset_property(Gtk.AccessibleProperty.LABEL)
         if p.installed and p.install_kind == "theme":
             # An installed theme's useful action is wearing it; removing one
             # is rare enough to belong in the detail sheet, where Remove sits
@@ -3715,7 +3736,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             link = Gtk.Button(icon_name="adw-external-link-symbolic",
                               valign=Gtk.Align.CENTER)
             link.add_css_class("flat")
-            link.set_tooltip_text(e.url)
+            _name(link, f"Open {e.url}")
             link.connect("clicked", lambda _b, u=e.url: self.open_url(u))
             row.add_suffix(link)
 
