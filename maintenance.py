@@ -16,10 +16,12 @@ Three rules the checks follow:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -397,24 +399,169 @@ def unmaintained_aur() -> Finding:
                  "it is frozen.")
 
 
-def disk_space() -> Finding:
+def _usage(path: str):
+    """(free MB, total MB, percent used) or None."""
     try:
-        st = os.statvfs("/")
-        free = st.f_bavail * st.f_frsize / 1048576
-        total = st.f_blocks * st.f_frsize / 1048576
+        st = os.statvfs(path)
     except OSError:
-        return Finding(id="disk", title="Disk space",
-                       detail="Could not read filesystem stats.", severity=OK)
-    pct = 100 * (1 - free / total) if total else 0
+        return None
+    total = st.f_blocks * st.f_frsize / 1048576
+    free = st.f_bavail * st.f_frsize / 1048576
+    if total <= 0:
+        return None
+    return free, total, 100 * (1 - free / total)
+
+
+def disk_space() -> Finding:
+    """Every filesystem that matters, not just the root one.
+
+    Checking only / misses the ways a machine actually runs out of room: a
+    full /boot stops a kernel update, and a full XDG runtime directory --
+    1.6 GB of tmpfs that one runaway log can fill -- breaks logins, Wayland
+    clients and system updates while `df /` still reports hundreds of
+    gigabytes free.
+    """
+    import subprocess
+
+    watched = [("/", "/")]
+    for extra in ("/boot", "/var", "/home",
+                  os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"):
+        if extra and os.path.isdir(extra):
+            try:
+                if os.stat(extra).st_dev != os.stat("/").st_dev:
+                    watched.append((extra, extra))
+            except OSError:
+                pass
+
+    rows, worst, worst_pct, seen = [], OK, 0.0, set()
+    for label, path in watched:
+        u = _usage(path)
+        if not u:
+            continue
+        free, total, pct = u
+        # btrfs subvolumes report distinct device ids while sharing one pool,
+        # so /, /home and /var would otherwise be listed three times with
+        # identical figures.
+        fingerprint = (round(total), round(free))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        rows.append(f"{label}  {fmt_size(free)} free of {fmt_size(total)} "
+                    f"({pct:.0f}% used)")
+        # A small tmpfs fills fast and breaks more than it looks like it
+        # should, so it is judged on headroom rather than percentage alone.
+        tight = (total < 4096 and free < 128) or pct > 92
+        level = CRIT if tight else (WARN if pct > 85 else OK)
+        if (CRIT, WARN, INFO, OK).index(level) < (CRIT, WARN, INFO, OK).index(worst):
+            worst = level
+        worst_pct = max(worst_pct, pct)
+
+    root = _usage("/") or (0, 0, 0)
     return Finding(
         id="disk",
         title="Disk space",
-        detail=f"{fmt_size(free)} free of {fmt_size(total)} on / ({pct:.0f}% used).",
-        severity=CRIT if pct > 92 else WARN if pct > 85 else OK,
-        size_mb=free)
+        detail=(" · ".join(rows) if rows else "Could not read filesystem stats.")
+               + ("  A filesystem is nearly full; an update will fail before "
+                  "it starts." if worst == CRIT else ""),
+        severity=worst,
+        items=rows if len(rows) > 1 else [],
+        size_mb=root[0])
 
 
-CHECKS = (disk_space, pacman_cache, journal, yay_cache, orphan_packages,
+def runtime_logs() -> Finding:
+    """Session logs in the runtime directory, which is a small tmpfs.
+
+    Hyprland and Quickshell write per-session logs into XDG_RUNTIME_DIR. A
+    display that flaps produces a hotplug event per cycle and several log
+    lines per event, and the directory it lands in is typically 1.6 GB. The
+    failure mode is not "logs are large" but "the next system update dies
+    with No space left on device".
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    if not os.path.isdir(runtime):
+        return Finding(id="runtime-logs", title="Session logs",
+                       detail="No runtime directory to check.", severity=OK)
+
+    biggest, total_mb, items = [], 0.0, []
+    for sub in ("hypr", "quickshell"):
+        d = Path(runtime) / sub
+        if not d.exists():
+            continue
+        mb, _n = _du_mb(d)
+        total_mb += mb
+        if mb >= 1:
+            items.append(f"{sub}  {fmt_size(mb)}")
+    for f in Path(runtime).rglob("*.log"):
+        try:
+            size = f.stat().st_size / 1048576
+        except OSError:
+            continue
+        if size > 100:
+            biggest.append(f"{fmt_size(size)}  {f}")
+
+    u = _usage(runtime)
+    pct = u[2] if u else 0
+    sev = CRIT if pct > 90 else (WARN if (total_mb > 400 or biggest) else OK)
+    return Finding(
+        id="runtime-logs",
+        title="Session logs",
+        detail=(f"{fmt_size(total_mb)} of session logs in {runtime}, which is "
+                f"{pct:.0f}% full. These are logs from this and previous "
+                f"desktop sessions; nothing reads them after the session ends."
+                if total_mb >= 1 else
+                f"Session logs are negligible ({runtime} is {pct:.0f}% full)."),
+        severity=sev, size_mb=total_mb,
+        items=items + biggest,
+        fix_label="Clear old session logs" if total_mb >= 1 else "",
+        fix=_clear_runtime_logs if total_mb >= 1 else None,
+        fix_note="Truncates the running session's log and removes log "
+                 "directories from sessions that have ended. The desktop is "
+                 "not restarted and nothing else is touched.")
+
+
+def _clear_runtime_logs(log):
+    import shutil as _sh
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    live = set()
+    try:
+        out = subprocess.run(["hyprctl", "instances", "-j"],
+                             capture_output=True, text=True, timeout=20)
+        live = {i.get("instance") for i in json.loads(out.stdout or "[]")}
+    except Exception:
+        pass
+
+    for d in sorted((runtime / "hypr").glob("*")):
+        if not d.is_dir():
+            continue
+        for f in d.glob("*.log"):
+            size = f.stat().st_size / 1048576 if f.exists() else 0
+            if d.name in live:
+                # The session is still running: truncate rather than unlink,
+                # so the compositor keeps a valid file to write to.
+                with open(f, "w"):
+                    pass
+                log(f"truncated {f.name} ({fmt_size(size)}, live session)")
+            else:
+                f.unlink(missing_ok=True)
+                log(f"removed {f.name} ({fmt_size(size)})")
+        if d.name not in live and not any(d.iterdir()):
+            d.rmdir()
+
+    qs = runtime / "quickshell/by-id"
+    if qs.exists():
+        cutoff = time.time() - 3 * 86400
+        for d in sorted(qs.iterdir()):
+            try:
+                if d.is_dir() and d.stat().st_mtime < cutoff:
+                    _sh.rmtree(d, ignore_errors=True)
+                    log(f"removed quickshell session {d.name}")
+            except OSError:
+                pass
+    log("done")
+
+
+CHECKS = (disk_space, runtime_logs, pacman_cache, journal, yay_cache,
+          orphan_packages,
           unmaintained_aur, failed_units, pacnew, dangling_desktop,
           broken_symlinks, rollbacks, trash)
 
@@ -440,6 +587,7 @@ def run_all() -> list[Finding]:
 
 def reclaimable_mb(findings: list[Finding]) -> float:
     """How much space the actionable cleanups would actually free."""
-    frees = {"pacman-cache", "yay-cache", "journal", "trash", "rollbacks"}
+    frees = {"pacman-cache", "yay-cache", "journal", "trash", "rollbacks",
+             "runtime-logs"}
     return sum(f.size_mb for f in findings
                if f.id in frees and f.actionable)

@@ -501,6 +501,42 @@ class ShelfShape(unittest.TestCase):
                              "the AI page unpacks these as (title, desc, loader)")
 
 
+class DiskChecks(unittest.TestCase):
+    """Checking only / misses how a machine actually runs out of room.
+
+    A full XDG runtime directory -- 1.6 GB of tmpfs that one runaway
+    compositor log can fill -- stops system updates with "No space left on
+    device" while `df /` still reports hundreds of gigabytes free.
+    """
+
+    def test_disk_check_looks_beyond_the_root_filesystem(self):
+        import maintenance
+        f = maintenance.disk_space()
+        self.assertIn("/", f.detail)
+        import os
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        if os.path.isdir(runtime):
+            self.assertIn(runtime, f.detail + " ".join(f.items),
+                          "the runtime directory must be watched")
+
+    def test_a_nearly_full_small_tmpfs_is_critical(self):
+        import maintenance
+        # A 1.6 GB tmpfs with 40 MB left is 97% used: judged on headroom,
+        # not on percentage alone, because small filesystems fill fast.
+        with mock.patch.object(maintenance, "_usage") as usage:
+            usage.return_value = (40, 1600, 97.5)
+            f = maintenance.disk_space()
+        self.assertEqual(f.severity, maintenance.CRIT)
+
+    def test_runtime_log_cleanup_is_offered_only_when_there_is_something(self):
+        import maintenance
+        f = maintenance.runtime_logs()
+        if f.size_mb < 1:
+            self.assertIsNone(f.fix, "nothing to clear, so nothing offered")
+        else:
+            self.assertTrue(f.fix_label)
+
+
 class VisualSystem(unittest.TestCase):
     """The two conventions an interface drifts away from first.
 
