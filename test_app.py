@@ -1746,6 +1746,44 @@ class PluginLogos(unittest.TestCase):
         self.assertEqual(plugins.github_owner("https://gitlab.com/a/b"), "")
 
 
+class PluginRemovalAndRecheck(unittest.TestCase):
+    def test_removing_a_plugin_removes_its_shortcut(self):
+        import app as app_mod
+        import shortcuts
+        lines = []
+        with mock.patch.object(shortcuts, "available", return_value=True), \
+             mock.patch.object(shortcuts, "current", return_value="SUPER + ALT + V"), \
+             mock.patch.object(shortcuts, "set_shortcut",
+                               return_value="removed") as unset:
+            _label, step = app_mod.AlmanacWindow._forget_shortcut("lxp.vitals")
+            step(lines.append)
+        unset.assert_called_once_with("lxp.vitals", None)
+
+    def test_a_shortcut_that_cannot_be_removed_does_not_fail_the_removal(self):
+        import app as app_mod
+        import shortcuts
+        lines = []
+        with mock.patch.object(shortcuts, "available", return_value=True), \
+             mock.patch.object(shortcuts, "current",
+                               side_effect=ValueError("edited by hand")):
+            _label, step = app_mod.AlmanacWindow._forget_shortcut("x")
+            step(lines.append)                  # must not raise
+        self.assertIn("left in bindings.lua", lines[-1])
+
+    def test_store_removal_also_removes_the_shortcut(self):
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        win._store_after = mock.Mock()
+        win._forget_shortcut = app_mod.AlmanacWindow._forget_shortcut
+        p = store.Plugin(id="x", name="X", install_kind="plugin", market="omarchy")
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run):
+            app_mod.AlmanacWindow.on_plugin_remove(win, None, p)
+            fake.say_yes()
+        self.assertEqual(fake.ran[1][0], "Removing its keyboard shortcut")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

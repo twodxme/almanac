@@ -3177,7 +3177,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             _("Remove"), True,
             lambda: tasks.run(self, f"Removing {p.name}",
                               [(f"Removing {p.name}",
-                                ["omarchy", "plugin", "remove", p.id, "--yes"])],
+                                ["omarchy", "plugin", "remove", p.id, "--yes"]),
+                               self._forget_shortcut(p.id)],
                               lambda ok: self._store_after(ok, p, "removed")))
 
     # ---- store entries that are themes ----
@@ -3767,6 +3768,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
             fetch(f"github-{owner}", url=icons_mod.github_avatar(owner))
         return frame
 
+    @staticmethod
+    def _forget_shortcut(pid: str):
+        """A task step: drop a removed plugin's shortcut. Otherwise the
+        binding outlives the plugin -- the key stays taken and opens nothing.
+        Never fails the removal; a binding it cannot remove is reported."""
+        def step(log):
+            try:
+                if shortcuts.available() and shortcuts.current(pid):
+                    log(shortcuts.set_shortcut(pid, None))
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                log(f"its shortcut was left in bindings.lua: {exc}")
+        return (_("Removing its keyboard shortcut"), step)
+
     def _plugin_switch(self, switch, on: bool, i) -> bool:
         """Switch a plugin through Omarchy, then show what actually holds.
 
@@ -3828,7 +3842,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                   "settings in shell.json are removed with it."),
                 f"{i.folder}\n\n$ {' '.join(argv)}", _("Remove"), True,
                 lambda: tasks.run(
-                    self, f"Removing {i.name}", [(f"Removing {i.name}", argv)],
+                    self, f"Removing {i.name}",
+                    [(f"Removing {i.name}", argv), self._forget_shortcut(i.id)],
                     self._checked(lambda: i.id in plugins_mod.enabled(),
                                   lambda _b, a: verify.Outcome(
                                       not a, f"{i.name} removed" if not a
@@ -5098,6 +5113,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         def step(pid):
             def run(log):
+                # Checked again now: the dialog may have stayed open while the
+                # plugin was edited, or swapped for a development link.
+                now = plugins_mod.classify(plugins_mod.plugins_dir() / pid, {})
+                if not now.updatable:
+                    log(f"{pid}: skipped — {now.describe()}")
+                    raise RuntimeError(f"{pid} changed since the check")
                 r = subprocess.run(plugins_mod.update_argv(pid), capture_output=True,
                                    text=True, timeout=300)
                 for line in (r.stdout + r.stderr).splitlines()[-6:]:
