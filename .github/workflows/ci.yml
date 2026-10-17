@@ -1,0 +1,55 @@
+# Every push and pull request, on a clean Arch Linux: the tests, a lint for
+# names that do not exist (two shipped crashes were exactly that), the
+# desktop and AppStream metadata, and a real package build of this commit.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git python gtk4 libadwaita python-gobject python-cairo \
+            pacman-contrib polkit xdg-utils ruff appstream desktop-file-utils
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # pkgver counts commits
+
+      - name: Tests
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # GTK needs a display to import; Broadway is one with no screen.
+          gtk4-broadwayd :5 &
+          sleep 1
+          GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 python3 test_app.py
+
+      - name: Lint
+        run: ruff check --select F821,F811,F823 --output-format github *.py
+
+      - name: Metadata
+        run: |
+          appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
+          desktop-file-validate docs/almanac.desktop
+
+      - name: Package builds
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          mkdir /tmp/pkg && cp PKGBUILD /tmp/pkg/ && chown -R builder /tmp/pkg
+          # Build this commit, not whatever main is on GitHub right now.
+          sed -i "s|^source=.*|source=(\"git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA\")|" /tmp/pkg/PKGBUILD
+          cd /tmp/pkg
+          sudo -u builder git config --global --add safe.directory '*'
+          sudo -u builder env GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 \
+            makepkg --nodeps --noconfirm
+          tar -tf almanac-git-*.pkg.tar.zst | grep -q usr/share/almanac/app.py
