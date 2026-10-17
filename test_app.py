@@ -1965,6 +1965,34 @@ class BackgroundServices(unittest.TestCase):
                          ["systemctl", "--user", "disable", "--now", "x.service"])
 
 
+class SidebarGroups(unittest.TestCase):
+    def test_a_folded_groups_selected_row_folds_once_left(self):
+        import app as app_mod
+        win = _Stub()
+        rows = []
+        for key in ("apps", "plugins"):
+            r = mock.Mock(_key=key)
+            rows.append(r)
+        win.group_rows = {"library": mock.Mock()}
+        win.group_members = {"library": rows}
+        win._collapsed = {"library"}
+        win.filter_key = "plugins"
+        apply_all = lambda: app_mod.AlmanacWindow._apply_all_group_states(win)  # noqa: E731
+        win._apply_group_state = lambda g: app_mod.AlmanacWindow._apply_group_state(win, g)
+        apply_all()
+        rows[1].set_visible.assert_called_with(True)      # selected: shown
+        win.filter_key = "updates"                        # navigated away
+        apply_all()
+        rows[1].set_visible.assert_called_with(False)     # now folded
+        self.assertIn("_apply_all_group_states()",
+                      inspect_source(app_mod.AlmanacWindow._on_sidebar_selected))
+
+
+def inspect_source(fn):
+    import inspect
+    return inspect.getsource(fn)
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

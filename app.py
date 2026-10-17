@@ -2062,6 +2062,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if row is None:
             return                      # selection cleared during a rebuild
         self.filter_key = row._key
+        # A folded group keeps only the selected row showing; once the
+        # selection moves on, that row folds away too. Without this a row
+        # kept visible because it was selected stayed out after leaving it.
+        self._apply_all_group_states()
         if getattr(self, "_narrow", False):
             GLib.idle_add(self.split.set_show_sidebar, False)
         if row._key == "featured":
