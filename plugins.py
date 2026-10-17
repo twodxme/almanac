@@ -331,6 +331,9 @@ def github_owner(url: str) -> str:
 
 def enabled() -> dict[str, bool]:
     """id -> enabled, from Omarchy's own list."""
+    import demo
+    if demo.active():
+        return {i.id: i.enabled for i in demo.plugins()}
     try:
         out = subprocess.run(["omarchy", "plugin", "list", "--json"],
                              capture_output=True, text=True, timeout=25).stdout

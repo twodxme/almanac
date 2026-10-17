@@ -3878,8 +3878,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     # ---- switchboard -------------------------------------------------------
     def _build_switchboard(self):
-        """Everything with an on/off, in one place: plugins, startup apps,
-        background services and Almanac's own background work."""
+        """The on/offs with no other home: startup apps, background services
+        and Almanac's own background work. Plugins are switched on the
+        Plugins page, beside their state and actions; here they get one row
+        that says how many are on and goes there."""
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.switch_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                                    spacing=20, margin_start=12, margin_end=12,
@@ -3895,18 +3897,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._summarize(_("Reading what can be switched…"), "switchboard")
 
         def work():
-            found = plugins_mod.installed(fetch=False)
+            on = plugins_mod.enabled()
             starts = autostart.entries()
             units = services.services()
-            try:
-                listings = {c.id: c for c in
-                            getattr(self, "_plugins", None) or store_mod.catalog()}
-            except Exception:                           # noqa: BLE001
-                listings = {}
-            GLib.idle_add(self._switchboard_show, found, starts, units, listings)
+            GLib.idle_add(self._switchboard_show, on, starts, units)
         threading.Thread(target=work, daemon=True).start()
 
-    def _switchboard_show(self, found, starts, units, listings=None):
+    def _switchboard_show(self, on, starts, units):
         while (child := self.switch_body.get_first_child()) is not None:
             self.switch_body.remove(child)
         self._switch_rows = []
@@ -3920,14 +3917,23 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 self._switch_rows.append((row, text))
             self.switch_body.append(box)
 
-        # Yours first and the 37-odd built-ins last, so startup apps and
-        # services are not buried under the shell's own parts.
-        listings = listings or {}
-        section(_("Your plugins"),
-                _("Updates, shortcuts and removal are on the Plugins page."),
-                [(self._switch_plugin_row(i, listings.get(i.id)),
-                  f"{i.name} {i.id} {i.description}")
-                 for i in found if not i.built_in])
+        # Plugins: one row, not 47 duplicated from their own page.
+        if on:
+            row = self._plain(
+                title=_("Plugins"),
+                subtitle=f"{sum(on.values())} of {len(on)} on — switched on the "
+                         f"Plugins page, beside their updates and shortcuts")
+            row.add_prefix(Gtk.Image(icon_name="application-x-addon-symbolic",
+                                     pixel_size=22, valign=Gtk.Align.CENTER))
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic",
+                                     valign=Gtk.Align.CENTER))
+            row.set_activatable(True)
+            row.connect("activated", lambda _r: self._select_category("plugins"))
+            box = self._section(_("Plugins"))
+            box._rows.append(row)
+            self.switch_body.append(box)
+            self._switch_rows.append((box, "plugins"))
+
         section(_("Startup apps"),
                 _("Started when you log in. Switching one off writes a "
                   "per-user override; the system's copy is never touched."),
@@ -3941,14 +3947,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         section(_("Almanac"),
                 _("Almanac's own background work."),
                 self._switch_almanac_rows())
-        section(_("Built-in plugins"),
-                _("The parts of Omarchy's shell that can be switched off."),
-                [(self._switch_plugin_row(i), f"{i.name} {i.id} {i.description}")
-                 for i in found if i.built_in])
 
-        n = len(self._switch_rows)
-        self._summarize(f"{n} switches · {len(found)} plugins · {len(starts)} "
-                        f"startup apps · {len(units)} services", "switchboard")
+        switches = len(starts) + len(units) + 2
+        self._summarize(f"{switches} switches · {len(starts)} startup apps · "
+                        f"{len(units)} services", "switchboard")
         self._switchboard_filter(self.search.get_text())
         return False
 
@@ -4030,15 +4032,6 @@ class AlmanacWindow(Adw.ApplicationWindow):
         row.add_suffix(switch)
         row.set_activatable_widget(switch)
         return row
-
-    def _switch_plugin_row(self, i, listing=None):
-        def apply(on):
-            subprocess.run(plugins_mod.toggle_argv(i.id, on), capture_output=True,
-                           text=True, timeout=60)
-            return plugins_mod.enabled().get(i.id)
-        return self._switch_row(
-            i.name, i.description or i.id, i.enabled, apply,
-            prefix=self._plugin_logo(i, listing), sensitive=i.can_disable)
 
     def _switch_autostart_row(self, e):
         icon = Gtk.Image(pixel_size=28, valign=Gtk.Align.CENTER)

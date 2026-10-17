@@ -298,11 +298,12 @@ as if it had not been updated.
 
 <img src="docs/screenshots/switchboard.png" alt="Switchboard" width="820">
 
-Plugins, the apps that start when you log in, your session's background
-services, and Almanac's own background work — each with a switch, and each
-switched the standard way: `omarchy plugin enable/disable`, a per-user
-`Hidden=true` override in `~/.config/autostart` (the system's copy is never
-touched), and `systemctl --user enable/disable --now`. Every switch moves only
+The apps that start when you log in, your session's background services, and
+Almanac's own background work — each with a switch, switched the standard
+way: a per-user `Hidden=true` override in `~/.config/autostart` (the system's
+copy is never touched) and `systemctl --user enable/disable --now`. Plugins
+are switched on the Plugins page, beside their updates and shortcuts; the
+Switchboard shows how many are on and links there. Every switch moves only
 once the change holds. Session plumbing — PipeWire, the portals, the keyring —
 is marked essential and asks first, saying what would stop working; services
 started on demand by something else are not offered, since their switch could

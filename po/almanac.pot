@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-17 15:59-0700\n"
+"POT-Creation-Date: 2026-10-17 16:04-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -29,7 +29,7 @@ msgstr ""
 msgid "Themes"
 msgstr ""
 
-#: app.py:392 app.py:4783
+#: app.py:392 app.py:4776
 msgid "Updates"
 msgstr ""
 
@@ -45,7 +45,7 @@ msgstr ""
 msgid "Applications"
 msgstr ""
 
-#: app.py:397 app.py:447
+#: app.py:397 app.py:447 app.py:3923 app.py:3932
 msgid "Plugins"
 msgstr ""
 
@@ -117,7 +117,7 @@ msgstr ""
 msgid "Search the switchboard"
 msgstr ""
 
-#: app.py:468 app.py:592 app.py:627 app.py:3941
+#: app.py:468 app.py:592 app.py:627 app.py:3947
 msgid "Almanac"
 msgstr ""
 
@@ -133,7 +133,7 @@ msgstr ""
 msgid "Search installed software"
 msgstr ""
 
-#: app.py:643 app.py:1501 app.py:5925
+#: app.py:643 app.py:1501 app.py:5918
 msgid "Update all"
 msgstr ""
 
@@ -284,7 +284,7 @@ msgstr ""
 msgid "Keyboard shortcut…"
 msgstr ""
 
-#: app.py:1214 app.py:1649 app.py:4727 app.py:5240 app.py:5471 app.py:5983
+#: app.py:1214 app.py:1649 app.py:4720 app.py:5233 app.py:5464 app.py:5976
 msgid "Update"
 msgstr ""
 
@@ -476,7 +476,7 @@ msgid "Apply"
 msgstr ""
 
 #: app.py:2813 app.py:3202 app.py:3275 app.py:3347 app.py:3496 app.py:3503
-#: app.py:3868 app.py:5558 app.py:5652 app.py:5669
+#: app.py:3868 app.py:5551 app.py:5645 app.py:5662
 msgid "Remove"
 msgstr ""
 
@@ -517,8 +517,8 @@ msgid ""
 "running any of it."
 msgstr ""
 
-#: app.py:3081 app.py:3229 app.py:3294 app.py:3538 app.py:5576 app.py:5594
-#: app.py:5616 app.py:5846
+#: app.py:3081 app.py:3229 app.py:3294 app.py:3538 app.py:5569 app.py:5587
+#: app.py:5609 app.py:5839
 msgid "Install"
 msgstr ""
 
@@ -657,7 +657,7 @@ msgstr ""
 msgid "Reading plugins…"
 msgstr ""
 
-#: app.py:3640 app.py:3926
+#: app.py:3640
 msgid "Your plugins"
 msgstr ""
 
@@ -717,606 +717,594 @@ msgid ""
 "shell.json are removed with it."
 msgstr ""
 
-#: app.py:3895
+#: app.py:3897
 msgid "Reading what can be switched…"
 msgstr ""
 
-#: app.py:3927
-msgid "Updates, shortcuts and removal are on the Plugins page."
-msgstr ""
-
-#: app.py:3931
+#: app.py:3937
 msgid "Startup apps"
 msgstr ""
 
-#: app.py:3932
+#: app.py:3938
 msgid ""
 "Started when you log in. Switching one off writes a per-user override; the "
 "system's copy is never touched."
 msgstr ""
 
-#: app.py:3936
+#: app.py:3942
 msgid "Background services"
 msgstr ""
 
-#: app.py:3937
+#: app.py:3943
 msgid ""
 "Your session's systemd services and timers. Off stops it now and at every "
 "login. Essential ones ask first."
 msgstr ""
 
-#: app.py:3942
+#: app.py:3948
 msgid "Almanac's own background work."
 msgstr ""
 
-#: app.py:3944
-msgid "Built-in plugins"
-msgstr ""
-
-#: app.py:3945
-msgid "The parts of Omarchy's shell that can be switched off."
-msgstr ""
-
-#: app.py:4004
+#: app.py:4006
 msgid "The change did not take effect"
 msgstr ""
 
-#: app.py:4011
+#: app.py:4013
 msgid "You can switch it back on here."
 msgstr ""
 
-#: app.py:4012
+#: app.py:4014
 msgid "Keep it on"
 msgstr ""
 
-#: app.py:4013
+#: app.py:4015
 msgid "Switch off"
 msgstr ""
 
-#: app.py:4061
+#: app.py:4054
 msgid "Essential"
 msgstr ""
 
-#: app.py:4063
+#: app.py:4056
 msgid "Omarchy"
 msgstr ""
 
-#: app.py:4065
+#: app.py:4058
 msgid "Running"
 msgstr ""
 
-#: app.py:4070
+#: app.py:4063
 msgid "Omarchy set this up, and a later omarchy update may expect it to be on."
 msgstr ""
 
-#: app.py:4101 app.py:4903
+#: app.py:4094 app.py:4896
 msgid "Settings watcher"
 msgstr ""
 
-#: app.py:4102
+#: app.py:4095
 msgid ""
 "Notices settings reset to defaults, and plugin updates, while Almanac is "
 "closed"
 msgstr ""
 
-#: app.py:4106
+#: app.py:4099
 msgid "Scheduled updates"
 msgstr ""
 
-#: app.py:4107
+#: app.py:4100
 msgid "What runs and how often: Preferences → Updates"
 msgstr ""
 
-#: app.py:4133
+#: app.py:4126
 msgid "Reading the last 30 days…"
 msgstr ""
 
-#: app.py:4145
+#: app.py:4138
 msgid "Nothing recorded yet"
 msgstr ""
 
-#: app.py:4146
+#: app.py:4139
 msgid ""
 "Package changes, snapshots and settings resets from the last 30 days appear "
 "here."
 msgstr ""
 
-#: app.py:4148
+#: app.py:4141
 msgid "Nothing in the last 30 days"
 msgstr ""
 
-#: app.py:4181
+#: app.py:4174
 msgid "Checking the system…"
 msgstr ""
 
-#: app.py:4221
+#: app.py:4214
 msgid "Everything is up to date"
 msgstr ""
 
-#: app.py:4222
+#: app.py:4215
 msgid "Nothing installed has a newer version waiting."
 msgstr ""
 
-#: app.py:4223
+#: app.py:4216
 msgid "No orphans"
 msgstr ""
 
-#: app.py:4224
+#: app.py:4217
 msgid ""
 "Every installed package is either asked for directly or needed by something "
 "that is."
 msgstr ""
 
-#: app.py:4226
+#: app.py:4219
 msgid "No Flatpaks"
 msgstr ""
 
-#: app.py:4227
+#: app.py:4220
 msgid "Nothing is installed through Flatpak on this machine."
 msgstr ""
 
-#: app.py:4230
+#: app.py:4223
 msgid "No AppImages tracked"
 msgstr ""
 
-#: app.py:4231
+#: app.py:4224
 msgid ""
 "Install one from the App Store, or add an existing file with ☰ → Track an "
 "AppImage."
 msgstr ""
 
-#: app.py:4234
+#: app.py:4227
 msgid "No local builds"
 msgstr ""
 
-#: app.py:4235
+#: app.py:4228
 msgid "Nothing here is running from a git checkout."
 msgstr ""
 
-#: app.py:4236
+#: app.py:4229
 msgid "No AUR packages"
 msgstr ""
 
-#: app.py:4237
+#: app.py:4230
 msgid "Nothing foreign is installed."
 msgstr ""
 
-#: app.py:4241
+#: app.py:4234
 msgid "Critical"
 msgstr ""
 
-#: app.py:4242
+#: app.py:4235
 msgid "Attention"
 msgstr ""
 
-#: app.py:4243
+#: app.py:4236
 msgid "Optional"
 msgstr ""
 
-#: app.py:4244
+#: app.py:4237
 msgid "OK"
 msgstr ""
 
-#: app.py:4283 app.py:4568
+#: app.py:4276 app.py:4561
 msgid "manual"
 msgstr ""
 
-#: app.py:4339
+#: app.py:4332
 msgid "Nothing to reclaim"
 msgstr ""
 
-#: app.py:4343
+#: app.py:4336
 msgid ""
 "These free cached downloads, build artefacts and old logs. Nothing you "
 "created is touched, and nothing installed is removed."
 msgstr ""
 
-#: app.py:4345
+#: app.py:4338
 msgid "Reclaim"
 msgstr ""
 
-#: app.py:4438
+#: app.py:4431
 msgid "Reading the AI setup…"
 msgstr ""
 
-#: app.py:4488
+#: app.py:4481
 msgid "Checking…"
 msgstr ""
 
-#: app.py:4495
+#: app.py:4488
 msgid "None"
 msgstr ""
 
-#: app.py:4495
+#: app.py:4488
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: app.py:4715
+#: app.py:4708
 msgid "Held back (major release, update it on its own): "
 msgstr ""
 
-#: app.py:4725
+#: app.py:4718
 msgid ""
 "Each replaces its own binary. None of this needs root, and none of it "
 "touches your agent configuration."
 msgstr ""
 
-#: app.py:4740
+#: app.py:4733
 msgid "Preferences"
 msgstr ""
 
-#: app.py:4755
+#: app.py:4748
 msgid "General"
 msgstr ""
 
-#: app.py:4757
+#: app.py:4750
 msgid "Starting up"
 msgstr ""
 
-#: app.py:4759
+#: app.py:4752
 msgid "Open on"
 msgstr ""
 
-#: app.py:4770
+#: app.py:4763
 msgid "Notifications"
 msgstr ""
 
-#: app.py:4771
+#: app.py:4764
 msgid "Desktop notifications. Results still show inside the window either way."
 msgstr ""
 
-#: app.py:4773
+#: app.py:4766
 msgid "When an action changes nothing"
 msgstr ""
 
-#: app.py:4774
+#: app.py:4767
 msgid "An update or cleanup that ran but left things as they were"
 msgstr ""
 
-#: app.py:4775
+#: app.py:4768
 msgid "When settings are reset to defaults"
 msgstr ""
 
-#: app.py:4776
+#: app.py:4769
 msgid "A tool replaced one of your config files with its default"
 msgstr ""
 
-#: app.py:4777
+#: app.py:4770
 msgid "When plugin updates are available"
 msgstr ""
 
-#: app.py:4778
+#: app.py:4771
 msgid "Checked every few hours by the settings watcher (Background)"
 msgstr ""
 
-#: app.py:4786
+#: app.py:4779
 msgid "Automatic updates"
 msgstr ""
 
-#: app.py:4787
+#: app.py:4780
 msgid ""
 "A systemd user timer runs the update in the background. Anything that could "
 "stop the machine booting is always held for you to run by hand, whatever is "
 "set here."
 msgstr ""
 
-#: app.py:4791
+#: app.py:4784
 msgid "Run updates on a schedule"
 msgstr ""
 
-#: app.py:4799
+#: app.py:4792
 msgid "How often"
 msgstr ""
 
-#: app.py:4803
+#: app.py:4796
 msgid "Last run"
 msgstr ""
 
-#: app.py:4803
+#: app.py:4796
 msgid "Next run"
 msgstr ""
 
-#: app.py:4810
+#: app.py:4803
 msgid "What the scheduled run updates"
 msgstr ""
 
-#: app.py:4811
+#: app.py:4804
 msgid ""
 "Each of these updates independently. Turning one off does not stop you "
 "updating it by hand here."
 msgstr ""
 
-#: app.py:4833
+#: app.py:4826
 msgid "Care"
 msgstr ""
 
-#: app.py:4834
+#: app.py:4827
 msgid "Hold back major releases"
 msgstr ""
 
-#: app.py:4835
+#: app.py:4828
 msgid ""
 "A new major version of an agent CLI waits for you to update it on its own, "
 "with its release notes"
 msgstr ""
 
-#: app.py:4838
+#: app.py:4831
 msgid "Plugins that bulk updates touch"
 msgstr ""
 
-#: app.py:4849
+#: app.py:4842
 msgid "Run the update now"
 msgstr ""
 
-#: app.py:4850
+#: app.py:4843
 msgid "Runs exactly what the schedule would run, in a window you can watch."
 msgstr ""
 
-#: app.py:4852
+#: app.py:4845
 msgid "Run now"
 msgstr ""
 
-#: app.py:4854
+#: app.py:4847
 msgid "Run the scheduled update immediately, in a window you can watch"
 msgstr ""
 
-#: app.py:4860
+#: app.py:4853
 msgid "Last run log"
 msgstr ""
 
-#: app.py:4868
+#: app.py:4861
 msgid "Privacy"
 msgstr ""
 
-#: app.py:4871
+#: app.py:4864
 msgid "What Almanac fetches"
 msgstr ""
 
-#: app.py:4872
+#: app.py:4865
 msgid ""
 "Each is a request to the named service, made only to show you something. "
 "Nothing about this machine is sent with any of them. Switch one off and that "
 "part of Almanac does without."
 msgstr ""
 
-#: app.py:4877
+#: app.py:4870
 msgid "Omarchy plugin marketplace"
 msgstr ""
 
-#: app.py:4879
+#: app.py:4872
 msgid "Omarchy themes"
 msgstr ""
 
-#: app.py:4880
+#: app.py:4873
 msgid "GitHub, the omarchy-theme topic"
 msgstr ""
 
-#: app.py:4881
+#: app.py:4874
 msgid "ArtCraft apps"
 msgstr ""
 
-#: app.py:4882
+#: app.py:4875
 msgid "getartcraft.com and its GitHub releases"
 msgstr ""
 
-#: app.py:4883
+#: app.py:4876
 msgid "Arch Security Tracker"
 msgstr ""
 
-#: app.py:4884
+#: app.py:4877
 msgid "security.archlinux.org — the whole advisory list, matched here"
 msgstr ""
 
-#: app.py:4885
+#: app.py:4878
 msgid "Logos"
 msgstr ""
 
-#: app.py:4886
+#: app.py:4879
 msgid ""
 "Each from its vendor's own site, or GitHub for avatars; logos already saved "
 "still show"
 msgstr ""
 
-#: app.py:4888
+#: app.py:4881
 msgid "Use your GitHub sign-in"
 msgstr ""
 
-#: app.py:4889
+#: app.py:4882
 msgid ""
 "Your existing gh login raises GitHub's limit from 60 requests an hour to "
 "5,000. Held in memory, never saved or logged."
 msgstr ""
 
-#: app.py:4895
+#: app.py:4888
 msgid "Background"
 msgstr ""
 
-#: app.py:4898
+#: app.py:4891
 msgid "While Almanac is closed"
 msgstr ""
 
-#: app.py:4899
+#: app.py:4892
 msgid ""
 "A small background process with no window. It watches config folders for a "
 "reset to defaults, and checks plugins for updates every few hours."
 msgstr ""
 
-#: app.py:4904
+#: app.py:4897
 msgid "Starts with your session, through the standard autostart folder"
 msgstr ""
 
-#: app.py:5040
+#: app.py:5033
 msgid "Working out what needs you…"
 msgstr ""
 
-#: app.py:5091
+#: app.py:5084
 msgid "Nothing needs you right now"
 msgstr ""
 
-#: app.py:5247
+#: app.py:5240
 msgid "Almanac was not updated"
 msgstr ""
 
-#: app.py:5251
+#: app.py:5244
 msgid "Almanac updated — restart to use the new version"
 msgstr ""
 
-#: app.py:5266
+#: app.py:5259
 msgid ""
 "A catalogue of everything installed on this machine: where each thing came "
 "from, how old it is, whether it still has a maintainer, and what needs "
 "attention."
 msgstr ""
 
-#: app.py:5345
+#: app.py:5338
 msgid "Press the keys, e.g. Super + Alt + V"
 msgstr ""
 
-#: app.py:5370
+#: app.py:5363
 msgid ""
 "Opens the plugin's panel. Checked against every binding Hyprland has now; "
 "written to its own block in bindings.lua, and put back if Hyprland rejects "
 "it."
 msgstr ""
 
-#: app.py:5374 app.py:5774 app.py:5845
+#: app.py:5367 app.py:5767 app.py:5838
 msgid "Cancel"
 msgstr ""
 
-#: app.py:5376
+#: app.py:5369
 msgid "Remove shortcut"
 msgstr ""
 
-#: app.py:5379
+#: app.py:5372
 msgid "Save"
 msgstr ""
 
-#: app.py:5416
+#: app.py:5409
 msgid "Checking plugins…"
 msgstr ""
 
-#: app.py:5427
+#: app.py:5420
 msgid "No plugin updates to install"
 msgstr ""
 
-#: app.py:5472
+#: app.py:5465
 msgid "Updating plugins"
 msgstr ""
 
-#: app.py:5483
+#: app.py:5476
 msgid "Restart the shell?"
 msgstr ""
 
-#: app.py:5484
+#: app.py:5477
 msgid ""
 "Restarts the Omarchy shell and clears its compiled QML cache. Use it when a "
 "plugin behaves as if it had not been updated. Your bar and settings are not "
 "touched."
 msgstr ""
 
-#: app.py:5487
+#: app.py:5480
 msgid "Restart"
 msgstr ""
 
-#: app.py:5517
+#: app.py:5510
 msgid "No terminal found to run that in"
 msgstr ""
 
-#: app.py:5556
+#: app.py:5549
 msgid ""
 "These are installed as dependencies but nothing needs them any more. "
 "Everything that would go is listed below."
 msgstr ""
 
-#: app.py:5573
+#: app.py:5566
 msgid ""
 "Omarchy shell plugins run inside the shell process with your permissions — "
 "there is no sandbox."
 msgstr ""
 
-#: app.py:5606
+#: app.py:5599
 msgid "Type what to search for, then press Install"
 msgstr ""
 
-#: app.py:5614
+#: app.py:5607
 msgid ""
 "This installs a package by exact name. To browse what matches first, use the "
 "App Store and search there."
 msgstr ""
 
-#: app.py:5651
+#: app.py:5644
 msgid "The Flatpak and its data are removed."
 msgstr ""
 
-#: app.py:5704
+#: app.py:5697
 msgid "Nothing changed"
 msgstr ""
 
-#: app.py:5737
+#: app.py:5730
 msgid "Some files now open in a different app"
 msgstr ""
 
-#: app.py:5739
+#: app.py:5732
 msgid ""
 "\n"
 "\n"
 "Give them back to what opened them before?"
 msgstr ""
 
-#: app.py:5741
+#: app.py:5734
 msgid "Keep the new app"
 msgstr ""
 
-#: app.py:5743
+#: app.py:5736
 msgid "Give them back"
 msgstr ""
 
-#: app.py:5769
+#: app.py:5762
 msgid "Install from a link"
 msgstr ""
 
-#: app.py:5770
+#: app.py:5763
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: app.py:5775
+#: app.py:5768
 msgid "Look it up"
 msgstr ""
 
-#: app.py:5785
+#: app.py:5778
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: app.py:5787
+#: app.py:5780
 msgid "Looking it up…"
 msgstr ""
 
-#: app.py:5823
+#: app.py:5816
 msgid "Recommended"
 msgstr ""
 
-#: app.py:5935
+#: app.py:5928
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: app.py:5939
+#: app.py:5932
 msgid "Update anyway"
 msgstr ""
 
-#: app.py:6081
+#: app.py:6074
 msgid "No terminal found to run the update in"
 msgstr ""
 
-#: app.py:6089
+#: app.py:6082
 msgid "Update running in a terminal — the list refreshes when it closes"
 msgstr ""
 
-#: app.py:6109
+#: app.py:6102
 msgid "Choose an AppImage to track"
 msgstr ""
 

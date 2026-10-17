@@ -1349,6 +1349,7 @@ class DemoModeHidesTheMachine(unittest.TestCase):
              mock.patch.object(plugins.subprocess, "run",
                                side_effect=AssertionError("asked omarchy")):
             self.assertTrue(plugins.installed())
+            self.assertTrue(plugins.enabled())
 
     def test_history_is_synthetic(self):
         import history
