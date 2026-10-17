@@ -123,6 +123,14 @@ row:selected .count-badge.is-crit {
 
    Each modifier carries the base declarations too, so a single class name is
    enough at every call site and nothing has to remember to add two. */
+/* A plugin's mark: a rounded tile, tinted when it holds a symbol, filled by
+   artwork when it holds a picture. */
+.plugin-logo {
+  border-radius: 8px;
+  background: alpha(@window_fg_color, 0.06);
+}
+.plugin-logo.has-art { background: none; }
+
 /* Status pills: small text, so held to WCAG AA (4.5:1). A 12% tint with the
    text mixed 15% toward the foreground measures at least 5.07:1 in both
    libadwaita's light and dark palettes; a fuller tint fell to 4.03:1. */
@@ -2855,6 +2863,29 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._tex_cache[key] = tex
         return tex
 
+    def _square(self, path, side: int = 72):
+        """A centred square crop, scaled -- so a 1600px-wide screenshot makes
+        a tile exactly as big as an icon, instead of the width it asks for."""
+        key = f"{path}@square{side}"
+        tex = self._tex_cache.get(key)
+        if tex is not None:
+            return tex
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), side * 4, -1, True)
+            edge = min(pb.get_width(), pb.get_height())
+            pb = pb.new_subpixbuf((pb.get_width() - edge) // 2,
+                                  (pb.get_height() - edge) // 2, edge, edge)
+            pb = pb.scale_simple(side, side, GdkPixbuf.InterpType.BILINEAR)
+            tex = Gdk.MemoryTexture.new(
+                side, side,
+                Gdk.MemoryFormat.R8G8B8A8 if pb.get_has_alpha()
+                else Gdk.MemoryFormat.R8G8B8,
+                GLib.Bytes.new(pb.get_pixels()), pb.get_rowstride())
+        except (GLib.Error, OSError, TypeError):
+            return None
+        self._tex_cache[key] = tex
+        return tex
+
     def _card_art(self, item, token, path):
         """Put a cached image on a card, decoding at most once per file."""
         if item._token != token:
@@ -3556,7 +3587,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             found = plugins_mod.installed(cache=cache.setdefault("_plugins", {}))
             try:
                 catalog = getattr(self, "_plugins", None) or store_mod.catalog()
-                trust = {c.id: c.trust for c in catalog}
+                trust = {c.id: c for c in catalog}
             except Exception:                           # noqa: BLE001
                 trust = {}
             try:
@@ -3590,7 +3621,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 continue
             section = self._section(f"{title} ({len(group)})", note)
             for i in group:
-                row = self._plugin_row(i, trust.get(i.id), keys.get(i.id, ""))
+                listing = trust.get(i.id)
+                row = self._plugin_row(i, listing.trust if listing else None,
+                                       keys.get(i.id, ""), listing)
                 section._rows.append(row)
                 self._plugin_rows.append((row, i))
             self.plugins_body.append(section)
@@ -3613,9 +3646,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.set_visible(not q or q in " ".join(
                 (i.id, i.name, i.description, " ".join(i.kinds))).lower())
 
-    def _plugin_row(self, i, trust, shortcut: str):
+    def _plugin_row(self, i, trust, shortcut: str, listing=None):
         row = self._plain(title=i.name, subtitle=i.description or i.id)
         row.set_subtitle_lines(2)
+        row.add_prefix(self._plugin_logo(i, listing))
 
         st = i.state
         key = (st.kind if st and st.kind in ("update", "error")
@@ -3669,6 +3703,69 @@ class AlmanacWindow(Adw.ApplicationWindow):
         row.add_suffix(switch)
         row.set_activatable_widget(switch)
         return row
+
+    def _plugin_logo(self, i, listing=None):
+        """The mark beside a plugin, best source first (see plugins.py):
+        the vendor's own logo for a plugin about a service, the marketplace
+        artwork for a listed one, a system icon for what it does, the
+        author's GitHub avatar, and a generic plugin icon last.
+
+        The system icon shows at once; a logo replaces it when it arrives,
+        so rows never jump.
+        """
+        frame = Gtk.Box(width_request=36, height_request=36, hexpand=False,
+                        valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+        frame.add_css_class("plugin-logo")
+        frame.set_overflow(Gtk.Overflow.HIDDEN)
+        symbol = plugins_mod.symbol_for(i)
+        image = Gtk.Image(icon_name=symbol, pixel_size=22, hexpand=True,
+                          halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        image.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+        frame.append(image)
+
+        def show(path, cover=False):
+            if not path:
+                return False
+            tex = self._square(path) if cover else self._texture(path, 72)
+            if tex is None:
+                return False
+            frame.remove(frame.get_first_child())
+            if cover:
+                # Already square and small: an Image at a fixed pixel size
+                # cannot ask for more room than the tile has.
+                pic = Gtk.Image(paintable=tex, pixel_size=36)
+                pic.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+                frame.append(pic)
+                frame.add_css_class("has-art")
+            else:
+                logo = Gtk.Image(paintable=tex, pixel_size=26, hexpand=True,
+                                 halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+                logo.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+                frame.append(logo)
+            return False
+
+        def fetch(key, url="", domain=""):
+            hit = icons_mod.cached(key)
+            if hit:
+                show(hit)
+                return
+            self._thumb_pool.submit(lambda: GLib.idle_add(
+                show, icons_mod.fetch(key, url, domain)))
+
+        domain = plugins_mod.vendor_for(i)
+        owner = plugins_mod.github_owner(i.state.url if i.state else "")
+        if domain:
+            fetch(domain, domain=domain)
+        elif listing is not None and listing.thumb:
+            cached = store_mod.thumb_path(listing)
+            if cached is not None and cached.exists() and cached.stat().st_size:
+                show(cached, cover=True)
+            else:
+                self._thumb_pool.submit(lambda: GLib.idle_add(
+                    show, store_mod.fetch_thumb(listing), True))
+        elif symbol == plugins_mod.GENERIC and owner:
+            fetch(f"github-{owner}", url=icons_mod.github_avatar(owner))
+        return frame
 
     def _plugin_switch(self, switch, on: bool, i) -> bool:
         """Switch a plugin through Omarchy, then show what actually holds.

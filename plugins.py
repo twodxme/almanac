@@ -232,6 +232,100 @@ def installed(fetch: bool = True, cache: dict | None = None) -> list[Installed]:
     return result
 
 
+# ---- what to show beside each plugin -------------------------------------------
+
+# A plugin about a service carries that service's mark, fetched from the
+# vendor's own domain (icons.py) -- matched on the plugin's id and name only,
+# never its description, where "works with Slack" would mislabel it.
+VENDORS = (
+    ("tailscale", "tailscale.com"), ("slack", "slack.com"),
+    ("spotify", "spotify.com"), ("github", "github.com"),
+    ("dropbox", "dropbox.com"), ("1password", "1password.com"),
+    ("docker", "docker.com"), ("obsidian", "obsidian.md"),
+    ("discord", "discord.com"), ("youtube", "youtube.com"),
+    ("google", "google.com"), ("todoist", "todoist.com"),
+    ("notion", "notion.so"), ("proton", "proton.me"),
+    ("steam", "steampowered.com"), ("twitch", "twitch.tv"),
+    ("claude", "anthropic.com"), ("anthropic", "anthropic.com"),
+    ("openai", "openai.com"), ("chatgpt", "openai.com"),
+    ("home assistant", "home-assistant.io"), ("jellyfin", "jellyfin.org"),
+)
+
+# Otherwise, a system icon for what it does. Adwaita names only, each checked
+# to exist, so the row looks right under any icon theme that follows it.
+SYMBOLS = (
+    ("bluetooth", "bluetooth-symbolic"),
+    ("wifi", "network-wireless-symbolic"), ("network", "network-wireless-symbolic"),
+    ("tailscale", "network-transmit-receive-symbolic"),
+    ("vpn", "network-transmit-receive-symbolic"),
+    ("audio", "audio-volume-high-symbolic"), ("volume", "audio-volume-high-symbolic"),
+    ("sound", "audio-volume-high-symbolic"),
+    ("microphone", "microphone-sensitivity-high-symbolic"),
+    ("media", "media-playback-start-symbolic"), ("music", "media-playback-start-symbolic"),
+    ("battery", "battery-full-symbolic"), ("power", "system-shutdown-symbolic"),
+    ("clock", "preferences-system-time-symbolic"), ("time", "preferences-system-time-symbolic"),
+    ("reminder", "alarm-symbolic"), ("alarm", "alarm-symbolic"),
+    ("weather", "weather-few-clouds-symbolic"),
+    ("clipboard", "edit-paste-symbolic"), ("emoji", "face-smile-symbolic"),
+    ("image", "image-x-generic-symbolic"), ("screenshot", "camera-photo-symbolic"),
+    ("lock", "system-lock-screen-symbolic"), ("idle", "system-lock-screen-symbolic"),
+    ("polkit", "dialog-password-symbolic"), ("password", "dialog-password-symbolic"),
+    ("menu", "open-menu-symbolic"), ("background", "preferences-desktop-wallpaper-symbolic"),
+    ("wallpaper", "preferences-desktop-wallpaper-symbolic"),
+    ("appearance", "preferences-desktop-appearance-symbolic"),
+    ("theme", "preferences-desktop-appearance-symbolic"),
+    ("monitor", "video-display-symbolic"), ("display", "video-display-symbolic"),
+    ("nightlight", "night-light-symbolic"), ("night", "night-light-symbolic"),
+    ("notification", "preferences-system-notifications-symbolic"),
+    ("osd", "preferences-system-notifications-symbolic"),
+    ("keyboard", "preferences-desktop-keyboard-symbolic"),
+    ("update", "software-update-available-symbolic"),
+    ("disk", "drive-harddisk-symbolic"), ("speedtest", "content-loading-symbolic"),
+    ("workspace", "view-grid-symbolic"), ("window", "window-new-symbolic"),
+    ("tray", "view-app-grid-symbolic"), ("bar", "view-app-grid-symbolic"),
+    ("agent", "utilities-terminal-symbolic"), ("dev", "utilities-terminal-symbolic"),
+    ("vitals", "emblem-system-symbolic"), ("system", "emblem-system-symbolic"),
+    ("radar", "weather-few-clouds-symbolic"),
+)
+GENERIC = "application-x-addon-symbolic"
+
+
+def _words(*texts: str) -> str:
+    return " " + " ".join(t.lower().replace(".", " ").replace("-", " ")
+                          .replace("_", " ") for t in texts if t) + " "
+
+
+def _own_words(i: Installed) -> str:
+    """The plugin's name and the last part of its id. The rest of an id is a
+    reverse-DNS namespace ("io.github.someone"), and the kind ("bar-widget")
+    says where it sits, not what it is -- matching either mislabels it."""
+    return _words(i.id.rsplit(".", 1)[-1], i.name)
+
+
+def vendor_for(i: Installed) -> str:
+    """The domain of the service a plugin is about, or ''."""
+    words = _own_words(i)
+    for word, domain in VENDORS:
+        if f" {word}" in words:
+            return domain
+    return ""
+
+
+def symbol_for(i: Installed) -> str:
+    """A system icon for what the plugin does, from its name and id."""
+    words = _own_words(i)
+    for word, icon in SYMBOLS:
+        if f" {word}" in words:
+            return icon
+    return GENERIC
+
+
+def github_owner(url: str) -> str:
+    import re
+    m = re.match(r"(?:https://github\.com/|git@github\.com:)([\w.-]+)/", url or "")
+    return m.group(1) if m else ""
+
+
 def enabled() -> dict[str, bool]:
     """id -> enabled, from Omarchy's own list."""
     try:

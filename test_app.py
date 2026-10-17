@@ -1717,6 +1717,35 @@ class WindowStarts(unittest.TestCase):
                 app_mod.Gtk.ShortcutTrigger.parse_string(f"<Control>{i % 10}"))
 
 
+class PluginLogos(unittest.TestCase):
+    def plugin(self, pid, name, kinds=("bar-widget",)):
+        import plugins
+        return plugins.Installed(id=pid, name=name, kinds=kinds)
+
+    def test_a_service_plugin_gets_its_vendor(self):
+        import plugins
+        self.assertEqual(plugins.vendor_for(self.plugin("tim.tailscale", "My Tailscale")),
+                         "tailscale.com")
+
+    def test_a_namespace_is_not_a_vendor(self):
+        import plugins
+        p = self.plugin("io.github.someone.lock-explorer", "Lock Screen Explorer")
+        self.assertEqual(plugins.vendor_for(p), "")
+        self.assertEqual(plugins.symbol_for(p), "system-lock-screen-symbolic")
+
+    def test_the_kind_does_not_decide_the_icon(self):
+        import plugins
+        # "bar-widget" must not make every bar plugin look like the bar.
+        self.assertEqual(plugins.symbol_for(self.plugin("x.usage", "AI Usage")),
+                         plugins.GENERIC)
+
+    def test_github_owner(self):
+        import plugins
+        self.assertEqual(plugins.github_owner("https://github.com/lxp/vitals.git"), "lxp")
+        self.assertEqual(plugins.github_owner("git@github.com:lxp/vitals.git"), "lxp")
+        self.assertEqual(plugins.github_owner("https://gitlab.com/a/b"), "")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
