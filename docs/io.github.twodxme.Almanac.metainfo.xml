@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata: what software centres read to describe Almanac. -->
+<component type="desktop-application">
+  <id>io.github.twodxme.Almanac</id>
+  <launchable type="desktop-id">almanac.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Almanac</name>
+  <summary>See everything installed, where it came from, and what needs you</summary>
+
+  <description>
+    <p>
+      Almanac is a catalogue of everything installed on this machine: packages
+      from the repositories and the AUR, Flatpaks, AppImages, local git
+      checkouts, Omarchy plugins and themes, and the AI agent tooling no
+      package manager tracks.
+    </p>
+    <p>
+      It is opinionated about provenance. Before you install anything from a
+      marketplace, Almanac shows the repository the code actually comes from —
+      which is not the same as the author name in its manifest — and whether
+      what you are about to install is still the commit that was reviewed.
+    </p>
+    <p>What it covers:</p>
+    <ul>
+      <li>One update list across six package managers, with versions-behind counts</li>
+      <li>An app store over the Omarchy plugin marketplace, Omarchy themes and ArtCraft</li>
+      <li>Agent CLIs, MCP servers, skills, plugins and hooks, with live health</li>
+      <li>System health checks that each offer the one command that acts on them</li>
+      <li>Install and removal inside the app, always showing the full list first</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>System</category>
+    <category>PackageManager</category>
+    <category>Settings</category>
+  </categories>
+
+  <keywords>
+    <keyword>package</keyword>
+    <keyword>update</keyword>
+    <keyword>store</keyword>
+    <keyword>plugin</keyword>
+    <keyword>theme</keyword>
+    <keyword>maintenance</keyword>
+    <keyword>omarchy</keyword>
+    <keyword>AUR</keyword>
+  </keywords>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>What needs attention today, over the desktop's own wallpaper</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/featured.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Plugins, apps and themes with provenance on every card</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/app-store.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Themes previewed in their own colours</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/themes.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>One update list for six package managers</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/updates.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Agent CLIs, MCP servers, skills and hooks</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/ai.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>System health, each check with the command that acts on it</caption>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/health.png</image>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/twodxme/almanac</url>
+  <url type="bugtracker">https://github.com/twodxme/almanac/issues</url>
+  <url type="vcs-browser">https://github.com/twodxme/almanac</url>
+
+  <developer id="io.github.twodxme">
+    <name>twodxme</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <requires>
+    <display_length compare="ge">480</display_length>
+  </requires>
+
+  <releases>
+    <release version="1.0.0" date="2026-10-16">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

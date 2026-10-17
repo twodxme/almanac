@@ -139,10 +139,23 @@ vanished upstream, trash and disk headroom.
 
 ## Install
 
+**From the AUR** (recommended — Almanac then appears in its own Updates list
+as a package, and defers its updates to `pacman`):
+
+```bash
+yay -S almanac-git
+```
+
+**From source:**
+
 ```bash
 git clone https://github.com/twodxme/almanac ~/.local/share/almanac
-ln -sf ~/.local/share/almanac/almanac ~/.local/bin/almanac
-cp ~/.local/share/almanac/docs/almanac.desktop ~/.local/share/applications/
+cd ~/.local/share/almanac
+ln -sf "$PWD/almanac" ~/.local/bin/almanac
+install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
+install -Dm644 docs/io.github.twodxme.Almanac.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
 ```
 
 Then run `almanac`, or launch it from your application menu.

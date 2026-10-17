@@ -202,6 +202,8 @@ class _Stub:
         self._say = mock.Mock()
         self._summarize = mock.Mock()
         self.reload = mock.Mock()
+        self._store_refresh = mock.Mock()
+        self._plugins = []
 
 
 class _Confirmed:
@@ -358,6 +360,111 @@ class RemovalCommands(unittest.TestCase):
                 self.assertFalse(prev.exists())
                 self.assertTrue(other.exists(), "removal must not touch other files")
                 self.assertEqual(inventory._load_registry(), {})
+
+
+class EmptyStates(unittest.TestCase):
+    """A blank screen is indistinguishable from a broken one.
+
+    Each category's empty state has to say which kind of empty it is --
+    "nothing to do" reads completely differently from "nothing matched" --
+    so the mapping is asserted rather than left to whoever edits it next.
+    """
+
+    def test_every_source_category_explains_itself(self):
+        import app as app_mod
+        states = app_mod.AlmanacWindow.EMPTY_STATES
+        for key in (inventory.ORPHAN, inventory.FLATPAK, inventory.APPIMAGE,
+                    inventory.LOCAL, inventory.AUR, "updates"):
+            self.assertIn(key, states, f"{key} has no empty state")
+            icon, title, body = states[key]
+            self.assertTrue(icon and title and body,
+                            f"{key}'s empty state is incomplete")
+            self.assertGreater(len(body), 20,
+                               f"{key}'s empty state does not explain anything")
+
+    def test_an_empty_updates_list_is_good_news_not_an_error(self):
+        import app as app_mod
+        icon, title, body = app_mod.AlmanacWindow.EMPTY_STATES["updates"]
+        self.assertIn("ok", icon, "a finished state should not look like a fault")
+        self.assertNotIn("error", icon)
+        self.assertIn("up to date", title.lower())
+
+    def test_orphan_empty_state_does_not_imply_something_is_wrong(self):
+        import app as app_mod
+        _icon, title, body = app_mod.AlmanacWindow.EMPTY_STATES[inventory.ORPHAN]
+        self.assertNotIn("error", (title + body).lower())
+        self.assertNotIn("fail", (title + body).lower())
+
+
+class ThemeActions(unittest.TestCase):
+    """Themes install, apply and remove with their own commands."""
+
+    @staticmethod
+    def _wire(win, app_mod, *names):
+        """Bind the real methods the code under test dispatches into."""
+        for name in names:
+            setattr(win, name,
+                    getattr(app_mod.AlmanacWindow, name).__get__(win))
+
+    def test_removal_uses_the_theme_command_not_the_plugin_one(self):
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        self._wire(win, app_mod, "_remove_theme", "_store_after")
+        theme = store.Plugin(id="theme.x.y", name="Lumon",
+                             repo="https://github.com/x/omarchy-lumon-theme",
+                             install_kind="theme", installed=True)
+
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run):
+            app_mod.AlmanacWindow.on_plugin_remove(win, None, theme)
+            fake.say_yes()
+
+        joined = " ".join(fake.commands)
+        self.assertIn("omarchy theme remove Lumon", joined)
+        self.assertNotIn("plugin remove", joined,
+                         "a theme is not a plugin and the CLI knows it")
+
+    def test_a_theme_shipped_with_omarchy_is_not_removable(self):
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        self._wire(win, app_mod, "_remove_theme", "_store_after")
+        stock = store.Plugin(id="theme.o.s", name="Solitude",
+                             repo="https://github.com/x/omarchy-solitude-theme",
+                             install_kind="theme", installed=True,
+                             built_in=True)
+
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run):
+            app_mod.AlmanacWindow.on_plugin_remove(win, None, stock)
+
+        self.assertIsNone(fake.confirm_args,
+                          "must not offer to remove what omarchy ships")
+        self.assertEqual(fake.ran, [])
+        win._say.assert_called()
+
+    def test_installing_a_theme_does_not_also_apply_it(self):
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        self._wire(win, app_mod, "_install_theme", "_theme_installed",
+                   "_apply_theme_now")
+        theme = store.Plugin(
+            id="theme.x.y", name="Lumon",
+            repo="https://github.com/x/omarchy-lumon-theme",
+            install_kind="theme", installable=True,
+            install_cmd="omarchy theme install https://github.com/x/omarchy-lumon-theme")
+
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run):
+            app_mod.AlmanacWindow.on_plugin_install(win, None, theme)
+            fake.say_yes()
+
+        joined = " ".join(fake.commands)
+        self.assertIn("theme install", joined)
+        self.assertNotIn("theme set", joined,
+                         "installing must not re-skin the desktop on its own")
 
 
 if __name__ == "__main__":

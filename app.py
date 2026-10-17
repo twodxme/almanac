@@ -386,6 +386,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.set_title("Almanac")
+        self.set_icon_name("io.github.twodxme.Almanac")
         self.set_default_size(1320, 800)
         # Nothing here should ever need a horizontal scrollbar, so the window
         # has to be able to shrink to a half-screen tile.
@@ -518,12 +519,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
 
-        sidebar_toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic")
-        sidebar_toggle.set_active(True)
-        sidebar_toggle.set_tooltip_text("Show categories")
-        sidebar_toggle.connect(
+        self.sidebar_toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic")
+        self.sidebar_toggle.set_active(True)
+        self.sidebar_toggle.set_tooltip_text("Show categories")
+        self.sidebar_toggle.connect(
             "toggled", lambda b: self.split.set_show_sidebar(b.get_active()))
-        header.pack_start(sidebar_toggle)
+        header.pack_start(self.sidebar_toggle)
 
         # The header names the page and summarises it. Previously the search
         # entry was the title widget, so no page had a name and the four
@@ -661,7 +662,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller.set_margin_start(12)
         scroller.set_margin_end(12)
         scroller.set_margin_bottom(12)
-        box.append(scroller)
+
+        self.list_stack = Gtk.Stack()
+        self.list_stack.set_vexpand(True)
+        self.list_stack.add_named(scroller, "list")
+        self.list_empty = self._status_page(
+            "emblem-ok-symbolic", "Nothing here", "")
+        self.list_stack.add_named(self.list_empty, "empty")
+        box.append(self.list_stack)
 
         self.content_stack = Gtk.Stack()
         self.content_stack.set_hhomogeneous(False)
@@ -690,6 +698,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
         split.set_max_sidebar_width(260)
         self.split = split
         self.set_content(split)
+
+        # Below ~760px the sidebar costs more than it gives: 205 of 480 pixels
+        # is most of a half-screen tile. It folds into an overlay instead, and
+        # the toggle in the header becomes the way back to it.
+        breakpoint_ = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse("max-width: 760px"))
+        breakpoint_.add_setter(split, "collapsed", True)
+        breakpoint_.connect("apply", lambda *_: self._set_narrow(True))
+        breakpoint_.connect("unapply", lambda *_: self._set_narrow(False))
+        self.add_breakpoint(breakpoint_)
+        self._narrow = False
 
         # Row-menu actions resolve by name at activation time, because the
         # row widgets themselves are recycled as the list scrolls.
@@ -1260,6 +1279,22 @@ class AlmanacWindow(Adw.ApplicationWindow):
             text += f" · {orphan_n} orphans"
         if shown != total:
             text += f" · showing {shown}"
+        # Say which kind of empty this is, rather than showing a blank table.
+        if shown == 0:
+            icon, title, body = self.EMPTY_STATES.get(
+                self.filter_key,
+                ("system-search-symbolic", "Nothing matches",
+                 "Try a different search."))
+            if self.query:
+                icon, title = "system-search-symbolic", "Nothing matches"
+                body = f"No installed software matches “{self.query}”."
+            self.list_empty.set_icon_name(icon)
+            self.list_empty.set_title(title)
+            self.list_empty.set_description(body)
+            self.list_stack.set_visible_child_name("empty")
+        else:
+            self.list_stack.set_visible_child_name("list")
+
         self._summarize(text, "packages")
         self._sync_primary()
         self._update_sidebar_counts()
@@ -1757,6 +1792,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if row is None:
             return                      # selection cleared during a rebuild
         self.filter_key = row._key
+        if getattr(self, "_narrow", False):
+            GLib.idle_add(self.split.set_show_sidebar, False)
         if row._key == "featured":
             self._leave_store()
             self._show_page("featured")
@@ -1804,6 +1841,25 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._show_page("packages", category=row._key)
         self.filter.changed(Gtk.FilterChange.DIFFERENT)
         self._update_status()
+
+    def _set_narrow(self, narrow: bool):
+        """Fold or unfold for the window's width."""
+        self._narrow = narrow
+        # Collapsed, the sidebar is an overlay that should start hidden;
+        # expanded, it is furniture and should be back.
+        self.split.set_show_sidebar(not narrow)
+        self.sidebar_toggle.set_active(not narrow)
+        self.sidebar_toggle.set_tooltip_text(
+            "Show categories" if narrow else "Hide categories")
+        # One column of cards is the right answer on a narrow window; four
+        # would each be 110px wide.
+        if hasattr(self, "store_grid"):
+            self.store_grid.set_max_columns(2 if narrow else 4)
+
+    def _select_category_and_close(self, key: str):
+        self._select_category(key)
+        if getattr(self, "_narrow", False):
+            self.split.set_show_sidebar(False)
 
     def _page_title(self, key: str, fallback: str) -> str:
         row = self.sidebar_rows.get(key)
@@ -2111,12 +2167,31 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller.set_margin_start(12)
         scroller.set_margin_end(12)
         scroller.set_margin_bottom(12)
+        self.store_scroll_inner = scroller
         # Cards arrive a page at a time as you reach the end of the list.
         # GridView recycles the widgets, but building 5,600 PluginItems on
         # every keystroke is what makes the search feel heavy.
         scroller.get_vadjustment().connect("value-changed", self._store_scrolled)
         self.store_scroller = scroller
-        page.append(scroller)
+
+        # The grid and its empty state occupy the same slot.
+        self.store_stack = Gtk.Stack()
+        self.store_stack.set_vexpand(True)
+        self.store_stack.add_named(scroller, "grid")
+        retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER)
+        retry.add_css_class("suggested-action")
+        retry.add_css_class("pill")
+        retry.connect("clicked", lambda *_: self._store_reload(force=True))
+        self.store_empty = self._status_page(
+            "system-search-symbolic", "Nothing matches",
+            "Try a different search, or clear the filters.", None)
+        self.store_offline = self._status_page(
+            "network-offline-symbolic", "The catalogue could not be loaded",
+            "Almanac could not reach the marketplaces. It will use the last "
+            "copy it has as soon as one exists.", retry)
+        self.store_stack.add_named(self.store_empty, "empty")
+        self.store_stack.add_named(self.store_offline, "offline")
+        page.append(self.store_stack)
         return page
 
     STORE_PAGE = 100
@@ -2543,6 +2618,20 @@ class AlmanacWindow(Adw.ApplicationWindow):
             market=pick(self.store_market, getattr(self, "_store_markets", [""])))
 
         self._store_results = results
+        if not self._plugins:
+            self.store_stack.set_visible_child_name("offline")
+        elif not results:
+            clearable = (self.search.get_text().strip()
+                         or getattr(self, "_store_cat_key", "")
+                         or self.store_verified.get_active()
+                         or self.store_installed.get_active()
+                         or self.store_trust.get_selected() > 0)
+            self.store_empty.set_description(
+                "Try a different search, or clear the filters." if clearable
+                else "This marketplace has nothing listed right now.")
+            self.store_stack.set_visible_child_name("empty")
+        else:
+            self.store_stack.set_visible_child_name("grid")
         self.store_model.remove_all()
         # Back to the top: the previous scroll position means nothing once
         # the result set has changed underneath it.
@@ -3032,6 +3121,26 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row._count.add_css_class("count-badge" if crit else "dim-label")
         return False
 
+    EMPTY_STATES = {
+        "updates": ("emblem-ok-symbolic", "Everything is up to date",
+                    "Nothing installed has a newer version waiting."),
+        inventory.ORPHAN: ("emblem-ok-symbolic", "No orphans",
+                           "Every installed package is either asked for "
+                           "directly or needed by something that is."),
+        inventory.FLATPAK: ("package-x-generic-symbolic", "No Flatpaks",
+                            "Nothing is installed through Flatpak on this "
+                            "machine."),
+        inventory.APPIMAGE: ("application-x-executable-symbolic",
+                             "No AppImages tracked",
+                             "Install one from the App Store, or add an "
+                             "existing file with ☰ → Track an AppImage."),
+        inventory.LOCAL: ("applications-engineering-symbolic",
+                          "No local builds",
+                          "Nothing here is running from a git checkout."),
+        inventory.AUR: ("package-x-generic-symbolic", "No AUR packages",
+                        "Nothing foreign is installed."),
+    }
+
     _SEVERITY_CSS = {
         maintenance.CRIT: ("Critical", "crit-pill"),
         maintenance.WARN: ("Attention", "stale-pill"),
@@ -3140,6 +3249,20 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_child(self.ai_page)
         page.append(scroller)
+        return page
+
+    @staticmethod
+    def _status_page(icon: str, title: str, body: str, action=None):
+        """What a screen says when it has nothing to show.
+
+        A blank list is indistinguishable from a broken one. Every empty
+        screen here names which of the three it is -- nothing to do, nothing
+        matched, or nothing could be loaded -- and offers the way out.
+        """
+        page = Adw.StatusPage(icon_name=icon, title=title, description=body)
+        page.set_vexpand(True)
+        if action is not None:
+            page.set_child(action)
         return page
 
     @staticmethod
@@ -3883,7 +4006,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         info = selfupdate.check(fetch=False)
         about = Adw.AboutDialog(
             application_name="Almanac",
-            application_icon="system-software-install",
+            application_icon="io.github.twodxme.Almanac",
             version=info["version"],
             developer_name="twodxme",
             comments="A catalogue of everything installed on this machine: "
