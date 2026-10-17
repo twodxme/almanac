@@ -96,6 +96,25 @@
   </requires>
 
   <releases>
+    <release version="1.1.0" date="2026-10-17">
+      <description>
+        <p>Almanac now checks that what it did actually happened, and watches for
+        changes made behind your back.</p>
+        <ul>
+          <li>Every update, install and cleanup reports what changed, not
+          whether a command exited successfully</li>
+          <li>Settings reset to their defaults are detected and restored in one
+          click</li>
+          <li>Packages are snapshotted before they change, on systems with
+          Snapper</li>
+          <li>File types an install took over can be handed back</li>
+          <li>Install any GitHub project from its link, with every way it ships
+          compared and the download checksum-verified</li>
+          <li>Major releases wait for you; local changes to plugins are carried
+          forward or set aside, never discarded</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-10-17">
       <description>
         <p>Apps whose release could not be looked up are listed as not checked,

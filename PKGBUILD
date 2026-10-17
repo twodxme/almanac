@@ -7,8 +7,13 @@ pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('any')
 url="https://github.com/twodxme/almanac"
 license=('MIT')
-depends=('python' 'gtk4' 'libadwaita' 'python-gobject' 'python-cairo' 'pacman')
+depends=('python' 'gtk4' 'libadwaita' 'python-gobject' 'python-cairo' 'pacman'
+         'polkit')
 optdepends=(
+  'git: local checkouts, plugin updates and carrying local changes forward'
+  'snapper: a snapshot before every package Almanac installs or updates'
+  'xdg-utils: handing file types back to the app that opened them before'
+  'xdg-terminal-exec: opens full upgrades in your chosen terminal'
   'omarchy: plugin catalogue, themes and system updates'
   'yay: AUR package updates and installs'
   'pacman-contrib: checkupdates, for pending repository updates'

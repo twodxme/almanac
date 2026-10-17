@@ -55,6 +55,11 @@ def update_agents() -> int:
         if not cmd:
             log(f"{a.name}: {a.version} → {a.update} available, no self-updater")
             continue
+        if agents.major_jump(a.version, a.update):
+            # A new major version waits for a person: it is the kind of
+            # update that changes flags and config formats.
+            log(f"{a.name}: {a.version} → {a.update} is a major release, held")
+            continue
         log(f"{a.name}: {a.version} → {a.update}")
         if _run(list(cmd)):
             done += 1

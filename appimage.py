@@ -156,8 +156,9 @@ def install_desktop_entry(appimage_path: Path, name: str) -> bool:
     import shutil
     import tempfile
 
-    apps_dir = Path.home() / ".local/share/applications"
-    icons_dir = Path.home() / ".local/share/icons/hicolor"
+    import xdg
+    apps_dir = xdg.data_home() / "applications"
+    icons_dir = xdg.data_home() / "icons/hicolor"
     apps_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=str(appimage_path.parent)) as tmp:
@@ -204,8 +205,9 @@ def install_desktop_entry(appimage_path: Path, name: str) -> bool:
 
 
 def remove_desktop_entry(name: str) -> None:
-    apps = Path.home() / ".local/share/applications" / f"almanac-{name}.desktop"
+    import xdg
+    apps = xdg.data_home() / "applications" / f"almanac-{name}.desktop"
     apps.unlink(missing_ok=True)
-    for png in (Path.home() / ".local/share/icons/hicolor").glob(
+    for png in (xdg.data_home() / "icons/hicolor").glob(
             f"*/apps/almanac-{name}.png"):
         png.unlink(missing_ok=True)

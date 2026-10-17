@@ -647,20 +647,30 @@ def local_builds(check_updates: bool = True) -> list[App]:
             "git_tracked": info.get("tracked", False),
         }
 
-    sd = Path.home() / ".local/share/streamdock"
-    if (sd / ".git").exists():
-        rev = _run(["git", "-C", str(sd), "describe", "--always", "--dirty"]).strip()
-        g = git_extra(sd)
+    # Anything cloned straight into the data directory and built there --
+    # a driver, a tool installed with `make install PREFIX=~/.local`. Found
+    # by being a git checkout, not by name; Almanac's own checkout is left
+    # to its self-update.
+    import xdg
+    own = Path(__file__).resolve().parent
+    for repo in sorted(xdg.data_home().glob("*/.git")):
+        repo = repo.parent
+        if repo.resolve() == own:
+            continue
+        rev = _run(["git", "-C", str(repo), "describe", "--always", "--dirty"]).strip()
+        origin = _run(["git", "-C", str(repo), "remote", "get-url", "origin"]).strip()
+        g = git_extra(repo)
+        launcher = xdg.bin_home() / repo.name
         apps.append(App(
-            name="streamdock",
+            name=repo.name,
             version=rev or "git",
             source=LOCAL,
-            description="Stream Dock N1 driver (built from source)",
+            description=("Built from source" + (f" · {origin}" if origin else "")),
             update=(f"{g['git_behind']} commits" if g.get("git_behind") else ""),
-            exec_path=str(Path.home() / ".local/bin/streamdock"),
-            extra={**g, "repo": str(sd), "is_app": False},
+            exec_path=str(launcher) if launcher.exists() else "",
+            extra={**g, "repo": str(repo), "is_app": False},
         ))
-    plugins = Path.home() / ".config/omarchy/plugins"
+    plugins = xdg.config_home() / "omarchy/plugins"
     for p in sorted(plugins.glob("*")) if plugins.is_dir() else []:
         if not p.is_dir():
             continue
@@ -893,7 +903,8 @@ def search_plugins(query: str, limit: int = 40) -> list[App]:
         return []
 
     retired = set(reg.get("retiredPluginIds") or [])
-    installed = {d.name for d in (Path.home() / ".config/omarchy/plugins").glob("*")
+    import xdg
+    installed = {d.name for d in (xdg.config_home() / "omarchy/plugins").glob("*")
                  if d.is_dir()}
     q = query.strip().lower()
     out = []

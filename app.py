@@ -21,7 +21,9 @@ from gi.repository import (Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk,  # noqa
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import json  # noqa: E402
+import os  # noqa: E402
 import threading  # noqa: E402
+import time  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -35,9 +37,17 @@ import selfupdate  # noqa: E402
 import theming  # noqa: E402
 import featured  # noqa: E402
 import ai  # noqa: E402
+import agents as agents_mod  # noqa: E402
 import autoupdate  # noqa: E402
 import ghcache  # noqa: E402
 import icons as icons_mod  # noqa: E402
+import guard  # noqa: E402
+import mimeguard  # noqa: E402
+import patches  # noqa: E402
+import snapshots  # noqa: E402
+import sources  # noqa: E402
+import verify  # noqa: E402
+import xdg  # noqa: E402
 import shlex  # noqa: E402
 
 _CSS = b"""
@@ -573,6 +583,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         menu = Gio.Menu()
         actions = Gio.Menu()
         actions.append("Install what’s in the search box…", "win.install")
+        actions.append("Install from a link…", "win.fromlink")
         actions.append("Track an AppImage file…", "win.track")
         menu.append_section(None, actions)
         maintenance = Gio.Menu()
@@ -622,6 +633,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         header.pack_end(menu_btn)
 
         for name, fn in (("install", self.on_install), ("track", self.on_add_appimage),
+                         ("fromlink", self.on_install_link),
                          ("clean", self.on_clean_orphans),
                          ("prefs", self.on_preferences),
                          ("selfupdate", self.on_self_update),
@@ -772,6 +784,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._select_category("featured" if self.filter_key == "all"
                                   else self.filter_key)
         self._watch_pacman()
+        self._watch_configs()
         self.reload()
 
     # ---- columns ---------------------------------------------------------
@@ -997,6 +1010,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row = item.get_child()
             upd = row.get_first_child()
             play = upd.get_next_sibling()
+            menu = play.get_next_sibling()
 
             # Rows are recycled as the list scrolls, so a stale handler would
             # fire for whichever item later lands in this widget.
@@ -1077,7 +1091,6 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
             # Destructive actions sit behind a menu, never a bare button where
             # the pointer already is.
-            menu = play.get_next_sibling()
             model = Gio.Menu()
             url = it.app.extra.get("url", "")
             if url:
@@ -1197,6 +1210,67 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._monitor.connect("changed", self._on_pacman_changed)
         except GLib.Error:
             self._monitor = None        # no watch is survivable; Rescan still works
+
+    def _watch_configs(self):
+        """Notice the moment a tool resets a config file to its defaults.
+
+        The Health check finds a reset whenever it runs; this makes it
+        immediate while the window is open. Only the directories the
+        distribution ships defaults for are watched, since nothing else can
+        be "reset to defaults".
+        """
+        self._config_monitors = []
+        self._config_pending = None
+        self._config_reported = {str(r.backup) for r in guard.resets()}
+        root = guard.defaults_root()
+        if root is None:
+            return
+        for sub in sorted(root.iterdir()) if root.is_dir() else []:
+            target = guard.config_home() / sub.name
+            if not target.is_dir():
+                continue
+            try:
+                mon = Gio.File.new_for_path(str(target)).monitor_directory(
+                    Gio.FileMonitorFlags.NONE, None)
+            except GLib.Error:
+                continue
+            mon.connect("changed", self._on_config_changed)
+            self._config_monitors.append(mon)
+
+    def _on_config_changed(self, _mon, gfile, _other, event):
+        if event != Gio.FileMonitorEvent.CREATED:
+            return
+        if not guard.BAK.match(gfile.get_basename() or ""):
+            return
+        if self._config_pending:
+            GLib.source_remove(self._config_pending)
+        # The backup is written before the defaults are copied in; wait for both.
+        self._config_pending = GLib.timeout_add_seconds(3, self._config_check)
+
+    def _config_check(self):
+        self._config_pending = None
+
+        def work():
+            found = guard.resets()
+            GLib.idle_add(self._config_report, found)
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def _config_report(self, found):
+        new = [r for r in found if str(r.backup) not in self._config_reported]
+        self._config_reported |= {str(r.backup) for r in found}
+        if not new:
+            return False
+        names = ", ".join(r.name for r in new)
+        lost = sum(len(r.lost) for r in new)
+        body = (f"{names} was replaced with the shipped defaults"
+                + (f", removing {lost} of your entries" if lost else "")
+                + ". Your version was kept — restore it from Health check.")
+        self._notify("Your settings were reset", body, "critical")
+        self._say("Settings reset to defaults — see Health check", 10)
+        if self.content_stack.get_visible_child_name() == "maintenance":
+            self._maint_reload()
+        return False
 
     def _on_pacman_changed(self, *_args):
         if self._pending_rescan:
@@ -2870,13 +2944,15 @@ class AlmanacWindow(Adw.ApplicationWindow):
         tasks.confirm(
             self, f"Install {p.name}?",
             f"{p.size_mb:.0f} MB will be downloaded from GitHub and kept "
-            f"under ~/.local/share/almanac, with a launcher entry.",
+            f"with Almanac's apps, with a launcher entry.",
             detail, "Install", False,
             lambda: tasks.run(
                 self, f"Installing {p.name}",
                 [(f"Downloading {p.name} {p.version}",
                   lambda log, p=p, dest=dest: self._fetch_appimage(log, p, dest))],
-                lambda ok: self._store_after(ok, p, "installed")))
+                lambda ok, holder=self._watch_defaults(): (
+                    ok and self._check_defaults(holder),
+                    self._store_after(ok, p, "installed"))))
 
     def _fetch_appimage(self, log, p, dest):
         """Download, register and add a launcher entry. Raises on failure."""
@@ -3256,7 +3332,25 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self, f.title, f.detail, detail,
             f.fix_label, destructive,
             lambda: tasks.run(self, f.title, [(f.fix_label, f.fix)],
-                              lambda ok: self._maint_after(ok)))
+                              self._findings_done([f])))
+
+    def _findings_done(self, fixed: list):
+        """After fixes: ask each check again, and say what actually changed."""
+        def done(ok):
+            self._maint_after(ok)
+
+            def work():
+                outs = [verify.judge_finding(f, verify.recheck(f.id))
+                        for f in fixed]
+                failed = [o for o in outs if o.changed is False]
+                for o in failed:
+                    GLib.idle_add(self._report_outcome, o)
+                if not failed and outs:
+                    GLib.idle_add(self._say,
+                                  " · ".join(o.message for o in outs), 8)
+            threading.Thread(target=work, daemon=True).start()
+            return False
+        return done
 
     def _maint_after(self, ok):
         self._maint_reload()
@@ -3283,7 +3377,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             "Nothing you created is touched, and nothing installed is removed.",
             "\n\n".join(detail), "Reclaim", False,
             lambda: tasks.run(self, "Reclaiming space", steps,
-                              lambda ok: self._maint_after(ok)))
+                              self._findings_done(
+                                  [f for f in getattr(self, "_findings", [])
+                                   if f.id in wanted and f.actionable])))
 
     # ---- the AI estate ----------------------------------------------------
     def _build_ai(self):
@@ -3611,6 +3707,20 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _ai_act(self, e):
         cmd = e.action
+        if (e.kind == ai.HARNESS and e.update and isinstance(cmd, list)
+                and agents_mod.major_jump(e.version, e.update)):
+            # Same treatment as from the Updates list: notes first.
+            spec = next((k for k in agents_mod.KNOWN if k.name == e.name), None)
+            app = inventory.App(name=e.name, version=e.version, source=inventory.AGENT,
+                                update=e.update,
+                                extra={"update_cmd": cmd, "manager": "",
+                                       "repo": spec.repo if spec else "",
+                                       "binary": spec.id if spec else ""})
+            app.extra["manager"] = "mise" if cmd[:1] == ["mise"] else "self"
+            if app.extra["manager"] == "mise" and spec:
+                app.extra["key"] = spec.id
+            self._update_agent(app)
+            return
         detail = e.action_note or ""
         if isinstance(cmd, list):
             detail += f"\n\n$ {' '.join(cmd)}"
@@ -3630,6 +3740,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _ai_update_all(self):
         upd = [e for _t, _d, es in getattr(self, "_ai_survey", [])
                for e in es if e.kind == ai.HARNESS and e.update and e.action]
+        # Major releases are updated one at a time, with their notes shown.
+        held = [e for e in upd if agents_mod.major_jump(e.version, e.update)]
+        upd = [e for e in upd if e not in held]
+        if held:
+            self._say("Held back (major release, update it on its own): "
+                      + ", ".join(f"{e.name} {e.update}" for e in held), 8)
         if not upd:
             return
         steps = [(f"Updating {e.name}", e.action) for e in upd]
@@ -4108,34 +4224,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self.on_git_pull(None, app)
 
     def _row_stash(self, name: str):
-        """Put local edits somewhere recoverable, then fast-forward.
-
-        Stash rather than discard: the edits are someone's work, and a pull
-        that silently threw them away would be the worst thing this app does.
-        `git stash pop` brings them back.
-        """
+        """Update a checkout that has local edits -- see on_git_pull."""
         app = self._row_actions.get(name)
-        repo = app.extra.get("repo") if app else ""
-        if not repo:
-            return
-        behind = app.extra.get("git_behind", 0)
-        tasks.confirm(
-            self, f"Stash local changes in {name}?",
-            f"This checkout is {behind} commit(s) behind and has uncommitted "
-            f"changes, so it cannot fast-forward. The changes are stashed, "
-            f"not discarded — `git stash pop` in the repository brings them "
-            f"back.",
-            f"{repo}\n\n"
-            f"$ git stash push --include-untracked -m 'almanac: before update'\n"
-            f"$ git pull --ff-only",
-            "Stash and update", False,
-            lambda: tasks.run(
-                self, f"Updating {name}",
-                [("Stashing local changes",
-                  ["git", "-C", repo, "stash", "push", "--include-untracked",
-                   "-m", "almanac: before update"]),
-                 ("Pulling", ["git", "-C", repo, "pull", "--ff-only", "--stat"])],
-                self._after_pacman))
+        if app:
+            self.on_git_pull(None, app)
 
     def _row_aur(self, name: str):
         self.open_url(f"https://aur.archlinux.org/packages/{name}")
@@ -4160,15 +4252,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def _in_terminal(self, script: str, note: str):
         """The one remaining escape to a terminal: see on_update_all."""
-        term = shutil.which("foot") or shutil.which("alacritty") or shutil.which("kitty")
-        if not term:
+        argv = xdg.terminal_argv(
+            ["bash", "-lc",
+             script + "; echo; read -n1 -r -p 'Done — press any key to close'"])
+        if not argv:
             self._say("No terminal found to run that in")
             return False
         try:
-            subprocess.Popen(
-                [term, "-e", "bash", "-lc",
-                 script + "; echo; read -n1 -r -p 'Done — press any key to close'"],
-                start_new_session=True)
+            subprocess.Popen(argv, start_new_session=True)
             self._say(note)
             return True
         except OSError as e:
@@ -4242,9 +4333,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"{app.name} {app.version}\n{app.description}\n\n"
             f"$ {' '.join(argv)}",
             "Install", False,
-            lambda: tasks.run(self, f"Installing {app.name}",
-                              [(f"Installing {app.name}", argv)],
-                              self._after_pacman))
+            lambda: self._install_package(app.name, argv))
 
     def on_install(self, _button):
         """Search and install, handed to yay in a terminal.
@@ -4257,14 +4346,35 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self.search.grab_focus()
             self._say("Type what to search for, then press Install")
             return
+        if sources.parse(text):
+            self.on_install_link(link=text)
+            return
         argv = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", text]
         tasks.confirm(
             self, f"Install “{text}”?",
             "This installs a package by exact name. To browse what matches "
             "first, use the App Store and search there.",
             f"$ {' '.join(argv)}", "Install", False,
-            lambda: tasks.run(self, f"Installing {text}",
-                              [(f"Installing {text}", argv)], self._after_pacman))
+            lambda: self._install_package(text, argv))
+
+    def _install_package(self, name: str, argv: list):
+        """Install through yay: snapshot first, then check what changed."""
+        holder = self._watch_defaults()
+
+        def after(ok):
+            if ok:
+                self._check_defaults(holder)
+            self._after_pacman(ok)
+
+        tasks.run(self, f"Installing {name}",
+                  self._snapshot_first([(f"Installing {name}", argv)],
+                                       f"installing {name}"),
+                  self._checked(verify.installed_package(name),
+                                lambda b, a: verify.Outcome(
+                                    bool(a) and a != b,
+                                    f"{name} {a} installed" if a and a != b
+                                    else f"{name} was not installed"),
+                                then=after))
 
     def on_remove(self, _button, app: inventory.App):
         """Remove a package, with its orphaned dependencies.
@@ -4302,6 +4412,206 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               [(f"Removing {app.name}",
                                 ["pacman", "-Rns", "--noconfirm", app.name])],
                               self._after_pacman))
+
+    # ---- did it work? ------------------------------------------------------
+    def _checked(self, probe, judge, then=None):
+        """An on_done that reports what changed, not what a command exited.
+
+        `probe` is asked now and again once the task is over, and `judge`
+        turns the two answers into what the user is told (see verify.py).
+        Every silent failure this app has had passed an exit-status check.
+        """
+        before = probe() if probe else None
+
+        def done(ok):
+            if then is not None:
+                then(ok)
+            if probe is None:
+                return False
+
+            def work():
+                GLib.idle_add(self._report_outcome, judge(before, probe()))
+            threading.Thread(target=work, daemon=True).start()
+            return False
+        return done
+
+    def _report_outcome(self, out):
+        if out.changed is False:
+            # Something the user asked for did not happen. A toast can be
+            # missed; this is the one result that must not be.
+            self._notify("Nothing changed", out.message)
+            self._say(out.message, 10)
+        else:
+            self._say(out.message)
+        return False
+
+    def _snapshot_first(self, steps: list, what: str) -> list:
+        """Put a Snapper snapshot ahead of a package change, when available."""
+        step = snapshots.create_step(f"Almanac: before {what}")
+        return [step, *steps] if step else list(steps)
+
+    # ---- which files an install took over ----------------------------------
+    def _watch_defaults(self) -> dict:
+        """Read every file type's default app now, before an install."""
+        holder: dict = {}
+
+        def work():
+            holder["before"] = mimeguard.snapshot()
+        holder["thread"] = threading.Thread(target=work, daemon=True)
+        holder["thread"].start()
+        return holder
+
+    def _check_defaults(self, holder: dict):
+        def work():
+            holder["thread"].join(timeout=90)
+            moved = mimeguard.changes(holder.get("before"), mimeguard.snapshot())
+            if moved:
+                GLib.idle_add(self._offer_defaults_back, moved)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _offer_defaults_back(self, moved):
+        returnable = [m for m in moved if m[1]]
+        dialog = Adw.AlertDialog(
+            heading="Some files now open in a different app",
+            body=("\n".join(mimeguard.summary(moved))
+                  + ("\n\nGive them back to what opened them before?"
+                     if returnable else "")))
+        dialog.add_response("keep", "Keep the new app")
+        if returnable:
+            dialog.add_response("restore", "Give them back")
+            dialog.set_response_appearance(
+                "restore", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("keep")
+        dialog.set_close_response("keep")
+
+        def respond(_d, resp):
+            if resp == "restore":
+                n = mimeguard.restore(returnable)
+                self._say(f"{n} file type(s) handed back")
+        dialog.connect("response", respond)
+        dialog.present(self)
+        return False
+
+    # ---- install from a link -----------------------------------------------
+    def on_install_link(self, _button=None, link: str = ""):
+        """Paste a GitHub link; see every way it ships before choosing one."""
+        entry = Gtk.Entry(placeholder_text="https://github.com/owner/project",
+                          activates_default=True, hexpand=True)
+        entry.set_text(link)
+        dialog = Adw.AlertDialog(
+            heading="Install from a link",
+            body="Paste a GitHub project link. Every way it is published is "
+                 "compared, and one is recommended, before anything is "
+                 "downloaded.")
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("find", "Look it up")
+        dialog.set_response_appearance("find", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("find")
+        dialog.set_close_response("cancel")
+
+        def respond(_d, resp):
+            if resp != "find":
+                return
+            text = entry.get_text().strip()
+            if not sources.parse(text):
+                self._say("That is not a GitHub repository link")
+                return
+            self._say("Looking it up…")
+
+            def work():
+                res = sources.resolve(text)
+                GLib.idle_add(self._show_link_options, res)
+            threading.Thread(target=work, daemon=True).start()
+        dialog.connect("response", respond)
+        dialog.present(self)
+
+    def _show_link_options(self, res):
+        if not res.options:
+            self._say(res.error or "Nothing installable found", 8)
+            return False
+        chosen = {"opt": res.best}
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        rows.add_css_class("boxed-list")
+        group = None
+        for i, o in enumerate(res.options):
+            # Name and version on the title; the file or package name, then
+            # each reason and caveat on its own line, so none is cut off.
+            lines = [o.name] + [f"✓ {r}" for r in o.reasons] \
+                + [f"⚠ {w}" for w in o.warnings]
+            row = self._plain(title=f"{o.title} · {o.version}" if o.version
+                              else o.title, subtitle="\n".join(lines))
+            row.set_subtitle_lines(0)
+            check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
+            if group is None:
+                group = check
+            else:
+                check.set_group(group)
+            check.set_active(i == 0)
+            check.connect("toggled", lambda b, o=o:
+                          b.get_active() and chosen.update(opt=o))
+            row.add_prefix(check)
+            row.set_activatable_widget(check)
+            if i == 0:
+                pill = Gtk.Label(label="Recommended", valign=Gtk.Align.CENTER)
+                pill.add_css_class("pill-ok")
+                row.add_suffix(pill)
+            rows.append(row)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_propagate_natural_height(True)
+        scroll.set_max_content_height(420)
+        scroll.set_child(rows)
+
+        facts = [f"{res.stars:,} stars"]
+        if res.license:
+            facts.append(res.license)
+        if res.archived:
+            facts.append("archived")
+        dialog = Adw.AlertDialog(heading=f"Install {res.repo}?",
+                                 body=(res.description + "\n" if res.description
+                                       else "") + " · ".join(facts))
+        dialog.set_body_use_markup(False)
+        if hasattr(dialog, "set_prefer_wide_layout"):        # libadwaita 1.6+
+            dialog.set_prefer_wide_layout(True)
+        dialog.set_extra_child(scroll)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("install", "Install")
+        dialog.set_response_appearance("install",
+                                       Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("install")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r: r == "install"
+                       and self._install_option(res, chosen["opt"]))
+        dialog.present(self)
+        return False
+
+    def _install_option(self, res, opt):
+        holder = self._watch_defaults()
+
+        def after(ok):
+            if ok:
+                self._check_defaults(holder)
+            self._after_pacman(ok)
+
+        if opt.kind == sources.APPIMAGE:
+            tasks.run(self, f"Installing {res.repo}",
+                      [(f"Downloading {opt.name}",
+                        lambda log: sources.install_appimage(res, opt, log))],
+                      after)
+            return
+        argv = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec",
+                opt.name]
+        name = opt.name
+        tasks.run(self, f"Installing {name}",
+                  self._snapshot_first([(f"Installing {name}", argv)],
+                                       f"installing {name}"),
+                  self._checked(verify.installed_package(name),
+                                lambda b, a: verify.Outcome(
+                                    bool(a) and a != b,
+                                    f"{name} {a} installed" if a and a != b
+                                    else f"{name} was not installed"),
+                                then=after))
 
     def _after_pacman(self, ok: bool):
         """The app ran it, so it knows to re-read rather than guess."""
@@ -4360,9 +4670,13 @@ class AlmanacWindow(Adw.ApplicationWindow):
             "break linking. “Update all” is the safer choice.",
             f"{app.name}  {app.version} → {app.update}\n\n$ {' '.join(argv)}",
             "Update anyway", False,
-            lambda: tasks.run(self, f"Updating {app.name}",
-                              [(f"Updating {app.name}", argv)],
-                              self._after_pacman))
+            lambda: tasks.run(
+                self, f"Updating {app.name}",
+                self._snapshot_first([(f"Updating {app.name}", argv)],
+                                     f"updating {app.name}"),
+                self._checked(verify.for_app(app),
+                              lambda b, a: verify.judge_app(app, b, a),
+                              then=self._after_pacman)))
 
     def _update_agent(self, app: inventory.App):
         """Agents update themselves, or their version manager does it."""
@@ -4374,31 +4688,72 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if app.extra.get("url"):
                 self.open_url(app.extra["url"])
             return
+        if agents_mod.major_jump(app.version, app.update):
+            # A new major version is shown with what changed, and asked
+            # about on its own: it can rename flags or move config.
+            def work():
+                notes = agents_mod.release_notes(app.extra.get("repo", ""))
+                GLib.idle_add(self._confirm_agent, app, cmd, notes)
+            threading.Thread(target=work, daemon=True).start()
+            return
+        self._confirm_agent(app, cmd, "")
+
+    def _confirm_agent(self, app, cmd, notes: str):
         manager = app.extra.get("manager", "self")
+        major = agents_mod.major_jump(app.version, app.update)
+        heading = (f"{app.name} {app.update} is a major release" if major
+                   else f"Update {app.name}?")
+        body = (f"Major versions can change commands, flags and config "
+                f"formats. Read what changed first. Managed by {manager}; "
+                f"nothing here needs root." if major else
+                f"Managed by {manager}. It replaces its own binary, so nothing "
+                f"here needs root.")
+        detail = f"{app.name}  {app.version} → {app.update}\n\n$ {' '.join(cmd)}"
+        if notes:
+            detail += "\n\nWhat changed\n" + notes
         tasks.confirm(
-            self, f"Update {app.name}?",
-            f"Managed by {manager}. It replaces its own binary, so nothing "
-            f"here needs root.",
-            f"{app.name}  {app.version} → {app.update}\n\n$ {' '.join(cmd)}",
-            "Update", False,
+            self, heading, body, detail,
+            "Update" if not major else f"Update to {app.update}", False,
             lambda: tasks.run(self, f"Updating {app.name}",
                               [(f"Updating {app.name}", cmd)],
-                              self._after_pacman))
+                              self._checked(verify.for_app(app),
+                                            lambda b, a: verify.judge_app(app, b, a),
+                                            then=self._after_pacman)))
+        return False
 
     def on_git_pull(self, _button, app: inventory.App):
-        """Pull a local checkout.
+        """Update a local checkout, taking any local edits into account.
 
-        --ff-only is what makes this safe to run without a terminal: it either
-        fast-forwards or refuses, so there is no half-merged state to resolve
-        and nothing to answer. A refusal shows in the log with git's reason.
+        A clean checkout is a fast-forward. One with edits is first held up
+        against the update (patches.py): an edit the update already contains
+        is dropped, one that still applies is carried over, and one that
+        conflicts is set aside as a stash. Edits are never discarded.
         """
         repo = app.extra.get("repo", "")
         if not repo:
             return
-        tasks.run(self, f"Updating {app.name}",
-                  [(f"Pulling {app.name}",
-                    ["git", "-C", repo, "pull", "--ff-only"])],
-                  self._after_pacman)
+
+        def work():
+            state = patches.analyze(repo)
+            GLib.idle_add(self._confirm_pull, app, repo, state)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _confirm_pull(self, app, repo, state):
+        steps = patches.steps(repo, state, app.name)
+        done = self._checked(verify.git_head(repo),
+                             lambda b, a: verify.judge_app(app, b, a),
+                             then=self._after_pacman)
+        if state.kind in (patches.CLEAN, patches.UNKNOWN):
+            tasks.run(self, f"Updating {app.name}", steps, done)
+            return False
+        heading, body, action = patches.explain(state, app.name)
+        detail = "\n".join(f"$ {' '.join(argv)}" for _l, argv in steps)
+        if state.upstream_commits:
+            detail += ("\n\nUpstream changes to the same files\n"
+                       + "\n".join(state.upstream_commits[:15]))
+        tasks.confirm(self, heading, body, detail, action, False,
+                      lambda: tasks.run(self, f"Updating {app.name}", steps, done))
+        return False
 
     def on_update_appimage(self, button, app: inventory.App):
         """Download the newer AppImage and swap it in, off the UI thread."""
@@ -4437,7 +4792,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     def on_update_all(self, _button):
-        """Hand the transaction to omarchy update, in a terminal.
+        """Hand the full upgrade to the system's own updater, in a terminal.
 
         The terminal is the point: `omarchy update` needs a password, and a GUI
         cannot answer that prompt. Running it where the user can type is the
@@ -4446,23 +4801,35 @@ class AlmanacWindow(Adw.ApplicationWindow):
         The list rescans itself when the terminal closes. Leaving that to the
         user meant everything just updated stayed listed as needing an update.
         """
-        term = shutil.which("foot") or shutil.which("alacritty") or shutil.which("kitty")
-        if not term:
+        command = xdg.system_update_command()
+        argv = xdg.terminal_argv(
+            ["bash", "-lc",
+             f"{command}; echo; read -n1 -r -p 'Done — press any key to close'"])
+        if not argv:
             self._say("No terminal found to run the update in")
             return
         try:
-            proc = subprocess.Popen(
-                [term, "-e", "bash", "-lc",
-                 "omarchy update; echo; read -n1 -r -p 'Done — press any key to close'"],
-                start_new_session=True)
+            started = time.monotonic()
+            proc = subprocess.Popen(argv, start_new_session=True)
         except OSError as e:
             self._say(f"Could not start the update: {e}")
             return
         self._say("Update running in a terminal — the list refreshes when it closes")
+        probe = verify.pending_updates()
 
         def wait():
+            # Asked while the user types their password, which is longer
+            # than checkupdates takes.
+            before = probe()
             proc.wait()
             GLib.idle_add(self._after_pacman, True)
+            if time.monotonic() - started < 5:
+                # The launcher handed the window to a terminal server and
+                # returned at once, so there is no "finished" to wait for.
+                GLib.idle_add(self._say, "Rescan when the update finishes", 8)
+                return
+            GLib.idle_add(self._report_outcome,
+                          verify.judge_pending(before, probe()))
 
         threading.Thread(target=wait, daemon=True).start()
 

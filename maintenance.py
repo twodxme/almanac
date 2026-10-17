@@ -25,10 +25,18 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import xdg
+
 HOME = Path.home()
 PACMAN_CACHE = Path("/var/cache/pacman/pkg")
-YAY_CACHE = HOME / ".cache/yay"
-TRASH = HOME / ".local/share/Trash"
+YAY_CACHE = xdg.cache_home() / "yay"
+TRASH = xdg.data_home() / "Trash"
+
+
+def _appimage_store() -> Path:
+    """Where Almanac keeps AppImages -- beside its registry, in XDG state."""
+    import inventory
+    return Path(inventory.REGISTRY).parent / "apps"
 
 OK, INFO, WARN, CRIT = "ok", "info", "warn", "crit"
 
@@ -211,7 +219,7 @@ def _empty_trash(log):
 
 def rollbacks() -> Finding:
     """The .previous copies this app keeps after an AppImage update."""
-    apps = HOME / ".local/share/almanac/apps"
+    apps = _appimage_store()
     files = sorted(apps.glob("*.previous")) if apps.exists() else []
     mb = sum(f.stat().st_size for f in files) / 1048576 if files else 0.0
     return Finding(
@@ -231,7 +239,7 @@ def rollbacks() -> Finding:
 
 
 def _delete_rollbacks(log):
-    apps = HOME / ".local/share/almanac/apps"
+    apps = _appimage_store()
     for f in sorted(apps.glob("*.previous")):
         try:
             f.unlink()
@@ -289,7 +297,7 @@ def pacnew() -> Finding:
 def dangling_desktop() -> Finding:
     """Launcher entries pointing at programs that are no longer there."""
     bad = []
-    for d in (HOME / ".local/share/applications",):
+    for d in (xdg.data_home() / "applications",):
         if not d.exists():
             continue
         for f in sorted(d.glob("*.desktop")):
@@ -328,7 +336,7 @@ def dangling_desktop() -> Finding:
 
 def _remove_dangling(log):
     found = dangling_desktop()
-    d = HOME / ".local/share/applications"
+    d = xdg.data_home() / "applications"
     for row in found.items:
         name = row.split(" → ")[0]
         f = d / name
@@ -647,10 +655,34 @@ def _clear_runtime_logs(log):
     log("done")
 
 
+def config_resets() -> Finding:
+    import guard
+    return guard.finding()
+
+
+def update_snapshots() -> Finding:
+    import snapshots
+    return snapshots.finding()
+
+
 CHECKS = (disk_space, runtime_logs, package_integrity, pacman_cache,
           journal, yay_cache, orphan_packages,
           unmaintained_aur, failed_units, pacnew, dangling_desktop,
-          broken_symlinks, rollbacks, trash)
+          broken_symlinks, rollbacks, trash, config_resets, update_snapshots)
+
+
+# Which check produced which finding, so one can be asked again after its fix
+# without re-running all of them (the integrity check alone reads every file
+# pacman installed).
+CHECK_BY_ID = {
+    "disk": disk_space, "runtime-logs": runtime_logs,
+    "integrity": package_integrity, "pacman-cache": pacman_cache,
+    "journal": journal, "yay-cache": yay_cache, "orphans": orphan_packages,
+    "aur-health": unmaintained_aur, "failed-units": failed_units,
+    "pacnew": pacnew, "dangling-desktop": dangling_desktop,
+    "broken-symlinks": broken_symlinks, "rollbacks": rollbacks, "trash": trash,
+    "config-reset": config_resets, "snapshot": update_snapshots,
+}
 
 
 def run_all() -> list[Finding]:

@@ -386,6 +386,29 @@ def mise_tools(check_updates: bool = True) -> list:
     return out
 
 
+def major_jump(current: str, latest: str) -> bool:
+    """A new major version: the kind of update that changes how a tool works.
+
+    These are held back from "update all" and from scheduled runs, and shown
+    with their release notes, because a CLI agent that renames its flags or
+    moves its config is not something to discover mid-task.
+    """
+    import inventory
+    return bool(latest) and inventory.versions_behind(current, latest)[1] == "major"
+
+
+def release_notes(repo: str, limit: int = 2000) -> str:
+    """The latest release's notes from GitHub, trimmed, or ''."""
+    if not repo:
+        return ""
+    import ghcache
+    d = ghcache.latest_release(repo)
+    body = (d.get("body") or "").strip() if isinstance(d, dict) else ""
+    if len(body) > limit:
+        body = body[:limit].rsplit("\n", 1)[0] + "\n…"
+    return body
+
+
 def _newer(latest: str, current: str) -> bool:
     """True when `latest` is a higher version than `current`.
 

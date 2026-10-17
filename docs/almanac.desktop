@@ -7,6 +7,6 @@ Keywords=package;update;software;store;plugin;theme;maintenance;AppImage;AUR;
 Exec=almanac
 Icon=io.github.twodxme.Almanac
 Terminal=false
-Categories=System;PackageManager;Settings;
+Categories=System;PackageManager;
 StartupNotify=true
 StartupWMClass=io.github.twodxme.Almanac

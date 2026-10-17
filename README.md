@@ -165,17 +165,78 @@ with neither says so instead of pretending.
 
 <img src="docs/screenshots/health.png" alt="Health check" width="820">
 
-Fourteen read-only checks, each offering the single command that acts on what it
+Sixteen read-only checks, each offering the single command that acts on what it
 found: package cache, journal size, AUR build cache, orphans (with build
 tooling deliberately kept), unmerged `.pacnew` files, failed services, broken
 launcher entries, dead symlinks, AppImage rollback copies, AUR packages that
-vanished upstream, package file integrity, session logs, trash and disk
-headroom.
+vanished upstream, package file integrity, session logs, trash, disk
+headroom, settings reset to defaults, and whether the last update can be
+undone.
 
 A cleanup is judged by what it would free, not by how big the thing is. A
 trimmed package cache is still gigabytes — two versions of everything
 installed is what makes a downgrade possible — so it is rated on paccache's own
 dry run, and clears once there is nothing left to trim.
+
+---
+
+## What it watches for
+
+### Every action is checked, not assumed
+
+An exit status says a command ran, not that it did what was asked. `yay -S
+--needed` skips a package the system database does not know is newer;
+`journalctl --vacuum-size` deletes nothing without root; `paccache` can have
+nothing left to trim. Each exits 0. So every update, install and cleanup is
+bracketed by the same question asked before and after — *which version is
+installed? what does this check find?* — and you are told the difference.
+"The update ran, but 26.04.5 is still installed" is a result, and it is shown
+as one.
+
+### Settings put back to their defaults
+
+Some repair commands replace a config file with the shipped default and keep
+yours as `<file>.bak.<time>` — without saying so. Almanac recognises that from
+the files alone (the file now matches the default, the backup does not),
+notices it the moment it happens while the window is open, says what was lost
+("9 bar widgets removed"), and restores your version in one click. The
+defaults it replaces are kept, so the restore can be undone too.
+
+### Updates you can undo
+
+On systems with [Snapper](http://snapper.io), every package Almanac installs
+or updates is snapshotted first, and the Health check says whether your last
+update — however it was run — can be rolled back. Booted into a snapshot from
+the boot menu, it offers to make that snapshot permanent. Snapshot listings
+are root-only, so this is read from pacman's log and the system journal
+rather than from the snapshots themselves.
+
+### Files an install took over
+
+Installing an app can quietly make it what opens your `.docx` or `.pdf`
+files. Almanac reads every file type's default app before and after each
+install, and if anything changed hands it says so — *"WordCraft now opens
+.docx, .odt — before: LibreOffice Writer"* — and can give them back, through
+the standard `xdg-mime`.
+
+### Install from a link
+
+Paste a GitHub link (☰ → Install from a link, or straight into the search
+box). Almanac lays out every way the project reaches your machine — the
+official repositories, the project's own AppImage, AUR packages that build
+from source or repackage a binary — and recommends one, with the reasons and
+the caveats. An AppImage is checked against the SHA-256 GitHub publishes for
+it before it is made runnable; an AUR package whose upstream is a different
+project is flagged.
+
+### Major releases and local changes
+
+A new major version of an agent CLI is held back from "update all" and from
+scheduled runs, and shown with its release notes when you update it on its
+own. A plugin or checkout you have patched is weighed against the update
+before pulling: if the update already contains your change it is dropped, if
+it still applies it is carried forward, and if the update rewrote the same
+lines your change is set aside as a git stash — never discarded.
 
 ---
 
@@ -223,15 +284,23 @@ a conflict inside a running application.
 |---|---|
 | **Required** | Python 3.11+, GTK 4, libadwaita 1.9+ |
 | **Full experience** | Arch or Omarchy — `pacman`, `yay`, `checkupdates` |
-| **Optional** | `omarchy` (plugins, themes, system updates) · `flatpak` · `mise` · `gh` |
+| **Optional** | `omarchy` (plugins, themes, system updates) · `flatpak` · `mise` · `gh` · `snapper` (undoable updates) · `xdg-utils` · `xdg-terminal-exec` |
 
 `gh` is worth having: Almanac uses your existing `gh auth token` to raise the
 GitHub API ceiling from 60 requests an hour to 5,000. It is never written to
 disk and never logged.
 
 Almanac degrades rather than breaks. Without `omarchy` you lose the plugin and
-theme catalogues; without `flatpak` that source simply does not appear. Nothing
-is required for the app to open and be useful.
+theme catalogues, and full upgrades run through `yay`, `paru` or `pacman`
+instead; without `flatpak` that source simply does not appear; without
+`snapper` updates are not snapshotted. Nothing is required for the app to open
+and be useful.
+
+It follows the desktop's conventions rather than assuming one desktop: base
+directories come from the XDG Base Directory variables, a terminal is opened
+with `xdg-terminal-exec` (or `$TERMINAL`, or whichever known terminal is
+installed), file-type choices go through `xdg-mime`, and anything needing root
+asks through polkit.
 
 ---
 
@@ -279,6 +348,9 @@ about this:
   have installed to a single third party.
 - **GitHub release checks** for AppImages and agent CLIs, conditional on ETags
   so an unchanged release costs no quota.
+- **Install from a link**: the repository and its latest release from the
+  GitHub API, and the matching package names from the AUR's public API —
+  only for the link you pasted, only when you ask.
 
 No analytics, no telemetry, no accounts. Nothing is sent about what you have
 installed; icon requests reveal only that *somebody* asked that host for its
@@ -296,7 +368,7 @@ better than I can.
 python3 test_app.py
 ```
 
-58 tests, weighted toward the destructive paths — removal, orphan cleanup,
+99 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

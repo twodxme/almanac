@@ -684,6 +684,434 @@ class CatalogueLookups(unittest.TestCase):
         self.assertFalse(rows[0]["unchecked"], "the stale miss must be retried")
 
 
+def _git_repo(d, name="up"):
+    """A tiny upstream with one file, and a clone of it."""
+    import subprocess
+
+    def git(*a, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                       cwd=cwd, check=True, capture_output=True)
+    up = Path(d, name)
+    git("init", "-q", "-b", "main", str(up), cwd=d)
+    (up / "f.txt").write_text("one\ntwo\nthree\nfour\nfive\nsix\n")
+    git("add", ".", cwd=up)
+    git("commit", "-q", "-m", "first", cwd=up)
+    clone = Path(d, name + "-clone")
+    git("clone", "-q", str(up), str(clone), cwd=d)
+    return up, clone, git
+
+
+class ActionsAreVerified(unittest.TestCase):
+    """A command that exits 0 and changes nothing is reported as that."""
+
+    def test_unchanged_version_is_not_success(self):
+        import verify
+        app = inventory.App(name="yaru", version="1.0", source=inventory.REPO,
+                            update="2.0")
+        out = verify.judge_app(app, "1.0", "1.0")
+        self.assertIs(out.changed, False)
+        self.assertIn("did not change", out.message)
+
+    def test_changed_version_is_success(self):
+        import verify
+        app = inventory.App(name="yaru", version="1.0", source=inventory.REPO,
+                            update="2.0")
+        self.assertTrue(verify.judge_app(app, "1.0", "2.0").ok)
+
+    def test_an_unanswerable_probe_is_not_called_success(self):
+        import verify
+        app = inventory.App(name="x", version="1", source=inventory.REPO)
+        self.assertIsNone(verify.judge_app(app, None, "2").changed)
+
+    def test_full_upgrade_reports_what_is_still_waiting(self):
+        import verify
+        out = verify.judge_pending({"a", "b", "c"}, {"c"})
+        self.assertTrue(out.ok)
+        self.assertIn("c", out.message)
+        self.assertIs(verify.judge_pending({"a"}, {"a"}).changed, False)
+
+    def test_a_fix_that_freed_nothing_says_so(self):
+        import maintenance as m
+        import verify
+        before = m.Finding(id="journal", title="Journal", detail="1 GB",
+                           severity=m.WARN, size_mb=500, fix=["true"])
+        after = m.Finding(id="journal", title="Journal", detail="1 GB",
+                          severity=m.WARN, size_mb=500, fix=["true"])
+        self.assertIs(verify.judge_finding(before, after).changed, False)
+        fixed = m.Finding(id="journal", title="Journal", detail="ok",
+                          severity=m.OK)
+        self.assertTrue(verify.judge_finding(before, fixed).ok)
+
+    def test_every_check_can_be_asked_again(self):
+        import maintenance as m
+        self.assertEqual(set(m.CHECK_BY_ID.values()), set(m.CHECKS))
+
+    def test_package_update_takes_a_snapshot_first(self):
+        import app as app_mod
+        import snapshots
+        fake = _Confirmed()
+        win = _Stub()
+        win._after_pacman = mock.Mock()
+        win._snapshot_first = lambda steps, what: \
+            app_mod.AlmanacWindow._snapshot_first(win, steps, what)
+        win._checked = lambda *a, **k: None
+        pkg = inventory.App(name="somepkg", version="1", source=inventory.REPO,
+                            update="2")
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run), \
+             mock.patch.object(inventory, "synced_version", return_value="2"), \
+             mock.patch.object(snapshots, "snapper_configs", return_value=["root"]):
+            app_mod.AlmanacWindow.on_update_one(win, None, pkg)
+            fake.say_yes()
+        self.assertEqual(fake.ran[0][0], "Taking a snapshot first")
+        self.assertIn("yay -S", fake.commands[1])
+
+
+class ConfigResets(unittest.TestCase):
+    """A config file put back to the shipped defaults, with the user's
+    version sitting next to it as a backup nobody mentions."""
+
+    def setUp(self):
+        import time
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.home = root / "config"
+        self.shipped = root / "omarchy"
+        (self.home / "omarchy").mkdir(parents=True)
+        (self.shipped / "config/omarchy").mkdir(parents=True)
+        self.default = {"bar": [{"id": "omarchy.clock"}]}
+        self.mine = {"bar": [{"id": "omarchy.clock"}, {"id": "my.widget"},
+                             {"id": "my.tray"}]}
+        (self.shipped / "config/omarchy/shell.json").write_text(
+            json.dumps(self.default))
+        self.cfg = self.home / "omarchy/shell.json"
+        self.cfg.write_text(json.dumps(self.default, indent=2))
+        self.bak = self.home / f"omarchy/shell.json.bak.{int(time.time()) - 60}"
+        self.bak.write_text(json.dumps(self.mine))
+        self.env = mock.patch.dict("os.environ", {
+            "XDG_CONFIG_HOME": str(self.home), "OMARCHY_PATH": str(self.shipped)})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_a_reset_is_found_with_what_it_removed(self):
+        import guard
+        [r] = guard.resets()
+        self.assertEqual(r.path, self.cfg)
+        self.assertEqual(r.lost, ["my.widget", "my.tray"])
+
+    def test_restoring_brings_it_back_and_keeps_the_defaults(self):
+        import guard
+        [r] = guard.resets()
+        guard.restore(r, log=lambda _m: None)
+        self.assertEqual(json.loads(self.cfg.read_text()), self.mine)
+        self.assertTrue(list(self.cfg.parent.glob("shell.json.defaults.*")))
+        self.assertEqual(guard.resets(), [])
+
+    def test_a_backup_that_was_itself_the_defaults_is_not_a_reset(self):
+        import guard
+        # Formatted differently, same content: nothing was lost.
+        self.bak.write_text(json.dumps(self.default, indent=4))
+        self.assertEqual(guard.resets(), [])
+
+    def test_a_customised_file_is_not_a_reset(self):
+        import guard
+        self.cfg.write_text(json.dumps(self.mine))
+        self.assertEqual(guard.resets(), [])
+
+    def test_an_old_backup_is_let_go(self):
+        import guard
+        old = self.cfg.with_name("shell.json.bak.1000000000")
+        self.bak.rename(old)
+        self.assertEqual(guard.resets(), [])
+
+    def test_without_shipped_defaults_nothing_is_claimed(self):
+        import guard
+        with mock.patch.dict("os.environ",
+                             {"OMARCHY_PATH": str(Path(self.tmp.name) / "none")}):
+            self.assertEqual(guard.resets(), [])
+
+    def test_restoring_shell_json_restarts_never_refreshes(self):
+        import guard
+        with mock.patch.object(guard.shutil, "which", return_value="/bin/x"):
+            cmds = guard.reload_for([self.cfg])
+        self.assertEqual(cmds, [["omarchy-restart-shell"]])
+
+
+class UpdateSnapshots(unittest.TestCase):
+    LOG = (
+        "[2026-10-16T22:52:33-0700] [PACMAN] starting full system upgrade\n"
+        "[2026-10-16T22:52:40-0700] [ALPM] transaction started\n"
+        "[2026-10-16T22:52:40-0700] [ALPM] running '05-snap-pac-pre.hook'...\n"
+        "[2026-10-16T22:52:41-0700] [ALPM] upgraded a (1-1 -> 2-1)\n"
+        "[2026-10-16T22:52:42-0700] [ALPM] transaction completed\n"
+        "[2026-10-16T23:02:32-0700] [ALPM] transaction started\n"
+        "[2026-10-16T23:02:33-0700] [ALPM] upgraded b (1-1 -> 2-1)\n"
+        "[2026-10-16T23:02:34-0700] [ALPM] transaction completed\n")
+
+    def test_the_last_transaction_is_read_with_its_changes(self):
+        import snapshots
+        tx = snapshots.last_transaction(self.LOG)
+        self.assertEqual(tx.changes, ["upgraded b (1-1 -> 2-1)"])
+        self.assertFalse(tx.hooks_snapshot)
+
+    def test_a_snapshot_hook_inside_the_transaction_counts(self):
+        import snapshots
+        first = self.LOG.split("[2026-10-16T23:02:32")[0]
+        self.assertTrue(snapshots.last_transaction(first).hooks_snapshot)
+
+    def test_a_manual_snapper_create_in_the_journal_counts(self):
+        import snapshots
+        j = ("Oct 16 23:02:22 host sudo[1]: tim : COMMAND=/usr/bin/snapper "
+             "-c root create -c number -d 4.0.4-1\n")
+        self.assertTrue(snapshots.snapshot_before(0, j))
+        self.assertFalse(snapshots.snapshot_before(0, "nothing\n"))
+
+    def test_a_snapshot_boot_is_recognised(self):
+        import snapshots
+        line = "root=UUID=x rw rootflags=subvol=/@/.snapshots/142/snapshot quiet"
+        self.assertEqual(snapshots.booted_snapshot(line), "142")
+        self.assertEqual(snapshots.booted_snapshot("root=UUID=x rw"), "")
+
+    def test_no_snapper_means_no_snapshot_step(self):
+        import snapshots
+        with mock.patch.object(snapshots, "snapper_configs", return_value=[]):
+            self.assertIsNone(snapshots.create_step("x"))
+
+    def test_a_refused_snapshot_does_not_stop_the_update(self):
+        import snapshots
+        failed = mock.Mock(returncode=1, stdout="", stderr="Request dismissed")
+        with mock.patch.object(snapshots, "snapper_configs", return_value=["root"]), \
+             mock.patch.object(snapshots.subprocess, "run", return_value=failed):
+            _label, step = snapshots.create_step("x")
+            lines = []
+            step(lines.append)          # must not raise
+        self.assertIn("continuing without one", lines[-1])
+
+
+class DefaultApps(unittest.TestCase):
+    def test_a_takeover_is_listed_with_what_it_replaced(self):
+        import mimeguard
+        before = {"application/vnd.oasis.opendocument.text": "writer.desktop",
+                  "text/plain": "nvim.desktop"}
+        after = {"application/vnd.oasis.opendocument.text": "wordcraft.desktop",
+                 "text/plain": "nvim.desktop"}
+        self.assertEqual(mimeguard.changes(before, after),
+                         [("application/vnd.oasis.opendocument.text",
+                           "writer.desktop", "wordcraft.desktop")])
+
+    def test_no_snapshot_means_no_claim(self):
+        import mimeguard
+        self.assertEqual(mimeguard.changes(None, {"a/b": "x"}), [])
+
+    def test_restoring_uses_the_standard_tool(self):
+        import mimeguard
+        with mock.patch.object(mimeguard.subprocess, "run") as run:
+            n = mimeguard.restore([("text/rtf", "writer.desktop", "wc.desktop"),
+                                   ("text/x-new", "", "wc.desktop")])
+        self.assertEqual(n, 1)
+        self.assertEqual(run.call_args[0][0],
+                         ["xdg-mime", "default", "writer.desktop", "text/rtf"])
+
+
+class LocalChanges(unittest.TestCase):
+    """A patched checkout, weighed against the update without touching it."""
+
+    def test_a_change_the_update_already_has_is_absorbed(self):
+        import patches
+        with tempfile.TemporaryDirectory() as d:
+            up, clone, git = _git_repo(d)
+            (up / "f.txt").write_text("one\nTWO\nthree\nfour\nfive\nsix\n")
+            git("commit", "-qam", "fix", cwd=up)
+            git("fetch", "-q", cwd=clone)
+            (clone / "f.txt").write_text("one\nTWO\nthree\nfour\nfive\nsix\n")
+            self.assertEqual(patches.analyze(str(clone)).kind, patches.ABSORBED)
+
+    def test_an_unrelated_change_still_applies(self):
+        import patches
+        with tempfile.TemporaryDirectory() as d:
+            up, clone, git = _git_repo(d)
+            (up / "f.txt").write_text("ONE\ntwo\nthree\nfour\nfive\nsix\n")
+            git("commit", "-qam", "upstream", cwd=up)
+            git("fetch", "-q", cwd=clone)
+            (clone / "f.txt").write_text("one\ntwo\nthree\nfour\nfive\nSIX\n")
+            state = patches.analyze(str(clone))
+            self.assertEqual(state.kind, patches.APPLIES)
+            labels = [l for l, _a in patches.steps(str(clone), state, "x")]
+            self.assertEqual(labels[-1], "Putting your change back")
+            # Analysing must not have touched the working tree.
+            self.assertIn("SIX", (clone / "f.txt").read_text())
+
+    def test_the_same_lines_changed_differently_conflict(self):
+        import patches
+        with tempfile.TemporaryDirectory() as d:
+            up, clone, git = _git_repo(d)
+            (up / "f.txt").write_text("one\nUPSTREAM\nthree\nfour\nfive\nsix\n")
+            git("commit", "-qam", "upstream", cwd=up)
+            git("fetch", "-q", cwd=clone)
+            (clone / "f.txt").write_text("one\nMINE\nthree\nfour\nfive\nsix\n")
+            state = patches.analyze(str(clone))
+            self.assertEqual(state.kind, patches.CONFLICTS)
+            self.assertEqual(len(state.upstream_commits), 1)
+            # Set aside, never discarded.
+            cmds = [" ".join(a) for _l, a in patches.steps(str(clone), state, "x")]
+            self.assertTrue(any("stash push" in c for c in cmds))
+            self.assertFalse(any("checkout" in c or "reset" in c for c in cmds))
+
+    def test_a_clean_checkout_is_a_plain_pull(self):
+        import patches
+        with tempfile.TemporaryDirectory() as d:
+            _up, clone, _git = _git_repo(d)
+            state = patches.analyze(str(clone))
+            self.assertEqual(state.kind, patches.CLEAN)
+            self.assertEqual(len(patches.steps(str(clone), state, "x")), 1)
+
+
+class InstallFromLink(unittest.TestCase):
+    def test_links_are_recognised(self):
+        import sources
+        for link in ("https://github.com/storytold/wordcraft",
+                     "github.com/storytold/wordcraft/releases",
+                     "https://github.com/storytold/wordcraft.git"):
+            self.assertEqual(sources.parse(link), ("storytold", "wordcraft"))
+        self.assertIsNone(sources.parse("https://gitlab.com/a/b"))
+        self.assertIsNone(sources.parse("wordcraft"))
+
+    def test_the_x86_appimage_is_chosen_and_its_digest_used(self):
+        import sources
+        rel = {"tag_name": "v1.2.0", "assets": [
+            {"name": "app-1.2.0-aarch64.AppImage", "size": 1,
+             "browser_download_url": "u1"},
+            {"name": "app-1.2.0-x86_64.AppImage", "size": 1048576,
+             "browser_download_url": "u2", "digest": "sha256:" + "a" * 64}]}
+        o = sources._appimage(rel)
+        self.assertEqual(o.name, "app-1.2.0-x86_64.AppImage")
+        self.assertEqual(o.sha256, "a" * 64)
+        self.assertEqual(o.version, "1.2.0")
+
+    def test_an_unverifiable_appimage_ranks_below_a_verified_one(self):
+        import sources
+        rel = {"tag_name": "v1", "assets": [
+            {"name": "app-1-x86_64.AppImage", "size": 1,
+             "browser_download_url": "u"}]}
+        unverified = sources._appimage(rel)
+        self.assertTrue(unverified.warnings)
+        self.assertGreater(unverified.rank, 5)
+
+    def test_an_aur_package_for_another_project_is_flagged(self):
+        import sources
+        data = json.dumps({"results": [
+            {"Name": "app", "Version": "1", "NumVotes": 50, "Maintainer": "m",
+             "URL": "https://github.com/someone-else/app"},
+            {"Name": "app-bin", "Version": "1", "NumVotes": 50, "Maintainer": "m",
+             "URL": "https://app.example.org"}]}).encode()
+        with mock.patch.object(sources, "_get", return_value=data):
+            opts = {o.name: o for o in sources._aur(
+                ["app", "app-bin"],
+                ["https://github.com/owner/app", "https://app.example.org/"])}
+        self.assertTrue(any("not this project" in w for w in opts["app"].warnings))
+        self.assertIn("Points at this project", opts["app-bin"].reasons)
+
+    def test_a_checksum_mismatch_deletes_the_download(self):
+        import appimage
+        import sources
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(inventory, "REGISTRY", Path(d, "appimages.json")):
+            def fake_download(_url, dest, *_a):
+                Path(dest).write_bytes(b"not what was published")
+                return Path(dest)
+            res = sources.Resolution("o", "app")
+            opt = sources.Option(sources.APPIMAGE, "app-1-x86_64.AppImage", "1",
+                                 "AppImage", url="u", sha256="0" * 64)
+            with mock.patch.object(appimage, "download", side_effect=fake_download):
+                with self.assertRaises(RuntimeError):
+                    sources.install_appimage(res, opt, log=lambda _m: None)
+            self.assertEqual(list(Path(d, "apps").iterdir()), [])
+
+
+class MajorReleases(unittest.TestCase):
+    def test_major_jumps_are_recognised(self):
+        import agents
+        self.assertTrue(agents.major_jump("1.19.3", "2.0.30"))
+        self.assertFalse(agents.major_jump("2.1.265", "2.1.301"))
+        self.assertFalse(agents.major_jump("1.0", ""))
+
+    def test_scheduled_runs_hold_major_releases(self):
+        import agents
+        import autorun
+        a = inventory.App(name="opencode", version="1.19.3", source="agent",
+                          update="2.0.30", extra={"update_cmd": ["true"]})
+        with mock.patch.object(agents, "detect", return_value=[a]), \
+             mock.patch.object(autorun, "_run") as run, \
+             mock.patch.object(autorun, "log"):
+            self.assertEqual(autorun.update_agents(), 0)
+        run.assert_not_called()
+
+
+class AnyonesMachine(unittest.TestCase):
+    """Almanac is published; nothing may assume the machine it was written on."""
+
+    def test_base_directories_follow_xdg(self):
+        import xdg
+        with mock.patch.dict("os.environ", {"XDG_DATA_HOME": "/srv/data",
+                                            "XDG_CONFIG_HOME": "relative/ignored"}):
+            self.assertEqual(xdg.data_home(), Path("/srv/data"))
+            self.assertEqual(xdg.config_home(), Path.home() / ".config")
+
+    def test_the_desktops_terminal_launcher_wins(self):
+        import xdg
+        with mock.patch.object(xdg.shutil, "which",
+                               side_effect=lambda n: "/usr/bin/" + n):
+            self.assertEqual(xdg.terminal_argv(["true"]),
+                             ["xdg-terminal-exec", "true"])
+
+    def test_each_terminal_gets_its_own_flags(self):
+        import xdg
+        have = {"gnome-terminal"}
+        with mock.patch.object(xdg.shutil, "which",
+                               side_effect=lambda n: n if n in have else None), \
+             mock.patch.dict("os.environ", {"TERMINAL": ""}):
+            self.assertEqual(xdg.terminal_argv(["true"]),
+                             ["gnome-terminal", "--wait", "--", "true"])
+
+    def test_no_omarchy_means_the_plain_updater(self):
+        import xdg
+        with mock.patch.object(xdg.shutil, "which",
+                               side_effect=lambda n: n if n == "yay" else None):
+            self.assertEqual(xdg.system_update_command(), "yay -Syu")
+
+    def test_rollback_copies_are_looked_for_where_they_are_kept(self):
+        import maintenance
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(inventory, "REGISTRY", Path(d, "appimages.json")):
+            Path(d, "apps").mkdir()
+            Path(d, "apps", "tool.previous").write_bytes(b"x" * 2048)
+            f = maintenance.rollbacks()
+        self.assertEqual(f.items, ["tool.previous"])
+
+    def test_local_builds_are_found_by_being_checkouts_not_by_name(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d, "some-driver")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            with mock.patch.dict("os.environ", {"XDG_DATA_HOME": d,
+                                                "XDG_CONFIG_HOME": d}):
+                names = [a.name for a in inventory.local_builds(check_updates=False)]
+        self.assertIn("some-driver", names)
+
+    def test_no_personal_paths_in_the_source(self):
+        here = Path(__file__).parent
+        for f in here.glob("*.py"):
+            if f.name == "test_app.py":
+                continue
+            text = f.read_text()
+            # Whoever runs the tests: their home must never be baked in.
+            self.assertNotIn(str(Path.home()) + "/", text, f.name)
+            self.assertNotIn("streamdock", text.lower(), f.name)
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
