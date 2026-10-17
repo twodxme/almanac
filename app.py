@@ -74,24 +74,44 @@ row:selected .count-badge.is-crit {
   background: @error_color;
   color: @error_fg_color;
 }
-.crit-pill {
+/* ---- pills ----
+   One shape, one size, five meanings. There were nine classes across three
+   font sizes doing this job -- crit-pill, stale-pill, crit-core, store-chip,
+   store-installed and three trust-* variants -- which is why a status chip
+   and a provenance chip on the same card never quite lined up.
+
+   Each modifier carries the base declarations too, so a single class name is
+   enough at every call site and nothing has to remember to add two. */
+.pill, .pill-crit, .pill-warn, .pill-ok, .pill-accent, .pill-quiet {
+  background: alpha(@window_fg_color, 0.09);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.70rem;
+}
+.pill-crit {
   background: alpha(@error_color, 0.18);
   color: @error_color;
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-size: 0.70rem;
   font-weight: bold;
 }
-.stale-pill {
-  background: alpha(@warning_color, 0.18);
+.pill-warn {
+  background: alpha(@warning_color, 0.20);
   color: @warning_color;
+}
+.pill-ok {
+  background: alpha(@success_color, 0.18);
+  color: @success_color;
+  font-weight: bold;
+}
+.pill-accent {
+  background: alpha(@accent_color, 0.20);
+  color: @accent_color;
+  font-weight: bold;
+}
+.pill-quiet {
+  opacity: 0.7;
 }
 .link-ish {
   color: @accent_color;
-}
-.crit-core {
-  background: alpha(@warning_color, 0.20);
-  color: @warning_color;
 }
 
 /* ---- plugin marketplace cards ---- */
@@ -124,21 +144,7 @@ row:selected .count-badge.is-crit {
   color: #ffffff;
 }
 .store-name { font-weight: bold; }
-.store-chip {
-  background: alpha(@window_fg_color, 0.09);
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 0.68rem;
-}
 .store-verified { color: @success_color; }
-.store-installed {
-  background: alpha(@success_color, 0.20);
-  color: @success_color;
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 0.68rem;
-  font-weight: bold;
-}
 .store-stars { font-size: 0.72rem; }
 .stats { font-size: 0.74rem; }
 .stat-key { opacity: 0.62; }
@@ -171,27 +177,6 @@ row:selected .count-badge.is-crit {
 /* Provenance chips. Four states rather than a tick, because "reviewed",
    "verified", "reviewed but upstream has moved since" and "nobody checked"
    are four different promises. */
-.trust-official {
-  background: alpha(@accent_color, 0.20);
-  color: @accent_color;
-  border-radius: 999px; padding: 1px 8px;
-  font-size: 0.68rem; font-weight: bold;
-}
-.trust-ok {
-  background: alpha(@success_color, 0.18);
-  color: @success_color;
-  border-radius: 999px; padding: 1px 8px; font-size: 0.68rem;
-}
-.trust-warn {
-  background: alpha(@warning_color, 0.18);
-  color: @warning_color;
-  border-radius: 999px; padding: 1px 8px; font-size: 0.68rem;
-}
-.trust-none {
-  background: alpha(@window_fg_color, 0.09);
-  border-radius: 999px; padding: 1px 8px; font-size: 0.68rem;
-  opacity: 0.7;
-}
 """
 
 SOURCE_LABEL = {
@@ -523,8 +508,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # window height, and these are the numbers you would otherwise open a
         # terminal for.
         self.stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
-                             margin_start=14, margin_end=14,
-                             margin_top=10, margin_bottom=12)
+                             margin_start=12, margin_end=12,
+                             margin_top=8, margin_bottom=12)
         self.stats.add_css_class("stats")
         sidebar_scroll.set_vexpand(True)
 
@@ -828,18 +813,18 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         # --- Name: icon + name + description ---
         def setup_name(_f, item):
-            row = Gtk.Box(spacing=10, margin_top=5, margin_bottom=5)
+            row = Gtk.Box(spacing=8, margin_top=4, margin_bottom=4)
             img = Gtk.Image()
             img.set_pixel_size(32)
             img.set_valign(Gtk.Align.CENTER)
             text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
                            valign=Gtk.Align.CENTER, hexpand=True)
-            title_row = Gtk.Box(spacing=7)
+            title_row = Gtk.Box(spacing=6)
             name = Gtk.Label(xalign=0, hexpand=True)
             name.set_ellipsize(Pango.EllipsizeMode.END)
             pill = Gtk.Label(hexpand=False)
             pill.set_halign(Gtk.Align.START)
-            pill.add_css_class("crit-pill")
+            pill.add_css_class("pill")
             pill.set_valign(Gtk.Align.CENTER)
             pill.set_visible(False)
             title_row.append(name)
@@ -875,18 +860,18 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
             # Only ever shown on a row that actually has an update pending --
             # labelling an up-to-date browser "security" would be noise.
-            pill.remove_css_class("crit-core")
-            pill.remove_css_class("stale-pill")
+            for css in ("pill-crit", "pill-warn", "pill-ok"):
+                pill.remove_css_class(css)
             if it.git_dirty:
                 pill.set_text("local edits")
-                pill.add_css_class("stale-pill")
+                pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
                     "This checkout has uncommitted changes. Pulling upstream "
                     "would overwrite them — commit or stash first.")
                 pill.set_visible(True)
             elif it.source == inventory.SYSTEM and it.has_update:
                 pill.set_text("system")
-                pill.add_css_class("crit-core")
+                pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
                     "Omarchy itself — update with the whole system "
                     "(Update all), never on its own")
@@ -894,7 +879,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             elif it.source == inventory.ORPHAN:
                 keep = it.advice == "keep"
                 pill.set_text("keep" if keep else "safe to remove")
-                pill.add_css_class("crit-core" if keep else "stale-pill")
+                pill.add_css_class("pill-warn" if keep else "pill-warn")
                 pill.set_tooltip_text(
                     "Build tooling or a debug package — the next AUR build will "
                     "want it back" if keep else "Nothing requires this any more")
@@ -910,7 +895,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                               "upstream may have stopped"),
                 }[it.stale]
                 pill.set_text(label)
-                pill.add_css_class("stale-pill")
+                pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(tip)
                 pill.set_visible(True)
             elif it.critical == "security":
@@ -920,7 +905,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 pill.set_visible(True)
             elif it.critical == "core":
                 pill.set_text("core")
-                pill.add_css_class("crit-core")
+                pill.add_css_class("pill-warn")
                 pill.set_tooltip_text(
                     "Touches boot or needs a reboot — update with the full system, not alone")
                 pill.set_visible(True)
@@ -1359,14 +1344,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         # --- header: icon, name, what it is ---
         hero = Adw.PreferencesGroup()
-        head = Gtk.Box(spacing=14, margin_bottom=4)
+        head = Gtk.Box(spacing=12, margin_bottom=4)
         img = Gtk.Image()
         img.set_pixel_size(64)
         self._app_icon(img, item.app, 128)
         head.append(img)
 
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                         valign=Gtk.Align.CENTER, spacing=3)
+                         valign=Gtk.Align.CENTER, spacing=2)
         t = Gtk.Label(xalign=0, label=app.name)
         t.add_css_class("title-2")
         titles.append(t)
@@ -1471,17 +1456,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
     def _detail_badges(self, item):
         out = []
         if item.critical == "security":
-            out.append(("security update", "crit-pill"))
+            out.append(("security update", "pill-crit"))
         elif item.critical == "core":
-            out.append(("core system", "crit-pill"))
+            out.append(("core system", "pill-crit"))
         if item.stale == "orphaned":
-            out.append(("unmaintained", "stale-pill"))
+            out.append(("unmaintained", "pill-warn"))
         elif item.stale == "flagged":
-            out.append(("flagged out of date", "stale-pill"))
+            out.append(("flagged out of date", "pill-warn"))
         if item.git_dirty:
-            out.append(("local edits", "stale-pill"))
+            out.append(("local edits", "pill-warn"))
         if item.source == inventory.ORPHAN:
-            out.append(("orphan · " + (item.advice or ""), "stale-pill"))
+            out.append(("orphan · " + (item.advice or ""), "pill-warn"))
         return out
 
     @staticmethod
@@ -2144,9 +2129,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # eight controls above the results. Every page then has the same
         # chrome in the same places, and the store gets its vertical space
         # back for what it is actually for.
-        bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
-                      margin_start=14, margin_end=14,
-                      margin_top=10, margin_bottom=14)
+        bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                      margin_start=12, margin_end=12,
+                      margin_top=8, margin_bottom=12)
 
         self.store_cat = Gtk.DropDown.new_from_strings(["All categories"])
         self.store_cat.set_tooltip_text("Category")
@@ -2361,11 +2346,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
         shot.append(initials)
         card.append(shot)
 
-        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3,
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
                        margin_start=12, margin_end=12,
-                       margin_top=10, margin_bottom=10)
+                       margin_top=8, margin_bottom=8)
 
-        top = Gtk.Box(spacing=5)
+        top = Gtk.Box(spacing=4)
         name = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
         name.set_max_width_chars(22)
         name.add_css_class("store-name")
@@ -2377,7 +2362,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         installed = Gtk.Label(label="Installed",
                               ellipsize=Pango.EllipsizeMode.END)
         installed.set_max_width_chars(10)
-        installed.add_css_class("store-installed")
+        installed.add_css_class("pill-ok")
         top.append(name)
         top.append(check)
         top.append(spacer)
@@ -2419,7 +2404,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         bottom = Gtk.Box(spacing=6, margin_top=4)
         cat = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
         cat.set_max_width_chars(11)
-        cat.add_css_class("store-chip")
+        cat.add_css_class("pill")
         trust = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
         trust.set_max_width_chars(14)
         stars = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
@@ -2469,7 +2454,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             f"{p.publisher}\nListed by {p.market_name}" if p.repo
             else f"Listed by {p.market_name}")
         w["trust"].set_text(t.label)
-        for css in ("trust-official", "trust-ok", "trust-warn", "trust-none"):
+        for css in ("pill-accent", "pill-ok", "pill-warn", "pill-quiet"):
             w["trust"].remove_css_class(css)
         w["trust"].add_css_class(t.css)
         w["trust"].set_tooltip_text(t.why)
@@ -2964,7 +2949,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
 
         hero = Adw.PreferencesGroup()
-        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
         shot = Gtk.Box()
         shot.add_css_class("store-shot")
@@ -3077,7 +3062,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         view.set_content(page)
 
-        bottom = Gtk.Box(spacing=8, margin_start=14, margin_end=14,
+        bottom = Gtk.Box(spacing=8, margin_start=12, margin_end=12,
                          margin_top=8, margin_bottom=12,
                          halign=Gtk.Align.END)
         if p.installed and p.install_kind == "theme":
@@ -3100,7 +3085,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             bottom.append(rm)
         elif p.installed and p.built_in:
             lbl = Gtk.Label(label="Built in")
-            lbl.add_css_class("store-installed")
+            lbl.add_css_class("pill-ok")
             bottom.append(lbl)
         elif p.installable and p.install_cmd:
             ins = Gtk.Button(label="Install")
@@ -3118,14 +3103,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         out = []
         if p.installed:
             out.append(("Installed" if not p.built_in else "Built in",
-                        "store-installed"))
+                        "pill-ok"))
         out.append((p.trust.label, p.trust.css))
         if p.status and p.status != "Available":
-            out.append((p.status, "store-chip"))
+            out.append((p.status, "pill"))
         if p.stars:
-            out.append((f"★ {p.stars}", "store-chip"))
+            out.append((f"★ {p.stars}", "pill"))
         if p.category:
-            out.append((p.category, "store-chip"))
+            out.append((p.category, "pill"))
         return out
 
     # ---- maintenance ------------------------------------------------------
@@ -3210,14 +3195,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
     }
 
     _SEVERITY_CSS = {
-        maintenance.CRIT: ("Critical", "crit-pill"),
-        maintenance.WARN: ("Attention", "stale-pill"),
-        maintenance.INFO: ("Optional", "store-chip"),
-        maintenance.OK: ("OK", "trust-ok"),
+        maintenance.CRIT: ("Critical", "pill-crit"),
+        maintenance.WARN: ("Attention", "pill-warn"),
+        maintenance.INFO: ("Optional", "pill"),
+        maintenance.OK: ("OK", "pill-ok"),
     }
 
     def _maint_row(self, f):
-        label, css = self._SEVERITY_CSS.get(f.severity, ("", "store-chip"))
+        label, css = self._SEVERITY_CSS.get(f.severity, ("", "pill"))
 
         if f.items:
             row = self._plain(Adw.ExpanderRow, title=f.title, subtitle=f.detail)
@@ -3417,8 +3402,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return False
 
     _AI_SEVERITY = {
-        "warn": ("Attention", "stale-pill"),
-        "info": ("Optional", "store-chip"),
+        "warn": ("Attention", "pill-warn"),
+        "info": ("Optional", "pill"),
         "ok": ("", ""),
     }
 
@@ -3817,7 +3802,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
                        valign=Gtk.Align.END, halign=Gtk.Align.START,
-                       margin_start=20, margin_end=20, margin_bottom=18)
+                       margin_start=20, margin_end=20, margin_bottom=16)
         self.hero_head = Gtk.Label(xalign=0, wrap=True)
         self.hero_head.add_css_class("hero-head")
         self.hero_sub = Gtk.Label(xalign=0, wrap=True)
@@ -3961,7 +3946,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if item.severity:
             label, css = self._SEVERITY_CSS.get(
                 maintenance.CRIT if item.severity == "crit" else maintenance.WARN,
-                ("", "store-chip"))
+                ("", "pill"))
             pill = Gtk.Label(label=label, valign=Gtk.Align.CENTER)
             pill.add_css_class(css)
             row.add_prefix(pill)
@@ -3980,7 +3965,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if item.plugin is not None:
             chip = Gtk.Label(label=item.plugin.market_name,
                              valign=Gtk.Align.CENTER)
-            chip.add_css_class("store-chip")
+            chip.add_css_class("pill")
             row.add_suffix(chip)
 
         if item.action:

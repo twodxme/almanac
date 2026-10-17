@@ -204,7 +204,7 @@ class Plugin:
             return Trust(key, label, css, why, TRUST_ORDER.index(key))
 
         if self.built_in:
-            return t("official", "Official", "trust-official",
+            return t("official", "Official", "pill-accent",
                      f"Ships with Omarchy itself, listed by {self.market_name}")
         m = MARKETS.get(self.market)
         if m and m.first_party_owner and self.owner == m.first_party_owner:
@@ -213,11 +213,11 @@ class Plugin:
             # publishes under. A vendor catalogue listing somebody else's
             # repository is exactly the case this must not wave through.
             rel = f", release {self.version}" if self.version else ""
-            return t("first-party", "First-party", "trust-official",
+            return t("first-party", "First-party", "pill-accent",
                      f"Published by {m.name} itself, from "
                      f"github.com/{self.owner}{rel}")
         if self.upstream_status in ("failed", "unreachable"):
-            return t("unreachable", "Source unreachable", "trust-warn",
+            return t("unreachable", "Source unreachable", "pill-warn",
                      f"{self.market_name} could not reach the repository on "
                      f"its last check ({self.upstream_checked_at[:10]})")
         if self.review_method == "maintainer-reviewed":
@@ -226,19 +226,19 @@ class Plugin:
             base = f"Source reviewed{who}{when} for {self.market_name}"
             if self.drifted:
                 return t("reviewed-stale", "Reviewed · changed since",
-                         "trust-warn",
+                         "pill-warn",
                          base + ", but upstream has committed since then")
-            return t("reviewed", "Reviewed", "trust-ok", base)
+            return t("reviewed", "Reviewed", "pill-ok", base)
         if self.coverage == "snapshot-verified" and not self.drifted:
-            return t("verified", "Verified", "trust-ok",
+            return t("verified", "Verified", "pill-ok",
                      f"{self.market_name} automated checks passed against "
                      f"commit {self.validated_commit[:7]}")
         if self.coverage in ("snapshot-verified", "update-unverified"):
-            return t("stale", "Changed since review", "trust-warn",
+            return t("stale", "Changed since review", "pill-warn",
                      f"Validated at {self.validated_commit[:7]}, but upstream "
                      f"is now at {self.upstream_commit[:7]} -- the newer "
                      f"commits have not been checked")
-        return t("unverified", "Unverified", "trust-none",
+        return t("unverified", "Unverified", "pill-quiet",
                  f"{self.market_name} records no automated or human review")
 
     @property

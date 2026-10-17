@@ -10,6 +10,7 @@ Run: python3 test_app.py
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -498,6 +499,72 @@ class ShelfShape(unittest.TestCase):
         for group in ai.group_specs():
             self.assertEqual(len(group), 3,
                              "the AI page unpacks these as (title, desc, loader)")
+
+
+class VisualSystem(unittest.TestCase):
+    """The two conventions an interface drifts away from first.
+
+    Spacing and badge styling are individually invisible and cumulatively
+    obvious: before this, the window used twenty distinct spacing values and
+    nine badge classes across three font sizes, each one locally sensible.
+    These assert the system rather than any particular number.
+    """
+
+    SCALE = {2, 4, 6, 8, 12, 16, 20, 24}
+    PILLS = {"pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent",
+             "pill-quiet"}
+
+    @staticmethod
+    def _source():
+        return (Path(__file__).parent / "app.py").read_text()
+
+    def test_spacing_comes_from_the_scale(self):
+        offenders = {}
+        for prop, value in re.findall(
+                r"\b(margin_(?:start|end|top|bottom)|spacing|child_spacing"
+                r"|line_spacing)=(\d+)\b", self._source()):
+            if int(value) not in self.SCALE:
+                offenders.setdefault(int(value), []).append(prop)
+        self.assertEqual(
+            offenders, {},
+            f"spacing off the scale {sorted(self.SCALE)}: {offenders}")
+
+    def test_badges_use_one_pill_system(self):
+        retired = ("crit-pill", "stale-pill", "crit-core", "store-chip",
+                   "store-installed", "trust-official", "trust-ok",
+                   "trust-warn", "trust-none")
+        src = self._source() + (Path(__file__).parent / "store.py").read_text()
+        found = [name for name in retired if f'"{name}"' in src]
+        self.assertEqual(found, [],
+                         f"retired badge classes still referenced: {found}")
+
+    def test_every_pill_class_is_defined_in_the_stylesheet(self):
+        src = self._source()
+        css = src.split('_CSS = b"""')[1].split('"""')[0]
+        used = set(re.findall(r'"(pill(?:-[a-z]+)?)"', src))
+        self.assertTrue(used, "no pill classes found at all")
+        for name in used:
+            self.assertIn(f".{name}", css,
+                          f"{name} is applied but never styled")
+        self.assertTrue(used <= self.PILLS,
+                        f"unknown pill variants: {sorted(used - self.PILLS)}")
+
+    def test_pills_are_all_one_size(self):
+        css = self._source().split('_CSS = b"""')[1].split('"""')[0]
+        block = re.search(
+            r"\.pill,[^{]*\{([^}]*)\}", css)
+        self.assertIsNotNone(block, "the shared pill rule is missing")
+        self.assertIn("font-size", block.group(1),
+                      "the pill size must be set once, on the shared rule")
+        # No variant may override the size; that is how three sizes happened.
+        for variant in ("pill-crit", "pill-warn", "pill-ok", "pill-accent",
+                        "pill-quiet"):
+            # Anchored: the shared selector ends in ".pill-quiet {" too,
+            # and matching that would test the wrong rule.
+            rule = re.search(r"(?m)^\." + variant + r"\s*\{([^}]*)\}", css)
+            if rule:
+                self.assertNotIn("font-size", rule.group(1),
+                                 f".{variant} must not set its own size")
 
 
 if __name__ == "__main__":

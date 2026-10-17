@@ -28,10 +28,15 @@ The full rendered version with severities and before/after figures is
 - **Every row has an affordance or an explanation.** A row that cannot act
   says why.
 
+## Closed since
+
+| Gap | Resolution |
+|---|---|
+| Spacing had no scale | Twenty distinct values snapped onto `2, 4, 6, 8, 12, 16, 20, 24` — a 4px scale with 2 and 6 as half-steps for tight chrome. A test fails the build on any value off it. |
+| Nine badge classes overlapped | One `.pill` base with five modifiers (`crit`, `warn`, `ok`, `accent`, `quiet`) at a single size. Each modifier carries the base declarations, so one class name is enough at every call site. Three tests assert it: no retired class names, every applied variant is styled, and no variant overrides the size. |
+
 ## Still open
 
 | Gap | Note |
 |---|---|
-| Spacing has no scale | Margins in use: 4, 5, 6, 8, 10, 12, 14, 16. Gaps: 3, 4, 5, 6, 7, 8, 10, 20. Each is locally sensible; none derive from a scale. |
-| Nine badge classes overlap | Three font sizes across `crit-pill`, `stale-pill`, `store-chip`, `count-badge`, `store-installed` and three `trust-*`. Should collapse to three semantic levels plus one accent. |
 | `omarchy update` opens a terminal | Everything else runs in-app. The system updater manages its own `sudo`, which wants a TTY. |
