@@ -45,6 +45,7 @@ package() {
   # The application itself.
   install -dm755 "$appdir"
   install -Dm644 *.py "$appdir/"
+  install -Dm644 icons/*.svg -t "$appdir/icons/"
 
   # Installed this way, Almanac detects that pacman owns it and defers its
   # own updates to the package manager rather than offering a git pull.

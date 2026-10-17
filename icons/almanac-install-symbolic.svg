@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Almanac's install glyph: an arrow into a tray. Symbolic, so GTK recolours
+     it with the theme; MIT, like the rest of Almanac. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" d="M7 1h2v7.59l2.3-2.3 1.4 1.42L8 12.41 3.3 7.71l1.4-1.42L7 8.59z"/>
+  <path fill="#222222" d="M1 10h2v3h10v-3h2v4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/>
+</svg>

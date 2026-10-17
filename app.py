@@ -50,6 +50,10 @@ import verify  # noqa: E402
 import xdg  # noqa: E402
 import shlex  # noqa: E402
 
+# Install is an arrow into a tray, shipped in icons/: the theme's own download
+# icon is a folder, which reads as "the Downloads folder".
+INSTALL_ICON = "almanac-install-symbolic"
+
 _CSS = b"""
 /* Sidebar counts. Three levels: a count is usually just a number, an
    amber one wants looking at, and only a security update earns red. The
@@ -1034,7 +1038,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 if not already:
                     upd.remove_css_class("error")
                     upd.add_css_class("accent")
-                    upd.set_icon_name("list-add-symbolic")
+                    upd.set_icon_name(INSTALL_ICON)
                     upd.set_tooltip_text(
                         f"Install {it.name}"
                         + (" (Omarchy plugin)" if it.source == inventory.PLUGIN else ""))
@@ -2595,10 +2599,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 else f"Remove {p.name}")
             item._handler = btn.connect("clicked", self.on_plugin_remove, p)
         elif p.installable and p.install_cmd:
-            btn.set_label("Install")
+            # A glyph rather than a word: cards are narrow, and the word is
+            # still there for the pointer (tooltip) and screen readers.
+            btn.set_icon_name(INSTALL_ICON)
             btn.set_sensitive(True)
             btn.add_css_class("suggested-action")      # filled: the main action
-            btn.set_tooltip_text(p.install_cmd)
+            btn.set_tooltip_text(f"Install {p.name}\n{p.install_cmd}")
+            btn.update_property([Gtk.AccessibleProperty.LABEL],
+                                [f"Install {p.name}"])
             item._handler = btn.connect("clicked", self.on_plugin_install, p)
         else:
             # 1,062 entries are listed but not installable through the CLI --
@@ -3171,7 +3179,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             lbl.add_css_class("pill-ok")
             bottom.append(lbl)
         elif p.installable and p.install_cmd:
-            ins = Gtk.Button(label="Install")
+            ins = Gtk.Button(child=Adw.ButtonContent(icon_name=INSTALL_ICON,
+                                                     label="Install"))
             ins.add_css_class("suggested-action")
             ins.connect("clicked", lambda b: (dialog.close(),
                                               self.on_plugin_install(b, p)))
@@ -4092,7 +4101,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.add_suffix(chip)
 
         if item.action:
-            btn = Gtk.Button(label=item.action, valign=Gtk.Align.CENTER)
+            btn = (Gtk.Button(icon_name=INSTALL_ICON, valign=Gtk.Align.CENTER)
+                   if item.action == "Install" else
+                   Gtk.Button(label=item.action, valign=Gtk.Align.CENTER))
+            btn.update_property([Gtk.AccessibleProperty.LABEL],
+                                [f"{item.action} {item.title}"])
             if item.severity == "crit":
                 btn.add_css_class("suggested-action")
             btn.set_tooltip_text(f"{item.action} {item.title}")
@@ -4932,6 +4945,15 @@ class AlmanacApp(Adw.Application):
             self.start_page = resolved
         self.activate()
         return 0
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        # Almanac's own glyphs, shipped beside the code so they look the same
+        # under any icon theme.
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.IconTheme.get_for_display(display).add_search_path(
+                str(Path(__file__).resolve().parent / "icons"))
 
     def do_activate(self):
         win = self.props.active_window
