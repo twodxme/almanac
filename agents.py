@@ -135,7 +135,6 @@ def _version_of(binary: str) -> str:
 
 
 MISE_CACHE = CACHE / "mise-outdated.json"
-MISE_LS_CACHE = CACHE / "mise-installed.json"
 
 # Tools mise manages that are not coding agents. They update the same way and
 # were previously invisible: nothing on the machine reported that `gh` or
@@ -154,22 +153,19 @@ TOOL_DOMAINS = {
 }
 
 
-def _mise_installed(ttl: int = TTL) -> dict:
+def _mise_installed() -> dict:
     """{tool: active version} for everything mise manages.
 
     Asked of mise rather than inferred from where a binary resolves to: a
     shimmed tool resolves to /usr/bin/mise, which looks nothing like a mise
     install path. Five of seven agents were misread as self-managed that
     way, and then had their updates checked against the wrong upstream.
+
+    Never cached. `mise ls` reads local state in milliseconds, and a cached
+    answer kept reporting updates that had already been installed.
     """
     if not shutil.which("mise"):
         return {}
-    try:
-        blob = json.loads(MISE_LS_CACHE.read_text())
-        if time.time() - blob.get("at", 0) < ttl:
-            return blob.get("data") or {}
-    except (OSError, ValueError):
-        pass
     try:
         out = subprocess.run(["mise", "ls", "--json"],
                              capture_output=True, text=True, timeout=90)
@@ -184,11 +180,6 @@ def _mise_installed(ttl: int = TTL) -> dict:
             if isinstance(e, dict) and e.get("active"):
                 data[tool] = e.get("version", "")
                 break
-    try:
-        CACHE.mkdir(parents=True, exist_ok=True)
-        MISE_LS_CACHE.write_text(json.dumps({"at": time.time(), "data": data}))
-    except OSError:
-        pass
     return data
 
 
@@ -197,6 +188,8 @@ def _mise_outdated(ttl: int = TTL) -> dict:
 
     Cached because `mise outdated` queries every tool's upstream and takes
     seconds; the answer does not change between two refreshes a minute apart.
+    Only its `latest` is trusted from the cache: its `current` goes stale the
+    moment anything is upgraded, so callers take that from _mise_installed.
     """
     if not shutil.which("mise"):
         return {}
@@ -270,14 +263,17 @@ def detect(check_updates: bool = True) -> list:
     if not present:
         return []
 
+    # Every mise shim resolves to the same mise binary, so the --version
+    # cache cannot tell them apart; mise answers for its own tools instead.
+    mise_have = _mise_installed()
+    unmanaged = [(spec, path) for spec, path in present
+                 if spec.id not in mise_have]
     with ThreadPoolExecutor(max_workers=8) as pool:
         mise_future = pool.submit(_mise_outdated) if check_updates else None
-        installed_future = pool.submit(_mise_installed)
         versions = dict(zip(
-            (spec.id for spec, _p in present),
-            pool.map(lambda sp: _cached_version(sp[0].id, sp[1]), present)))
+            (spec.id for spec, _p in unmanaged),
+            pool.map(lambda sp: _cached_version(sp[0].id, sp[1]), unmanaged)))
         mise = mise_future.result() if mise_future else {}
-        mise_have = installed_future.result()
 
     cached = _load_latest() if check_updates else {}
     fetched = dict(cached)
@@ -298,9 +294,10 @@ def detect(check_updates: bool = True) -> list:
             info = mise.get(spec.id) or {}
             latest = info.get("latest") or ""
             release_url = info.get("release_url") or ""
-            # mise reports the version it has *installed*, which is the honest
-            # comparison -- `claude --version` can be an older linked build.
-            current = info.get("current") or mise_have.get(spec.id) or current
+            # The active version from `mise ls`, read live -- the cached
+            # `mise outdated` entry still names whatever was installed before
+            # the last upgrade. `claude --version` can be an older linked build.
+            current = mise_have.get(spec.id) or info.get("current") or current
         else:
             update_cmd = list(spec.self_update)
             if spec.repo and check_updates:
@@ -371,7 +368,7 @@ def mise_tools(check_updates: bool = True) -> list:
         name, domain = TOOL_DOMAINS.get(tool, (tool, ""))
         out.append(inventory.App(
             name=name,
-            version=info.get("current") or version,
+            version=version,
             source=inventory.TOOL,
             description=f"Developer tool · managed by mise",
             update=update,

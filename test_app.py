@@ -537,6 +537,61 @@ class DiskChecks(unittest.TestCase):
             self.assertTrue(f.fix_label)
 
 
+class UpdatesClearAfterUpdating(unittest.TestCase):
+    """Something just updated must leave the updates list on the next scan.
+
+    Both of these were cached as a whole -- the installed side along with the
+    upstream side -- so after updating everything, ten rows stayed listed for
+    hours: mise tools at versions already replaced, and plugins "901 commits
+    behind" that had just been pulled.
+    """
+
+    def test_mise_compares_the_live_version_not_the_cached_one(self):
+        import agents
+        stale = {"uv": {"current": "0.12.13", "latest": "0.13.1"}}
+        with mock.patch.object(agents, "_mise_installed",
+                               return_value={"uv": "0.13.1"}), \
+             mock.patch.object(agents, "_mise_outdated", return_value=stale):
+            [uv] = agents.mise_tools()
+        self.assertEqual(uv.version, "0.13.1")
+        self.assertFalse(uv.has_update)
+
+    def test_commit_count_is_recounted_while_the_fetch_is_cached(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            def git(*a, cwd=d):
+                subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                                *a], cwd=cwd, check=True, capture_output=True)
+            up, clone = Path(d, "up"), Path(d, "clone")
+            git("init", "-q", "-b", "main", str(up))
+            git("commit", "-q", "--allow-empty", "-m", "one", cwd=up)
+            git("clone", "-q", str(up), str(clone))
+            git("commit", "-q", "--allow-empty", "-m", "two", cwd=up)
+
+            cache = {}
+            self.assertEqual(inventory._git_behind(clone, cache)["behind"], 1)
+            git("pull", "-q", "--ff-only", cwd=clone)
+            # Inside the fetch window: no network, but the count is fresh.
+            self.assertEqual(inventory._git_behind(clone, cache)["behind"], 0)
+
+    def test_a_release_the_system_db_lacks_is_sent_to_update_all(self):
+        # checkupdates saw 2.0 in a fresh private db; the system db still
+        # offers 1.0, so `yay -S --needed` would skip it and report success.
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        win.on_update_all = mock.Mock()
+        pkg = inventory.App(name="somepkg", version="1.0", source=inventory.REPO,
+                            update="2.0")
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run", fake.run), \
+             mock.patch.object(inventory, "synced_version", return_value="1.0"):
+            app_mod.AlmanacWindow.on_update_one(win, None, pkg)
+            fake.say_yes()
+        self.assertEqual(fake.ran, [], "a no-op install must not be run")
+        win.on_update_all.assert_called_once()
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

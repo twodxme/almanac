@@ -269,6 +269,20 @@ def _pending_repo() -> dict[str, str]:
     return pending
 
 
+def synced_version(name: str) -> str:
+    """The version pacman's own sync database offers for `name`, or ''.
+
+    checkupdates reads a private, freshly synced copy of the database, so it
+    can see a release the system database has not heard of yet. Installing
+    one package without -y uses the system copy, and against that copy the
+    package is already current -- pacman skips it and reports success.
+    """
+    for line in _run(["env", "LC_ALL=C", "pacman", "-Si", name]).splitlines():
+        if line.startswith("Version"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 def _pending_aur() -> dict[str, str]:
     pending = {}
     for line in _run(["yay", "-Qua"], timeout=90).splitlines():
@@ -576,15 +590,16 @@ def _git_cache() -> dict:
 def _git_behind(repo: Path, cache: dict) -> dict:
     """How far a checkout is behind its upstream.
 
-    `git fetch` is a network round trip per repo, so results are cached for an
-    hour. A repo with no upstream, or an unreachable remote, returns nothing
-    rather than a misleading zero -- "up to date" and "could not check" are
-    different answers.
+    Only the `git fetch` is cached -- it is a network round trip per repo, so
+    it runs at most once an hour. Counting commits against the fetched refs is
+    local and cheap, so it is done every time: a cached count kept a plugin
+    "901 commits behind" for an hour after it had been pulled. A repo with no
+    upstream, or an unreachable remote, returns nothing rather than a
+    misleading zero -- "up to date" and "could not check" are different answers.
     """
     key = str(repo)
     entry = cache.get(key) or {}
-    if time.time() - float(entry.get("checked_at") or 0) < GIT_CHECK_SECONDS:
-        return entry
+    fetched_at = float(entry.get("fetched_at") or 0)
 
     def git(*args, timeout=25):
         return subprocess.run(["git", "-C", str(repo), *args],
@@ -594,7 +609,9 @@ def _git_behind(repo: Path, cache: dict) -> dict:
         if git("rev-parse", "--abbrev-ref", "@{upstream}").returncode != 0:
             result = {"tracked": False}
         else:
-            git("fetch", "--quiet", timeout=45)
+            if time.time() - fetched_at >= GIT_CHECK_SECONDS:
+                git("fetch", "--quiet", timeout=45)
+                fetched_at = time.time()
             behind = git("rev-list", "--count", "HEAD..@{upstream}").stdout.strip()
             subject = git("log", "-1", "--format=%s", "@{upstream}").stdout.strip()
             dirty = bool(git("status", "--porcelain").stdout.strip())
@@ -604,7 +621,7 @@ def _git_behind(repo: Path, cache: dict) -> dict:
         result = dict(entry) or {"tracked": False}
         result["error"] = True
 
-    result["checked_at"] = time.time()
+    result["fetched_at"] = fetched_at
     cache[key] = result
     return result
 

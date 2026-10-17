@@ -4333,6 +4333,22 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._update_agent(app)
             return
 
+        # A release only checkupdates knows about cannot be installed on its
+        # own: the system database would need -y first, and syncing for one
+        # package is the partial upgrade Arch warns against. Running yay
+        # anyway does nothing and reports success, so say what will work.
+        if (app.source != inventory.AUR
+                and inventory.synced_version(app.name) not in ("", app.update)):
+            tasks.confirm(
+                self, f"{app.name} needs a full upgrade",
+                f"{app.update} was released after this system's package "
+                f"database was last refreshed, so it cannot be installed on "
+                f"its own. “Update all” refreshes the database and installs "
+                f"it along with everything it depends on.",
+                "", "Update all", False,
+                lambda: self.on_update_all(None))
+            return
+
         # `yay -S <pkg>` without -y installs against the database as it
         # stands. That is a partial upgrade, which Arch warns against, so the
         # warning is in the dialog and Update all remains the safe default.
@@ -4426,19 +4442,29 @@ class AlmanacWindow(Adw.ApplicationWindow):
         The terminal is the point: `omarchy update` needs a password, and a GUI
         cannot answer that prompt. Running it where the user can type is the
         honest solution; the alternative is passwordless root.
+
+        The list rescans itself when the terminal closes. Leaving that to the
+        user meant everything just updated stayed listed as needing an update.
         """
         term = shutil.which("foot") or shutil.which("alacritty") or shutil.which("kitty")
         if not term:
             self._say("No terminal found to run the update in")
             return
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [term, "-e", "bash", "-lc",
                  "omarchy update; echo; read -n1 -r -p 'Done — press any key to close'"],
                 start_new_session=True)
-            self._say("Update running in a terminal — rescan when it finishes")
         except OSError as e:
             self._say(f"Could not start the update: {e}")
+            return
+        self._say("Update running in a terminal — the list refreshes when it closes")
+
+        def wait():
+            proc.wait()
+            GLib.idle_add(self._after_pacman, True)
+
+        threading.Thread(target=wait, daemon=True).start()
 
     def on_add_appimage(self, _button):
         dialog = Gtk.FileDialog(title="Choose an AppImage to track")
