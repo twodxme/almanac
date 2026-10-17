@@ -205,6 +205,7 @@ SOURCE_LABEL = {
     inventory.AVAILABLE: "Install",
     inventory.PLUGIN: "Plugin",
     inventory.AGENT: "AI agent",
+    inventory.TOOL: "Dev tool",
 }
 _FALLBACK_ICON = {
     inventory.REPO: "package-x-generic",
@@ -217,6 +218,7 @@ _FALLBACK_ICON = {
     inventory.AVAILABLE: "system-software-install-symbolic",
     inventory.PLUGIN: "application-x-addon-symbolic",
     inventory.AGENT: "system-run-symbolic",
+    inventory.TOOL: "applications-engineering-symbolic",
 }
 
 
@@ -361,6 +363,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             (inventory.APPIMAGE, "AppImages", "application-x-executable-symbolic"),
             (inventory.FLATPAK, "Flatpak", "application-x-executable-symbolic"),
             (inventory.LOCAL, "Local builds", "applications-engineering-symbolic"),
+            (inventory.TOOL, "Dev tools", "utilities-terminal-symbolic"),
         )),
         ("maintenance", "Maintenance", (
             ("maintenance", "Health check", "emblem-ok-symbolic"),
@@ -1030,7 +1033,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
             upd.set_icon_name("software-update-available-symbolic")
             can_update = it.has_update and it.source in (
-                inventory.REPO, inventory.AUR, inventory.APPIMAGE)
+                inventory.REPO, inventory.AUR, inventory.APPIMAGE,
+                inventory.TOOL)
             if it.source == inventory.SYSTEM:
                 # Almanac is a SYSTEM entry but is the one thing here that
                 # can genuinely update itself.
@@ -1675,7 +1679,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         }
         for src in (inventory.SYSTEM, inventory.REPO, inventory.AUR,
                     inventory.APPIMAGE, inventory.FLATPAK, inventory.LOCAL,
-                    inventory.AGENT, inventory.ORPHAN):
+                    inventory.AGENT, inventory.TOOL, inventory.ORPHAN):
             counts[src] = sum(1 for i in items if i.source == src)
 
         crit = sum(1 for i in items if i.critical)
@@ -4331,7 +4335,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     def on_update_one(self, _button, app: inventory.App):
         """Update one thing, with whatever tool owns it."""
-        if app.source == inventory.AGENT:
+        if app.extra.get("update_cmd"):
             self._update_agent(app)
             return
 

@@ -33,6 +33,9 @@ SYSTEM = "system"
 # AI coding agents: installed by their own scripts or a version manager, so no
 # package manager reports them. See agents.py.
 AGENT = "agent"
+# Version-managed developer tools: mise, asdf and friends own software that
+# no package manager reports on.
+TOOL = "tool"
 
 
 # Updates worth pulling out of the crowd. Two kinds:
@@ -673,7 +676,8 @@ def collect() -> list[App]:
     # Almanac lists itself. An app whose job is telling you what is stale
     # should not be the one thing that silently is.
     sources = (packages, appimages, flatpaks, local_builds,
-               agents.detect, lambda: [selfupdate.as_app()], orphans)
+               agents.detect, agents.mise_tools,
+               lambda: [selfupdate.as_app()], orphans)
     out = []
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
         for future in [pool.submit(fn) for fn in sources]:
