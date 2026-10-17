@@ -1112,6 +1112,14 @@ class AnyonesMachine(unittest.TestCase):
             self.assertNotIn("streamdock", text.lower(), f.name)
 
 
+class AboutWindow(unittest.TestCase):
+    def test_whats_new_comes_from_the_shipped_metainfo(self):
+        import selfupdate
+        version, markup = selfupdate.release_notes()
+        self.assertEqual(version, selfupdate.VERSION)
+        self.assertTrue(markup.startswith("<p>"))
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

@@ -36,6 +36,33 @@ VERSION = "1.1.0"
 GIT, PACKAGE, PLAIN = "git", "package", "plain"
 
 
+METAINFO = "io.github.twodxme.Almanac.metainfo.xml"
+
+
+def release_notes() -> tuple[str, str] | None:
+    """(version, AppStream description markup) of the newest release.
+
+    Read from the same AppStream file software centres show, so the About
+    window's "What's New" never disagrees with them. A checkout has it under
+    docs/; a package installs it to the system metainfo directory.
+    """
+    import xml.etree.ElementTree as ET
+    for path in (ROOT / "docs" / METAINFO, Path("/usr/share/metainfo") / METAINFO):
+        try:
+            release = ET.parse(path).getroot().find("releases/release")
+        except (OSError, ET.ParseError):
+            continue
+        if release is None:
+            continue
+        desc = release.find("description")
+        if desc is None:
+            return None
+        # libadwaita takes the description's children as AppStream markup.
+        body = "".join(ET.tostring(child, encoding="unicode") for child in desc)
+        return release.get("version", ""), " ".join(body.split())
+    return None
+
+
 def _git(*args, timeout=60) -> tuple[int, str]:
     try:
         out = subprocess.run(["git", "-C", str(ROOT), *args],

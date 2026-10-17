@@ -534,7 +534,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
         wordmark.add_css_class("heading")
         brand.append(mark)
         brand.append(wordmark)
-        sidebar_header.set_title_widget(brand)
+        # Clicking an app's own mark opens its About, as it does in most
+        # desktop apps; the menu entry stays for keyboard users.
+        brand_btn = Gtk.Button(child=brand, tooltip_text="About Almanac")
+        brand_btn.add_css_class("flat")
+        brand_btn.update_property([Gtk.AccessibleProperty.LABEL],
+                                  ["About Almanac"])
+        brand_btn.connect("clicked", self.on_about)
+        sidebar_header.set_title_widget(brand_btn)
         sidebar_header.set_show_end_title_buttons(False)
         sidebar_page.add_top_bar(sidebar_header)
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -4201,6 +4208,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
         about.set_debug_info(
             f"Installed as: {info['kind']}\n{info['note']}\n"
             + theming.describe() + "\n" + ghcache.describe())
+        notes = selfupdate.release_notes()
+        if notes:
+            version, markup = notes
+            about.set_release_notes_version(version)
+            about.set_release_notes(markup)
         about.present(self)
 
     def _row_folder(self, name: str):
