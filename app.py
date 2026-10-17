@@ -56,6 +56,7 @@ import history  # noqa: E402
 import mimeguard  # noqa: E402
 import patches  # noqa: E402
 import snapshots  # noqa: E402
+import plugin_setup as setup_mod  # noqa: E402
 import sources  # noqa: E402
 import verify  # noqa: E402
 import watcher  # noqa: E402
@@ -2677,7 +2678,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             btn.set_icon_name(INSTALL_ICON)
             btn.set_sensitive(True)
             btn.add_css_class("suggested-action")      # filled: the main action
-            btn.set_tooltip_text(f"Install {p.name}\n{p.install_cmd}")
+            btn.set_tooltip_text(f"Install {p.name}"
+                                 + (_(" — setup follows") if p.needs_setup else "")
+                                 + f"\n{p.install_cmd}")
             btn.update_property([Gtk.AccessibleProperty.LABEL],
                                 [f"Install {p.name}"])
             item._handler = btn.connect("clicked", self.on_plugin_install, p)
@@ -2915,14 +2918,122 @@ class AlmanacWindow(Adw.ApplicationWindow):
                   f"Licence     {p.license or 'unstated'}\n"
                   f"Listed by   {p.market_name}\n\n"
                   f"$ {' '.join(argv)}")
+        body = _("Omarchy shell plugins run inside the shell process with your "
+                 "permissions — there is no sandbox. Install what you trust.")
+        if p.needs_setup:
+            body += "\n\n" + _(
+                "Its author lists setup beyond the install — packages, a build "
+                "step or a sign-in. Once it is installed, Almanac shows you each "
+                "step from its README before running any of it.")
+
+        def after(ok):
+            self._store_after(ok, p, "installed")
+            if ok and p.needs_setup:
+                self._offer_setup(p)
+
         tasks.confirm(
-            self, f"Install {p.name}?",
-            _("Omarchy shell plugins run inside the shell process with your "
-            "permissions — there is no sandbox. Install what you trust."),
-            detail, _("Install"), False,
+            self, f"Install {p.name}?", body, detail, _("Install"), False,
             lambda: tasks.run(self, f"Installing {p.name}",
-                              [(f"Installing {p.name}", argv)],
-                              lambda ok: self._store_after(ok, p, "installed")))
+                              [(f"Installing {p.name}", argv)], after))
+
+    # ---- setup after install ----------------------------------------------
+    def _plugin_dir(self, p) -> Path | None:
+        """Where `omarchy plugin add` put this plugin: named by manifest id."""
+        root = xdg.config_home() / "omarchy" / "plugins"
+        direct = root / p.id
+        if direct.is_dir():
+            return direct
+        for manifest in root.glob("*/manifest.json"):
+            try:
+                if json.loads(manifest.read_text()).get("id") == p.id:
+                    return manifest.parent
+            except (OSError, ValueError):
+                continue
+        return None
+
+    def _offer_setup(self, p):
+        """Read the installed plugin's README and walk through its setup."""
+        folder = self._plugin_dir(p)
+        if folder is None:
+            self._say(f"{p.name}: installed, but its folder was not found")
+            return
+
+        def work():
+            plan = setup_mod.plan(folder)
+            GLib.idle_add(self._show_setup, p, plan)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_setup(self, p, plan):
+        if plan.empty:
+            self._say(f"{p.name} installed — its README asks for nothing more")
+            return False
+        dialog = Adw.AlertDialog(
+            heading=f"Finish setting up {p.name}",
+            body=(_("From the plugin's README. Packages are installed by "
+                    "Almanac; commands run in a terminal in the plugin's "
+                    "folder, where you can watch them. Nothing runs until you "
+                    "choose.") if plan.automatable else
+                  _("Nothing here can be done for you — these need you. The "
+                    "README has the details.")))
+        buf = Gtk.TextBuffer()
+        buf.set_text(setup_mod.describe(plan))
+        text = Gtk.TextView(buffer=buf, editable=False, monospace=True,
+                            cursor_visible=False)
+        text.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        for side in ("left", "right", "top", "bottom"):
+            getattr(text, f"set_{side}_margin")(8)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(170)
+        scroll.set_max_content_height(340)
+        scroll.set_child(text)
+        scroll.add_css_class("card")
+        dialog.set_extra_child(scroll)
+        if hasattr(dialog, "set_prefer_wide_layout"):
+            dialog.set_prefer_wide_layout(True)
+        dialog.add_response("later", _("Later"))
+        dialog.add_response("readme", _("Open README"))
+        if plan.automatable:
+            dialog.add_response("run", _("Run setup"))
+            dialog.set_response_appearance("run", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("later")
+        dialog.set_close_response("later")
+
+        def respond(_d, resp):
+            if resp == "readme":
+                self.open_url(p.repo + "#readme" if p.repo
+                              else f"file://{plan.plugin_dir / plan.readme}")
+            elif resp == "run":
+                self._run_setup(p, plan)
+        dialog.connect("response", respond)
+        dialog.present(self)
+        return False
+
+    def _run_setup(self, p, plan):
+        def commands():
+            if not plan.commands:
+                return
+            argv = xdg.terminal_argv(
+                ["bash", "-lc", setup_mod.terminal_script(plan)
+                 + "; echo; read -n1 -r -p 'Press any key to close'"])
+            if not argv:
+                self._say(_("No terminal found to run the setup commands in"))
+                return
+            subprocess.Popen(argv, start_new_session=True)
+            history.record(history.ALMANAC, f"Setup commands run for {p.name}",
+                           items=plan.commands)
+
+        if plan.packages:
+            argv = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec",
+                    *plan.packages]
+            history.record(history.ALMANAC, f"Setup packages for {p.name}",
+                           items=plan.packages)
+            tasks.run(self, f"Setting up {p.name}",
+                      self._snapshot_first([(_("Installing what it needs"), argv)],
+                                           f"setting up {p.name}"),
+                      lambda ok: (self._after_pacman(ok), ok and commands()))
+        else:
+            commands()
 
     def on_plugin_remove(self, _button, p):
         """Remove, with the command that kind of entry actually uses.
@@ -3247,6 +3358,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
             rm.connect("clicked", lambda b: (dialog.close(),
                                              self.on_plugin_remove(b, p)))
             bottom.append(rm)
+            if p.needs_setup:
+                fin = Gtk.Button(label=_("Finish setup"))
+                fin.add_css_class("suggested-action")
+                fin.connect("clicked", lambda b: (dialog.close(),
+                                                  self._offer_setup(p)))
+                bottom.append(fin)
         elif p.installed and p.built_in:
             lbl = Gtk.Label(label=_("Built in"))
             lbl.add_css_class("pill-ok")

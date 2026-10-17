@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import re
 import os
 import subprocess
@@ -42,7 +43,7 @@ THUMBS = CACHE / "thumbs"
 TTL = 6 * 3600                          # the sites regenerate a few times a day
 # Bumped whenever a mapper starts keeping a new field, so existing caches are
 # refetched instead of silently serving entries that are missing it.
-SCHEMA = 4
+SCHEMA = 5
 
 # The six accents the Omarchy catalog assigns. Used for the initials tile on
 # the ~800 entries with no preview image, so a card without artwork still reads
@@ -130,6 +131,8 @@ class Plugin:
     upstream_checked_at: str = ""
     # The release lookup failed, so "not installable" is unknown, not a fact.
     unchecked: bool = False
+    # Installable, but its README asks for more afterwards: see plugin_setup.py.
+    needs_setup: bool = False
     upstream_status: str = ""
 
     # filled in from the local system, not the catalog
@@ -260,11 +263,31 @@ class Plugin:
 
 # ---- marketplaces ------------------------------------------------------------
 
+# The marketplace withholds one-click install from plugins whose README asks
+# for more than the install itself -- an API key, a package, a build step.
+# `omarchy plugin add` does not consult that flag: it clones, validates and
+# installs exactly as it does for any other plugin. So Almanac installs these
+# too, says plainly that setup follows, and walks through the setup after
+# (plugin_setup.py). Only single-plugin repositories qualify, and only with this
+# note; a failed compatibility check, a version-matched native helper, a
+# monorepo or a suite with its own installer stays manual, because there the
+# install itself is what cannot be done safely.
+_SETUP_NOTE = "This plugin requires additional setup"
+
+
+def _needs_setup(e: dict) -> bool:
+    return (not e.get("installAvailable") and not e.get("builtIn")
+            and e.get("repositoryLayout") == "root-plugin"
+            and (e.get("installNote") or "").startswith(_SETUP_NOTE)
+            and str(e.get("repo") or "").startswith("https://"))
+
+
 def _omarchy_entry(e: dict) -> dict:
     """plugins.omarchy.org catalog.json -> the fields the cards render.
 
     Keeping the other 30 fields would mean caching 14MB to display none of it.
     """
+    setup = _needs_setup(e)
     return {
         "id": e.get("id") or "",
         "name": e.get("name") or e.get("id") or "",
@@ -273,7 +296,7 @@ def _omarchy_entry(e: dict) -> dict:
         "version": e.get("version") or "",
         "category": e.get("category") or "Other",
         "kind": e.get("kind") or "",
-        "status": e.get("status") or "",
+        "status": "Needs setup" if setup else (e.get("status") or ""),
         "tags": e.get("tags") or [],
         "accent": e.get("accent") or "",
         "initials": e.get("initials") or "",
@@ -282,8 +305,11 @@ def _omarchy_entry(e: dict) -> dict:
         "verified": e.get("verificationStatus") == "verified",
         # A built-in is "installable" in the sense that it can be switched on;
         # the catalog expresses that as officialCommand rather than as an add.
-        "installable": bool(e.get("installAvailable") or e.get("builtIn")),
-        "install_cmd": e.get("installCommand") or e.get("officialCommand") or "",
+        "installable": bool(e.get("installAvailable") or e.get("builtIn") or setup),
+        "install_cmd": (e.get("installCommand") or e.get("officialCommand")
+                        or (f"omarchy plugin add {shlex.quote(e['repo'])} --enable"
+                            if setup else "")),
+        "needs_setup": setup,
         "install_note": e.get("installNote") or "",
         "license": e.get("license") or "",
         "updated": e.get("repositoryUpdatedAt") or "",

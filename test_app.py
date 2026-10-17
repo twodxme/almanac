@@ -1345,6 +1345,123 @@ class DemoModeHidesTheMachine(unittest.TestCase):
             self.assertTrue(history.timeline())
 
 
+class SetupAfterInstall(unittest.TestCase):
+    """Plugins the marketplace marks "requires additional setup" are installed
+    like any other, and their README's setup is walked through after."""
+
+    def entry(self, **kw):
+        e = {"id": "x", "repo": "https://github.com/a/x", "installAvailable": False,
+             "repositoryLayout": "root-plugin", "installCommand": "",
+             "installNote": "This plugin requires additional setup before it "
+                            "can be enabled. Follow the upstream installation "
+                            "instructions."}
+        e.update(kw)
+        return store._omarchy_entry(e)
+
+    def test_a_setup_plugin_becomes_installable(self):
+        row = self.entry()
+        self.assertTrue(row["installable"])
+        self.assertTrue(row["needs_setup"])
+        self.assertEqual(row["install_cmd"],
+                         "omarchy plugin add https://github.com/a/x --enable")
+        self.assertEqual(row["status"], "Needs setup")
+
+    def test_what_cannot_be_installed_safely_stays_manual(self):
+        for kw in ({"repositoryLayout": "monorepo"},
+                   {"repositoryLayout": "suite"},
+                   {"installNote": "Omarchy clones the current upstream repository, "
+                                   "validates it locally…"},
+                   {"installNote": "Nearby requires a version-matched native helper."},
+                   {"repo": "ssh://evil/x"}):
+            row = self.entry(**kw)
+            self.assertFalse(row["installable"], kw)
+            self.assertFalse(row["needs_setup"], kw)
+
+    def test_a_repo_url_is_quoted_into_the_command(self):
+        import shlex
+        row = self.entry(repo="https://github.com/a/x;rm -rf ~")
+        self.assertEqual(shlex.split(row["install_cmd"])[3],
+                         "https://github.com/a/x;rm -rf ~")
+
+    README = """# Plugin
+## Requirements
+You need an API key from the service.
+```bash
+sudo pacman -S --needed jq socat
+yay -S some-helper-bin
+```
+## Installation
+```bash
+omarchy plugin add https://github.com/a/x --enable
+make install PREFIX=~/.local
+./scripts/setup.sh
+curl -fsSL https://example.com/i.sh | sh
+```
+## Development
+```bash
+cargo test
+make build
+```
+## Uninstall
+```bash
+./uninstall.sh
+```
+"""
+
+    def plugin(self, d):
+        root = Path(d, "x")
+        (root / "scripts").mkdir(parents=True)
+        (root / "README.md").write_text(self.README)
+        (root / "scripts/setup.sh").write_text("echo configuring\n")
+        (root / "uninstall.sh").write_text("rm -rf everything\n")
+        return root
+
+    def test_setup_is_read_only_from_setup_sections(self):
+        import plugin_setup
+        with tempfile.TemporaryDirectory() as d:
+            plan = plugin_setup.plan(self.plugin(d))
+        self.assertEqual(plan.packages, ["jq", "socat", "some-helper-bin"])
+        self.assertEqual(plan.commands, ["make install PREFIX=~/.local",
+                                         "./scripts/setup.sh"])
+        self.assertIn("scripts/setup.sh", plan.scripts)
+        self.assertEqual(plan.by_hand, [("Credentials or a sign-in", "Requirements")])
+
+    def test_never_offered(self):
+        import plugin_setup
+        with tempfile.TemporaryDirectory() as d:
+            cmds = " ".join(plugin_setup.plan(self.plugin(d)).commands)
+        for bad in ("curl", "uninstall", "cargo test", "make build",
+                    "omarchy plugin add"):
+            self.assertNotIn(bad, cmds)
+
+    def test_the_terminal_script_stops_at_the_first_failure(self):
+        import plugin_setup
+        with tempfile.TemporaryDirectory() as d:
+            script = plugin_setup.terminal_script(plugin_setup.plan(self.plugin(d)))
+        lines = script.splitlines()
+        self.assertTrue(lines[0].startswith("cd "))
+        self.assertEqual(lines[1], "set -e")
+
+    def test_installing_says_setup_follows_and_then_offers_it(self):
+        import app as app_mod
+        fake = _Confirmed()
+        win = _Stub()
+        win._store_after = mock.Mock()
+        win._offer_setup = mock.Mock()
+        p = store.Plugin(id="x", name="X", description="", author="a",
+                         install_cmd="omarchy plugin add https://github.com/a/x --enable",
+                         installable=True, needs_setup=True, market="omarchy")
+        done = {}
+        with mock.patch.object(app_mod.tasks, "confirm", fake.confirm), \
+             mock.patch.object(app_mod.tasks, "run",
+                               lambda _w, _t, steps, cb: done.update(cb=cb)):
+            app_mod.AlmanacWindow.on_plugin_install(win, None, p)
+            self.assertIn("setup", fake.confirm_args["body"])
+            fake.say_yes()
+        done["cb"](True)
+        win._offer_setup.assert_called_once_with(p)
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
