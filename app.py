@@ -4541,7 +4541,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.add_prefix(pill)
 
         if e.status:
-            st = Gtk.Label(label=e.status, valign=Gtk.Align.CENTER)
+            # A status can be a whole server error ("Failed to connect — HTTP
+            # 429: Error POSTing to endpoint: {…}"). Unbounded, one such
+            # label asked for 724px, pushed the page wider than the window
+            # and squeezed the sidebar to its minimum. Short, ellipsized,
+            # with the full text a hover away.
+            st = Gtk.Label(label=e.status, valign=Gtk.Align.CENTER,
+                           ellipsize=Pango.EllipsizeMode.END,
+                           max_width_chars=28, xalign=1)
+            st.set_tooltip_text(e.status)
+            st.update_property([Gtk.AccessibleProperty.DESCRIPTION], [e.status])
             st.add_css_class("dim-label")
             st.add_css_class("caption")
             row.add_suffix(st)

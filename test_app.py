@@ -1993,6 +1993,27 @@ def inspect_source(fn):
     return inspect.getsource(fn)
 
 
+class RowsFitTheWindow(unittest.TestCase):
+    def test_a_long_server_error_does_not_widen_the_ai_page(self):
+        """One unbounded status label asked for 724px and squeezed the
+        sidebar to its minimum whenever an MCP server was failing."""
+        import ai
+        import app as app_mod
+        win = _Stub()
+        win._plain = app_mod.AlmanacWindow._plain
+        win._vendor_icon = mock.Mock()
+        win._AI_SEVERITY = app_mod.AlmanacWindow._AI_SEVERITY
+        win._ai_act = mock.Mock()
+        win.open_url = mock.Mock()
+        e = ai.Entry(kind=ai.MCP, name="A server",
+                     status="Failed to connect — HTTP 429: Error POSTing to "
+                            "endpoint: " + '{"code":"rate_limited"} ' * 12,
+                     severity="warn", url="https://example.org")
+        row = app_mod.AlmanacWindow._ai_row(win, e)
+        minimum = row.measure(app_mod.Gtk.Orientation.HORIZONTAL, -1)[0]
+        self.assertLess(minimum, 480, "the window's own minimum width")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 
