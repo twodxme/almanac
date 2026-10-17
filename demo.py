@@ -236,6 +236,19 @@ def findings():
                   items=["inkscape.previous"],
                   fix_label="Delete rollback copies", fix=["true"],
                   fix_note="Deletes the .previous files."),
+        m.Finding(id="vulnerabilities", title="Known vulnerabilities",
+                  detail="2 installed package(s) have known vulnerabilities; "
+                         "2 can be fixed by updating.",
+                  severity=m.CRIT, count=2,
+                  items=["chromium 151.0.7620.9-1 — high, arbitrary code "
+                         "execution; fixed in 152.0.7700.1-1 · CVE-2026-0001",
+                         "openssh 10.2p1-1 — medium, information disclosure; "
+                         "fixed in 10.3p1-1 · CVE-2026-0002"],
+                  fix_note="Update all installs every fixed version."),
+        m.Finding(id="snapshot", title="Update snapshots",
+                  detail="The last update (today 09:13: fd) can be undone — a "
+                         "snapshot was taken just before it.",
+                  severity=m.OK),
         m.Finding(id="pacnew", title="Unmerged config files",
                   detail="No .pacnew or .pacsave files in /etc.",
                   severity=m.OK),
@@ -305,3 +318,45 @@ def ai_groups():
 # states without touching what is really on the machine.
 INSTALLED_PLUGIN_IDS = {"omarchy.clock", "omarchy.battery"}
 INSTALLED_THEMES = {"solitude"}
+
+
+def history():
+    """A believable week, so the History page can be shown without anyone's."""
+    import time
+    import history as h
+    now = time.time()
+    day = 86400
+
+    def at(days_ago, hour, minute):
+        t = time.localtime(now - days_ago * day)
+        return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, hour, minute, 0,
+                            0, 0, -1))
+
+    events = [
+        h.Event(at(0, 9, 14), h.ALMANAC, "fd 10.3.0-1 → 10.4.0-1"),
+        h.Event(at(0, 9, 13), h.PACKAGES, "Updated fd",
+                items=["upgraded fd (10.3.0-1 -> 10.4.0-1)"]),
+        h.Event(at(0, 9, 13), h.SNAPSHOT, "Snapshot taken",
+                "“Almanac: before updating fd”"),
+        h.Event(at(1, 18, 2), h.ALMANAC, "File types changed hands",
+                items=["Inkscape now opens .svg — before: Image Viewer"]),
+        h.Event(at(1, 17, 40), h.ALMANAC, "Installed inkscape 1.4.2",
+                "AppImage from https://github.com/example/inkscape · "
+                "checksum verified"),
+        h.Event(at(2, 21, 7), h.ALMANAC, "omarchy/shell.json restored",
+                "From shell.json.bak.1; the defaults were kept"),
+        h.Event(at(2, 21, 5), h.RESET, "omarchy/shell.json replaced",
+                "Your previous version was kept as a backup"),
+        h.Event(at(3, 10, 30), h.PACKAGES,
+                "Updated 14 packages · installed 2 packages",
+                items=["upgraded firefox (147.0-1 -> 148.0-1)",
+                       "upgraded mesa (25.3.1-1 -> 25.3.2-1)",
+                       "installed wl-clipboard (2.2.1-3)"]),
+        h.Event(at(3, 10, 28), h.SNAPSHOT, "Snapshot taken", "“4.0.4-1”"),
+    ]
+    by_day = {}
+    from datetime import datetime
+    for e in sorted(events, key=lambda e: e.ts, reverse=True):
+        by_day.setdefault(datetime.fromtimestamp(e.ts).date(), []).append(e)
+    return [h.Day(d, evs, any(e.kind == h.SNAPSHOT for e in evs))
+            for d, evs in sorted(by_day.items(), reverse=True)]

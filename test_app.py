@@ -1324,6 +1324,27 @@ class Translations(unittest.TestCase):
                          "No string anyone has translated")
 
 
+class DemoModeHidesTheMachine(unittest.TestCase):
+    """Screenshots are made in demo mode and published; nothing in them may
+    describe the machine they were taken on."""
+
+    def test_sidebar_stats_are_synthetic(self):
+        import os
+        import app as app_mod
+        with mock.patch.dict("os.environ", {"ALMANAC_DEMO": "1"}):
+            kernel = app_mod.AlmanacWindow._kernel_version()
+            uptime = app_mod.AlmanacWindow._uptime()
+        self.assertNotIn(os.uname().release.split("-")[0], kernel)
+        self.assertEqual(uptime, "6d 2h")
+
+    def test_history_is_synthetic(self):
+        import history
+        with mock.patch.dict("os.environ", {"ALMANAC_DEMO": "1"}), \
+             mock.patch.object(history, "package_events",
+                               side_effect=AssertionError("read the real log")):
+            self.assertTrue(history.timeline())
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

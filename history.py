@@ -203,6 +203,9 @@ def reset_events(since: float) -> list[Event]:
 # ---- the timeline ------------------------------------------------------------
 
 def timeline(days: int = DAYS) -> list[Day]:
+    import demo
+    if demo.active():
+        return demo.history()
     since = time.time() - days * 86400
     events = (package_events(since) + snapshot_events(since)
               + reset_events(since) + recorded(since))

@@ -165,12 +165,13 @@ with neither says so instead of pretending.
 
 <img src="docs/screenshots/health.png" alt="Health check" width="820">
 
-Sixteen read-only checks, each offering the single command that acts on what it
+Seventeen read-only checks, each offering the single command that acts on what it
 found: package cache, journal size, AUR build cache, orphans (with build
 tooling deliberately kept), unmerged `.pacnew` files, failed services, broken
 launcher entries, dead symlinks, AppImage rollback copies, AUR packages that
 vanished upstream, package file integrity, session logs, trash, disk
-headroom, settings reset to defaults, and whether the last update can be
+headroom, settings reset to defaults, known vulnerabilities, and whether the
+last update can be
 undone.
 
 A cleanup is judged by what it would free, not by how big the thing is. A
@@ -181,6 +182,26 @@ dry run, and clears once there is nothing left to trim.
 ---
 
 ## What it watches for
+
+### Known vulnerabilities, not guesses
+
+A "security update" is one that fixes a known vulnerability in the version you
+have installed — matched against the [Arch Security
+Tracker](https://security.archlinux.org) with pacman's own `vercmp`. Each
+package's page lists its advisories, with severity, CVEs and the fixed
+version, and the Health check says which can be fixed by updating and which
+have no fix released yet. When the tracker cannot be reached, Almanac says so
+rather than reporting a clean bill.
+
+### History — what changed, and when
+
+<img src="docs/screenshots/history.png" alt="History" width="820">
+
+"It worked last week" starts most troubleshooting. History puts the last 30
+days on one timeline: every package transaction, every snapshot, every config
+file a tool replaced, and everything Almanac itself did — including updates
+that ran but changed nothing. Days with a snapshot say so, since what came
+after can be undone from the boot menu.
 
 ### Every action is checked, not assumed
 
@@ -198,9 +219,11 @@ as one.
 Some repair commands replace a config file with the shipped default and keep
 yours as `<file>.bak.<time>` — without saying so. Almanac recognises that from
 the files alone (the file now matches the default, the backup does not),
-notices it the moment it happens while the window is open, says what was lost
-("9 bar widgets removed"), and restores your version in one click. The
-defaults it replaces are kept, so the restore can be undone too.
+notices it the moment it happens, says what was lost ("9 bar widgets
+removed"), and restores your version in one click. The defaults it replaces
+are kept, so the restore can be undone too. With the window closed, an
+optional background watcher (Preferences → *While Almanac is closed*) does the
+same: a few directory monitors and no window, started through XDG autostart.
 
 ### Updates you can undo
 
@@ -348,6 +371,8 @@ about this:
   have installed to a single third party.
 - **GitHub release checks** for AppImages and agent CLIs, conditional on ETags
   so an unchanged release costs no quota.
+- **The Arch Security Tracker's advisory list**, downloaded whole and matched
+  against your packages locally. Cached for six hours.
 - **Install from a link**: the repository and its latest release from the
   GitHub API, and the matching package names from the AUR's public API —
   only for the link you pasted, only when you ask.
@@ -368,7 +393,7 @@ better than I can.
 python3 test_app.py
 ```
 
-118 tests, weighted toward the destructive paths — removal, orphan cleanup,
+120 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

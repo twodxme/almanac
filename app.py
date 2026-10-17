@@ -1778,6 +1778,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
     @staticmethod
     def _kernel_version() -> str:
+        import demo
+        if demo.active():
+            return "6.18.5"             # a screenshot must not name this machine's
         try:
             return os.uname().release.split("-arch")[0]
         except Exception:                               # noqa: BLE001
