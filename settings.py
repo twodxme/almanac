@@ -35,7 +35,7 @@ DEFAULTS: dict = {
     "net_gh_token": True,           # use `gh auth token` for GitHub requests
 }
 
-START_PAGES = (("last", "Where you left off"), ("featured", "Featured"),
+START_PAGES = (("last", "Where you left off"), ("featured", "Today"),
                ("updates", "Updates"), ("plugins", "Plugins"))
 
 

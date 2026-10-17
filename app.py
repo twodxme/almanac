@@ -404,7 +404,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # keeping it current are what the app is for, and a header above them
         # would rank them as peers of "Sources".
         ("primary", None, (
-            ("featured", _("Featured"), "starred-symbolic"),
+            # "featured" stays the key: saved state and --page featured keep
+            # working. Nothing here is featured by anyone; it is what is true
+            # today.
+            ("featured", _("Today"), "weather-clear-symbolic"),
             ("discover", _("App Store"), "system-software-install-symbolic"),
             ("themes", _("Themes"), "preferences-desktop-wallpaper-symbolic"),
             ("updates", _("Updates"), "software-update-available-symbolic"),
@@ -444,7 +447,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
     #   update   show the "Update all" button
     #   sort     show the sort menu
     PAGES: dict[str, dict[str, Any]] = {
-        "featured":    dict(view="featured", title=_("Featured"),
+        "featured":    dict(view="featured", title=_("Today"),
                             search=None, update=False, sort=False,
                             filters=False),
         "discover":    dict(view="store", title=_("App Store"),
@@ -6256,7 +6259,7 @@ class AlmanacApp(Adw.Application):
     # a keybinding can land on Updates without a click -- and makes a
     # screenshot of a given page reproducible.
     PAGE_ALIASES = {
-        "featured": "featured", "home": "featured",
+        "featured": "featured", "home": "featured", "today": "featured",
         "store": "discover", "app-store": "discover", "discover": "discover",
         "themes": "themes", "theme": "themes",
         "updates": "updates", "update": "updates",

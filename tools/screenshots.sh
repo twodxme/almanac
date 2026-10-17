@@ -39,7 +39,7 @@ shoot() {   # page, file, seconds to settle
   echo "$out/$file"
 }
 
-shoot featured  featured.png  22
+shoot today     today.png     35
 shoot store     app-store.png 50
 shoot themes    themes.png    30
 shoot updates   updates.png   18

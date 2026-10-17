@@ -15,7 +15,7 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 ![libadwaita 1.9](https://img.shields.io/badge/libadwaita-1.9%2B-86d39b.svg)
 ![Arch](https://img.shields.io/badge/Arch-pacman%20%7C%20AUR-7dd7dc.svg)
 
-<img src="docs/screenshots/featured.png" alt="Almanac's Featured page: a hero over the desktop wallpaper, with what needs attention below" width="900">
+<img src="docs/screenshots/today.png" alt="Almanac's Today page: a hero over the desktop wallpaper, with what needs attention below" width="900">
 
 </div>
 
@@ -41,9 +41,9 @@ was reviewed.
 
 ## What it does
 
-### Featured — what needs you today
+### Today — what needs you, and what's new
 
-<img src="docs/screenshots/featured.png" alt="Featured" width="820">
+<img src="docs/screenshots/today.png" alt="Today" width="820">
 
 The landing page, assembled from live data rather than an editorial list that
 someone has to keep writing:

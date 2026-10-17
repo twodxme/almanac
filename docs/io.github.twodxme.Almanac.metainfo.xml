@@ -53,7 +53,7 @@
   <screenshots>
     <screenshot type="default">
       <caption>What needs attention today</caption>
-      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/featured.png</image>
+      <image>https://raw.githubusercontent.com/twodxme/almanac/main/docs/screenshots/today.png</image>
     </screenshot>
     <screenshot>
       <caption>Plugins, apps and themes with provenance on every card</caption>
@@ -96,6 +96,20 @@
   </requires>
 
   <releases>
+    <release version="1.6.0" date="2026-10-17">
+      <description>
+        <p>A denser, calmer window, and Featured is now Today.</p>
+        <ul>
+          <li>Every page fits more: compact sidebar, one-line rows, explanations
+          in tooltips, and passing health checks folded into one row</li>
+          <li>Three App Store cards across, with nothing truncated</li>
+          <li>The Switchboard leaves plugins to the Plugins page</li>
+          <li>Fixed: a failing MCP server squeezed the sidebar on the AI page;
+          a folded sidebar group kept a row out after leaving it; ArtCraft apps
+          showed Manual setup</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.0" date="2026-10-17">
       <description>
         <p>A Switchboard for everything with an on/off, proper Preferences, and
