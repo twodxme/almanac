@@ -1182,6 +1182,54 @@ class KnownVulnerabilities(unittest.TestCase):
         self.assertNotEqual(f.severity, m.OK)
 
 
+class Timeline(unittest.TestCase):
+    LOG = (
+        "[2026-10-16T23:02:32-0700] [ALPM] transaction started\n"
+        "[2026-10-16T23:02:33-0700] [ALPM] upgraded a (1-1 -> 2-1)\n"
+        "[2026-10-16T23:02:33-0700] [ALPM] upgraded b (1-1 -> 2-1)\n"
+        "[2026-10-16T23:02:33-0700] [ALPM] installed c (1-1)\n"
+        "[2026-10-16T23:02:34-0700] [ALPM] transaction completed\n"
+        "[2026-10-16T23:05:00-0700] [ALPM] transaction started\n"
+        "[2026-10-16T23:05:01-0700] [ALPM] transaction completed\n")
+
+    def test_a_transaction_is_one_event_with_a_plain_summary(self):
+        import history
+        [e] = history.package_events(0, self.LOG)
+        self.assertEqual(e.title, "Updated 2 packages · installed c")
+        self.assertEqual(len(e.items), 3)
+
+    def test_snapshots_are_read_from_the_journal(self):
+        import history
+        rec = {"MESSAGE": "tim : TTY=pts/4 ; COMMAND=/usr/bin/snapper -c root "
+                          "create -c number -d 4.0.4-1",
+               "__REALTIME_TIMESTAMP": "1792216942000000"}
+        [e] = history.snapshot_events(0, json.dumps(rec) + "\n")
+        self.assertEqual(e.kind, history.SNAPSHOT)
+        self.assertIn("4.0.4-1", e.detail)
+
+    def test_almanacs_own_actions_round_trip(self):
+        import history
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict("os.environ", {"XDG_STATE_HOME": d}):
+            history.record(history.ALMANAC, "yaru did not change",
+                           severity="warn")
+            [e] = history.recorded(0)
+        self.assertEqual((e.title, e.severity), ("yaru did not change", "warn"))
+
+    def test_days_with_a_snapshot_are_marked(self):
+        import history
+        snap = history.Event(1792216942, history.SNAPSHOT, "Snapshot taken")
+        pkg = history.Event(1792216952, history.PACKAGES, "Updated a")
+        with mock.patch.object(history, "package_events", return_value=[pkg]), \
+             mock.patch.object(history, "snapshot_events", return_value=[snap]), \
+             mock.patch.object(history, "reset_events", return_value=[]), \
+             mock.patch.object(history, "recorded", return_value=[]), \
+             mock.patch.object(history.time, "time", return_value=1792220000):
+            [day] = history.timeline()
+        self.assertTrue(day.snapshot)
+        self.assertEqual(day.events[0], pkg)          # newest first
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

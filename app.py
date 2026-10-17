@@ -42,6 +42,7 @@ import autoupdate  # noqa: E402
 import ghcache  # noqa: E402
 import icons as icons_mod  # noqa: E402
 import guard  # noqa: E402
+import history  # noqa: E402
 import mimeguard  # noqa: E402
 import patches  # noqa: E402
 import snapshots  # noqa: E402
@@ -366,6 +367,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         )),
         ("maintenance", "Maintenance", (
             ("maintenance", "Health check", "emblem-ok-symbolic"),
+            ("history", "History", "document-open-recent-symbolic"),
             (inventory.ORPHAN, "Orphans", "user-trash-symbolic"),
         )),
     )
@@ -399,6 +401,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                             search="Search installed software",
                             update=True, sort=True, filters=False),
         "maintenance": dict(view="maintenance", title="Health check",
+                            search=None, update=False, sort=False, filters=False),
+        "history":     dict(view="history", title="History",
                             search=None, update=False, sort=False, filters=False),
         inventory.AGENT: dict(view="ai", title="AI",
                               search=None, update=False, sort=False, filters=False),
@@ -720,6 +724,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self.content_stack.add_named(box, "list")
         self.content_stack.add_named(self._build_store(), "store")
         self.content_stack.add_named(self._build_maintenance(), "maintenance")
+        self.content_stack.add_named(self._build_history(), "history")
         self.content_stack.add_named(self._build_ai(), "ai")
         self.content_stack.add_named(self._build_featured(), "featured")
         self.content_stack.set_visible_child_name("list")
@@ -1159,7 +1164,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # order they appear in the sidebar.
         for i, key in enumerate(("featured", "discover", "themes", "updates",
                                  inventory.AGENT, "apps", "all",
-                                 "maintenance"), start=1):
+                                 "maintenance", "history"), start=1):
             add(f"<Control>{i}", lambda k=key: self._select_category(k))
         self.add_controller(controller)
 
@@ -1796,7 +1801,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else:
                 header._chevron.set_tooltip_text(None)
         for key, row in self.sidebar_rows.items():
-            if key in ("maintenance", inventory.AGENT, "featured", "themes"):
+            if key in ("maintenance", "history", inventory.AGENT, "featured",
+                       "themes"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
             # An empty category stays visible but recedes, so the layout does
@@ -1973,6 +1979,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 self._ai_show(self._ai_survey)
             return
 
+        if row._key == "history":
+            self._leave_store()
+            self._show_page("history")
+            self._history_reload()
+            return
+
         if row._key == "maintenance":
             self._leave_store()
             self._show_page("maintenance")
@@ -2059,6 +2071,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._store_reload(force=True)
         elif page == "maintenance":
             self._maint_reload()
+        elif page == "history":
+            self._history_reload()
         elif page == inventory.AGENT:
             self._ai_reload()
         else:
@@ -3248,6 +3262,73 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller.set_child(body)
         page.append(scroller)
         return page
+
+    # ---- history ----------------------------------------------------------
+    _HISTORY_ICONS = {
+        history.PACKAGES: "package-x-generic-symbolic",
+        history.SNAPSHOT: "camera-photo-symbolic",
+        history.RESET: "edit-undo-symbolic",
+        history.ALMANAC: "emblem-ok-symbolic",
+    }
+
+    def _build_history(self):
+        """What changed on this machine, by day. See history.py."""
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.history_body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                    spacing=20, margin_start=12, margin_end=12,
+                                    margin_bottom=16)
+        scroller = Gtk.ScrolledWindow(vexpand=True)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self.history_body)
+        page.append(scroller)
+        return page
+
+    def _history_reload(self):
+        self._summarize("Reading the last 30 days…", "history")
+
+        def work():
+            days = history.timeline()
+            GLib.idle_add(self._history_show, days)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _history_show(self, days):
+        while (child := self.history_body.get_first_child()) is not None:
+            self.history_body.remove(child)
+        if not days:
+            self.history_body.append(self._status_page(
+                "document-open-recent-symbolic", "Nothing recorded yet",
+                "Package changes, snapshots and settings resets from the last "
+                "30 days appear here."))
+            self._summarize("Nothing in the last 30 days", "history")
+            return False
+        for day in days:
+            note = ("A snapshot was taken this day — changes after it can be "
+                    "undone from the boot menu." if day.snapshot else "")
+            section = self._section(day.label, note)
+            for e in day.events:
+                section._rows.append(self._history_row(e))
+            self.history_body.append(section)
+        n = sum(len(d.events) for d in days)
+        self._summarize(f"{n} change(s) in the last 30 days", "history")
+        return False
+
+    def _history_row(self, e):
+        when = datetime.fromtimestamp(e.ts).strftime("%H:%M")
+        subtitle = " · ".join(x for x in (when, e.detail) if x)
+        if e.items:
+            row = self._plain(Adw.ExpanderRow, title=e.title, subtitle=subtitle)
+            for item in e.items[:80]:
+                entry = self._plain(title=item)
+                entry.add_css_class("property")
+                row.add_row(entry)
+        else:
+            row = self._plain(title=e.title, subtitle=subtitle)
+        icon = Gtk.Image(icon_name=("dialog-warning-symbolic" if e.severity == "warn"
+                                    else self._HISTORY_ICONS.get(e.kind,
+                                                                 "emblem-ok-symbolic")))
+        icon.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+        row.add_prefix(icon)
+        return row
 
     def _maint_reload(self):
         self._busy(True)
@@ -4485,6 +4566,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return done
 
     def _report_outcome(self, out):
+        history.record(history.ALMANAC, out.message,
+                       severity="warn" if out.changed is False else "")
         if out.changed is False:
             # Something the user asked for did not happen. A toast can be
             # missed; this is the one result that must not be.
@@ -4537,6 +4620,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if resp == "restore":
                 n = mimeguard.restore(returnable)
                 self._say(f"{n} file type(s) handed back")
+                history.record(history.ALMANAC,
+                               f"{n} file type(s) handed back",
+                               items=mimeguard.summary(returnable))
+        history.record(history.ALMANAC, "File types changed hands",
+                       items=mimeguard.summary(moved))
         dialog.connect("response", respond)
         dialog.present(self)
         return False
@@ -4951,6 +5039,7 @@ class AlmanacApp(Adw.Application):
         "updates": "updates", "update": "updates",
         "ai": inventory.AGENT, "agents": inventory.AGENT,
         "health": "maintenance", "maintenance": "maintenance",
+        "history": "history", "timeline": "history",
         "apps": "apps", "applications": "apps",
         "all": "all", "everything": "all",
         "orphans": inventory.ORPHAN,

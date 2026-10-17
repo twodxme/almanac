@@ -170,6 +170,10 @@ def restore(reset: Reset, log=print) -> None:
     shutil.copy2(reset.path, keep)
     shutil.copy2(reset.backup, reset.path)
     log(f"restored {reset.name} from {reset.backup.name}")
+    import history
+    history.record(history.ALMANAC, f"{reset.name} restored",
+                   f"From {reset.backup.name}; the defaults were kept as "
+                   f"{keep.name}")
     log(f"the defaults it replaced are in {keep.name}")
 
 

@@ -283,4 +283,8 @@ def install_appimage(res: Resolution, opt: Option, log=print) -> Path:
     inventory.save_registry(reg)
     if appimage.install_desktop_entry(dest, key):
         log("launcher entry added")
+    import history
+    history.record(history.ALMANAC, f"Installed {res.repo} {opt.version}",
+                   f"AppImage from {res.url}"
+                   + (" · checksum verified" if opt.sha256 else ""))
     return dest
