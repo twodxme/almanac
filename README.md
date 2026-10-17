@@ -115,7 +115,10 @@ dropped.
 
 ### AI — the estate no package manager tracks
 
-<img src="docs/screenshots/ai.png" alt="AI" width="820">
+<img src="docs/screenshots/ai.png" alt="The AI page, showing installed agent CLIs with their versions and update state" width="820">
+
+*Above: the Harnesses section. Below it on the same page sit your MCP servers
+with live connection health, skills, plugins, marketplaces and hooks.*
 
 Agent CLIs (Claude Code, Codex, Gemini, opencode, Copilot, Cursor, Crush,
 Goose, Aider, Qwen, Amp, Droid), MCP servers with live health, skills, plugins,
