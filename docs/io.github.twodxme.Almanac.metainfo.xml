@@ -96,6 +96,24 @@
   </requires>
 
   <releases>
+    <release version="1.2.0" date="2026-10-17">
+      <description>
+        <p>Known vulnerabilities from the Arch Security Tracker, a history of
+        what changed on this machine, and a settings watcher that works while
+        Almanac is closed.</p>
+        <ul>
+          <li>Security updates are the ones that fix a known vulnerability in
+          the installed version, not a guess from the package name</li>
+          <li>History: package changes, snapshots, settings resets and
+          Almanac's own actions on one timeline, by day</li>
+          <li>An optional background watcher notices settings reset to their
+          defaults while the window is closed</li>
+          <li>Every icon-only control is named for screen readers, and status
+          colours meet WCAG AA in light and dark themes</li>
+          <li>The interface is translatable, through GNU gettext</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-10-17">
       <description>
         <p>Almanac now checks that what it did actually happened, and watches for
