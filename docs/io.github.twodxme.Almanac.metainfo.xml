@@ -96,6 +96,20 @@
   </requires>
 
   <releases>
+    <release version="1.3.0" date="2026-10-17">
+      <description>
+        <p>Over a thousand plugins that used to say "Manual setup" install in one
+        click, and Almanac walks you through the setup their README asks for.</p>
+        <ul>
+          <li>Packages a plugin needs are installed for you, with a snapshot
+          first and the result checked</li>
+          <li>Build steps and setup scripts are shown in full, then run in a
+          terminal you can watch</li>
+          <li>Credentials and config edits are listed with the README section
+          to read</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.2.0" date="2026-10-17">
       <description>
         <p>Known vulnerabilities from the Arch Security Tracker, a history of

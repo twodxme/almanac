@@ -252,6 +252,20 @@ the caveats. An AppImage is checked against the SHA-256 GitHub publishes for
 it before it is made runnable; an AUR package whose upstream is a different
 project is flagged.
 
+### Plugins that need setup
+
+The marketplace marks about a thousand plugins "manual setup" because their
+README asks for more than the install — an API key, a package, a build step.
+Almanac installs them like any other (`omarchy plugin add`, validated by
+Omarchy), says up front that setup follows, and then reads the README from the
+installed copy: packages it installs for you, build steps and setup scripts it
+shows in full and runs in a terminal you can watch, and anything only you can
+do — credentials, config edits — it lists with the section to read. Only
+install, setup and configuration sections are read; development, testing and
+uninstall instructions are never offered. Plugins whose install itself cannot
+be done safely (a failed compatibility check, a version-matched helper, a
+monorepo, a suite with its own installer) still say "Manual setup", and why.
+
 ### Major releases and local changes
 
 A new major version of an agent CLI is held back from "update all" and from
@@ -393,7 +407,7 @@ better than I can.
 python3 test_app.py
 ```
 
-120 tests, weighted toward the destructive paths — removal, orphan cleanup,
+127 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.
