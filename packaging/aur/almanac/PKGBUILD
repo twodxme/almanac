@@ -1,0 +1,72 @@
+# Maintainer: twodxme <tim@wraplabs.com>
+# The release package: built from a tagged release. almanac-git, in the
+# repository root, builds the newest commit instead.
+pkgname=almanac
+pkgver=1.2.0
+pkgrel=1
+pkgdesc="See everything installed, where it came from, and what needs you"
+arch=('any')
+url="https://github.com/twodxme/almanac"
+license=('MIT')
+depends=('python' 'gtk4' 'libadwaita' 'python-gobject' 'python-cairo' 'pacman'
+         'polkit')
+optdepends=(
+  'git: local checkouts, plugin updates and carrying local changes forward'
+  'snapper: a snapshot before every package Almanac installs or updates'
+  'xdg-utils: handing file types back to the app that opened them before'
+  'xdg-terminal-exec: opens full upgrades in your chosen terminal'
+  'omarchy: plugin catalogue, themes and system updates'
+  'yay: AUR package updates and installs'
+  'pacman-contrib: checkupdates, for pending repository updates'
+  'flatpak: Flatpak inventory and updates'
+  'mise: version-managed AI agent CLIs'
+  'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
+  'webp-pixbuf-loader: marketplace card artwork'
+)
+makedepends=('gettext')
+checkdepends=('git')
+conflicts=('almanac-git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('320f8db80c358b10b4da3938268b06c85efcd8cbcf25c9ad437cbfbc3aa8895d')
+
+check() {
+  cd "$srcdir/$pkgname-$pkgver"
+  python3 test_app.py
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  local appdir="$pkgdir/usr/share/$pkgname"
+
+  # The application itself.
+  install -dm755 "$appdir"
+  install -Dm644 *.py "$appdir/"
+  install -Dm644 icons/*.svg -t "$appdir/icons/"
+
+  # Translations, compiled into the system locale directory.
+  for po in po/*.po; do
+    [ -e "$po" ] || continue
+    lang=$(basename "$po" .po)
+    install -dm755 "$pkgdir/usr/share/locale/$lang/LC_MESSAGES"
+    msgfmt -o "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/almanac.mo" "$po"
+  done
+
+  # Installed this way, Almanac detects that pacman owns it and defers its
+  # own updates to the package manager rather than offering a git pull.
+  install -dm755 "$pkgdir/usr/bin"
+  cat > "$pkgdir/usr/bin/$pkgname" <<'LAUNCH'
+#!/bin/bash
+exec python3 /usr/share/almanac/app.py "$@"
+LAUNCH
+  chmod 755 "$pkgdir/usr/bin/$pkgname"
+
+  install -Dm644 docs/almanac.desktop \
+    "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 docs/io.github.twodxme.Almanac.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.twodxme.Almanac.metainfo.xml"
+  install -Dm644 docs/io.github.twodxme.Almanac.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
