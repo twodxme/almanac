@@ -467,5 +467,30 @@ class ThemeActions(unittest.TestCase):
                          "installing must not re-skin the desktop on its own")
 
 
+class ShelfShape(unittest.TestCase):
+    """Featured and the AI page carry differently-shaped collections.
+
+    Featured yields Shelf objects; the AI survey yields
+    (title, description, entries) tuples. Unpacking one as the other raised
+    only at runtime, on a page that had already rendered.
+    """
+
+    def test_featured_build_returns_shelf_objects(self):
+        import featured
+        shelves = featured.build([], [], [])
+        self.assertTrue(shelves)
+        for shelf in shelves:
+            self.assertTrue(hasattr(shelf, "items"),
+                            "a shelf must expose .items, not unpack as a tuple")
+            self.assertTrue(hasattr(shelf, "title"))
+            self.assertIsInstance(shelf.items, list)
+
+    def test_ai_survey_returns_triples(self):
+        import ai
+        for group in ai.group_specs():
+            self.assertEqual(len(group), 3,
+                             "the AI page unpacks these as (title, desc, loader)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

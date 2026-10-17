@@ -41,15 +41,38 @@ import icons as icons_mod  # noqa: E402
 import shlex  # noqa: E402
 
 _CSS = b"""
+/* Sidebar counts. Three levels: a count is usually just a number, an
+   amber one wants looking at, and only a security update earns red. The
+   label is vertically centred at the widget level -- without that the
+   background fills the whole row and the pill reads as a tall oval. */
 .count-badge {
-  background: @error_color;
-  color: #fff;
+  background: alpha(@window_fg_color, 0.10);
+  color: @window_fg_color;
   border-radius: 999px;
-  font-size: 0.70rem;
+  font-size: 0.72rem;
   font-weight: bold;
-  padding: 0 5px;
-  min-width: 14px;
-  min-height: 14px;
+  font-feature-settings: "tnum";
+  padding: 1px 7px;
+  min-width: 16px;
+  min-height: 0;
+}
+.count-badge.is-warn {
+  background: alpha(@warning_color, 0.22);
+  color: @warning_color;
+}
+.count-badge.is-crit {
+  /* The only solid fill in the sidebar, so it is the only thing that
+     shouts. Its foreground is measured against the fill, not assumed. */
+  background: @error_color;
+  color: @error_fg_color;
+}
+row:selected .count-badge {
+  background: alpha(@accent_fg_color, 0.18);
+  color: @accent_fg_color;
+}
+row:selected .count-badge.is-crit {
+  background: @error_color;
+  color: @error_fg_color;
 }
 .crit-pill {
   background: alpha(@error_color, 0.18);
@@ -446,9 +469,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     row = Adw.ActionRow(title=label)
                     row.set_title_lines(1)
                     row.add_prefix(Gtk.Image(icon_name=icon))
-                    count = Gtk.Label()
-                    count.add_css_class("dim-label")
-                    count.add_css_class("caption")
+                    count = Gtk.Label(valign=Gtk.Align.CENTER)
+                    count.add_css_class("count-badge")
                     row.add_suffix(count)
                     row._key, row._count, row._group = key, count, gkey
                     self.sidebar_rows[key] = row
@@ -479,9 +501,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 row = Adw.ActionRow(title=label)
                 row.set_title_lines(1)
                 row.add_prefix(Gtk.Image(icon_name=icon))
-                count = Gtk.Label()
-                count.add_css_class("dim-label")
-                count.add_css_class("caption")
+                count = Gtk.Label(valign=Gtk.Align.CENTER)
+                count.add_css_class("count-badge")
                 row.add_suffix(count)
                 row._key, row._count, row._group = key, count, gkey
                 self.sidebar_rows[key] = row
@@ -1536,6 +1557,26 @@ class AlmanacWindow(Adw.ApplicationWindow):
         combined.append(self._priority_sorter)      # then urgency, then name
         self.sorted.set_sorter(combined)
 
+    @staticmethod
+    def _badge(label, count: int, level: str = ""):
+        """Set a sidebar count and how loudly it should read.
+
+        Three levels, and only one of them is red. Every badge used to turn
+        red as soon as any single package anywhere was security-critical,
+        which painted Featured, Updates and AI the same alarming colour and
+        left the actual security item indistinguishable from the rest.
+        """
+        label.set_text(str(count) if count else "")
+        for css in ("is-warn", "is-crit"):
+            label.remove_css_class(css)
+        label.set_visible(bool(count))
+        if not count:
+            return
+        if level == "crit":
+            label.add_css_class("is-crit")
+        elif level == "warn":
+            label.add_css_class("is-warn")
+
     def _stat_row(self, label: str, value: str, tooltip: str = ""):
         row = Gtk.Box(spacing=6)
         name = Gtk.Label(label=label, xalign=0, hexpand=True)
@@ -1648,7 +1689,6 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if key in ("maintenance", inventory.AGENT, "featured", "themes"):
                 continue            # their badges count findings, not packages
             n = counts.get(key, 0)
-            row._count.set_text(str(n) if n else "")
             # An empty category stays visible but recedes, so the layout does
             # not reshuffle as things are installed and removed.
             # "discover" has no inventory count of its own and "all"/"updates"
@@ -1657,13 +1697,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
             row.set_sensitive(
                 n > 0 or key in ("all", "updates", "discover", "themes",
                                  "maintenance", "featured", inventory.AGENT))
-            row._count.remove_css_class("count-badge")
-            row._count.remove_css_class("dim-label")
-            if key == "updates" and n:
-                # The one count worth colouring, and only when it is urgent.
-                row._count.add_css_class("count-badge" if crit else "dim-label")
-            else:
-                row._count.add_css_class("dim-label")
+            # Red means "a security update is waiting", nothing else. Pending
+            # updates are a number, not an emergency.
+            security = sum(1 for i in items if i.critical == "security")
+            self._badge(row._count, n,
+                        "crit" if (key == "updates" and security) else "")
 
     # ---- filtering -------------------------------------------------------
     def _match(self, item, _data):
@@ -2366,7 +2404,6 @@ class AlmanacWindow(Adw.ApplicationWindow):
         bottom.append(stars)
         bottom.append(Gtk.Box(hexpand=True))
         action = Gtk.Button()
-        action.add_css_class("flat")
         action.set_can_shrink(True)
         bottom.append(action)
         body.append(bottom)
@@ -2439,21 +2476,27 @@ class AlmanacWindow(Adw.ApplicationWindow):
         if item._handler is not None:
             btn.disconnect(item._handler)
             item._handler = None
-        btn.remove_css_class("suggested-action")
-        btn.remove_css_class("destructive-action")
+        # `.flat` strips the accent background but not the accent foreground,
+        # so combining it with `.suggested-action` paints accent_fg_color --
+        # near-black under most dark themes -- straight onto the card. That
+        # measured 1.41:1 against the card. Filled, the same pair is 8.65:1.
+        for css in ("suggested-action", "destructive-action", "flat"):
+            btn.remove_css_class(css)
         if p.installed and p.install_kind == "theme":
             # An installed theme's useful action is wearing it; removing one
             # is rare enough to belong in the detail sheet, where Remove sits
             # for every other kind too.
             btn.set_label("Apply")
             btn.set_sensitive(True)
-            btn.add_css_class("suggested-action")
+            btn.add_css_class("suggested-action")      # filled: the main action
             btn.set_tooltip_text(f"Switch the whole desktop to {p.name}")
             item._handler = btn.connect(
                 "clicked", lambda _b, pl=p: self._apply_theme_now(pl))
         elif p.installed:
             btn.set_label("Remove")
             btn.set_sensitive(not p.built_in)
+            # Low emphasis: removal should never be the loudest thing on a card.
+            btn.add_css_class("flat")
             btn.set_tooltip_text(
                 "Ships with Omarchy — cannot be removed" if p.built_in
                 else f"Remove {p.name}")
@@ -2461,7 +2504,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
         elif p.installable and p.install_cmd:
             btn.set_label("Install")
             btn.set_sensitive(True)
-            btn.add_css_class("suggested-action")
+            btn.add_css_class("suggested-action")      # filled: the main action
             btn.set_tooltip_text(p.install_cmd)
             item._handler = btn.connect("clicked", self.on_plugin_install, p)
         else:
@@ -2473,6 +2516,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # marketplace calls it, and it beats an Install that cannot work.
             btn.set_label("Manual setup")
             btn.set_sensitive(True)
+            btn.add_css_class("flat")                  # not an install: quieter
             btn.set_tooltip_text(p.install_note or "Not installable from here")
             item._handler = btn.connect(
                 "clicked", lambda _b, pl=p: self._show_plugin(pl))
@@ -3114,11 +3158,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         # Keep the sidebar badge honest about what the page says.
         row = self.sidebar_rows.get("maintenance")
         if row is not None:
-            row._count.set_text(str(len(issues)) if issues else "")
-            row._count.remove_css_class("dim-label")
-            row._count.remove_css_class("count-badge")
             crit = any(f.severity == maintenance.CRIT for f in findings)
-            row._count.add_css_class("count-badge" if crit else "dim-label")
+            self._badge(row._count, len(issues), "crit" if crit else "warn")
         return False
 
     EMPTY_STATES = {
@@ -3387,10 +3428,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         row = self.sidebar_rows.get(inventory.AGENT)
         if row is not None and final:
-            row._count.set_text(str(attention) if attention else str(total))
-            row._count.remove_css_class("dim-label")
-            row._count.remove_css_class("count-badge")
-            row._count.add_css_class("count-badge" if attention else "dim-label")
+            self._badge(row._count, attention or total,
+                        "warn" if attention else "")
         return False
 
     def _ai_row(self, e):
@@ -3842,10 +3881,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
             else "Nothing needs you right now", "featured")
         row = self.sidebar_rows.get("featured")
         if row is not None:
-            row._count.set_text(str(problems) if problems else "")
-            row._count.remove_css_class("dim-label")
-            row._count.remove_css_class("count-badge")
-            row._count.add_css_class("count-badge" if problems else "dim-label")
+            # Featured's shelves are Shelf objects; the AI page's are
+            # (title, description, entries) tuples. Different shapes.
+            crit = any(item.severity == "crit"
+                       for shelf in shelves for item in shelf.items)
+            self._badge(row._count, problems, "crit" if crit else "warn")
         return False
 
     # Each shelf is a sample of a bigger list; this says where the rest is.

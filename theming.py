@@ -97,6 +97,45 @@ def load_palette() -> dict:
     return out
 
 
+def _luminance(value: str) -> float:
+    """WCAG relative luminance of a hex colour."""
+    h = (value or "").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return 0.0
+    try:
+        chan = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    except ValueError:
+        return 0.0
+    conv = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+            for c in chan]
+    return 0.2126 * conv[0] + 0.7152 * conv[1] + 0.0722 * conv[2]
+
+
+def contrast(a: str, b: str) -> float:
+    la, lb = _luminance(a), _luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def readable_on(background: str) -> str:
+    """Black or white, whichever actually reads better on this colour.
+
+    Measured, not guessed from a luminance cutoff: a mid-blue accent sits
+    close enough to any threshold you pick that the wrong side of it costs
+    four times the contrast. Comparing both candidates is exact and cannot
+    be off by one theme.
+
+    The theme's own darkest background was used here before, which is only
+    right when the accent happens to be light.
+    """
+    if not background:
+        return ""
+    return max(("#000000", "#ffffff"),
+               key=lambda candidate: contrast(candidate, background))
+
+
 def _pick(p: dict, *names: str) -> str:
     for n in names:
         if p.get(n):
@@ -126,7 +165,7 @@ def css_for(palette: dict) -> str:
     pairs = [
         ("accent_bg_color", accent),
         ("accent_color", accent),
-        ("accent_fg_color", bg_dkr or bg),
+        ("accent_fg_color", readable_on(accent) if accent else ""),
 
         ("window_bg_color", bg),
         ("window_fg_color", fg),
@@ -152,6 +191,12 @@ def css_for(palette: dict) -> str:
         ("error_bg_color", _pick(palette, "red")),
         ("destructive_color", _pick(palette, "red")),
         ("destructive_bg_color", _pick(palette, "red")),
+
+        # Foregrounds for the solid semantic fills, measured against each
+        # fill rather than assumed to be white.
+        ("error_fg_color", readable_on(_pick(palette, "red"))),
+        ("warning_fg_color", readable_on(_pick(palette, "yellow", "orange"))),
+        ("success_fg_color", readable_on(_pick(palette, "green"))),
     ]
 
     lines = [f"@define-color {name} {value};"
