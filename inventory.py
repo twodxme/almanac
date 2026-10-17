@@ -665,8 +665,11 @@ def collect() -> list[App]:
     import agents
     from concurrent.futures import ThreadPoolExecutor
 
+    import selfupdate
+    # Almanac lists itself. An app whose job is telling you what is stale
+    # should not be the one thing that silently is.
     sources = (packages, appimages, flatpaks, local_builds,
-               agents.detect, orphans)
+               agents.detect, lambda: [selfupdate.as_app()], orphans)
     out = []
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
         for future in [pool.submit(fn) for fn in sources]:

@@ -31,8 +31,10 @@ import inventory
 import store as store_mod  # noqa: E402
 import tasks  # noqa: E402
 import maintenance  # noqa: E402
+import selfupdate  # noqa: E402
 import ai  # noqa: E402
 import autoupdate  # noqa: E402
+import ghcache  # noqa: E402
 import icons as icons_mod  # noqa: E402
 import shlex  # noqa: E402
 
@@ -494,6 +496,10 @@ class AlmanacWindow(Adw.ApplicationWindow):
         settings = Gio.Menu()
         settings.append("Automatic updates…", "win.prefs")
         menu.append_section(None, settings)
+        about_section = Gio.Menu()
+        about_section.append("Update Almanac…", "win.selfupdate")
+        about_section.append("About Almanac", "win.about")
+        menu.append_section(None, about_section)
 
         self.SORTS_INSTALLED = (
             ("default", "Priority (default)"), ("name", "Name A → Z"),
@@ -532,6 +538,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
         for name, fn in (("install", self.on_install), ("track", self.on_add_appimage),
                          ("clean", self.on_clean_orphans),
                          ("prefs", self.on_preferences),
+                         ("selfupdate", self.on_self_update),
+                         ("about", self.on_about),
                          ("rescan", lambda *_: self._refresh_page())):
             act = Gio.SimpleAction.new(name, None)
             act.connect("activate", lambda _a, _p, f=fn: f(None))
@@ -639,7 +647,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
         self._reported = set()
         group = Gio.SimpleActionGroup()
         for act, handler in (("visit", self._row_visit), ("remove", self._row_remove),
-                             ("notes", self._row_notes), ("aur", self._row_aur)):
+                             ("notes", self._row_notes), ("aur", self._row_aur),
+                             ("folder", self._row_folder),
+                             ("changes", self._row_changes),
+                             ("pull", self._row_pull),
+                             ("stash", self._row_stash)):
             a = Gio.SimpleAction.new(act, GLib.VariantType.new("s"))
             a.connect("activate", lambda _a, param, h=handler: h(param.get_string()))
             group.add_action(a)
@@ -920,7 +932,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
             can_update = it.has_update and it.source in (
                 inventory.REPO, inventory.AUR, inventory.APPIMAGE)
             if it.source == inventory.SYSTEM:
-                can_update = False
+                # Almanac is a SYSTEM entry but is the one thing here that
+                # can genuinely update itself.
+                can_update = bool(it.app.extra.get("self")) and it.has_update
             elif it.source == inventory.LOCAL:
                 # Never offer a pull over uncommitted work.
                 can_update = bool(it.git_behind) and not it.git_dirty
@@ -935,7 +949,12 @@ class AlmanacWindow(Adw.ApplicationWindow):
                 upd.remove_css_class("error")
                 upd.remove_css_class("accent")
                 upd.add_css_class("error" if it.critical == "security" else "accent")
-                if it.source == inventory.LOCAL:
+                if it.app.extra.get("self"):
+                    upd.set_tooltip_text(
+                        f"Update Almanac itself — {it.app.extra.get('note', '')}")
+                    upd._handler = upd.connect(
+                        "clicked", lambda _b: self.on_self_update())
+                elif it.source == inventory.LOCAL:
                     upd.set_tooltip_text(
                         f"git pull in {it.app.extra.get('repo', '')}\n"
                         f"Latest upstream: {it.app.extra.get('git_subject', '')}")
@@ -972,6 +991,23 @@ class AlmanacWindow(Adw.ApplicationWindow):
             if it.source in (inventory.REPO, inventory.AUR,
                              inventory.APPIMAGE, inventory.FLATPAK):
                 model.append("Remove…", f"row.remove::{it.name}")
+
+            # A local checkout with uncommitted work gets no pull button,
+            # because the pull would be refused. Without these it got no
+            # affordance at all and no explanation -- a row 209 commits
+            # behind that simply does nothing.
+            if it.source == inventory.LOCAL and it.app.extra.get("repo"):
+                model.append("Open repository folder",
+                             f"row.folder::{it.name}")
+                if it.git_dirty:
+                    model.append("Show local changes…",
+                                 f"row.changes::{it.name}")
+                    if it.git_behind:
+                        model.append("Stash changes and update…",
+                                     f"row.stash::{it.name}")
+                elif it.git_behind:
+                    model.append("Update (git pull)", f"row.pull::{it.name}")
+
             menu.set_menu_model(model if model.get_n_items() else None)
             menu.set_visible(model.get_n_items() > 0)
             self._row_actions[it.name] = it.app
@@ -3111,6 +3147,112 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self.open_url(f"https://github.com/{parts[0]}/{parts[1]}/releases")
         elif url:
             self.open_url(url)
+
+    def on_self_update(self, *_a):
+        """Update Almanac, then offer to restart into the new code."""
+        info = selfupdate.check()
+        if not info["can_update"]:
+            self._say(info["note"] or "Almanac is up to date", 8)
+            return
+        tasks.confirm(
+            self, f"Update Almanac?",
+            f"{info['behind']} commit(s) behind. The update is a "
+            f"fast-forward pull, so it cannot overwrite local work — if "
+            f"there were any, this would refuse instead.",
+            f"Checkout  {selfupdate.ROOT}\n"
+            f"Remote    {info['remote']}\n"
+            f"Newest    {info['latest']}\n\n"
+            f"$ git pull --ff-only",
+            "Update", False,
+            lambda: tasks.run(self, "Updating Almanac",
+                              selfupdate.update_steps(),
+                              self._after_self_update))
+
+    def _after_self_update(self, ok: bool):
+        if not ok:
+            self._say("Almanac was not updated", 8)
+            return
+        # The running process cannot adopt the new source, so say so rather
+        # than letting the version in the list disagree with what is running.
+        toast = Adw.Toast(title="Almanac updated — restart to use the new "
+                                "version", timeout=0)
+        toast.set_button_label("Restart")
+        toast.connect("button-clicked", lambda *_: selfupdate.restart())
+        self.toasts.add_toast(toast)
+        self.reload()
+        return False
+
+    def on_about(self, *_a):
+        info = selfupdate.check(fetch=False)
+        about = Adw.AboutDialog(
+            application_name="Almanac",
+            application_icon="system-software-install",
+            version=info["version"],
+            developer_name="twodxme",
+            comments="A catalogue of everything installed on this machine: "
+                     "where each thing came from, how old it is, whether it "
+                     "still has a maintainer, and what needs attention.",
+            website="https://github.com/twodxme/almanac",
+            issue_url="https://github.com/twodxme/almanac/issues",
+            license_type=Gtk.License.MIT_X11)
+        about.add_credit_section("Catalogues", [
+            "Omarchy plugin marketplace https://plugins.omarchy.org",
+            "ArtCraft https://getartcraft.com",
+        ])
+        about.set_debug_info(
+            f"Installed as: {info['kind']}\n{info['note']}\n"
+            + ghcache.describe())
+        about.present(self)
+
+    def _row_folder(self, name: str):
+        app = self._row_actions.get(name)
+        if app and app.extra.get("repo"):
+            self.open_url(f"file://{app.extra['repo']}")
+
+    def _row_changes(self, name: str):
+        """Show what is uncommitted, read-only, before offering to move it."""
+        app = self._row_actions.get(name)
+        repo = app.extra.get("repo") if app else ""
+        if not repo:
+            return
+        tasks.run(self, f"Local changes in {name}",
+                  [("Working tree", ["git", "-C", repo, "status", "--short"]),
+                   ("Diff summary", ["git", "-C", repo, "diff", "--stat"])])
+
+    def _row_pull(self, name: str):
+        app = self._row_actions.get(name)
+        if app:
+            self.on_git_pull(None, app)
+
+    def _row_stash(self, name: str):
+        """Put local edits somewhere recoverable, then fast-forward.
+
+        Stash rather than discard: the edits are someone's work, and a pull
+        that silently threw them away would be the worst thing this app does.
+        `git stash pop` brings them back.
+        """
+        app = self._row_actions.get(name)
+        repo = app.extra.get("repo") if app else ""
+        if not repo:
+            return
+        behind = app.extra.get("git_behind", 0)
+        tasks.confirm(
+            self, f"Stash local changes in {name}?",
+            f"This checkout is {behind} commit(s) behind and has uncommitted "
+            f"changes, so it cannot fast-forward. The changes are stashed, "
+            f"not discarded — `git stash pop` in the repository brings them "
+            f"back.",
+            f"{repo}\n\n"
+            f"$ git stash push --include-untracked -m 'almanac: before update'\n"
+            f"$ git pull --ff-only",
+            "Stash and update", False,
+            lambda: tasks.run(
+                self, f"Updating {name}",
+                [("Stashing local changes",
+                  ["git", "-C", repo, "stash", "push", "--include-untracked",
+                   "-m", "almanac: before update"]),
+                 ("Pulling", ["git", "-C", repo, "pull", "--ff-only", "--stat"])],
+                self._after_pacman))
 
     def _row_aur(self, name: str):
         self.open_url(f"https://aur.archlinux.org/packages/{name}")
