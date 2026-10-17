@@ -1478,6 +1478,182 @@ class StorePages(unittest.TestCase):
         self.assertEqual(app_mod.AlmanacWindow._store_pool(win, "themes"), [theme])
 
 
+class PluginStates(unittest.TestCase):
+    """Classified before anything is offered -- especially development links."""
+
+    def setUp(self):
+        import subprocess
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.git = lambda *a, cwd: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+            cwd=cwd, check=True, capture_output=True)
+        self.up = self.d / "up"
+        self.git("init", "-q", "-b", "main", str(self.up), cwd=self.d)
+        (self.up / "manifest.json").write_text("{}")
+        self.git("add", ".", cwd=self.up)
+        self.git("commit", "-qm", "one", cwd=self.up)
+        self.plug = self.d / "plugins" / "a.plugin"
+        self.git("clone", "-q", str(self.up), str(self.plug), cwd=self.d)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def advance_upstream(self):
+        (self.up / "f").write_text("x")
+        self.git("add", ".", cwd=self.up)
+        self.git("commit", "-qm", "two", cwd=self.up)
+
+    def state(self, d=None):
+        import plugins
+        return plugins.classify(d or self.plug, {})
+
+    def test_current_and_behind(self):
+        import plugins
+        self.assertEqual(self.state().kind, plugins.CURRENT)
+        self.advance_upstream()
+        st = self.state()
+        self.assertEqual((st.kind, st.behind), (plugins.UPDATE, 1))
+
+    def test_a_symlinked_development_plugin_is_never_updatable(self):
+        import plugins
+        self.advance_upstream()
+        link = self.d / "plugins" / "dev.plugin"
+        link.symlink_to(self.plug)
+        st = self.state(link)
+        self.assertEqual((st.kind, st.detail), (plugins.LOCAL, "symlink"))
+        self.assertFalse(st.updatable)
+
+    def test_edits_ahead_and_diverged_are_local_changes(self):
+        import plugins
+        (self.plug / "manifest.json").write_text('{"x": 1}')
+        self.assertEqual(self.state().detail, "modified")
+        self.git("commit", "-qam", "mine", cwd=self.plug)
+        self.assertEqual(self.state().detail, "ahead")
+        self.advance_upstream()
+        st = self.state()
+        self.assertEqual((st.kind, st.detail), (plugins.LOCAL_CHANGES, "diverged"))
+
+    def test_plain_folders_are_local(self):
+        import plugins
+        plain = self.d / "plugins" / "mine"
+        plain.mkdir()
+        self.assertEqual(self.state(plain).detail, "not-git")
+        self.assertFalse(self.state(plain).updatable)
+
+    def test_bulk_update_scope(self):
+        import plugins
+        self.assertTrue(plugins.in_scope("verified", "verified"))
+        self.assertFalse(plugins.in_scope("reviewed-stale", "verified"))
+        self.assertTrue(plugins.in_scope("reviewed-stale", "changed"))
+        self.assertFalse(plugins.in_scope(None, "changed"))     # unlisted
+        self.assertTrue(plugins.in_scope(None, "all"))
+
+    def test_restarting_never_refreshes(self):
+        import plugins
+        argv = " ".join(plugins.restart_argv())
+        self.assertIn("omarchy-restart-shell", argv)
+        self.assertNotIn("refresh", argv)
+
+    def test_scheduled_runs_skip_links_and_out_of_scope_plugins(self):
+        import autorun
+        import plugins
+        self.advance_upstream()
+        (self.d / "plugins" / "dev.plugin").symlink_to(self.plug)
+        with mock.patch.object(plugins, "plugins_dir",
+                               return_value=self.d / "plugins"), \
+             mock.patch.object(plugins, "scope", return_value="verified"), \
+             mock.patch.object(store, "catalog", return_value=[]), \
+             mock.patch.object(autorun, "_run", return_value=True) as run, \
+             mock.patch.object(autorun, "log"):
+            autorun.update_plugins()
+        run.assert_not_called()             # unlisted, so outside "verified"
+        with mock.patch.object(plugins, "plugins_dir",
+                               return_value=self.d / "plugins"), \
+             mock.patch.object(plugins, "scope", return_value="all"), \
+             mock.patch.object(store, "catalog", return_value=[]), \
+             mock.patch.object(autorun, "_run", return_value=True) as run, \
+             mock.patch.object(autorun, "log"):
+            autorun.update_plugins()
+        updated = [c.args[0][3] for c in run.call_args_list]
+        self.assertEqual(updated, ["a.plugin"])     # never the symlink
+
+
+class PluginShortcuts(unittest.TestCase):
+    BINDS = [{"modmask": 64, "key": "SPACE", "description": "Omarchy menu",
+              "keycode": 0, "mouse": False, "catch_all": False, "submap": ""}]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        hypr = Path(self.tmp.name, "hypr")
+        hypr.mkdir()
+        self.path = hypr / "bindings.lua"
+        self.original = '-- mine\no.bind("SUPER + SPACE", "Omarchy menu", "x")\n'
+        self.path.write_text(self.original)
+        self.env = mock.patch.dict("os.environ", {"XDG_CONFIG_HOME": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def hyprctl(self, errors_after_reload=""):
+        state = {"reloaded": False}
+
+        def run(*args):
+            if args[:2] == ("-j", "binds"):
+                return json.dumps(self.BINDS)
+            if args == ("reload",):
+                state["reloaded"] = True
+                return "ok"
+            if args == ("configerrors",):
+                return errors_after_reload if state["reloaded"] else ""
+            return ""
+        return run
+
+    def test_combinations_are_normalised(self):
+        import shortcuts
+        self.assertEqual(shortcuts.normalise("alt+super+v")[0], "SUPER + ALT + V")
+        with self.assertRaises(ValueError):
+            shortcuts.normalise("v")                    # no modifier
+
+    def test_a_shortcut_is_written_in_its_own_block(self):
+        import shortcuts
+        with mock.patch.object(shortcuts, "_hyprctl", side_effect=self.hyprctl()):
+            shortcuts.set_shortcut("lxp.vitals", "super+alt+v")
+        raw = self.path.read_text()
+        self.assertTrue(raw.startswith(self.original.rstrip("\n")))
+        self.assertEqual(shortcuts.current("lxp.vitals"), "SUPER + ALT + V")
+        self.assertIn("omarchy-shell shell toggle lxp.vitals", raw)
+        with mock.patch.object(shortcuts, "_hyprctl", side_effect=self.hyprctl()):
+            shortcuts.set_shortcut("lxp.vitals", None)
+        self.assertEqual(self.path.read_text().strip(), self.original.strip())
+
+    def test_a_taken_combination_is_refused_and_nothing_written(self):
+        import shortcuts
+        with mock.patch.object(shortcuts, "_hyprctl", side_effect=self.hyprctl()):
+            with self.assertRaises(ValueError) as e:
+                shortcuts.set_shortcut("lxp.vitals", "super+space")
+        self.assertIn("Omarchy menu", str(e.exception))
+        self.assertEqual(self.path.read_text(), self.original)
+
+    def test_a_rejected_change_is_rolled_back(self):
+        import shortcuts
+        with mock.patch.object(shortcuts, "_hyprctl",
+                               side_effect=self.hyprctl("line 3: bad bind")):
+            with self.assertRaises(ValueError):
+                shortcuts.set_shortcut("lxp.vitals", "super+alt+v")
+        self.assertEqual(self.path.read_text(), self.original)
+
+    def test_a_hand_edited_block_is_not_overwritten(self):
+        import shortcuts
+        with mock.patch.object(shortcuts, "_hyprctl", side_effect=self.hyprctl()):
+            shortcuts.set_shortcut("lxp.vitals", "super+alt+v")
+        self.path.write_text(self.path.read_text().replace("toggle", "summon"))
+        with self.assertRaises(ValueError):
+            shortcuts.current("lxp.vitals")
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

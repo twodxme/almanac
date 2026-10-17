@@ -268,6 +268,26 @@ uninstall instructions are never offered. Plugins whose install itself cannot
 be done safely (a failed compatibility check, a version-matched helper, a
 monorepo, a suite with its own installer) still say "Manual setup", and why.
 
+### Installed plugins
+
+Every installed plugin can be switched on or off (through `omarchy plugin
+enable/disable`) from its row or its page, without removing it. Before
+anything offers to update one, it is classified: up to date, update waiting,
+local changes (edited, ahead of upstream, diverged, detached), local, or
+error. A **symlinked development plugin** — a link to its author's workspace —
+is never updated here, though `omarchy plugin update` would fast-forward it.
+Updates go through `omarchy plugin update`, which validates the result and
+rolls back a plugin that fails.
+
+**☰ → Update plugins** updates every clean pending update at once, within a
+scope set in Preferences — verified only, verified and changed since review,
+or all — and lists what it held back and why. Scheduled runs honour the same
+scope. A plugin with a panel can be given a **keyboard shortcut**: checked
+against every binding Hyprland has, written to its own block in
+`bindings.lua`, and put back if Hyprland rejects it. **☰ → Restart the
+shell** restarts it and clears the compiled QML cache, for a plugin that acts
+as if it had not been updated.
+
 ### Major releases and local changes
 
 A new major version of an agent CLI is held back from "update all" and from
@@ -409,7 +429,7 @@ better than I can.
 python3 test_app.py
 ```
 
-128 tests, weighted toward the destructive paths — removal, orphan cleanup,
+140 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.
@@ -450,6 +470,9 @@ system action here; this is a window onto it.
   for the catalogue, the verification pipeline, and for publishing it in a form
   anyone can read.
 - [ArtCraft](https://getartcraft.com) for the Craft apps.
+- [omaplug](https://github.com/fross100/omaplug) by Fross, whose plugin
+  states, scoped bulk updates and conflict-checked shortcuts Almanac's
+  installed-plugin management follows.
 - Every theme author in the `omarchy-theme` topic.
 
 ## License

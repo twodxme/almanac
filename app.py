@@ -57,6 +57,8 @@ import mimeguard  # noqa: E402
 import patches  # noqa: E402
 import snapshots  # noqa: E402
 import plugin_setup as setup_mod  # noqa: E402
+import plugins as plugins_mod  # noqa: E402
+import shortcuts  # noqa: E402
 import sources  # noqa: E402
 import verify  # noqa: E402
 import watcher  # noqa: E402
@@ -630,6 +632,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         menu.append_section(None, actions)
         maintenance = Gio.Menu()
         maintenance.append(_("Review orphaned packages…"), "win.clean")
+        maintenance.append(_("Update plugins…"), "win.updateplugins")
+        if shutil.which("omarchy-restart-shell"):
+            maintenance.append(_("Restart the shell…"), "win.restartshell")
         maintenance.append(_("Refresh this page"), "win.rescan")
         menu.append_section(None, maintenance)
         settings = Gio.Menu()
@@ -676,6 +681,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
 
         for name, fn in (("install", self.on_install), ("track", self.on_add_appimage),
                          ("fromlink", self.on_install_link),
+                         ("updateplugins", self.on_update_plugins),
+                         ("restartshell", self.on_restart_shell),
                          ("clean", self.on_clean_orphans),
                          ("prefs", self.on_preferences),
                          ("selfupdate", self.on_self_update),
@@ -811,7 +818,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                              ("folder", self._row_folder),
                              ("changes", self._row_changes),
                              ("pull", self._row_pull),
-                             ("stash", self._row_stash)):
+                             ("stash", self._row_stash),
+                             ("toggle", self._row_toggle),
+                             ("shortcut", self._row_shortcut)):
             a = Gio.SimpleAction.new(act, GLib.VariantType.new("s"))
             a.connect("activate", lambda _a, param, h=handler: h(param.get_string()))
             group.add_action(a)
@@ -1111,7 +1120,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
                     upd._handler = upd.connect(
                         "clicked", lambda _b: self.on_self_update())
                 elif it.source == inventory.LOCAL:
-                    _name(upd, 
+                    _name(upd,
+                        f"omarchy plugin update {it.app.extra['plugin_id']}"
+                        if it.app.extra.get("plugin_id") else
                         f"git pull in {it.app.extra.get('repo', '')}\n"
                         f"Latest upstream: {it.app.extra.get('git_subject', '')}")
                     upd._handler = upd.connect("clicked", self.on_git_pull, it.app)
@@ -1152,6 +1163,14 @@ class AlmanacWindow(Adw.ApplicationWindow):
             # affordance at all and no explanation -- a row 209 commits
             # behind that simply does nothing.
             if it.source == inventory.LOCAL and it.app.extra.get("repo"):
+                pid = it.app.extra.get("plugin_id")
+                if pid and it.app.extra.get("enabled") is not None:
+                    model.append(_("Turn off") if it.app.extra["enabled"]
+                                 else _("Turn on"), f"row.toggle::{it.name}")
+                    if (shortcuts.available()
+                            and shortcuts.has_panel(Path(it.app.extra["repo"]))):
+                        model.append(_("Keyboard shortcut…"),
+                                     f"row.shortcut::{it.name}")
                 model.append("Open repository folder",
                              f"row.folder::{it.name}")
                 if it.git_dirty:
@@ -1161,7 +1180,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
                         model.append("Stash changes and update…",
                                      f"row.stash::{it.name}")
                 elif it.git_behind:
-                    model.append("Update (git pull)", f"row.pull::{it.name}")
+                    model.append(_("Update") if it.app.extra.get("plugin_id")
+                                 else "Update (git pull)", f"row.pull::{it.name}")
 
             menu.set_menu_model(model if model.get_n_items() else None)
             menu.set_visible(model.get_n_items() > 0)
@@ -1503,6 +1523,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._detail_row(vg, _("Released"), extra["published"])
         if extra.get("git_subject"):
             self._detail_row(vg, _("Latest upstream commit"), extra["git_subject"])
+        if extra.get("plugin_detail"):
+            self._detail_row(vg, _("State"), extra["plugin_detail"])
+            if extra.get("enabled") is not None:
+                self._detail_row(vg, _("Switched"),
+                                 _("On") if extra["enabled"] else _("Off"))
         page.add(vg)
 
         # Advisories from the Arch Security Tracker, each linked to its page.
@@ -3379,6 +3404,19 @@ class AlmanacWindow(Adw.ApplicationWindow):
             rm.connect("clicked", lambda b: (dialog.close(),
                                              self.on_plugin_remove(b, p)))
             bottom.append(rm)
+            if p.install_kind == "plugin":
+                sw = Gtk.Button(label=_("Turn off") if p.enabled else _("Turn on"))
+                sw.connect("clicked", lambda b: (dialog.close(),
+                                                 self._toggle_plugin(p.id, not p.enabled,
+                                                                     p.name)))
+                bottom.append(sw)
+                folder = self._plugin_dir(p)
+                if (folder is not None and shortcuts.available()
+                        and shortcuts.has_panel(folder)):
+                    sc = Gtk.Button(label=_("Shortcut…"))
+                    sc.connect("clicked", lambda b: (dialog.close(),
+                                                     self._edit_shortcut(p.id, p.name)))
+                    bottom.append(sc)
             if p.needs_setup:
                 fin = Gtk.Button(label=_("Finish setup"))
                 fin.add_css_class("suggested-action")
@@ -4116,6 +4154,21 @@ class AlmanacWindow(Adw.ApplicationWindow):
             include.add(row)
         page.add(include)
 
+        # Which plugins "Update plugins" may touch, by provenance.
+        plug = Adw.PreferencesGroup(
+            title=_("Plugin updates"),
+            description=_("Which plugins ☰ → Update plugins and scheduled runs "
+                          "update. Any plugin can still be updated on its own."))
+        scope_row = Adw.ComboRow(title=_("Update"),
+                                 model=Gtk.StringList.new(
+                                     [lbl for _k, lbl, _s in plugins_mod.SCOPES]))
+        keys = [k for k, _l, _s in plugins_mod.SCOPES]
+        scope_row.set_selected(keys.index(plugins_mod.scope()))
+        scope_row.connect("notify::selected", lambda r, _p: plugins_mod.set_scope(
+            keys[r.get_selected()]))
+        plug.add(scope_row)
+        page.add(plug)
+
         # The settings watcher, for while this window is closed.
         watch = Adw.PreferencesGroup(
             title=_("While Almanac is closed"),
@@ -4553,6 +4606,176 @@ class AlmanacWindow(Adw.ApplicationWindow):
         app = self._row_actions.get(name)
         if app:
             self.on_git_pull(None, app)
+
+    # ---- plugins: on/off, shortcuts, bulk updates, the shell ----------------
+    def _row_toggle(self, name: str):
+        app = self._row_actions.get(name)
+        if app and app.extra.get("plugin_id"):
+            self._toggle_plugin(app.extra["plugin_id"], not app.extra.get("enabled"),
+                                app.name)
+
+    def _toggle_plugin(self, pid: str, on: bool, label: str = ""):
+        """Switch a plugin on or off through Omarchy, then check it took."""
+        label = label or pid
+        tasks.run(
+            self, f"{'Turning on' if on else 'Turning off'} {label}",
+            [(f"omarchy plugin {'enable' if on else 'disable'} {pid}",
+              plugins_mod.toggle_argv(pid, on))],
+            self._checked(lambda: plugins_mod.enabled().get(pid),
+                          lambda _b, a: verify.Outcome(
+                              a is on, f"{label} is now {'on' if a else 'off'}"
+                              if a is not None else f"{label}: state unknown"),
+                          then=lambda ok: (self.reload(), self._store_refresh()
+                                           if getattr(self, "_plugins", None) else None)))
+
+    def _row_shortcut(self, name: str):
+        app = self._row_actions.get(name)
+        if app and app.extra.get("plugin_id"):
+            self._edit_shortcut(app.extra["plugin_id"], app.name)
+
+    def _edit_shortcut(self, pid: str, label: str):
+        """Record a key combination and bind it to opening the plugin."""
+        try:
+            existing = shortcuts.current(pid)
+        except (OSError, ValueError) as exc:
+            self._say(str(exc), 8)
+            return
+        entry = Gtk.Entry(placeholder_text=_("Press the keys, e.g. Super + Alt + V"),
+                          hexpand=True)
+        entry.set_text(existing)
+        keys = Gtk.EventControllerKey()
+
+        def pressed(_c, keyval, _code, state):
+            name = (Gdk.keyval_name(keyval) or "").upper()
+            if name in ("SUPER_L", "SUPER_R", "CONTROL_L", "CONTROL_R", "ALT_L",
+                        "ALT_R", "SHIFT_L", "SHIFT_R", "META_L", "META_R"):
+                return False                # wait for the actual key
+            mods = [m for m, mask in (("SUPER", Gdk.ModifierType.SUPER_MASK),
+                                      ("CTRL", Gdk.ModifierType.CONTROL_MASK),
+                                      ("ALT", Gdk.ModifierType.ALT_MASK),
+                                      ("SHIFT", Gdk.ModifierType.SHIFT_MASK))
+                    if state & mask]
+            if not mods:
+                return False                # plain typing still edits the text
+            entry.set_text(" + ".join([*mods, name]))
+            entry.set_position(-1)
+            return True
+        keys.connect("key-pressed", pressed)
+        entry.add_controller(keys)
+
+        dialog = Adw.AlertDialog(
+            heading=f"Keyboard shortcut for {label}",
+            body=_("Opens the plugin's panel. Checked against every binding "
+                   "Hyprland has now; written to its own block in "
+                   "bindings.lua, and put back if Hyprland rejects it."))
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", _("Cancel"))
+        if existing:
+            dialog.add_response("remove", _("Remove shortcut"))
+            dialog.set_response_appearance("remove",
+                                           Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.add_response("save", _("Save"))
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        def respond(_d, resp):
+            if resp not in ("save", "remove"):
+                return
+            combo = None if resp == "remove" else entry.get_text()
+
+            def work():
+                try:
+                    msg = shortcuts.set_shortcut(pid, combo)
+                    history.record(history.ALMANAC, msg)
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    msg = f"Shortcut not saved: {exc}"
+                GLib.idle_add(self._say, msg, 8)
+            threading.Thread(target=work, daemon=True).start()
+        dialog.connect("response", respond)
+        dialog.present(self)
+        entry.grab_focus()
+
+    def on_update_plugins(self, _button=None):
+        """Update every plugin with a clean update waiting, within the scope
+        chosen in Preferences; say which were held back and why."""
+        def work():
+            plugins = getattr(self, "_plugins", None) or store_mod.catalog()
+            trust = {p.id: p.trust.key for p in plugins}
+            cache: dict = {}
+            states = []
+            pdir = plugins_mod.plugins_dir()
+            for d in sorted(pdir.glob("*")) if pdir.is_dir() else []:
+                if (d / "manifest.json").is_file():
+                    states.append(plugins_mod.classify(d, cache))
+            GLib.idle_add(self._confirm_plugin_updates, states, trust)
+        self._say(_("Checking plugins…"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _confirm_plugin_updates(self, states, trust):
+        scope = plugins_mod.scope()
+        ready = [s for s in states
+                 if s.updatable and plugins_mod.in_scope(trust.get(s.id), scope)]
+        held = [s for s in states if s.updatable and s not in ready]
+        blocked = [s for s in states if s.kind in (plugins_mod.LOCAL_CHANGES,
+                                                   plugins_mod.ERROR) and s.behind]
+        if not ready:
+            self._say(_("No plugin updates to install")
+                      + (f" — {len(held)} held back by the update scope" if held else ""), 8)
+            return False
+        scope_label = dict((k, lbl) for k, lbl, _s in plugins_mod.SCOPES)[scope]
+        lines = [f"{s.id:40} {s.behind} commit(s)" for s in ready]
+        if held:
+            lines += ["", f"Held back (outside “{scope_label}”):"] + [
+                f"  {s.id} — {trust.get(s.id) or 'not listed'}" for s in held]
+        if blocked:
+            lines += ["", "Not updated (needs you):"] + [
+                f"  {s.id} — {s.describe()}" for s in blocked]
+
+        def step(pid):
+            def run(log):
+                r = subprocess.run(plugins_mod.update_argv(pid), capture_output=True,
+                                   text=True, timeout=300)
+                for line in (r.stdout + r.stderr).splitlines()[-6:]:
+                    log(line)
+                if r.returncode != 0:
+                    raise RuntimeError(f"{pid} was not updated")
+            return run
+
+        heads = {s.id: str(plugins_mod.plugins_dir() / s.id) for s in ready}
+
+        def probe():
+            return {pid: verify.git_head(path)() for pid, path in heads.items()}
+
+        def judge(before, after):
+            moved = [p for p in heads if before.get(p) != after.get(p)]
+            stuck = [p for p in heads if p not in moved]
+            return verify.Outcome(bool(moved) and not stuck,
+                                  f"{len(moved)} plugin(s) updated"
+                                  + (f"; not updated: {', '.join(stuck)}" if stuck else ""))
+        tasks.confirm(
+            self, f"Update {len(ready)} plugin(s)?",
+            f"Scope: {scope_label} (change it in Preferences). Each goes "
+            f"through `omarchy plugin update`, which validates it and rolls "
+            f"back one that fails.",
+            "\n".join(lines), _("Update"), False,
+            lambda: tasks.run(self, _("Updating plugins"),
+                              [(f"Updating {s.id}", step(s.id)) for s in ready],
+                              self._checked(probe, judge, then=self._after_pacman)))
+        return False
+
+    def on_restart_shell(self, _button=None):
+        def restart():
+            subprocess.Popen(plugins_mod.restart_argv(), start_new_session=True)
+            history.record(history.ALMANAC, "Shell restarted")
+
+        tasks.confirm(
+            self, _("Restart the shell?"),
+            _("Restarts the Omarchy shell and clears its compiled QML cache. "
+              "Use it when a plugin behaves as if it had not been updated. "
+              "Your bar and settings are not touched."),
+            "$ " + " ".join(plugins_mod.restart_argv()[3:]), _("Restart"), False,
+            restart)
 
     def _row_aur(self, name: str):
         self.open_url(f"https://aur.archlinux.org/packages/{name}")
@@ -5065,6 +5288,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         repo = app.extra.get("repo", "")
         if not repo:
             return
+        if app.extra.get("plugin_state") == plugins_mod.LOCAL:
+            self._say(f"{app.name}: {app.extra.get('plugin_detail', '')}", 8)
+            return
 
         def work():
             state = patches.analyze(repo)
@@ -5072,7 +5298,9 @@ class AlmanacWindow(Adw.ApplicationWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _confirm_pull(self, app, repo, state):
-        steps = patches.steps(repo, state, app.name)
+        pid = app.extra.get("plugin_id")
+        steps = patches.steps(repo, state, app.name,
+                              plugins_mod.update_argv(pid) if pid else None)
         done = self._checked(verify.git_head(repo),
                              lambda b, a: verify.judge_app(app, b, a),
                              then=self._after_pacman)

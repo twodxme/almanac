@@ -649,6 +649,14 @@ def _git_behind(repo: Path, cache: dict) -> dict:
     return result
 
 
+def _github_page(url: str) -> str:
+    """A git remote as a page a browser can open, or ''."""
+    url = (url or "").strip().removesuffix(".git")
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url.split(":", 1)[1]
+    return url if url.startswith("https://") else ""
+
+
 def local_builds(check_updates: bool = True) -> list[App]:
     """Software built from source here. Listed so the inventory is honest about
     what exists; these update through their own repos, not a package manager."""
@@ -693,23 +701,43 @@ def local_builds(check_updates: bool = True) -> list[App]:
             exec_path=str(launcher) if launcher.exists() else "",
             extra={**g, "repo": str(repo), "is_app": False},
         ))
-    plugins = xdg.config_home() / "omarchy/plugins"
-    for p in sorted(plugins.glob("*")) if plugins.is_dir() else []:
+    # Omarchy shell plugins: classified before anything offers to touch them
+    # (plugins.py), with whether Omarchy currently has each one switched on.
+    import plugins as plugins_mod
+    pdir = plugins_mod.plugins_dir()
+    switched_on = plugins_mod.enabled() if pdir.is_dir() else {}
+    pcache = cache.setdefault("_plugins", {})
+    for p in sorted(pdir.glob("*")) if pdir.is_dir() else []:
         if not p.is_dir():
             continue
-        manifest = p / "manifest.json"
-        desc, ver = "Omarchy shell plugin", "—"
+        desc, ver, pid = "Omarchy shell plugin", "—", p.name
         try:
-            m = json.loads(manifest.read_text())
+            m = json.loads((p / "manifest.json").read_text())
             desc = m.get("description", desc)
             ver = m.get("version", ver)
+            pid = m.get("id") or pid
         except (OSError, ValueError):
             pass
-        g = git_extra(p)
+        st = plugins_mod.classify(p, pcache, fetch=check_updates)
+        # Only a run that checked has anything worth saving; without the
+        # check the cache started empty, and saving it would erase the last
+        # fetch results.
+        dirty_cache = dirty_cache or check_updates
+        on = switched_on.get(pid)
+        # An edit with an update waiting is still offered, through the
+        # patches.py weighing; ahead, diverged, detached and symlinked
+        # plugins are not, because no update is right for them.
+        behind = st.behind if (st.updatable or st.detail == "modified") else 0
         apps.append(App(
-            name=p.name, version=ver, source=LOCAL, description=desc,
-            update=(f"{g['git_behind']} commits" if g.get("git_behind") else ""),
-            extra={**g, "repo": str(p), "is_app": False},
+            name=p.name, version=ver, source=LOCAL,
+            description=(desc if on is not False else f"Turned off · {desc}"),
+            update=(f"{behind} commits" if behind else ""),
+            extra={"repo": str(p), "is_app": False, "plugin_id": pid,
+                   "plugin_state": st.kind, "plugin_detail": st.describe(),
+                   "enabled": on, "url": _github_page(st.url),
+                   "git_behind": behind, "git_dirty": st.detail == "modified",
+                   "git_tracked": st.kind not in (plugins_mod.LOCAL,),
+                   "git_subject": ""},
         ))
 
     if dirty_cache:

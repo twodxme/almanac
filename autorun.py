@@ -104,9 +104,37 @@ def update_appimages() -> int:
 
 
 def update_plugins() -> int:
-    """Omarchy shell plugins. Off by default: these change the desktop."""
-    ok = _run(["omarchy", "plugin", "update", "--yes"], timeout=900)
-    return 1 if ok else 0
+    """Omarchy shell plugins. Off by default: these change the desktop.
+
+    One at a time, and only those plugins.py classifies as a clean update
+    inside the chosen scope: `omarchy plugin update` with no id would also
+    fast-forward a symlinked development plugin's workspace.
+    """
+    import plugins
+    import store
+
+    try:
+        trust = {p.id: p.trust.key for p in store.catalog()}
+    except Exception:                                   # noqa: BLE001
+        trust = {}
+    scope = plugins.scope()
+    done = 0
+    pdir = plugins.plugins_dir()
+    for d in sorted(pdir.glob("*")) if pdir.is_dir() else []:
+        if not (d / "manifest.json").is_file():
+            continue
+        st = plugins.classify(d, {})
+        if not st.updatable:
+            continue
+        if not plugins.in_scope(trust.get(st.id), scope):
+            log(f"plugins: {st.id} held back by the update scope ({scope})")
+            continue
+        log(f"plugins: {st.id} ({st.behind} commits)")
+        if _run(plugins.update_argv(st.id), timeout=300):
+            done += 1
+    if not done:
+        log("plugins: nothing to update")
+    return done
 
 
 def main(argv=None) -> int:

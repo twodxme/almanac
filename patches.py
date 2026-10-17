@@ -82,11 +82,14 @@ def analyze(repo: str, upstream: str = "@{upstream}") -> PatchState:
         return PatchState(UNKNOWN)
 
 
-def steps(repo: str, state: PatchState, label: str) -> list:
-    """The task steps that update `repo` for this state."""
+def steps(repo: str, state: PatchState, label: str,
+          pull: list | None = None) -> list:
+    """The task steps that update `repo` for this state. `pull` is the
+    command that fetches the update -- `git pull --ff-only` by default; an
+    Omarchy plugin passes `omarchy plugin update`, which also validates."""
     stash = ["git", "-C", repo, "stash", "push", "-m",
              f"almanac: local change before updating {label}"]
-    pull = ["git", "-C", repo, "pull", "--ff-only"]
+    pull = pull or ["git", "-C", repo, "pull", "--ff-only"]
     if state.kind == APPLIES:
         return [("Setting your change aside", stash),
                 ("Pulling the update", pull),
