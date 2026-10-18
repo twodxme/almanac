@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import guard
+import pystack
 
 NOW = 1_800_000_000.0
 RECENT = int(NOW) - 3600
@@ -543,11 +544,11 @@ def _round2(root):
     # main thread and a worker thread (where the app parses). Not a reset
     # (their version is the defaults reformatted), so only the parse decides.
     # A worker thread's stack is a fresh RLIMIT_STACK, so its limit is exact
-    # (52154 under 8 MB). The main thread's starts at an address ASLR moves,
-    # so Python's own limit there varies run to run (~52100..52200): only
-    # depths clear of that band are deterministic.
-    lim = (((resource.getrlimit(resource.RLIMIT_STACK)[0] + 4095) // 4096 * 4096) - 43920) // 160
-    for n in (lim - 1, lim, lim + 1, 51500, 52700):
+    # for one process (52154 under 8 MB here; see pystack for why another
+    # machine's differs by a level). The main thread's starts at an address
+    # ASLR moves, so Python's own limit there varies run to run
+    # (~52100..52200): only depths clear of that band are deterministic.
+    for n in (*pystack.thread_depths(), 51500, 52700):
         deep, spaced = "[" * n + "]" * n, "[ " * n + "]" * n
         env, c, _ = tree(f"json{n}", {"a/x.json": (deep, spaced, spaced, RECENT)})
         if n in (51500, 52700):

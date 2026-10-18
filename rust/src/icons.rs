@@ -642,22 +642,39 @@ fn as_number(n: &Node) -> Result<f64, String> {
 
 /// The parsed file as plain JSON (for the parity output). NaN and the
 /// infinities, which JSON cannot hold, become null; lone surrogates U+FFFD.
+/// Built without recursion: a file can nest as deep as Python's json reads.
 fn to_value(doc: &Doc, id: usize) -> Value {
-    match &doc.nodes[id] {
-        Node::Null => Value::Null,
-        Node::Bool(b) => Value::Bool(*b),
-        Node::Int(s) => s
-            .parse::<i64>()
-            .map(Value::from)
-            .or_else(|_| s.parse::<u64>().map(Value::from))
-            .unwrap_or_else(|_| serde_json::Number::from_f64(s.parse::<f64>().unwrap_or(0.0)).map_or(Value::Null, Value::Number)),
-        Node::Float(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
-        Node::Str(s) => Value::String(String::from_utf16_lossy(s)),
-        Node::List(items) => Value::Array(items.iter().map(|&x| to_value(doc, x)).collect()),
-        Node::Dict(items) => {
-            Value::Object(items.iter().map(|(k, x)| (String::from_utf16_lossy(k), to_value(doc, *x))).collect())
-        }
-    }
+    crate::util::tree::fold_ids(
+        id,
+        |n, out| match &doc.nodes[n] {
+            Node::List(items) => {
+                out.extend(items);
+                Some(false)
+            }
+            Node::Dict(items) => {
+                out.extend(items.iter().map(|(_, c)| *c));
+                Some(true)
+            }
+            _ => None,
+        },
+        |n| match &doc.nodes[n] {
+            Node::Null => Value::Null,
+            Node::Bool(b) => Value::Bool(*b),
+            Node::Int(s) => s
+                .parse::<i64>()
+                .map(Value::from)
+                .or_else(|_| s.parse::<u64>().map(Value::from))
+                .unwrap_or_else(|_| serde_json::Number::from_f64(s.parse::<f64>().unwrap_or(0.0)).map_or(Value::Null, Value::Number)),
+            Node::Float(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
+            Node::Str(s) => Value::String(String::from_utf16_lossy(s)),
+            Node::List(_) | Node::Dict(_) => Value::Null,
+        },
+        |_, kids| Value::Array(kids),
+        |n, kids| match &doc.nodes[n] {
+            Node::Dict(items) => Value::Object(items.iter().map(|(k, _)| String::from_utf16_lossy(k)).zip(kids).collect()),
+            _ => Value::Null,
+        },
+    )
 }
 
 const RECURSION_LOADS: &str = "RecursionError: maximum recursion depth exceeded while decoding a JSON object from a unicode string";

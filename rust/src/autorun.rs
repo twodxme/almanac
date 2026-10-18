@@ -2714,7 +2714,10 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
             m.insert(extra.0.into(), extra.1);
             Value::Object(m)
         }
-        Err(e) => json!({"error": e, "log": lines}),
+        Err(e) => {
+            crate::util::tree::drop_value(extra.1);
+            json!({"error": e, "log": lines})
+        }
     };
     Some(match func {
         "log" => {
@@ -2812,8 +2815,10 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
                     )
                 })
             });
-            let events = events.borrow().clone();
-            done_or_error(done, lines, ("events", json!(events)))
+            // (taken, not cloned: a saved registry can be as deep as Python's
+            // json reads, and serde's clone recurses)
+            let events = std::mem::take(&mut *events.borrow_mut());
+            done_or_error(done, lines, ("events", Value::Array(events)))
         }
         "update_plugins" => {
             let calls = Rc::new(RefCell::new(Vec::new()));

@@ -204,20 +204,38 @@ impl Doc {
     /// The node as a serde value, for callers that need one: what serde
     /// cannot hold degrades (a lone surrogate to U+FFFD, NaN/inf to null,
     /// an int beyond u64/i64 to the nearest float).
+    /// Built without recursion: a file can nest as deep as Python's json
+    /// reads.
     fn to_value(&self, id: usize) -> Value {
-        match &self.nodes[id] {
-            Node::Null => Value::Null,
-            Node::Bool(b) => Value::Bool(*b),
-            Node::Int(s) => s.parse::<i64>().map(Value::from)
-                .or_else(|_| s.parse::<u64>().map(Value::from))
-                .unwrap_or_else(|_| float_value(s.parse::<f64>().unwrap_or(f64::NAN))),
-            Node::Float(f) => float_value(*f),
-            Node::Str(s) => Value::String(lossy(s)),
-            Node::Arr(items) => Value::Array(items.iter().map(|c| self.to_value(*c)).collect()),
-            Node::Obj(entries) => {
-                Value::Object(entries.iter().map(|(k, c)| (lossy(k), self.to_value(*c))).collect())
-            }
-        }
+        crate::util::tree::fold_ids(
+            id,
+            |n, out| match &self.nodes[n] {
+                Node::Arr(items) => {
+                    out.extend(items);
+                    Some(false)
+                }
+                Node::Obj(entries) => {
+                    out.extend(entries.iter().map(|(_, c)| *c));
+                    Some(true)
+                }
+                _ => None,
+            },
+            |n| match &self.nodes[n] {
+                Node::Null => Value::Null,
+                Node::Bool(b) => Value::Bool(*b),
+                Node::Int(s) => s.parse::<i64>().map(Value::from)
+                    .or_else(|_| s.parse::<u64>().map(Value::from))
+                    .unwrap_or_else(|_| float_value(s.parse::<f64>().unwrap_or(f64::NAN))),
+                Node::Float(f) => float_value(*f),
+                Node::Str(s) => Value::String(lossy(s)),
+                Node::Arr(_) | Node::Obj(_) => Value::Null,
+            },
+            |_, kids| Value::Array(kids),
+            |n, kids| match &self.nodes[n] {
+                Node::Obj(entries) => Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect()),
+                _ => Value::Null,
+            },
+        )
     }
 
     /// `json.dumps(data, indent=indent, sort_keys=sort_keys)`: Python's

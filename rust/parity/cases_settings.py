@@ -323,9 +323,11 @@ def _thread_limit():
 
 def _round2c():
     # On a worker thread CPython's limit is 52154 containers, every run
-    # (measured), where the main thread's moves around 52098-52131; Rust
-    # makes the call on a worker thread too (`thread: true`).
-    for total in (52120, 52154, 52155, 60000):
+    # (measured; pystack says why another machine's is a level off), where
+    # the main thread's moves around 52098-52131; Rust makes the call on a
+    # worker thread too (`thread: true`).
+    import pystack
+    for total in sorted({52120, *pystack.thread_depths(), 60000}):
         n = total - 1
         for kind in ("[]", ('{"a": ', "}")):
             if kind == "[]":
@@ -335,7 +337,7 @@ def _round2c():
             h = _home()
             yield "get", _args(h, f, key="hold_majors", thread=True), \
                 _with(h, f, lambda: _in_thread(lambda: settings.get("hold_majors")))
-            if total > _thread_limit():
+            if total > max(_thread_limit(), pystack.measured()):
                 # (Only past the limit: under it, indent=2 writes GBs. The
                 # limit follows `ulimit -s`; 52154 is the 8 MiB one.)
                 h = _home()
