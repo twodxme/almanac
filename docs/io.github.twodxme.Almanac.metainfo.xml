@@ -96,6 +96,20 @@
   </requires>
 
   <releases>
+    <release version="1.7.0" date="2026-10-17">
+      <description>
+        <p>Today's picks, and text you can read on any theme.</p>
+        <ul>
+          <li>Today's picks: the app and plugin of the day, ranked on stars and
+          forks in the last 24 hours, downloads and comments this week, each
+          figure labelled with exactly what it counts</li>
+          <li>Text contrast is measured against the active theme: 7:1 for
+          primary text, 5.5:1 for secondary and accent text</li>
+          <li>Status pills are solid, with whichever text reads best on each</li>
+          <li>New Privacy switch for the GitHub figures behind Today's picks</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.6.0" date="2026-10-17">
       <description>
         <p>A denser, calmer window, and Featured is now Today.</p>
