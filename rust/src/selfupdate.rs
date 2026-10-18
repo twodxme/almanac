@@ -80,7 +80,7 @@ fn py_resolve(p: &Path) -> PathBuf {
 pub const NAME: &str = "Almanac";
 /// Bumped by hand at release. git describe supersedes it in a checkout, so this
 /// is only what a tarball install reports.
-pub const VERSION: &str = "1.7.0";
+pub const VERSION: &str = "2.0.0";
 
 pub const GIT: &str = "git";
 pub const PACKAGE: &str = "package";
