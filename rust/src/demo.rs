@@ -150,7 +150,7 @@ pub fn packages() -> Vec<crate::inventory::App> {
             source: s(source),
             description: s(desc),
             update: s(update),
-            extra: e,
+            extra: e.into(),
             ..Default::default()
         });
     }
@@ -179,7 +179,7 @@ pub fn appimages() -> Vec<crate::inventory::App> {
             description: s(desc),
             update: s(update),
             exec_path: format!("{HOME}/.local/state/almanac/apps/{lower}.AppImage"),
-            extra,
+            extra: extra.into(),
         });
     }
     out
@@ -200,7 +200,7 @@ pub fn flatpaks() -> Vec<crate::inventory::App> {
                 source: s(inventory::FLATPAK),
                 description: s(desc),
                 update: s(update),
-                extra,
+                extra: extra.into(),
                 ..Default::default()
             }
         })
@@ -223,7 +223,7 @@ pub fn local_builds() -> Vec<crate::inventory::App> {
             source: s(inventory::LOCAL),
             description: s(desc),
             exec_path: String::new(),
-            extra,
+            extra: extra.into(),
             ..Default::default()
         });
     }
@@ -261,7 +261,7 @@ pub fn agents() -> Vec<crate::inventory::App> {
             description: format!("AI coding agent · managed by {manager}"),
             update: s(update),
             exec_path: format!("{HOME}/.local/bin/{binary}"),
-            extra,
+            extra: extra.into(),
         });
     }
     out

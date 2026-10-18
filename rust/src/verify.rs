@@ -387,7 +387,7 @@ impl PyApp {
             source: Py::Str(app.source.clone()),
             update: Py::Str(app.update.clone()),
             exec_path: Py::Str(app.exec_path.clone()),
-            extra: Py::plain(&serde_json::Value::Object(app.extra.clone())),
+            extra: Py::plain_dict(&app.extra),
         }
     }
 
@@ -744,6 +744,11 @@ enum Py {
 }
 
 impl Py {
+    /// A dict of JSON values (an app's `extra`) as `json.loads` gives it.
+    fn plain_dict(m: &serde_json::Map<String, serde_json::Value>) -> Py {
+        Py::Dict(m.iter().map(|(k, v)| (k.clone(), Py::plain(v))).collect())
+    }
+
     /// A JSON value as `json.loads` gives it.
     fn plain(v: &serde_json::Value) -> Py {
         use serde_json::Value;

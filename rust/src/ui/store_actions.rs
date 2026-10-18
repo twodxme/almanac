@@ -1072,7 +1072,7 @@ impl Win {
             description: String::new(),
             update: String::new(),
             exec_path: store_appimage_path(p).to_string_lossy().into_owned(),
-            extra,
+            extra: extra.into(),
         };
         let detail = format!("{}\n{}", entry.exec_path, entry.exec_path.replace(".AppImage", ".previous"));
         let w = self.downgrade();

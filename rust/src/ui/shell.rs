@@ -553,7 +553,10 @@ pub fn spawn_bg<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(T) + 'static,
 ) {
-    let handle = gio::spawn_blocking(work);
+    // On a stack of its own, sized for values as deep as Python's json
+    // reads (a cache or registry nested 52000 levels): the pool thread's
+    // is whatever `ulimit -s` gave, and an overflow there aborts the app.
+    let handle = gio::spawn_blocking(move || crate::util::with_stack(crate::util::JSON_STACK, work));
     glib::spawn_future_local(async move {
         if let Ok(value) = handle.await {
             done(value);

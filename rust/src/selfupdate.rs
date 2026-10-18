@@ -659,7 +659,7 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
         description: format!("This application · {}", info.note),
         update,
         exec_path,
-        extra,
+        extra: extra.into(),
     }
 }
 

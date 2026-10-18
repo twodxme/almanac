@@ -1200,7 +1200,7 @@ impl Win {
             extra.insert("plugin_detail".into(), detail.into());
             let app = inventory::App {
                 update: st.as_ref().map(|s| format!("{} commits", s.behind)).unwrap_or_default(),
-                extra,
+                extra: extra.into(),
                 ..inventory::App::new(&i.id, &i.version, inventory::LOCAL)
             };
             self.on_git_pull(&app);

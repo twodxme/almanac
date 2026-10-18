@@ -1583,7 +1583,7 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
             description: format!("AI coding agent · managed by {manager}"),
             update,
             exec_path: path.clone(),
-            extra,
+            extra: extra.into(),
         }, raw));
     }
 
@@ -1676,7 +1676,7 @@ fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps,
             description: "Developer tool · managed by mise".into(),
             update,
             exec_path: which(tool).unwrap_or_default(),
-            extra,
+            extra: extra.into(),
         }, version.clone()));
     }
     Ok(out)

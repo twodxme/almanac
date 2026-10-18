@@ -163,7 +163,10 @@ def cases():
     yield _case("_pid_path", watcher._pid_path, env={"XDG_RUNTIME_DIR": None, "XDG_STATE_HOME": "/s"})
 
     # ---- launcher: the real PATH, and a fake almanac on a PATH of its own
-    yield "launcher", {}, lambda: watcher.launcher()
+    # (the real PATH only when it has an `almanac`: the fallback differs by
+    # design, see above, and a CI container has none)
+    if shutil.which("almanac"):
+        yield "launcher", {}, lambda: watcher.launcher()
     fake = Path(_dir())
     (fake / "almanac").write_text("#!/bin/sh\n")
     (fake / "almanac").chmod(0o755)

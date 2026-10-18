@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::i18n::tr;
 use crate::inventory;
@@ -880,7 +880,7 @@ impl Win {
 
     fn build_details(&self, item: &AppItem) -> Result<(), String> {
         let app = &item.app;
-        let extra: Map<String, Value> = inventory::try_details(app)?;
+        let extra: inventory::Extra = inventory::try_details(app)?;
         let has = |key: &str| truthy(extra.get(key));
 
         let page = adw::PreferencesPage::new();
@@ -2319,7 +2319,7 @@ mod tests {
     fn item(name: &str, source: &str, extra: Value) -> AppItem {
         let mut app = inventory::App::new(name, "1", source);
         if let Value::Object(m) = extra {
-            app.extra = m;
+            app.extra = m.into();
         }
         AppItem::new(app)
     }

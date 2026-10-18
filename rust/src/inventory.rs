@@ -1258,7 +1258,56 @@ pub struct App {
     /// what to launch, when launchable
     pub exec_path: String,
     /// Mixed-type per-source details (`dict` in the Python).
-    pub extra: Map<String, Value>,
+    pub extra: Extra,
+}
+
+/// [`App::extra`]: per-source details, some straight from a file (the
+/// release url in an agent cache), so a value can be nested as deep as
+/// Python's json reads (52000 levels). serde's own clone and drop recurse
+/// once per level; these do not, so a row can be cloned and dropped on any
+/// thread -- the window's, or a worker's 2 MiB stack.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Extra(pub Map<String, Value>);
+
+impl std::ops::Deref for Extra {
+    type Target = Map<String, Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Extra {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Map<String, Value>> for Extra {
+    fn from(m: Map<String, Value>) -> Self {
+        Extra(m)
+    }
+}
+
+impl Clone for Extra {
+    fn clone(&self) -> Self {
+        Extra(self.0.iter().map(|(k, v)| (k.clone(), crate::util::tree::clone_value(v))).collect())
+    }
+}
+
+impl PartialEq for Extra {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(k, v)| other.0.get(k).is_some_and(|w| crate::util::tree::eq_value(v, w)))
+    }
+}
+
+impl Drop for Extra {
+    fn drop(&mut self) {
+        for (_, v) in std::mem::take(&mut self.0) {
+            crate::util::tree::drop_value(v);
+        }
+    }
 }
 
 /// The `extra` key holding the Python values of fields that are not a
@@ -1311,9 +1360,11 @@ impl App {
     }
 
     /// `extra` as the Python dict holds it (without `RAW_FIELDS`).
-    pub fn extra_dict(&self) -> Map<String, Value> {
+    pub fn extra_dict(&self) -> Extra {
         let mut m = self.extra.clone();
-        m.remove(RAW_FIELDS);
+        if let Some(raw) = m.remove(RAW_FIELDS) {
+            crate::util::tree::drop_value(raw);
+        }
         m
     }
 
@@ -1368,7 +1419,7 @@ impl<'de> Deserialize<'de> for App {
             extra: Map<String, Value>,
         }
         let w = Wire::deserialize(d)?;
-        let mut app = App { extra: w.extra, ..Default::default() };
+        let mut app = App { extra: w.extra.into(), ..Default::default() };
         app.extra.remove(RAW_FIELDS);
         for (k, v) in APP_FIELDS.iter().zip([w.name, w.version, w.source, w.description, w.update, w.exec_path]) {
             if let Some(v) = v {
@@ -1842,7 +1893,7 @@ pub fn packages() -> Result<Vec<App>, String> {
                 description: m("description"),
                 update: pend,
                 exec_path: n.clone(),
-                extra,
+                extra: extra.into(),
             });
         }
     }
@@ -1988,7 +2039,7 @@ pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
         extra.insert("is_app".into(), json!(true));
         let field = |k: &str, d: Value| rec.get(k).cloned().unwrap_or(d);
         apps.push(
-            App { source: APPIMAGE.into(), exec_path: path_s.clone(), extra, ..Default::default() }.with_values(&[
+            App { source: APPIMAGE.into(), exec_path: path_s.clone(), extra: extra.into(), ..Default::default() }.with_values(&[
                 ("name", &field("name", json!(key))),
                 ("version", &field("version", json!("?"))),
                 ("description", &field("description", json!("AppImage"))),
@@ -2144,7 +2195,7 @@ pub fn try_orphans() -> Result<Vec<App>, String> {
             source: ORPHAN.into(),
             description: m("description"),
             exec_path: String::new(),
-            extra,
+            extra: extra.into(),
             ..Default::default()
         });
     }
@@ -2219,7 +2270,8 @@ pub fn flatpaks() -> Result<Vec<App>, String> {
             extra: json!({"icon": appid, "is_app": true, "appid": appid})
                 .as_object()
                 .cloned()
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
         });
     }
     Ok(apps)
@@ -2511,7 +2563,7 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
                 if origin.is_empty() { String::new() } else { format!(" · {origin}") }
             ),
             update,
-            extra,
+            extra: extra.into(),
             ..Default::default()
         }
         .with_values(&[("name", &path_json(Path::new(repo.file_name().unwrap_or_default()))), ("exec_path", &exec)]));
@@ -2611,7 +2663,7 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
             App {
                 source: LOCAL.into(),
                 update: if behind != 0 { format!("{behind} commits") } else { String::new() },
-                extra,
+                extra: extra.into(),
                 ..Default::default()
             }
             .with_values(&[("name", &pname), ("version", &ver), ("description", &desc)]),
@@ -2678,7 +2730,7 @@ pub fn collect() -> Vec<App> {
 /// is only read one row at a time.
 ///
 /// Err: pacman's output is not UTF-8 (`_run`'s UnicodeDecodeError).
-pub fn try_details(app: &App) -> Result<Map<String, Value>, String> {
+pub fn try_details(app: &App) -> Result<Extra, String> {
     let mut out = app.extra_dict();
     if [REPO, AUR, SYSTEM, ORPHAN].contains(&app.source.as_str()) {
         let text = run(&["pacman", "-Qi", &app.name], 20)?;
@@ -2717,7 +2769,7 @@ pub fn try_details(app: &App) -> Result<Map<String, Value>, String> {
 
 /// `try_details` for callers that need a plain map: where the Python
 /// raises, this answers the row's own `extra`.
-pub fn details(app: &App) -> Map<String, Value> {
+pub fn details(app: &App) -> Extra {
     try_details(app).unwrap_or_else(|_| app.extra_dict())
 }
 
@@ -2770,7 +2822,8 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
                               "is_app": true})
                     .as_object()
                     .cloned()
-                    .unwrap_or_default(),
+                    .unwrap_or_default()
+                    .into(),
                 ..Default::default()
             });
         }
@@ -2865,7 +2918,7 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
             version: get_str(rec, "Version", ""),
             source: AVAILABLE.into(),
             description,
-            extra,
+            extra: extra.into(),
             ..Default::default()
         });
     }
@@ -3088,7 +3141,7 @@ pub fn try_search_plugins(query: &str, limit: usize) -> Result<Vec<App>, String>
         extra.insert("suite".into(), json!(e.get("type").and_then(Value::as_str) == Some("suite")));
         extra.insert("already".into(), json!(installed.contains(&name)));
         out.push(
-            App { name, source: PLUGIN.into(), description, extra, ..Default::default() }
+            App { name, source: PLUGIN.into(), description, extra: extra.into(), ..Default::default() }
                 // (A non-string type, null included, is kept as it is.)
                 .with_values(&[("version", &e.get("type").cloned().unwrap_or(json!("plugin")))]),
         );
@@ -3311,7 +3364,7 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
         "collect" => apps(collect()),
         "details" => {
             let app: App = serde_json::from_value(args.get("app").cloned().unwrap_or(json!({}))).unwrap_or_default();
-            res(try_details(&app).map(Value::Object))
+            res(try_details(&app).map(|mut e| Value::Object(std::mem::take(&mut e.0))))
         }
         "search_available" => {
             let mut v = match try_search_available(&s("query"), n("limit", 60)) {

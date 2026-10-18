@@ -63,7 +63,8 @@ jobs:
             gtk4-broadwayd :7 & b=$!; sleep 1
             GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 makepkg --nodeps --noconfirm
             rc=$?; kill $b; exit $rc'
-          tar -tf almanac-git-*.pkg.tar.zst | grep -q usr/bin/almanac
+          # (makepkg also makes an almanac-git-debug package here)
+          tar -tf almanac-git-[0-9]*.pkg.tar.zst | grep -q usr/bin/almanac
 
   # The Rust port (rust/): its tests, then the parity runner, which runs the
   # Python and the Rust on the same inputs (demo mode) and fails on any
@@ -108,6 +109,12 @@ jobs:
       - name: Build
         working-directory: rust
         run: as-user cargo build --release --locked
+
+      - name: Environment for parity
+        # For the record: the json nesting CPython reaches here (it follows
+        # the C stack) and whether the live AUR case gets an answer.
+        continue-on-error: true
+        run: as-user env ALMANAC_PARITY_BIN=rust/target/release/almanac-parity python3 rust/parity/environment.py
 
       - name: Tests
         working-directory: rust
