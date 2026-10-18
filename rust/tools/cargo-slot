@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run a cargo command with at most three builds at once across all agents:
+# the machine has 15 GB of RAM and rustc on this crate takes 1-2 GB each.
+#   rust/tools/cargo-slot cargo check --features wip-inventory
+# Each agent should also set its own CARGO_TARGET_DIR (see ARCHITECTURE.md).
+dir=/tmp/claude-1000/almanac-cargo-slots
+mkdir -p "$dir"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+while :; do
+  for i in 1 2 3; do
+    flock -n -E 75 "$dir/$i" "$@"
+    rc=$?
+    [ "$rc" -ne 75 ] && exit "$rc"
+  done
+  sleep 3
+done

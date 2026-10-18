@@ -1,0 +1,11 @@
+shell
+packages
+store
+store_actions
+plugins
+switchboard
+history
+ai
+preferences
+today
+actions

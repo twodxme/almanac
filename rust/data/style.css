@@ -1,0 +1,182 @@
+
+/* Secondary text everywhere is the foreground at --dim-opacity. libadwaita's
+   55% leaves captions faint even on stock Adwaita; 72% keeps them clearly
+   secondary at a comfortable contrast. An Omarchy theme computes its own
+   (theming.py), measured against its palette. */
+:root { --dim-opacity: 72%; }
+
+/* Sidebar counts. Three levels: a count is usually just a number, an
+   amber one wants looking at, and only a security update earns red. The
+   label is vertically centred at the widget level -- without that the
+   background fills the whole row and the pill reads as a tall oval. */
+.count-badge {
+  background: alpha(@window_fg_color, 0.10);
+  color: @window_fg_color;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  font-feature-settings: "tnum";
+  padding: 1px 7px;
+  min-width: 16px;
+  min-height: 0;
+}
+.count-badge.is-warn {
+  /* Solid, like .pill-warn; its text is measured at runtime too. */
+  background: @warning_bg_color;
+  color: @warning_fg_color;
+}
+.count-badge.is-crit {
+  /* The only solid fill in the sidebar, so it is the only thing that
+     shouts. Its foreground is measured against the fill, not assumed. */
+  background: @error_color;
+  color: @error_fg_color;
+}
+row:selected .count-badge {
+  background: alpha(@accent_fg_color, 0.18);
+  color: @accent_fg_color;
+}
+row:selected .count-badge.is-crit {
+  background: @error_color;
+  color: @error_fg_color;
+}
+/* ---- pills ----
+   One shape, one size, five meanings. There were nine classes across three
+   font sizes doing this job -- crit-pill, stale-pill, crit-core, store-chip,
+   store-installed and three trust-* variants -- which is why a status chip
+   and a provenance chip on the same card never quite lined up.
+
+   Each modifier carries the base declarations too, so a single class name is
+   enough at every call site and nothing has to remember to add two. */
+/* A plugin's mark: a rounded tile, tinted when it holds a symbol, filled by
+   artwork when it holds a picture. */
+.plugin-logo {
+  border-radius: 8px;
+  background: alpha(@window_fg_color, 0.06);
+}
+.plugin-logo.has-art { background: none; }
+
+/* Status pills: solid fills carrying the status colour, with text measured
+   against each fill at runtime (theming.pill_css) -- tinted pills could not
+   be both coloured and readable on a low-contrast palette. These are the
+   fallbacks until that has run. Neutral pills stay a quiet tint. */
+.pill, .pill-crit, .pill-warn, .pill-ok, .pill-accent, .pill-quiet {
+  background: alpha(@window_fg_color, 0.09);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.75rem;
+}
+.pill-crit { background: @error_bg_color; color: @error_fg_color; font-weight: bold; }
+.pill-warn { background: @warning_bg_color; color: @warning_fg_color; }
+.pill-ok { background: @success_bg_color; color: @success_fg_color; font-weight: bold; }
+.pill-accent { background: @accent_bg_color; color: @accent_fg_color; font-weight: bold; }
+.pill-quiet {
+  opacity: var(--dim-opacity);
+}
+.link-ish {
+  color: @accent_color;
+}
+
+/* ---- Today's picks: the standouts, deliberately not a store card ----
+   Wide rather than tall, artwork as big as the card allows, an accent wash
+   and border, and the evidence shown as figures. The wash peaks at 12%
+   (theming.PICK_WASH), and the card's text colours are measured against
+   that peak at runtime (theming.pick_css), since a wash costs contrast. */
+.pick-card {
+  background-color: @card_bg_color;
+  background-image: linear-gradient(110deg, alpha(@accent_bg_color, 0.12),
+                                    alpha(@accent_bg_color, 0.03) 70%);
+  border: 1px solid alpha(@accent_bg_color, 0.55);
+  border-radius: 16px;
+  box-shadow: 0 2px 10px alpha(black, 0.18);
+}
+.pick-card:hover { border-color: @accent_bg_color; }
+.pick-art { border-radius: 15px 0 0 15px; background: alpha(@window_fg_color, 0.05); }
+.pick-eyebrow {
+  color: @accent_color;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.pick-name { font-size: 1.35rem; font-weight: 800; }
+.pick-num { font-size: 1.05rem; font-weight: 800; }
+
+/* ---- plugin marketplace cards ---- */
+.store-card {
+  background: @card_bg_color;
+  border: 1px solid alpha(@window_fg_color, 0.13);
+  border-radius: 12px;
+}
+.store-card:hover {
+  border-color: alpha(@accent_color, 0.75);
+  background: alpha(@accent_color, 0.04);
+}
+.store-shot {
+  border-radius: 11px 11px 0 0;
+  background: alpha(@window_fg_color, 0.05);
+}
+/* The catalog assigns one of six accents per plugin; the ~800 entries with no
+   screenshot get an initials tile in theirs, so every card still reads as a
+   card. Six static classes rather than a CSS provider per card. */
+.acc-cyan   { background: linear-gradient(135deg, #2dd4bf, #0e7490); }
+.acc-coral  { background: linear-gradient(135deg, #fb7185, #9f1239); }
+.acc-lime   { background: linear-gradient(135deg, #a3e635, #3f6212); }
+.acc-rose   { background: linear-gradient(135deg, #f472b6, #9d174d); }
+.acc-amber  { background: linear-gradient(135deg, #fbbf24, #b45309); }
+.acc-violet { background: linear-gradient(135deg, #a78bfa, #5b21b6); }
+.acc-none   { background: linear-gradient(135deg, #94a3b8, #334155); }
+.store-initials {
+  font-size: 1.7rem;
+  font-weight: bold;
+  color: #ffffff;
+}
+.store-name { font-weight: bold; }
+.store-verified { color: @success_color; }
+.store-stars { font-size: 0.75rem; }
+.stats { font-size: 0.76rem; }
+/* The package table on its card: transparent, so the card's colour shows,
+   exactly as a boxed list's rows do. */
+columnview.almanac-table,
+columnview.almanac-table > listview,
+columnview.almanac-table > header { background: transparent; }
+/* Rows as tall as a boxed list's, so a table row and a list row are the same
+   size on every page. */
+columnview.almanac-table > listview > row { padding-top: 2px; padding-bottom: 2px; }
+columnview.almanac-table > listview > row > cell { padding-top: 4px; padding-bottom: 4px; }
+/* Sidebar rows at 36px rather than Adwaita's 50: fifteen destinations and
+   the stats fit a laptop's height without the Maintenance group falling off
+   the bottom. */
+.almanac-sidebar > row > box.header {
+  min-height: 36px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.almanac-sidebar > row { margin-top: 0; margin-bottom: 1px; }
+.stat-key { opacity: var(--dim-opacity); }
+.stat-val {
+  font-weight: bold;
+  font-feature-settings: "tnum";
+}
+.hero { border-radius: 12px; }
+/* The scrim is what keeps the text legible over an arbitrary wallpaper --
+   dark at the bottom where the type sits, clear at the top. */
+.hero-scrim {
+  background: linear-gradient(to top,
+              alpha(#000, 0.78) 0%,
+              alpha(#000, 0.42) 45%,
+              alpha(#000, 0.10) 100%);
+}
+.hero-head {
+  font-size: 1.45rem;
+  font-weight: bold;
+  color: #ffffff;
+}
+.hero-sub {
+  font-size: 0.86rem;
+  color: alpha(#ffffff, 0.82);
+}
+/* Dimmed once, by .dim-label like all secondary text -- it used to be
+   faded again here, to about 40% in the smallest text in the app. */
+.store-prov { font-size: 0.75rem; }
+/* Provenance chips. Four states rather than a tick, because "reviewed",
+   "verified", "reviewed but upstream has moved since" and "nobody checked"
+   are four different promises. */
