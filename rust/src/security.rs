@@ -2471,6 +2471,7 @@ mod tests {
     fn test_switched_off_network_features_make_no_request() {
         // The security part of the Python test: with the setting off,
         // advisories() is None without a request and finding() says so.
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("almanac-security-test-{}", std::process::id()));
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", &dir);

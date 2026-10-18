@@ -1962,13 +1962,11 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
 mod tests {
     use super::*;
     use std::process::Command;
-    use std::sync::Mutex;
 
     /// The tests that set environment variables run one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
         for (k, v) in vars {
             std::env::set_var(k, v);

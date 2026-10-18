@@ -3211,7 +3211,6 @@ mod tests {
     use super::*;
 
     /// The tests point XDG_CACHE_HOME / XDG_STATE_HOME at temp dirs; one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     fn artcraft_rows(releases: &(dyn Fn(&str, &Value) -> Option<Value> + Sync)) -> HashMap<String, Row> {
         let html = r#"<a href="/apps/wordcraft">WordCraft</a><a href="/apps/gridcraft">GridCraft</a>"#;
@@ -3262,7 +3261,7 @@ mod tests {
 
     #[test]
     fn test_an_incomplete_catalogue_is_refetched_before_the_ttl() {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tmp");
         std::env::set_var("XDG_CACHE_HOME", d.path());
         let m = Market { id: "t".into(), name: "T".into(), loader: Some(fixed_loader), ..Market::default() };
@@ -3326,7 +3325,7 @@ mod tests {
     #[test]
     fn test_switched_off_network_features_make_no_request() {
         // The store's part of it: every marketplace switched off loads none.
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tmp");
         std::env::set_var("XDG_STATE_HOME", d.path());
         for key in ["net_market_omarchy", "net_market_artcraft", "net_market_themes"] {

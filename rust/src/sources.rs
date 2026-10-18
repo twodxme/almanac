@@ -681,7 +681,14 @@ fn b64decode(data: &[u8]) -> Result<Vec<u8>, String> {
 /// does (a UTF-8 BOM is dropped; UTF-16 and UTF-32 are read too), then
 /// Python's JSON, which also takes `NaN`, `Infinity` and `-Infinity`, and
 /// integers of any size.
+///
+/// The parser recurses once per level, up to the 2000 it allows: on a
+/// thread with room for that, whatever the caller's stack.
 fn loads(raw: &[u8]) -> Result<Py, String> {
+    crate::util::with_stack(crate::util::DEEP_STACK, || loads_here(raw))
+}
+
+fn loads_here(raw: &[u8]) -> Result<Py, String> {
     let text = decode_json_bytes(raw)?;
     let mut p = JsonParser { s: &text, b: text.as_bytes(), i: 0, depth: 0 };
     p.ws();
@@ -2251,6 +2258,7 @@ mod tests {
         // one-shot local HTTP server serves it, and XDG_STATE_HOME points
         // inventory's REGISTRY at the temp dir.
         use std::io::Write;
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tempdir");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();

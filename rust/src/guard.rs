@@ -1645,11 +1645,9 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // The fixture lives in the environment (XDG_CONFIG_HOME, OMARCHY_PATH),
     // which is process-wide; one test at a time.
-    static LOCK: Mutex<()> = Mutex::new(());
 
     fn dumps(v: &serde_json::Value, indent: Option<usize>) -> String {
         crate::util::dumps(v, indent, false)
@@ -1668,7 +1666,7 @@ mod tests {
 
     impl ConfigReset {
         fn set_up() -> ConfigReset {
-            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().to_path_buf();
             let home = root.join("config");

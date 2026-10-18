@@ -2010,7 +2010,6 @@ fn parity_call(func: &str, args: &serde_json::Value) -> Option<serde_json::Value
 mod tests {
     use super::*;
 
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     // UpdatesClearAfterUpdating
     #[test]
@@ -2035,7 +2034,7 @@ mod tests {
     // Settings (setUp points XDG_STATE_HOME at a temp dir)
     #[test]
     fn test_major_releases_are_held_only_while_set() {
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());

@@ -311,8 +311,7 @@ mod tests {
     fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
         // base() reads the environment; these tests are the only ones that
         // touch XDG_DATA_HOME / XDG_CONFIG_HOME, and run under one lock.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
         for (k, v) in vars {
             std::env::set_var(k, v);

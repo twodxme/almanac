@@ -3219,10 +3219,8 @@ fn restore(cache_home: Option<std::ffi::OsString>, state_home: Option<std::ffi::
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // Tests share the process environment; one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     /// XDG_STATE_HOME and XDG_CACHE_HOME in a temp dir, as the Python test
     /// class's setUp does.
@@ -3234,7 +3232,7 @@ mod tests {
 
     impl Env {
         fn new() -> Env {
-            let guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let old = (std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("XDG_STATE_HOME"));
             std::env::set_var("XDG_CACHE_HOME", tmp.path().join("cache"));

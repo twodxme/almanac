@@ -2646,10 +2646,8 @@ fn restore(var: &str, old: Option<std::ffi::OsString>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // Tests share the process environment; one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     /// `Settings.setUp`/`tearDown`: XDG_STATE_HOME (and here XDG_CACHE_HOME,
     /// which the Python reads at import) in a temp dir.
@@ -2661,7 +2659,7 @@ mod tests {
 
     impl Env {
         fn new() -> Env {
-            let guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let mut old = Vec::new();
             for (var, sub) in [("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache")] {

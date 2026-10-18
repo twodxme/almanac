@@ -2917,6 +2917,7 @@ mod tests {
 
     #[test]
     fn test_picks_hold_for_the_day_and_switch_off() {
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());

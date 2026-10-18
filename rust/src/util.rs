@@ -744,6 +744,12 @@ macro_rules! tree_clone_eq {
 }
 pub(crate) use tree_clone_eq;
 
+/// Tests that set environment variables (XDG_STATE_HOME and the like) take
+/// this first: the environment is the process's, and tests in different
+/// modules run at once.
+#[cfg(test)]
+pub(crate) static TEST_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;

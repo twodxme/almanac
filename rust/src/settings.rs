@@ -816,10 +816,8 @@ fn restore(old: Option<std::ffi::OsString>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // Tests share the process environment; one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     /// `Settings.setUp`/`tearDown`: XDG_STATE_HOME in a temp dir.
     struct Env {
@@ -830,7 +828,7 @@ mod tests {
 
     impl Env {
         fn new() -> Env {
-            let guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let old = std::env::var_os("XDG_STATE_HOME");
             std::env::set_var("XDG_STATE_HOME", tmp.path());

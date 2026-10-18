@@ -1478,8 +1478,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Fixture {
-            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let hypr = tmp.path().join("hypr");
             std::fs::create_dir(&hypr).unwrap();

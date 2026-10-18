@@ -1062,11 +1062,10 @@ mod tests {
         _guard: std::sync::MutexGuard<'static, ()>,
     }
 
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl StartupApps {
         fn set_up() -> Self {
-            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().to_path_buf();
             let sysdir = root.join("etc/xdg/autostart");

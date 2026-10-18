@@ -1414,10 +1414,8 @@ fn restore_env(saved: Vec<(String, Option<std::ffi::OsString>)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     // Tests share the process environment; one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     /// Run under any name but `almanac-rs` (this test binary, the parity
     /// runner, the packaged `/usr/bin/almanac`), the command looked up is the
@@ -1457,7 +1455,7 @@ mod tests {
 
     #[test]
     fn test_enabling_writes_a_standard_autostart_entry() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let entry;
         {
@@ -1483,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_a_reset_is_announced_once() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let r = crate::guard::Reset::new(
             PathBuf::from("/c/shell.json"),
             PathBuf::from("/c/shell.json.bak.1"),
@@ -1502,7 +1500,7 @@ mod tests {
 
     #[test]
     fn test_only_something_new_is_announced() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let v = |xs: &[&str]| xs.iter().map(|s| pystr(s)).collect::<Vec<_>>();
         let calls = with_notify_mock(|| {
             let seen = announce_plugin_updates(&v(&["a", "b"]), &BTreeSet::new());
@@ -1516,7 +1514,7 @@ mod tests {
 
     #[test]
     fn test_switched_off_in_preferences() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let _e = EnvVar::set("XDG_STATE_HOME", d.path());
         let calls = with_notify_mock(|| {
@@ -1552,7 +1550,7 @@ mod tests {
 
     #[test]
     fn running_overflow_is_an_error() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let _r = EnvVar::set("XDG_RUNTIME_DIR", d.path());
         let pid = d.path().join("almanac-guard.pid");
@@ -1632,7 +1630,7 @@ mod tests {
 
     #[test]
     fn pid_path_is_normalised_as_path_does() {
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         for (rt, want) in [
             ("/run//x/", "/run/x/almanac-guard.pid"),
             (".", "almanac-guard.pid"),
@@ -1649,7 +1647,7 @@ mod tests {
     #[test]
     fn enable_with_a_non_utf8_launcher_fails_as_python_does() {
         use std::os::unix::fs::PermissionsExt;
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let bin = d.path().join(OsStr::from_bytes(b"b\xffin"));
         std::fs::create_dir(&bin).unwrap();
@@ -1673,7 +1671,7 @@ mod tests {
         if nix::unistd::geteuid().is_root() {
             return;
         }
-        let _l = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let (a, b) = (d.path().join("a"), d.path().join("b"));
         std::fs::create_dir(&a).unwrap();

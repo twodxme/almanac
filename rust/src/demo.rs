@@ -1473,6 +1473,7 @@ mod tests {
     #[test]
     fn active_reads_the_variable() {
         // Only this test touches ALMANAC_DEMO in this module.
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os("ALMANAC_DEMO");
         for (v, want) in [("", false), ("0", false), ("false", false), (" 1 ", true), ("yes", true),
                           ("\x1c", false), (" \x1d0\x1e ", false), ("\u{85}", false)] {

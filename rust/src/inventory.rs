@@ -3391,10 +3391,8 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     /// Tests that move XDG variables run one at a time.
-    static ENV: Mutex<()> = Mutex::new(());
 
     fn bh(c: &str, l: &str) -> (i64, String) {
         versions_behind(c, l)
@@ -3504,7 +3502,7 @@ mod tests {
 
     // ---- RegistryWrites
     fn with_state<T>(f: impl FnOnce(&Path) -> T) -> T {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());
@@ -3606,7 +3604,7 @@ mod tests {
     // ---- AnyonesMachine
     #[test]
     fn test_local_builds_are_found_by_being_checkouts_not_by_name() {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let repo = d.path().join("some-driver");
         assert!(util::run(&["git", "init", "-q", repo.to_str().unwrap()], 30).ok());

@@ -1750,7 +1750,6 @@ mod tests {
     );
 
     // Tests that touch the environment run one at a time.
-    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_a_transaction_is_one_event_with_a_plain_summary() {
@@ -1774,7 +1773,7 @@ mod tests {
 
     #[test]
     fn test_almanacs_own_actions_round_trip() {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = std::env::temp_dir().join(format!("almanac-history-test-{}", std::process::id()));
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", &d);
@@ -1803,7 +1802,7 @@ mod tests {
     #[test]
     fn test_history_is_synthetic() {
         // Demo mode must never read the real log: timeline returns demo::history().
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os("ALMANAC_DEMO");
         std::env::set_var("ALMANAC_DEMO", "1");
         let r = std::panic::catch_unwind(|| timeline(DAYS));
