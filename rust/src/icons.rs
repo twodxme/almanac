@@ -1642,7 +1642,8 @@ fn create_connection(host: &str, port: i128, timeout: Duration) -> Result<TcpStr
 }
 
 /// `http.client._create_https_context(11)`, i.e. `ssl.create_default_context()`
-/// plus ALPN http/1.1, through the same OpenSSL Python's `ssl` module uses.
+/// plus ALPN http/1.1 and post-handshake auth, through the same OpenSSL
+/// Python's `ssl` module uses.
 /// Every setting is the one CPython 3.14 makes, so what is accepted and
 /// rejected is identical: the cipher string (TLS 1.2 CBC suites such as
 /// ECDHE-RSA-AES128-SHA256 included), TLS 1.2 and up, VERIFY_X509_STRICT |
@@ -1673,6 +1674,16 @@ fn tls_context() -> Result<openssl::ssl::SslContext, String> {
             .map_err(err)?;
         b.set_default_verify_paths().map_err(err)?;
         b.set_alpn_protos(b"\x08http/1.1").map_err(err)?;
+        // `context.post_handshake_auth = True`, which http.client sets on
+        // every HTTPS context it makes: the ClientHello then carries the
+        // post_handshake_auth extension (49). Some CDNs fingerprint the
+        // hello and refuse one without it -- openai.com's favicon answers
+        // Python with 200 and the same request minus extension 49 with 403.
+        // The openssl crate has no safe wrapper for this one setting.
+        //
+        // SAFETY: `b.as_ptr()` is the live SSL_CTX owned by `b`, and
+        // SSL_CTX_set_post_handshake_auth only stores a flag on it.
+        unsafe { openssl_sys::SSL_CTX_set_post_handshake_auth(b.as_ptr(), 1) };
         Ok(b.build())
     })
     .clone()

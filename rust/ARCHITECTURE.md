@@ -19,21 +19,16 @@ density and naming; do not invent new behaviour, do not "improve" logic.
 | — | `src/main.rs`: the `almanac-rs` binary (same CLI as `app.py`) |
 | — | `src/bin/almanac-parity.rs`: the parity runner |
 
-## Work-in-progress files (how parallel porting stays green)
+## How it was ported
 
-Every module has two files: `x.rs` (last version that compiled and passed)
-and `x.wip.rs` (being worked on). Cargo feature `wip-x` (underscores become
-dashes: `wip-plugin-setup`, UI: `wip-ui-store-actions`) builds the crate with
-the `.wip.rs` copy. So:
-
-1. Edit **only** your own `src/<m>.wip.rs` (and your `parity/cases_<m>.py`).
-2. Build and test with your feature: `--features wip-<m>`.
-3. When it compiles, its tests pass, and parity passes: **promote** it with
-   `cp src/<m>.wip.rs src/<m>.rs`. Promote early and often; other agents
-   build against the promoted copy.
-4. Never edit another module's files. If you need something from a module
-   that is still a stub, code against the signature it has, and say so in
-   your report. If a signature in another module is wrong, report it.
+The port was done module by module in parallel, each module with a
+work-in-progress twin behind a Cargo feature so one half-finished module never
+broke the shared build. Every module was then reviewed twice by a separate
+agent looking for differences from the Python, its Python tests ported, and
+its parity cases run against the Python on a real machine and in demo mode;
+every page was compared with the Python's screenshot in dark and light. The
+twins were removed once everything matched. The conventions below are what
+the code follows.
 
 ## Building (shared machine: 12 CPUs, 15 GB RAM)
 
@@ -43,15 +38,18 @@ Always build through the gate, with your own target directory:
 cd /home/tim/.local/share/almanac/rust
 export CARGO_TARGET_DIR=$PWD/target/agents/<your-module>
 [ -d "$CARGO_TARGET_DIR" ] || { mkdir -p target/agents; cp -a --reflink=always target/seed "$CARGO_TARGET_DIR"; }
-tools/cargo-slot cargo check --features wip-<m>
-tools/cargo-slot cargo test  --features wip-<m> --lib <m>::
+tools/cargo-slot cargo check
+tools/cargo-slot cargo test --lib <m>::
 ```
 
 `tools/cargo-slot` allows three builds at once across all agents; it waits
 for a free slot. `target/seed` has every dependency prebuilt. To add a crate
 use `cargo add <crate>` (never hand-edit Cargo.toml) and say so in your report.
 
-No `unsafe`. No panics in non-test code on anything that can fail at runtime
+No `unsafe`, with one documented exception: `icons.rs` turns on TLS
+post-handshake authentication through `openssl-sys`, because some vendors'
+sites (openai.com, gnome.org) refuse a TLS hello without it and Python's ssl
+module always sends it. No panics in non-test code on anything that can fail at runtime
 (I/O, parsing, subprocesses, network) — mirror the Python's `except` and
 fall back the same way it does. `unwrap()` only where the Python itself
 could not fail.
@@ -110,7 +108,7 @@ def cases():
     yield "contrast", {"a": "#fff", "b": "#000"}, lambda: theming.contrast("#fff", "#000")
 ```
 
-Run: `RUST_FEATURES=wip-<m> python3 parity/run.py <m>` (and again with
+Run: `python3 parity/run.py <m>` (and again with
 `--demo`). Cover **every public function**, with ordinary inputs, edge cases
 (empty, malformed, unicode), and — for modules that read the machine — the
 real machine as it is. Python's output is the answer; any difference is a

@@ -22,6 +22,34 @@ use crate::verify::{self, Outcome, ProbeValue, TryProbe};
 use crate::xdg;
 
 /// State only the Plugins section reads and writes.
+/// What `plugin_logo` shows beside a plugin (see `plugin_logo_choice`).
+/// The system icon shows first in every case; the others replace it when
+/// their image arrives.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum LogoChoice {
+    Vendor { key: String, domain: String },
+    Art { thumb: String },
+    Avatar { key: String, url: String },
+    Symbol { name: String },
+}
+
+/// Parity hook for `plugin_logo_choice` (reached through `ui::ai::parity`).
+pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
+    match func {
+        "plugin_logo_choice" => {
+            let i: plugins_mod::Installed =
+                serde_json::from_value(args.get("i").cloned().unwrap_or_default()).ok()?;
+            let listing: Option<store_mod::Plugin> = args
+                .get("listing")
+                .filter(|v| !v.is_null())
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            serde_json::to_value(Win::plugin_logo_choice(&i, listing.as_ref())).ok()
+        }
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 pub struct State {
     /// `self.plugins_body`: the page's column of sections.
@@ -1059,29 +1087,51 @@ impl Win {
             Ok(())
         };
 
-        let domain = plugins_mod::vendor_for(i);
-        let owner = plugins_mod::github_owner(i.state.as_ref().map(|s| s.url.as_str()).unwrap_or(""));
-        if !domain.is_empty() {
-            fetch(domain.clone(), String::new(), domain)?;
-        } else if let Some(listing) = listing.filter(|l| !l.thumb.is_empty()) {
-            let cached = store_mod::thumb_path(listing, false);
+        match Win::plugin_logo_choice(i, listing) {
+            LogoChoice::Vendor { key, domain } => fetch(key, String::new(), domain)?,
+            LogoChoice::Avatar { key, url } => fetch(key, url, String::new())?,
+            LogoChoice::Symbol { .. } => {}
+            LogoChoice::Art { .. } => {
+                let Some(listing) = listing else { return Ok(frame) };
+                let cached = store_mod::thumb_path(listing, false);
             let present = cached
                 .as_ref()
                 .is_some_and(|c| c.exists() && std::fs::metadata(c).map(|m| m.len() != 0).unwrap_or(false));
-            if present {
-                show(cached, true);
-            } else {
-                let listing = listing.clone();
-                let show = show.clone();
-                self.thumb_bg(
-                    move || store_mod::fetch_thumb(&listing, false),
-                    move |path| show(path, true),
-                );
+                if present {
+                    show(cached, true);
+                } else {
+                    let listing = listing.clone();
+                    let show = show.clone();
+                    self.thumb_bg(
+                        move || store_mod::fetch_thumb(&listing, false),
+                        move |path| show(path, true),
+                    );
+                }
             }
-        } else if symbol == plugins_mod::GENERIC && !owner.is_empty() {
-            fetch(format!("github-{owner}"), crate::icons::github_avatar(&owner), String::new())?;
         }
         Ok(frame)
+    }
+
+    /// The mark `plugin_logo` puts beside a plugin, decided without a
+    /// window: the vendor's logo, the marketplace art, the author's avatar
+    /// (only where no system icon says more), or the system icon alone.
+    pub fn plugin_logo_choice(i: &plugins_mod::Installed, listing: Option<&store_mod::Plugin>) -> LogoChoice {
+        let symbol = plugins_mod::symbol_for(i);
+        let domain = plugins_mod::vendor_for(i);
+        let owner = plugins_mod::github_owner(i.state.as_ref().map(|s| s.url.as_str()).unwrap_or(""));
+        if !domain.is_empty() {
+            LogoChoice::Vendor { key: domain.clone(), domain }
+        } else if let Some(listing) = listing.filter(|l| !l.thumb.is_empty()) {
+            LogoChoice::Art {
+                thumb: store_mod::thumb_path(listing, false)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            }
+        } else if symbol == plugins_mod::GENERIC && !owner.is_empty() {
+            LogoChoice::Avatar { key: format!("github-{owner}"), url: crate::icons::github_avatar(&owner) }
+        } else {
+            LogoChoice::Symbol { name: symbol }
+        }
     }
 
     /// A task step: drop a removed plugin's shortcut. Otherwise the
@@ -1913,11 +1963,30 @@ mod tests {
     use std::path::Path;
     use std::sync::Mutex;
 
+    #[test]
+    fn plugin_logo_choice_vendor_art_avatar_symbol() {
+        let state = |url: &str| {
+            Some(plugins_mod::State::new("p", plugins_mod::CURRENT, "", 0, url))
+        };
+        let mut i = plugins_mod::Installed { id: "tim.tailscale".into(), name: "My Tailscale".into(), ..Default::default() };
+        assert_eq!(
+            Win::plugin_logo_choice(&i, None),
+            LogoChoice::Vendor { key: "tailscale.com".into(), domain: "tailscale.com".into() }
+        );
+        i = plugins_mod::Installed { id: "a.thing".into(), name: "Thing".into(), state: state("https://github.com/someone/thing"), ..Default::default() };
+        assert_eq!(
+            Win::plugin_logo_choice(&i, None),
+            LogoChoice::Avatar { key: "github-someone".into(), url: "https://github.com/someone.png?size=128".into() }
+        );
+        let listing = store_mod::Plugin { id: "a.thing".into(), thumb: "img/t.webp".into(), ..Default::default() };
+        assert!(matches!(Win::plugin_logo_choice(&i, Some(&listing)), LogoChoice::Art { .. }));
+        // A system icon that says what it does wins over the author's face.
+        i = plugins_mod::Installed { id: "lxp.vitals".into(), name: "Vitals".into(), state: state("https://github.com/lxp/vitals"), ..Default::default() };
+        assert_eq!(Win::plugin_logo_choice(&i, None), LogoChoice::Symbol { name: "emblem-system-symbolic".into() });
+    }
+
     fn src() -> &'static str {
-        #[cfg(feature = "wip-ui-plugins")]
-        return include_str!("plugins.wip.rs");
-        #[cfg(not(feature = "wip-ui-plugins"))]
-        return include_str!("plugins.rs");
+        include_str!("plugins.rs")
     }
 
     fn css() -> &'static str {

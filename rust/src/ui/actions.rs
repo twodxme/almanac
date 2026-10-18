@@ -2022,7 +2022,7 @@ mod tests {
 
     /// The code under test, without this test module.
     fn code() -> String {
-        // file!() is this copy (actions.rs or actions.wip.rs), from the crate root.
+        // file!() is this file, from the crate root.
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/", file!()))
             .unwrap_or_default();
         src.split("#[cfg(test)]").next().unwrap_or("").to_string()

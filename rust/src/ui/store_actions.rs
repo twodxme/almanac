@@ -1487,8 +1487,7 @@ mod tests {
 
     const CSS: &str = include_str!("../../data/style.css");
 
-    /// The non-test half of this file (whichever copy is being built, the
-    /// .wip.rs or the promoted one): what the inspection tests look at.
+    /// The non-test half of this file: what the inspection tests look at.
     fn source() -> &'static str {
         static SRC: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file!());

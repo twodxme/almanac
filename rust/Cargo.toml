@@ -36,6 +36,7 @@ libc = "0.2.191"
 nix = { version = "0.30.1", default-features = false, features = ["process", "signal", "user"] }
 num-bigint = "0.5.1"
 openssl = "0.10.75"
+openssl-sys = "0.9.117"
 regex = "1.13.1"
 rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "ring", "logging"] }
@@ -49,54 +50,6 @@ toml = "1.1.8"
 toml_v10 = { version = "0.8", package = "toml" }
 ureq = { version = "3.4.2", features = ["json", "rustls"], default-features = false }
 url = "2.5.8"
-
-[features]
-# One per module: build with the work-in-progress copy (ARCHITECTURE.md).
-wip-agents = []
-wip-ai = []
-wip-appimage = []
-wip-autorun = []
-wip-autostart = []
-wip-autoupdate = []
-wip-demo = []
-wip-featured = []
-wip-ghcache = []
-wip-guard = []
-wip-history = []
-wip-i18n = []
-wip-icons = []
-wip-inventory = []
-wip-maintenance = []
-wip-mimeguard = []
-wip-patches = []
-wip-picks = []
-wip-plugin-setup = []
-wip-plugins = []
-wip-security = []
-wip-selfupdate = []
-wip-services = []
-wip-settings = []
-wip-shortcuts = []
-wip-snapshots = []
-wip-sources = []
-wip-store = []
-wip-tasks = []
-wip-themeart = []
-wip-theming = []
-wip-verify = []
-wip-watcher = []
-wip-xdg = []
-wip-ui-shell = []
-wip-ui-packages = []
-wip-ui-store = []
-wip-ui-store-actions = []
-wip-ui-plugins = []
-wip-ui-switchboard = []
-wip-ui-history = []
-wip-ui-ai = []
-wip-ui-preferences = []
-wip-ui-today = []
-wip-ui-actions = []
 
 [profile.release]
 lto = "thin"

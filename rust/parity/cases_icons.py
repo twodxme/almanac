@@ -619,6 +619,35 @@ def _tls_fetch_case(key, url, **kw):
     return _case("fetch", fn, key=key, url=url, domain="", **kw)
 
 
+class _PhaHandler(_Handler):
+    """Answers 403 to a client whose ClientHello did not offer post-handshake
+    auth (extension 49), the way some CDNs refuse a hello that does not look
+    like a known client: openai.com's favicon did exactly this to the Rust
+    port. http.client offers it on every HTTPS context it makes."""
+
+    def do_GET(self):
+        try:
+            self.connection.verify_client_post_handshake()
+        except _ssl.SSLError:
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        super().do_GET()
+
+
+def _pha_server():
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _PhaHandler)
+    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(_TLS / "good.pem"), str(_TLS / "good.key"))
+    ctx.post_handshake_auth = True
+    ctx.verify_mode = _ssl.CERT_OPTIONAL
+    ctx.load_verify_locations(str(_TLS / "ca.pem"))
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1]
+
+
 def _review2_cases():
     # -- TLS: OpenSSL (urllib's default context) vs rustls.
     try:
@@ -628,6 +657,15 @@ def _review2_cases():
                    "cbc384": _tls_server("good", "ECDHE-RSA-AES256-SHA384")}
     except (OSError, _sp.CalledProcessError, _ssl.SSLError):
         servers = {}
+    try:
+        pha = _pha_server() if servers else None
+    except (OSError, _ssl.SSLError):
+        pha = None
+    if pha:
+        # The hello offers post-handshake auth, as http.client's does.
+        url = f"https://localhost:{pha}/png"
+        yield "_fetch", {"url": url}, (lambda url=url: _fresh("_fetch", url))
+        yield _tls_fetch_case("k", url=url, settings=ON)
     for name, port in servers.items():
         for host in ("localhost", "127.0.0.1", "localhost."):
             url = f"https://{host}:{port}/png"

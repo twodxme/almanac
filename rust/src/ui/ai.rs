@@ -17,6 +17,45 @@ use crate::ui::shell::{self, Win};
 pub struct State {
     pub ai_page: Option<gtk::Box>,
     pub ai_pending: i64,
+    /// Which `app_icon` call each table image last came from (see
+    /// `icon_claim`), so a vendor icon that lands after its row widget was
+    /// rebound to another app is dropped instead of painted on the wrong row.
+    pub icon_claims: Vec<(glib::WeakRef<gtk::Image>, u64)>,
+    pub icon_claim_seq: u64,
+}
+
+/// What `app_icon` shows for an app, decided without a window (the theme
+/// lookup is passed in), in `_app_icon`'s order: the .desktop icon from the
+/// theme, the .desktop icon as a file, the vendor's mark (with the glyph shown
+/// until it arrives), the per-source glyph.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum IconChoice {
+    Theme { name: String },
+    File { path: String },
+    Vendor { key: String, domain: String, url: String, glyph: String },
+    Glyph { name: String },
+}
+
+/// Parity hook for the icon choices the tables make (`almanac-parity ui`).
+pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
+    let app = || -> App {
+        serde_json::from_value(args.get("app").cloned().unwrap_or_default()).unwrap_or_default()
+    };
+    Some(match func {
+        "_icon_source" => {
+            let (k, d, u) = Win::icon_source(&app());
+            serde_json::json!([k, d, u])
+        }
+        "app_icon_choice" => {
+            let names: Vec<String> = args
+                .get("has_icon")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            serde_json::to_value(Win::app_icon_choice(&app(), &|n| names.iter().any(|x| x == n))).ok()?
+        }
+        _ => return crate::ui::plugins::parity(func, args),
+    })
 }
 
 #[derive(Clone)]
@@ -431,54 +470,99 @@ impl Win {
     /// Returns False when it fell through to the glyph, so the caller can
     /// dim it.
     pub fn app_icon(&self, image: &gtk::Image, app: &App, size: i32) -> bool {
-        let icon = extra_str(app, "icon");
         let theme = gtk::IconTheme::for_display(&WidgetExt::display(&self.window));
-        if !icon.is_empty() && theme.has_icon(&icon) {
-            image.set_icon_name(Some(&icon));
-            return true;
+        let claim = self.icon_claim(image);
+        match Win::app_icon_choice(app, &|name| theme.has_icon(name)) {
+            IconChoice::Theme { name } => {
+                image.set_icon_name(Some(&name));
+                true
+            }
+            IconChoice::File { path } => {
+                image.set_from_file(Some(&path));
+                true
+            }
+            IconChoice::Vendor { key, domain, url, glyph } => {
+                // `icons.cached` raising ends `_app_icon` with the image as it
+                // was; `icons.fetch` raising on the pool is kept by its future,
+                // unseen, and the glyph stays.
+                match crate::icons::cached_checked(&key) {
+                    Ok(Some(hit)) => {
+                        self.set_icon(image, &hit, size);
+                        return true;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return false;
+                    }
+                }
+                // Not fetched yet: show the glyph now, swap it in when it lands.
+                image.set_icon_name(Some(&glyph));
+                let w = self.clone();
+                let image = image.clone();
+                self.thumb_submit(
+                    move || crate::icons::fetch_checked(&key, &url, &domain),
+                    move |path| {
+                        // A table recycles its row widgets: by the time a
+                        // download lands, this image may show another app.
+                        if let Ok(path) = path {
+                            if w.icon_claimed(&image, claim) {
+                                w.icon_arrived(&image, size, path);
+                            }
+                        }
+                    },
+                );
+                true
+            }
+            IconChoice::Glyph { name } => {
+                image.set_icon_name(Some(&name));
+                false
+            }
+        }
+    }
+
+    /// The decision `app_icon` makes, without a window: `has_icon` is the
+    /// icon theme's lookup.
+    pub fn app_icon_choice(app: &App, has_icon: &dyn Fn(&str) -> bool) -> IconChoice {
+        let icon = extra_str(app, "icon");
+        if !icon.is_empty() && has_icon(&icon) {
+            return IconChoice::Theme { name: icon };
         }
         if !icon.is_empty() && Path::new(&icon).is_file() {
-            image.set_from_file(Some(&icon));
-            return true;
+            return IconChoice::File { path: icon };
         }
-
+        let glyph = shell::fallback_icon(&app.source).unwrap_or("package-x-generic").to_string();
         let (key, domain, url) = Win::icon_source(app);
         if !key.is_empty() {
-            // `icons.cached` raising ends `_app_icon` with the image as it
-            // was; `icons.fetch` raising on the pool is kept by its future,
-            // unseen, and the glyph stays.
-            match crate::icons::cached_checked(&key) {
-                Ok(Some(hit)) => {
-                    self.set_icon(image, &hit, size);
-                    return true;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!("almanac: {e}");
-                    return false;
-                }
-            }
-            // Not fetched yet: show the glyph now, swap it in when it lands.
-            image.set_icon_name(Some(
-                shell::fallback_icon(&app.source).unwrap_or("package-x-generic"),
-            ));
-            let w = self.clone();
-            let image = image.clone();
-            self.thumb_submit(
-                move || crate::icons::fetch_checked(&key, &url, &domain),
-                move |path| {
-                    if let Ok(path) = path {
-                        w.icon_arrived(&image, size, path);
-                    }
-                },
-            );
-            return true;
+            return IconChoice::Vendor { key, domain, url, glyph };
         }
+        IconChoice::Glyph { name: glyph }
+    }
 
-        image.set_icon_name(Some(
-            shell::fallback_icon(&app.source).unwrap_or("package-x-generic"),
-        ));
-        false
+    /// Mark `image` as showing what this `app_icon` call chose; returns the
+    /// mark a later download checks with `icon_claimed`.
+    fn icon_claim(&self, image: &gtk::Image) -> u64 {
+        let mut st = self.ai.borrow_mut();
+        st.icon_claim_seq += 1;
+        let seq = st.icon_claim_seq;
+        if let Some(slot) = st.icon_claims.iter_mut().find(|(w, _)| w.upgrade().as_ref() == Some(image)) {
+            slot.1 = seq;
+        } else {
+            if st.icon_claims.len() >= 256 {
+                st.icon_claims.retain(|(w, _)| w.upgrade().is_some());
+            }
+            st.icon_claims.push((image.downgrade(), seq));
+        }
+        seq
+    }
+
+    /// Whether `image` still shows the app the `claim` was made for.
+    fn icon_claimed(&self, image: &gtk::Image, claim: u64) -> bool {
+        self.ai
+            .borrow()
+            .icon_claims
+            .iter()
+            .any(|(w, seq)| *seq == claim && w.upgrade().as_ref() == Some(image))
     }
 
     /// (cache key, domain, explicit url) for an entry's vendor mark.
@@ -770,9 +854,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    #[cfg(feature = "wip-ui-ai")]
-    const SRC: &str = include_str!("ai.wip.rs");
-    #[cfg(not(feature = "wip-ui-ai"))]
     const SRC: &str = include_str!("ai.rs");
     const CSS: &str = include_str!("../../data/style.css");
 
@@ -915,5 +996,42 @@ mod tests {
         assert_eq!(Win::icon_source(&app).0, "example.com");
         let empty = App::new("y", "1", "pacman");
         assert_eq!(Win::icon_source(&empty), (String::new(), String::new(), String::new()));
+    }
+
+    #[test]
+    fn app_icon_choice_theme_then_file_then_vendor_then_glyph() {
+        let none = |_: &str| false;
+        let mut app = App::new("radar", "0.1", inventory::LOCAL);
+        assert_eq!(
+            Win::app_icon_choice(&app, &none),
+            IconChoice::Glyph { name: "applications-engineering".into() }
+        );
+        app.extra.insert("url".into(), serde_json::json!("https://github.com/wesleygrimes/omastorm"));
+        assert_eq!(
+            Win::app_icon_choice(&app, &none),
+            IconChoice::Vendor {
+                key: "gh-wesleygrimes".into(),
+                domain: String::new(),
+                url: "https://github.com/wesleygrimes.png?size=128".into(),
+                glyph: "applications-engineering".into(),
+            }
+        );
+        app.extra.insert("icon".into(), serde_json::json!("/nonexistent/icon.png"));
+        assert!(matches!(Win::app_icon_choice(&app, &none), IconChoice::Vendor { .. }));
+        let file = std::env::temp_dir().join(format!("almanac-icon-choice-{}.png", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        app.extra.insert("icon".into(), serde_json::json!(file.to_string_lossy()));
+        assert_eq!(
+            Win::app_icon_choice(&app, &none),
+            IconChoice::File { path: file.to_string_lossy().into_owned() }
+        );
+        let _ = std::fs::remove_file(&file);
+        app.extra.insert("icon".into(), serde_json::json!("radar"));
+        assert_eq!(
+            Win::app_icon_choice(&app, &|n| n == "radar"),
+            IconChoice::Theme { name: "radar".into() }
+        );
+        let odd = App::new("x", "1", "no-such-source");
+        assert_eq!(Win::app_icon_choice(&odd, &none), IconChoice::Glyph { name: "package-x-generic".into() });
     }
 }

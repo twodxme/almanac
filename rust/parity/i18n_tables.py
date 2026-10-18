@@ -10,7 +10,7 @@ the version `unicodedata.unidata_version` reports; every alias is checked
 against Python's own lookup.
 
 Writes rust/data/i18n/codecs.txt and rust/data/i18n/names.txt, and prints
-the Rust tables for `str.lower()` to paste into src/i18n.wip.rs.
+the Rust tables for `str.lower()` to paste into src/i18n.rs.
 """
 import json
 import sys

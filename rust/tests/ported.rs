@@ -19,8 +19,7 @@ use almanac::ui::shell::CSS;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// Every source file of the app as it is built (the promoted `x.rs`, never
-/// the `x.wip.rs` twin), with its test module cut off -- the Python skips
+/// Every source file of the app, with its test module cut off -- the Python skips
 /// `test_app.py` the same way.
 fn sources(under: &str) -> Vec<(PathBuf, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -29,9 +28,7 @@ fn sources(under: &str) -> Vec<(PathBuf, String)> {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, out);
-            } else if p.extension().is_some_and(|x| x == "rs")
-                && !p.to_string_lossy().ends_with(".wip.rs")
-            {
+            } else if p.extension().is_some_and(|x| x == "rs") {
                 out.push(p);
             }
         }

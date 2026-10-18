@@ -2576,7 +2576,7 @@ mod tests {
             if !window.contains(&format!("name(&{var}"))
                 && !window.contains("Property::Label")
             {
-                unnamed.push(format!("packages.wip.rs:{} {var}", i + 1));
+                unnamed.push(format!("packages.rs:{} {var}", i + 1));
             }
         }
         assert_eq!(unnamed, Vec::<String>::new());

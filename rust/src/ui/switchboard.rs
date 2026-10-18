@@ -549,9 +549,6 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    #[cfg(feature = "wip-ui-switchboard")]
-    const SRC: &str = include_str!("switchboard.wip.rs");
-    #[cfg(not(feature = "wip-ui-switchboard"))]
     const SRC: &str = include_str!("switchboard.rs");
 
     fn root() -> &'static Path {

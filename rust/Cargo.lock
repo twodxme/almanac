@@ -31,6 +31,7 @@ dependencies = [
  "nix",
  "num-bigint",
  "openssl",
+ "openssl-sys",
  "regex",
  "rustix",
  "rustls",

@@ -41,6 +41,8 @@ fn call(module: &str, func: &str, args: &serde_json::Value) -> Option<serde_json
         "verify" => almanac::verify::parity(func, args),
         "watcher" => almanac::watcher::parity(func, args),
         "xdg" => almanac::xdg::parity(func, args),
+        // The icon choices the window makes (`ui/ai.rs`, `ui/plugins.rs`).
+        "ui" => almanac::ui::ai::parity(func, args),
         _ => None,
     }
 }

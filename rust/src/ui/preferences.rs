@@ -468,8 +468,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    /// This file's own source (`inspect.getsource` in the Python tests),
-    /// whichever copy (`.rs` or `.wip.rs`) is being built.
+    /// This file's own source (`inspect.getsource` in the Python tests).
     fn source() -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file!());
         std::fs::read_to_string(path).unwrap_or_default()
