@@ -2806,7 +2806,8 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
                             }
                         },
                         &mut |reg| {
-                            e3.borrow_mut().push(json!(["save", reg.to_value_rendered(reg.root)]));
+                            // (not json!: it re-serialises the value, recursively)
+                            e3.borrow_mut().push(Value::Array(vec!["save".into(), reg.to_value_rendered(reg.root)]));
                             match args.get("save_err").and_then(Value::as_str) {
                                 Some(m) => Err(format!("OSError: {m}")),
                                 None => Ok(()),

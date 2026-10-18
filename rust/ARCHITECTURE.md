@@ -124,6 +124,39 @@ they would run, the plan, the parse) and point file-writing functions at a
 temp dir via `XDG_STATE_HOME` / `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` / `HOME`
 set in both the Python case and the Rust args.
 
+Run every module in a process of its own with `--each` (what CI does: a
+crash or an OOM kill names its module and the rest still run). `run.py`
+re-executes itself with the default 8 MiB stack (`ulimit -s 8192`): CPython
+3.14 nests json (and repr) as deep as its C stack allows, the cases and the
+port's limits are measured at 8 MiB, and a larger stack moves every
+RecursionError a case pins. `parity/environment.py` prints what the cases
+depend on (the interpreter, the stack, the json depth each thread reaches);
+`parity/pystack.py` holds the worker-thread limit, which another machine's
+CPython misses by a level (its TLS), so its exact boundary is only pinned
+where it holds. CPython 3.14.8 is the reference (what Arch ships); an older
+interpreter differs in `gettext.c2py` and stringprep (KNOWN in run.py).
+
+## Deep input
+
+Python's json reads files nested ~52000 levels deep (the C stack), and the
+app reads caches and state files a user (or a bug) could have nested that
+deep. Rust code must never recurse once per level of such input on a stack
+it does not size: a stack overflow aborts the whole process, on any thread.
+
+- Python value types (`PyVal`, `PyValue`, ...) get `Clone`, `PartialEq` and
+  `Drop` without recursion: `util::tree_clone_eq!` and a hand-written `Drop`
+  that takes children out flat. Conversions use `util::tree::fold` /
+  `fold_ids` (arenas); a deep `serde_json::Value` is cloned, compared and
+  dropped with `util::tree::{clone_value, eq_value, drop_value}`.
+- Where recursion is simpler and bounded (Python's recursion limit, ~1000),
+  run it on `util::with_stack(util::DEEP_STACK, ...)`; walks that may go
+  52000 deep through serde use `util::JSON_STACK`. The thread keeps the
+  caller's name (settings tells the main thread from a worker by it).
+- `ui::shell::spawn_bg` runs background work on a `JSON_STACK` thread.
+- The parity binary writes answers on a large-stack thread but runs the
+  cases on its main thread, so a small stack (`ulimit -s 256` with
+  `ALMANAC_PARITY_STACK=keep`) still catches a port function that recurses.
+
 ## Tests
 
 Port every test in `../test_app.py` that exercises your module, into your
