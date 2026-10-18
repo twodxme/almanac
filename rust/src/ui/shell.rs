@@ -653,6 +653,37 @@ pub struct Shared {
     /// `self._plugin_updates`: written by the Plugins page, read by the
     /// header's primary action (`getattr(self, "_plugin_updates", 0)`).
     pub plugin_updates: usize,
+    /// `self.store_sort`: the App Store's sort dropdown. Built by the store
+    /// section, reset by the AI page's filter reset, set by Today's shelf links.
+    pub store_sort: Option<gtk::DropDown>,
+    /// The rest of the store's filter drawer (`self.store_cat`,
+    /// `store_trust`, `store_market`, `store_verified`, `store_installed`):
+    /// built by the store section, reset by `store_reset_filters` (ai).
+    pub store_cat: Option<gtk::DropDown>,
+    pub store_trust: Option<gtk::DropDown>,
+    pub store_market: Option<gtk::DropDown>,
+    pub store_verified: Option<gtk::ToggleButton>,
+    pub store_installed: Option<gtk::ToggleButton>,
+    /// `self.store_drawer`: the filter drawer behind `filter_btn`, built by
+    /// the store section and attached by `show_page`.
+    pub store_drawer: Option<gtk::Popover>,
+    /// `self.store_model`: the cards showing, as boxed `PluginItem`s. Filled
+    /// by the store section, read by `on_card_activated` (store_actions).
+    pub store_model: gio::ListStore,
+    /// `self.store_grid`: its column count follows `set_narrow`.
+    pub store_grid: Option<gtk::GridView>,
+    /// `self._store_markets`: market ids parallel to the marketplace
+    /// dropdown ("" = all). Read by `pin_market` / `retitle_store`.
+    pub store_markets: Vec<String>,
+    /// `self._filters_for`: whether the filter lists were last built for the
+    /// Themes page (None: never built). Read by `pin_market`.
+    pub filters_for: Option<bool>,
+    /// `self._plugins is None`: true until the catalog is first assigned,
+    /// and again after a Preferences marketplace switch (`reload_store`).
+    /// Whoever assigns `plugins` (`store_loaded`, `feat_reload`'s fetch)
+    /// sets it back to false; `plugins` stays a `Vec` because every other
+    /// reader treats None as an empty list.
+    pub plugins_none: bool,
 }
 
 impl Default for Shared {
@@ -693,6 +724,18 @@ impl Default for Shared {
             feat_loaded_once: false,
             reported: BTreeSet::new(),
             plugin_updates: 0,
+            store_sort: None,
+            store_cat: None,
+            store_trust: None,
+            store_market: None,
+            store_verified: None,
+            store_installed: None,
+            store_drawer: None,
+            store_model: gio::ListStore::new::<glib::BoxedAnyObject>(),
+            store_grid: None,
+            store_markets: vec![String::new()],
+            filters_for: None,
+            plugins_none: true,
         }
     }
 }
