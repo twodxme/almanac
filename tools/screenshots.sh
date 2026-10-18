@@ -15,7 +15,20 @@ tmp=$(mktemp -d)
 broadway=
 trap 'kill "$broadway" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
-shoot() {   # page, file, seconds to settle
+shoot() {   # page, file, seconds to settle -- retried if the frame is blank
+  for attempt in 1 2 3; do
+    shoot_once "$@"
+    # A blank frame (Chromium photographed before Broadway drew anything)
+    # is a single colour; a real window never is.
+    colours=$(magick "$out/$2" -format %k info:)
+    [ "$colours" -gt 1 ] && { echo "$out/$2"; return; }
+    echo "$2: blank frame, attempt $attempt" >&2
+  done
+  echo "$2: still blank after 3 attempts" >&2
+  exit 1
+}
+
+shoot_once() {
   page=$1 file=$2 settle=$3
   # A fresh display per page: a reused one replays the previous window.
   display=:17 port=8097                       # 8080 + display number
@@ -28,15 +41,20 @@ shoot() {   # page, file, seconds to settle
     dbus-run-session -- python3 app.py --page "$page" >/dev/null 2>&1 &
   app=$!
   sleep "$settle"
-  chromium --headless=new --disable-gpu --hide-scrollbars \
-    --user-data-dir="$tmp/chromium" --window-size=1100,840 \
-    --virtual-time-budget=3000 --screenshot="$tmp/$file" \
-    "http://127.0.0.1:$port/" >/dev/null 2>&1
+  # Broadway can hand a new viewer an empty first frame; looking again at
+  # the same window a few seconds later gets the real one.
+  for look in 1 2 3 4; do
+    chromium --headless=new --disable-gpu --hide-scrollbars \
+      --user-data-dir="$tmp/chromium" --window-size=1100,840 \
+      --virtual-time-budget=3000 --screenshot="$tmp/$file" \
+      "http://127.0.0.1:$port/" >/dev/null 2>&1
+    [ "$(magick "$tmp/$file" -format %k info:)" -gt 1 ] && break
+    sleep 3
+  done
   kill "$app" "$broadway" 2>/dev/null || true
   wait "$app" "$broadway" 2>/dev/null || true
   # Broadway places the window at 25,25, at its 1024x768 screen size.
   magick "$tmp/$file" -crop 1024x768+25+25 +repage "$out/$file"
-  echo "$out/$file"
 }
 
 shoot today     today.png     35
