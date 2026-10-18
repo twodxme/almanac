@@ -92,4 +92,7 @@ jobs:
         run: |
           gtk4-broadwayd :6 &
           sleep 1
-          GDK_BACKEND=broadway BROADWAY_DISPLAY=:6 python3 rust/parity/run.py --demo
+          # The release build from the Build step; -u so progress shows live.
+          GDK_BACKEND=broadway BROADWAY_DISPLAY=:6 \
+            ALMANAC_PARITY_BIN=rust/target/release/almanac-parity \
+            python3 -u rust/parity/run.py --demo

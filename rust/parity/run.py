@@ -128,6 +128,11 @@ def known(module: str, func: str, diff: str):
 
 
 def build() -> Path:
+    # CI hands over the release binary it already built, rather than paying
+    # for a second, debug compile of the whole crate here.
+    prebuilt = os.environ.get("ALMANAC_PARITY_BIN")
+    if prebuilt:
+        return Path(prebuilt).resolve()
     feats = os.environ.get("RUST_FEATURES", "")
     cmd = [str(RUST / "tools/cargo-slot"), "cargo", "build", "-q", "--bin", "almanac-parity"]
     if feats:
