@@ -1,15 +1,18 @@
 # Maintainer: twodxme <tim@wraplabs.com>
-# The release package: built from a tagged release. almanac-git, in the
-# repository root, builds the newest commit instead.
+# The release package of the Rust port: built from a tagged release, from
+# the crate in rust/. It replaces the Python release package of the same
+# name (packaging/aur/almanac), so the two are never installed together.
 pkgname=almanac
-pkgver=1.7.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
-arch=('any')
+arch=('x86_64' 'aarch64')
 url="https://github.com/twodxme/almanac"
 license=('MIT')
-depends=('python' 'gtk4' 'libadwaita' 'python-gobject' 'python-cairo' 'pacman'
-         'polkit')
+# What the binary links (readelf -d on a release build: NEEDED), plus what
+# it runs (pacman, pkexec).
+depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'gdk-pixbuf2' 'cairo' 'openssl'
+         'libgcc' 'glibc' 'pacman' 'polkit')
 optdepends=(
   'git: local checkouts, plugin updates and carrying local changes forward'
   'snapper: a snapshot before every package Almanac installs or updates'
@@ -23,25 +26,53 @@ optdepends=(
   'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
   'webp-pixbuf-loader: marketplace card artwork'
 )
-makedepends=('gettext')
+makedepends=('cargo' 'gettext')
 checkdepends=('git')
+# makepkg's LTO adds -flto to CFLAGS, which turns ring's C objects into GCC
+# bitcode the Rust linker (lld) cannot read: undefined ring_core_* symbols.
+# The crate's own LTO (profile.release, lto = "thin") still applies.
+options=('!lto')
 conflicts=('almanac-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('55d1861b0592ee262907f0a215a44f6c38eee8506571c07b3146f78ece479570')
+sha256sums=('7fcbbf6ae7c24c64e597cd567621b21b3c0b9c99a77a1899b87a9342f935bde4')
+
+prepare() {
+  cd "$srcdir/$pkgname-$pkgver/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --release --locked
+}
 
 check() {
-  cd "$srcdir/$pkgname-$pkgver"
-  python3 test_app.py
+  cd "$srcdir/$pkgname-$pkgver/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Some tests build GTK widgets and need a display; CI runs this under
+  # Broadway (GDK_BACKEND=broadway), as it runs the Python tests.
+  cargo test --locked
 }
 
 package() {
   cd "$srcdir/$pkgname-$pkgver"
-  local appdir="$pkgdir/usr/share/$pkgname"
 
-  # The application itself.
-  install -dm755 "$appdir"
-  install -Dm644 *.py "$appdir/"
-  install -Dm644 icons/*.svg -t "$appdir/icons/"
+  # The application itself: one binary. Run as `almanac` it takes the
+  # io.github.twodxme.Almanac application id the desktop file names.
+  # Installed this way, Almanac sees that pacman owns the binary and defers
+  # its own updates to the package manager.
+  install -Dm755 rust/target/release/almanac-rs "$pkgdir/usr/bin/$pkgname"
+  # The scheduled update's non-pacman half (autorun.py in the Python package).
+  install -Dm755 rust/target/release/almanac-autorun \
+    "$pkgdir/usr/lib/$pkgname/almanac-autorun"
+
+  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them
+  # (the Python package keeps them beside app.py).
+  install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"
 
   # Translations, compiled into the system locale directory.
   for po in po/*.po; do
@@ -50,15 +81,6 @@ package() {
     install -dm755 "$pkgdir/usr/share/locale/$lang/LC_MESSAGES"
     msgfmt -o "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/almanac.mo" "$po"
   done
-
-  # Installed this way, Almanac detects that pacman owns it and defers its
-  # own updates to the package manager rather than offering a git pull.
-  install -dm755 "$pkgdir/usr/bin"
-  cat > "$pkgdir/usr/bin/$pkgname" <<'LAUNCH'
-#!/bin/bash
-exec python3 /usr/share/almanac/app.py "$@"
-LAUNCH
-  chmod 755 "$pkgdir/usr/bin/$pkgname"
 
   install -Dm644 docs/almanac.desktop \
     "$pkgdir/usr/share/applications/$pkgname.desktop"
