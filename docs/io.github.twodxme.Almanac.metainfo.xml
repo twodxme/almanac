@@ -96,6 +96,22 @@
   </requires>
 
   <releases>
+    <release version="2.0.0" date="2026-10-18">
+      <description>
+        <p>Almanac is now written in Rust.</p>
+        <ul>
+          <li>The same app, ported line for line: every page, dialog, action
+          and command-line option, with settings, history and caches from 1.x
+          carried over untouched</li>
+          <li>Held to the Python original by a parity check that runs both on
+          the same inputs, and by the Python's whole test suite, ported</li>
+          <li>Fixed: a late icon download could land on a different row of a
+          list that had been scrolled</li>
+          <li>Vendor logos from sites that refuse a TLS handshake without
+          post-handshake authentication now load</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.0" date="2026-10-17">
       <description>
         <p>Today's picks, and text you can read on any theme.</p>

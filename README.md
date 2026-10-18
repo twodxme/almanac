@@ -19,6 +19,13 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 
 </div>
 
+> **Almanac 2.0 is written in Rust.** Same app, same look, same files on
+> disk: it was ported line for line from the Python original, every page
+> compared screenshot-for-screenshot, and the two are held together by a
+> parity check that runs both on the same inputs (some 29,000 cases) and
+> fails on any difference. Settings, history and caches from 1.x carry over
+> untouched. The Python sources stay in this repository as the reference.
+
 ---
 
 ## Why
@@ -325,27 +332,34 @@ lines your change is set aside as a git stash — never discarded.
 ## Install
 
 **As a package** (recommended — Almanac then appears in its own Updates list
-as a package, and defers its updates to `pacman`). It is not on the AUR yet;
-the `PKGBUILD` in this repository builds it, and runs the tests while doing so:
+as a package, and defers its updates to `pacman`). The `PKGBUILD` in this
+repository builds the Rust app from the latest commit and runs its tests
+while doing so:
 
 ```bash
 git clone https://github.com/twodxme/almanac && cd almanac
 makepkg -si
 ```
 
-**From source:**
+**From source** (needs `cargo`):
 
 ```bash
 git clone https://github.com/twodxme/almanac ~/.local/share/almanac
-cd ~/.local/share/almanac
-ln -sf "$PWD/almanac" ~/.local/bin/almanac
-install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
-install -Dm644 docs/io.github.twodxme.Almanac.svg \
+cd ~/.local/share/almanac/rust
+cargo build --release
+install -Dm755 target/release/almanac-rs ~/.local/bin/almanac
+install -Dm644 ../docs/almanac.desktop ~/.local/share/applications/almanac.desktop
+install -Dm644 ../docs/io.github.twodxme.Almanac.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
 ```
 
 Then run `almanac`, or launch it from your application menu.
+
+**Beside a 1.x install:** `rust/packaging/almanac-rs` runs the release build
+from a checkout under its own application id (`io.github.twodxme.Almanac.Rs`),
+so the Python and Rust versions can be open at the same time while you
+compare them.
 
 Runtime data lives in `~/.local/state/almanac/`, never inside the checkout, so
 Almanac can update itself with a fast-forward pull without fighting its own
@@ -353,10 +367,10 @@ state.
 
 ### Updating
 
-Almanac appears in its own Updates list. **☰ → Update Almanac…** does a
-`git pull --ff-only` and offers to restart. It cannot overwrite local work: if
-you have uncommitted changes, the pull refuses and says so rather than creating
-a conflict inside a running application.
+Almanac appears in its own Updates list. Installed as a package, it defers to
+`pacman`, like everything else on the system. A build from a checkout cannot
+replace itself while it runs, so it says so and tells you to pull and run
+`cargo build --release` instead.
 
 ---
 
@@ -364,7 +378,7 @@ a conflict inside a running application.
 
 | | |
 |---|---|
-| **Required** | Python 3.11+, GTK 4, libadwaita 1.9+ |
+| **Required** | GTK 4, libadwaita 1.9+, OpenSSL (building it: `cargo`) |
 | **Full experience** | Arch or Omarchy — `pacman`, `yay`, `checkupdates` |
 | **Optional** | `omarchy` (plugins, themes, system updates) · `flatpak` · `mise` · `gh` · `snapper` (undoable updates) · `xdg-utils` · `xdg-terminal-exec` |
 
@@ -476,10 +490,13 @@ checks, packaging for other distributions, or a theme that makes it look
 better than I can.
 
 ```bash
-python3 test_app.py
+cd rust
+cargo test                       # 509 tests
+python3 parity/run.py --demo     # the Rust against the Python, case by case
 ```
 
-183 tests, weighted toward the destructive paths — removal, orphan cleanup,
+The Rust tests are the Python's 184 (`python3 test_app.py`) ported one for
+one, plus the port's own, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

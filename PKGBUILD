@@ -1,14 +1,18 @@
 # Maintainer: twodxme <tim@wraplabs.com>
+# Almanac from the latest commit: the Rust app in rust/. The tagged release
+# is packaging/aur/almanac.
 pkgname=almanac-git
 _pkgname=almanac
-pkgver=r66.1a5dabe
+pkgver=2.0.0.r0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
-arch=('any')
+arch=('x86_64' 'aarch64')
 url="https://github.com/twodxme/almanac"
 license=('MIT')
-depends=('python' 'gtk4' 'libadwaita' 'python-gobject' 'python-cairo' 'pacman'
-         'polkit')
+# What the binary links (readelf -d on a release build: NEEDED), plus what
+# it runs (pacman, pkexec).
+depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'gdk-pixbuf2' 'cairo' 'openssl'
+         'libgcc' 'glibc' 'pacman' 'polkit')
 optdepends=(
   'git: local checkouts, plugin updates and carrying local changes forward'
   'snapper: a snapshot before every package Almanac installs or updates'
@@ -22,7 +26,13 @@ optdepends=(
   'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
   'webp-pixbuf-loader: marketplace card artwork'
 )
-makedepends=('git' 'gettext')
+makedepends=('cargo' 'gettext')
+makedepends+=('git')
+checkdepends=('git')
+# makepkg's LTO adds -flto to CFLAGS, which turns ring's C objects into GCC
+# bitcode the Rust linker (lld) cannot read: undefined ring_core_* symbols.
+# The crate's own LTO (profile.release, lto = "thin") still applies.
+options=('!lto')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 source=("git+$url.git")
@@ -30,22 +40,47 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/$_pkgname"
-  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  printf "%s.r%s.%s" "$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1)" \
+    "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$_pkgname/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$_pkgname/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --release --locked
 }
 
 check() {
-  cd "$srcdir/$_pkgname"
-  python3 test_app.py
+  cd "$srcdir/$_pkgname/rust"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Some tests build GTK widgets and need a display; CI runs this under
+  # Broadway (GDK_BACKEND=broadway), as it runs the Python tests.
+  cargo test --locked
 }
 
 package() {
   cd "$srcdir/$_pkgname"
-  local appdir="$pkgdir/usr/share/$_pkgname"
 
-  # The application itself.
-  install -dm755 "$appdir"
-  install -Dm644 *.py "$appdir/"
-  install -Dm644 icons/*.svg -t "$appdir/icons/"
+  # The application itself: one binary. Run as `almanac` it takes the
+  # io.github.twodxme.Almanac application id the desktop file names.
+  # Installed this way, Almanac sees that pacman owns the binary and defers
+  # its own updates to the package manager.
+  install -Dm755 rust/target/release/almanac-rs "$pkgdir/usr/bin/$_pkgname"
+  # The scheduled update's non-pacman half (autorun.py in the Python package).
+  install -Dm755 rust/target/release/almanac-autorun \
+    "$pkgdir/usr/lib/$_pkgname/almanac-autorun"
+
+  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them
+  # (the Python package keeps them beside app.py).
+  install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"
 
   # Translations, compiled into the system locale directory.
   for po in po/*.po; do
@@ -55,15 +90,6 @@ package() {
     msgfmt -o "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/almanac.mo" "$po"
   done
 
-  # Installed this way, Almanac detects that pacman owns it and defers its
-  # own updates to the package manager rather than offering a git pull.
-  install -dm755 "$pkgdir/usr/bin"
-  cat > "$pkgdir/usr/bin/$_pkgname" <<'LAUNCH'
-#!/bin/bash
-exec python3 /usr/share/almanac/app.py "$@"
-LAUNCH
-  chmod 755 "$pkgdir/usr/bin/$_pkgname"
-
   install -Dm644 docs/almanac.desktop \
     "$pkgdir/usr/share/applications/$_pkgname.desktop"
   install -Dm644 docs/io.github.twodxme.Almanac.metainfo.xml \
@@ -71,6 +97,6 @@ LAUNCH
   install -Dm644 docs/io.github.twodxme.Almanac.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg"
 
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
 }
