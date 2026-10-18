@@ -134,7 +134,8 @@ def can_spend() -> bool:
     return not b["known"] or b["remaining"] > RESERVE
 
 
-def get_json(url: str, ttl: int = DEFAULT_TTL, allow_stale: bool = True):
+def get_json(url: str, ttl: int = DEFAULT_TTL, allow_stale: bool = True,
+             accept: str = "application/vnd.github+json"):
     """A cached GitHub API GET. Returns parsed JSON, or None.
 
     Never raises for network or quota problems: callers want "what do we know
@@ -153,7 +154,7 @@ def get_json(url: str, ttl: int = DEFAULT_TTL, allow_stale: bool = True):
             return entry.get("body") if (entry and allow_stale) else None
 
         headers = {"User-Agent": UA,
-                   "Accept": "application/vnd.github+json",
+                   "Accept": accept,
                    "X-GitHub-Api-Version": "2022-11-28"}
         tok = token()
         if tok:

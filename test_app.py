@@ -2067,6 +2067,204 @@ class PolishRegressions(unittest.TestCase):
         self.assertEqual(ai._tilde("/usr/bin/x"), "/usr/bin/x")
 
 
+class TextContrast(unittest.TestCase):
+    """Every kind of text measured against the surfaces it sits on, for a
+    low-contrast dark palette (Everforest) and a light one."""
+    EVERFOREST = {"mode": "dark", "background": "#2d353b", "dark_background": "#21272c",
+                  "darker_background": "#181d20", "lighter_background": "#343f44",
+                  "foreground": "#d3c6aa", "dark_foreground": "#4f585e",
+                  "accent": "#7fbbb3", "red": "#e67e80", "yellow": "#dbbc7f",
+                  "green": "#a7c080"}
+    LIGHT = {"mode": "light", "background": "#fdf6e3", "dark_background": "#eee8d5",
+             "darker_background": "#e4ddc8", "lighter_background": "#ffffff",
+             "foreground": "#586e75", "accent": "#268bd2", "red": "#dc322f",
+             "yellow": "#b58900", "green": "#859900"}
+
+    def check(self, pal):
+        import theming
+        css = theming.css_for(pal)
+        colours = dict(re.findall(r"@define-color (\w+) (#[0-9a-f]{6});", css))
+        surfaces = [pal["lighter_background"], pal["background"]]
+        for name in ("accent_color", "success_color", "warning_color", "error_color"):
+            for surf in surfaces:
+                self.assertGreaterEqual(theming.contrast(colours[name], surf), 5.5,
+                                        f"{name} on {surf}")
+        fg = colours["window_fg_color"]
+        for surf in surfaces:
+            self.assertGreaterEqual(theming.contrast(fg, surf), 7, f"text on {surf}")
+        pct = int(re.search(r"--dim-opacity: (\d+)%", css).group(1))
+        for surf in surfaces:
+            dim = theming.mix(surf, fg, pct / 100)
+            self.assertGreaterEqual(theming.contrast(dim, surf), 5.5, f"dim on {surf}")
+        for fill, text in re.findall(r"background: (#[0-9a-f]{6}); color: (#[0-9a-f]{6})", css):
+            best = max(theming.contrast(fill, c) for c in ("#000000", "#ffffff"))
+            self.assertGreaterEqual(theming.contrast(fill, text), min(7, best), fill)
+        return css
+
+    def test_a_low_contrast_dark_palette(self):
+        css = self.check(self.EVERFOREST)
+        # The terminal colour once painted as dim text, at 1.5:1.
+        self.assertNotIn("#4f585e", css)
+
+    def test_a_light_palette(self):
+        self.check(self.LIGHT)
+
+    def test_stock_theme_pills_are_measured(self):
+        import theming
+        css = theming.pill_css({"error": "#c01c28", "warning": "#cd9309",
+                                "success": "#2ec27e", "accent": "#3584e4"})
+        for fill, text in re.findall(r"background: (#[0-9a-f]{6}); color: (#[0-9a-f]{6})", css):
+            self.assertGreaterEqual(theming.contrast(fill, text), 4.5, fill)
+
+    def test_translucent_theme_colours_are_measured_as_shown(self):
+        """libadwaita's dark card is white at 8% over #222226. Measured as
+        plain white, the pick card got black text on a dark card."""
+        import theming
+        card = theming.flatten((1, 1, 1, 0.08), (0x22 / 255, 0x22 / 255, 0x26 / 255))
+        self.assertLess(theming._luminance(card), 0.05)
+        css = theming.pick_css(card, "#ffffff", "#78aeed")
+        text = re.search(r"\.pick-card \{ color: (#[0-9a-f]{6})", css).group(1)
+        self.assertGreater(theming._luminance(text), 0.5)
+
+    def test_nothing_dims_text_twice(self):
+        """A label with .dim-label must not also carry its own opacity: the
+        provenance line was faded to about 40% that way."""
+        src = (Path(__file__).parent / "app.py").read_text()
+        css = src.split('_CSS = b"""')[1].split('"""')[0]
+        for m in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+            body = m.group(2)
+            declared = re.search(r"(?<![-\w])opacity\s*:\s*([^;]+)", body)
+            if declared and "var(--dim-opacity)" not in declared.group(1):
+                self.fail(f"{m.group(1).strip()} sets its own opacity")
+
+
+class TodaysPicks(unittest.TestCase):
+    """The picks are ranked from measured figures, labelled with what each
+    one actually counts, fair across marketplaces, and stable within a day."""
+    NOW = 1_800_000_000.0
+
+    def plugin(self, pid, market="omarchy", stars=50, days_ago=1):
+        import store
+        from datetime import datetime, timezone
+        p = store.Plugin(id=pid, name=pid.title(), stars=stars, market=market,
+                         repo=f"https://github.com/o/{pid}", installable=True,
+                         verified=True, install_cmd="x",
+                         updated=datetime.fromtimestamp(
+                             self.NOW - days_ago * 86400, timezone.utc).isoformat())
+        p.installed = False
+        return p
+
+    def setUp(self):
+        import picks
+        self.picks = picks
+        # Every candidate counts as reviewed and installable here.
+        self._eligible = picks.eligible
+        picks.eligible = lambda p: not p.installed and bool(picks._github(p.repo))
+
+    def tearDown(self):
+        self.picks.eligible = self._eligible
+
+    def test_a_short_event_feed_is_labelled_with_the_hours_it_covers(self):
+        import ghcache
+        now = self.NOW
+        iso = lambda h: __import__("datetime").datetime.fromtimestamp(  # noqa: E731
+            now - h * 3600, __import__("datetime").timezone.utc).isoformat()
+        busy = [{"type": "WatchEvent", "created_at": iso(i / 50)} for i in range(100)]
+        quiet = [{"type": "WatchEvent", "created_at": iso(2)},
+                 {"type": "ForkEvent", "created_at": iso(30)}]
+        real = ghcache.get_json
+        try:
+            ghcache.get_json = lambda url, **k: busy if "busy" in url else quiet
+            self.assertEqual(self.picks.activity_today("o/busy", now, pages=1),
+                             (100, 0, 1))
+            # A feed that ran out is complete: the day is fully counted.
+            self.assertEqual(self.picks.activity_today("o/quiet", now), (1, 0, 24))
+        finally:
+            ghcache.get_json = real
+        s = self.picks.Signals(stars_today=100, window_hours=2)
+        self.assertIn(("+100", "stars in 2h"), self.picks.reasons(self.plugin("a"), s))
+        s = self.picks.Signals(stars_today=1)
+        self.assertIn(("+1", "star today"), self.picks.reasons(self.plugin("a"), s))
+
+    def test_a_release_total_is_never_called_today(self):
+        p = self.plugin("a")
+        total = self.picks.Signals(downloads=5000, downloads_label="v2.0")
+        self.assertIn(("5k", "downloads of v2.0"), self.picks.reasons(p, total))
+        daily = self.picks.Signals(downloads=40, downloads_today=True)
+        self.assertIn(("40", "downloads since yesterday"), self.picks.reasons(p, daily))
+
+    def test_marketplaces_are_judged_against_themselves(self):
+        big = [self.plugin(f"app{i}", "artcraft", stars=15000 + i) for i in range(3)]
+        small = [self.plugin(f"plug{i}", "omarchy", stars=40 + i) for i in range(3)]
+        cands = big + small
+        sig = ([self.picks.Signals(stars_today=150, comments=100)] * 3
+               + [self.picks.Signals(stars_today=3, comments=4)] * 3)
+        ranked = self.picks.rank(cands, sig, self.NOW, set())
+        chosen = self.picks.choose(ranked)
+        self.assertEqual({pk.plugin.market for pk in chosen}, {"artcraft", "omarchy"})
+
+    def test_the_shortlist_takes_turns_between_marketplaces(self):
+        pool = ([self.plugin(f"app{i}", "artcraft", stars=9000) for i in range(6)]
+                + [self.plugin(f"plug{i}", "omarchy", stars=9) for i in range(6)])
+        short = self.picks.shortlist(pool, 4, self.NOW)
+        self.assertEqual([p.market for p in short],
+                         ["artcraft", "omarchy", "artcraft", "omarchy"])
+        stale = [self.plugin("old", days_ago=30)]
+        self.assertEqual(self.picks.shortlist(stale, 4, self.NOW), [])
+
+    def test_yesterdays_pick_makes_room(self):
+        cands = [self.plugin("a"), self.plugin("b")]
+        sig = [self.picks.Signals(stars_today=10), self.picks.Signals(stars_today=8)]
+        self.assertEqual(self.picks.rank(cands, sig, self.NOW, set())[0].plugin.id, "a")
+        self.assertEqual(self.picks.rank(cands, sig, self.NOW, {"a"})[0].plugin.id, "b")
+
+    def test_picks_hold_for_the_day_and_switch_off(self):
+        import settings
+        import tempfile
+        import os
+        import ghcache
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("XDG_STATE_HOME")
+            os.environ["XDG_STATE_HOME"] = tmp
+            real = ghcache.get_json
+            numbers = {"a": 1, "b": 9}
+            ghcache.get_json = lambda url, *a, **k: (
+                [{"type": "WatchEvent", "created_at": "2027-01-15T07:00:00+00:00"}]
+                * numbers["a" if "/o/a/" in url else "b"] if "/events" in url else [])
+            try:
+                cands = [self.plugin("a"), self.plugin("b")]
+                first = [pk.plugin.id for pk in self.picks.today(cands, self.NOW)]
+                numbers.update(a=50, b=1)          # the afternoon's figures
+                again = [pk.plugin.id for pk in self.picks.today(cands, self.NOW + 3600)]
+                self.assertEqual(first, again)
+                settings.set("net_daily_picks", False)
+                self.assertEqual(self.picks.today(cands, self.NOW), [])
+            finally:
+                ghcache.get_json = real
+                if old is None:
+                    os.environ.pop("XDG_STATE_HOME", None)
+                else:
+                    os.environ["XDG_STATE_HOME"] = old
+
+    def test_the_wash_keeps_accent_text_legible(self):
+        """Text on the picks' accent wash, measured at its strongest point,
+        for a dark and a light palette and for stock Adwaita."""
+        import theming
+        cases = [(p["lighter_background"], p["foreground"], p["accent"])
+                 for p in (TextContrast.EVERFOREST, TextContrast.LIGHT)]
+        cases += [("#ffffff", "#000000cc"[:7], "#3584e4"),       # Adwaita light
+                  ("#383838", "#ffffff", "#78aeed")]             # Adwaita dark
+        for card, fg, accent in cases:
+            css = theming.pick_css(card, fg, accent)
+            text = re.search(r"\.pick-card \{ color: (#[0-9a-f]{6})", css).group(1)
+            eyebrow = re.search(r"\.pick-eyebrow \{ color: (#[0-9a-f]{6})", css).group(1)
+            wash = theming.mix(card, accent, theming.PICK_WASH)
+            self.assertGreaterEqual(theming.contrast(text, wash), 7, card)
+            self.assertGreaterEqual(theming.contrast(eyebrow, wash), 5.5, card)
+        # and the palette path emits it
+        self.assertIn(".pick-eyebrow", theming.css_for(TextContrast.EVERFOREST))
+
+
 class PackageIntegrity(unittest.TestCase):
     """"Permission denied" and "missing" are not the same answer.
 

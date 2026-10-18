@@ -46,6 +46,7 @@ import maintenance  # noqa: E402
 import selfupdate  # noqa: E402
 import theming  # noqa: E402
 import featured  # noqa: E402
+import picks as picks_mod  # noqa: E402
 import ai  # noqa: E402
 import agents as agents_mod  # noqa: E402
 import autoupdate  # noqa: E402
@@ -93,6 +94,12 @@ def _name(widget, text: str):
     widget.update_property([Gtk.AccessibleProperty.LABEL], [text])
 
 _CSS = b"""
+/* Secondary text everywhere is the foreground at --dim-opacity. libadwaita's
+   55% leaves captions faint even on stock Adwaita; 72% keeps them clearly
+   secondary at a comfortable contrast. An Omarchy theme computes its own
+   (theming.py), measured against its palette. */
+:root { --dim-opacity: 72%; }
+
 /* Sidebar counts. Three levels: a count is usually just a number, an
    amber one wants looking at, and only a security update earns red. The
    label is vertically centred at the widget level -- without that the
@@ -101,7 +108,7 @@ _CSS = b"""
   background: alpha(@window_fg_color, 0.10);
   color: @window_fg_color;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: bold;
   font-feature-settings: "tnum";
   padding: 1px 7px;
@@ -109,9 +116,9 @@ _CSS = b"""
   min-height: 0;
 }
 .count-badge.is-warn {
-  /* Same measured pair as .pill-warn: AA in both palettes. */
-  background: alpha(@warning_color, 0.12);
-  color: mix(@warning_color, @window_fg_color, 0.15);
+  /* Solid, like .pill-warn; its text is measured at runtime too. */
+  background: @warning_bg_color;
+  color: @warning_fg_color;
 }
 .count-badge.is-crit {
   /* The only solid fill in the sidebar, so it is the only thing that
@@ -143,40 +150,50 @@ row:selected .count-badge.is-crit {
 }
 .plugin-logo.has-art { background: none; }
 
-/* Status pills: small text, so held to WCAG AA (4.5:1). A 12% tint with the
-   text mixed 15% toward the foreground measures at least 5.07:1 in both
-   libadwaita's light and dark palettes; a fuller tint fell to 4.03:1. */
+/* Status pills: solid fills carrying the status colour, with text measured
+   against each fill at runtime (theming.pill_css) -- tinted pills could not
+   be both coloured and readable on a low-contrast palette. These are the
+   fallbacks until that has run. Neutral pills stay a quiet tint. */
 .pill, .pill-crit, .pill-warn, .pill-ok, .pill-accent, .pill-quiet {
   background: alpha(@window_fg_color, 0.09);
   border-radius: 999px;
   padding: 1px 8px;
-  font-size: 0.70rem;
+  font-size: 0.75rem;
 }
-.pill-crit {
-  background: alpha(@error_color, 0.12);
-  color: mix(@error_color, @window_fg_color, 0.15);
-  font-weight: bold;
-}
-.pill-warn {
-  background: alpha(@warning_color, 0.12);
-  color: mix(@warning_color, @window_fg_color, 0.15);
-}
-.pill-ok {
-  background: alpha(@success_color, 0.12);
-  color: mix(@success_color, @window_fg_color, 0.15);
-  font-weight: bold;
-}
-.pill-accent {
-  background: alpha(@accent_color, 0.12);
-  color: mix(@accent_color, @window_fg_color, 0.15);
-  font-weight: bold;
-}
+.pill-crit { background: @error_bg_color; color: @error_fg_color; font-weight: bold; }
+.pill-warn { background: @warning_bg_color; color: @warning_fg_color; }
+.pill-ok { background: @success_bg_color; color: @success_fg_color; font-weight: bold; }
+.pill-accent { background: @accent_bg_color; color: @accent_fg_color; font-weight: bold; }
 .pill-quiet {
-  opacity: 0.7;
+  opacity: var(--dim-opacity);
 }
 .link-ish {
   color: @accent_color;
 }
+
+/* ---- Today's picks: the standouts, deliberately not a store card ----
+   Wide rather than tall, artwork as big as the card allows, an accent wash
+   and border, and the evidence shown as figures. The wash peaks at 12%
+   (theming.PICK_WASH), and the card's text colours are measured against
+   that peak at runtime (theming.pick_css), since a wash costs contrast. */
+.pick-card {
+  background-color: @card_bg_color;
+  background-image: linear-gradient(110deg, alpha(@accent_bg_color, 0.12),
+                                    alpha(@accent_bg_color, 0.03) 70%);
+  border: 1px solid alpha(@accent_bg_color, 0.55);
+  border-radius: 16px;
+  box-shadow: 0 2px 10px alpha(black, 0.18);
+}
+.pick-card:hover { border-color: @accent_bg_color; }
+.pick-art { border-radius: 15px 0 0 15px; background: alpha(@window_fg_color, 0.05); }
+.pick-eyebrow {
+  color: @accent_color;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.pick-name { font-size: 1.35rem; font-weight: 800; }
+.pick-num { font-size: 1.05rem; font-weight: 800; }
 
 /* ---- plugin marketplace cards ---- */
 .store-card {
@@ -209,8 +226,8 @@ row:selected .count-badge.is-crit {
 }
 .store-name { font-weight: bold; }
 .store-verified { color: @success_color; }
-.store-stars { font-size: 0.72rem; }
-.stats { font-size: 0.74rem; }
+.store-stars { font-size: 0.75rem; }
+.stats { font-size: 0.76rem; }
 /* The package table on its card: transparent, so the card's colour shows,
    exactly as a boxed list's rows do. */
 columnview.almanac-table,
@@ -229,7 +246,7 @@ columnview.almanac-table > listview > row > cell { padding-top: 4px; padding-bot
   padding-bottom: 0;
 }
 .almanac-sidebar > row { margin-top: 0; margin-bottom: 1px; }
-.stat-key { opacity: 0.62; }
+.stat-key { opacity: var(--dim-opacity); }
 .stat-val {
   font-weight: bold;
   font-feature-settings: "tnum";
@@ -252,10 +269,9 @@ columnview.almanac-table > listview > row > cell { padding-top: 4px; padding-bot
   font-size: 0.86rem;
   color: alpha(#ffffff, 0.82);
 }
-.store-prov {
-  font-size: 0.68rem;
-  opacity: 0.75;
-}
+/* Dimmed once, by .dim-label like all secondary text -- it used to be
+   faded again here, to about 40% in the smallest text in the app. */
+.store-prov { font-size: 0.75rem; }
 /* Provenance chips. Four states rather than a tick, because "reviewed",
    "verified", "reviewed but upstream has moved since" and "nobody checked"
    are four different promises. */
@@ -515,6 +531,8 @@ class AlmanacWindow(Adw.ApplicationWindow):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
         self._apply_theme()
         self._theme_monitors = theming.watch(self._on_theme_changed)
+        Adw.StyleManager.get_default().connect(
+            "notify::dark", lambda *_: GLib.idle_add(self._apply_theme))
 
         self.filter_key = "all"
         self.query = ""
@@ -2371,9 +2389,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
         emptied and GTK's own theme shows through unmodified.
         """
         palette = theming.load_palette()
+        css = theming.css_for(palette)
+        if not palette:
+            # No Omarchy palette: measure the pills against whatever theme GTK
+            # is showing, so they read as well there as on an Omarchy one.
+            fills = self._theme_fills()
+            css += theming.pill_css(fills)
+            css += theming.pick_css(fills.get("card", ""), fills.get("fg", ""),
+                                    fills.get("accent", ""))
         try:
-            self._theme_provider.load_from_data(
-                theming.css_for(palette).encode())
+            self._theme_provider.load_from_data(css.encode())
         except GLib.Error:
             return
         dark = theming.is_dark(palette)
@@ -2381,6 +2406,31 @@ class AlmanacWindow(Adw.ApplicationWindow):
             Adw.StyleManager.get_default().set_color_scheme(
                 Adw.ColorScheme.FORCE_DARK if dark
                 else Adw.ColorScheme.FORCE_LIGHT)
+
+    def _theme_fills(self) -> dict:
+        """The active GTK theme's status fills, as hex. lookup_color is the
+        only way GTK 4 exposes a named colour; it is deprecated, not gone."""
+        import warnings
+        out = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ctx = self.get_style_context()
+            # Translucent colours are flattened onto the window first:
+            # libadwaita's dark card is white at 8%, and read as plain white
+            # it measured "black text" onto a dark card.
+            found, under = ctx.lookup_color("window_bg_color")
+            base = (under.red, under.green, under.blue) if found else None
+            for role, name in (("error", "error_bg_color"),
+                               ("warning", "warning_bg_color"),
+                               ("success", "success_bg_color"),
+                               ("accent", "accent_bg_color"),
+                               ("card", "card_bg_color"),
+                               ("fg", "window_fg_color")):
+                found, rgba = ctx.lookup_color(name)
+                if found:
+                    out[role] = theming.flatten(
+                        (rgba.red, rgba.green, rgba.blue, rgba.alpha), base)
+        return out
 
     def _on_theme_changed(self):
         # The theme is swapped as several filesystem operations, so this
@@ -4977,6 +5027,11 @@ class AlmanacWindow(Adw.ApplicationWindow):
                _("getartcraft.com and its GitHub releases"), reload_store)
         switch(net, "net_security_tracker", _("Arch Security Tracker"),
                _("security.archlinux.org — the whole advisory list, matched here"))
+        switch(net, "net_daily_picks", _("Today's picks"),
+               _("GitHub: recent stars, forks, downloads and comments for a "
+                 "shortlist of about ten listings, once a day"),
+               lambda: self._feat_reload() if settings.get("net_daily_picks")
+               else self._picks_show([]))
         switch(net, "net_vendor_icons", _("Logos"),
                _("Each from its vendor's own site, or GitHub for avatars; "
                  "logos already saved still show"))
@@ -5046,6 +5101,7 @@ class AlmanacWindow(Adw.ApplicationWindow):
                                  margin_start=12, margin_end=12,
                                  margin_top=12, margin_bottom=16)
         self.feat_page.append(self._build_hero())
+        self.feat_page.append(self._build_picks())
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_child(self.feat_page)
@@ -5053,6 +5109,161 @@ class AlmanacWindow(Adw.ApplicationWindow):
         return page
 
     HERO_HEIGHT = 120
+    PICK_HEIGHT = 176
+    PICK_ART = 196
+
+    def _build_picks(self):
+        """Today's picks: hidden until there is something to show, so a
+        machine with the network switched off just does not have the shelf."""
+        self.picks_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                                  spacing=4, visible=False)
+        head = Gtk.Label(label=_("Today's picks"), xalign=0)
+        head.add_css_class("heading")
+        why = _("Standouts today among what you can install here: stars and "
+                "forks in the last 24 hours, downloads, and how much people "
+                "are talking about it this week — measured on GitHub, and "
+                "each figure says what it counts.")
+        head.set_tooltip_text(why)
+        head.update_property([Gtk.AccessibleProperty.DESCRIPTION], [why])
+        self.picks_area.append(head)
+        # Two across when there is room, stacked when there is not.
+        self.picks_flow = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+            min_children_per_line=1, max_children_per_line=2,
+            column_spacing=12, row_spacing=12)
+        self.picks_area.append(self.picks_flow)
+        return self.picks_area
+
+    def _picks_reload(self, plugins):
+        def work():
+            try:
+                found = picks_mod.today(plugins)
+            except Exception:                           # noqa: BLE001
+                found = []
+            GLib.idle_add(self._picks_show, found)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _picks_show(self, found):
+        while (child := self.picks_flow.get_first_child()) is not None:
+            self.picks_flow.remove(child)
+        for i, pick in enumerate(found):
+            self.picks_flow.append(self._pick_card(pick, i))
+        self.picks_area.set_visible(bool(found))
+        return False
+
+    def _pick_card(self, pick, index):
+        p = pick.plugin
+        card = Gtk.Box()
+        card.add_css_class("pick-card")
+        card.set_overflow(Gtk.Overflow.HIDDEN)
+        card.set_size_request(300, self.PICK_HEIGHT)
+        card.set_cursor_from_name("pointer")
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_a, pl=p: self._show_plugin(pl))
+        card.add_controller(click)
+
+        # Artwork, as large as the card is tall. Same clamp as the store
+        # cards: the picture must not vote on the card's width.
+        art = Gtk.Box()
+        art.add_css_class("pick-art")
+        art.set_size_request(self.PICK_ART, -1)
+        # Set explicitly, or the picture's hexpand propagates up and every
+        # card's art takes a different share of the width.
+        art.set_hexpand(False)
+        art.set_overflow(Gtk.Overflow.HIDDEN)
+        pic = Gtk.Picture(content_fit=Gtk.ContentFit.COVER,
+                          hexpand=True, vexpand=True)
+        clamp = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        clamp.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+        clamp.set_propagate_natural_width(False)
+        clamp.set_propagate_natural_height(False)
+        clamp.set_child(pic)
+        art.append(clamp)
+        card.append(art)
+        self._pick_art(p, pic, art)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                       hexpand=True, margin_start=16, margin_end=16,
+                       margin_top=12, margin_bottom=12)
+        what = _("App") if p.install_kind == "appimage" else _("Plugin")
+        eyebrow = Gtk.Label(
+            label=(f"★ {what} of the day" if index == 0
+                   else f"{what} of the day").upper(), xalign=0)
+        eyebrow.add_css_class("pick-eyebrow")
+        body.append(eyebrow)
+        name = Gtk.Label(label=p.name, xalign=0,
+                         ellipsize=Pango.EllipsizeMode.END)
+        name.add_css_class("pick-name")
+        body.append(name)
+        sub = Gtk.Label(label=p.subtitle, xalign=0,
+                        ellipsize=Pango.EllipsizeMode.END)
+        sub.add_css_class("caption")
+        sub.add_css_class("dim-label")
+        body.append(sub)
+        desc = Gtk.Label(label=p.description or "", xalign=0, wrap=True,
+                         lines=2, ellipsize=Pango.EllipsizeMode.END,
+                         margin_top=4, vexpand=True, valign=Gtk.Align.START)
+        desc.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        desc.set_width_chars(20)
+        desc.set_max_width_chars(60)
+        body.append(desc)
+
+        foot = Gtk.Box(spacing=16)
+        for number, label in pick.reasons:
+            stat = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            n = Gtk.Label(label=number, xalign=0)
+            n.add_css_class("pick-num")
+            t = Gtk.Label(label=label, xalign=0,
+                          ellipsize=Pango.EllipsizeMode.END)
+            t.set_max_width_chars(26)          # "downloads since yesterday"
+            t.add_css_class("caption")
+            t.add_css_class("dim-label")
+            stat.append(n)
+            stat.append(t)
+            stat.update_property([Gtk.AccessibleProperty.LABEL],
+                                 [f"{number} {label}"])
+            foot.append(stat)
+        foot.append(Gtk.Box(hexpand=True))
+        btn = Gtk.Button(icon_name=INSTALL_ICON, valign=Gtk.Align.END)
+        btn.add_css_class("suggested-action")
+        btn.add_css_class("circular")
+        _name(btn, f"Install {p.name}")
+        btn.connect("clicked", self.on_plugin_install, p)
+        foot.append(btn)
+        body.append(foot)
+        card.append(body)
+
+        card.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"{what} of the day: {p.name}. "
+             + ", ".join(f"{n} {l}" for n, l in pick.reasons)])
+        card.set_tooltip_text(p.description or p.name)
+        return card
+
+    def _pick_art(self, p, pic, art):
+        """The listing's screenshot, at a size worth looking at; the accent
+        tile with initials when it has none."""
+        def put(path):
+            tex = self._texture(path, 640) if path else None
+            if tex is not None:
+                pic.set_paintable(tex)
+            else:
+                pic.set_visible(False)
+                tile = Gtk.Label(label=p.initials or p.name[:2].upper(),
+                                 hexpand=True, vexpand=True)
+                tile.add_css_class("store-initials")
+                art.add_css_class(f"acc-{p.accent}" if p.accent in store_mod.ACCENTS
+                                  else "acc-none")
+                art.append(tile)
+            return False
+        cached = store_mod.thumb_path(p)
+        if cached is not None and cached.exists() and cached.stat().st_size:
+            put(cached)
+        elif p.thumb:
+            self._thumb_pool.submit(
+                lambda: GLib.idle_add(put, store_mod.fetch_thumb(p)))
+        else:
+            put(None)
 
     def _build_hero(self):
         """The machine's own wallpaper, with the state of the machine on it.
@@ -5149,14 +5360,16 @@ class AlmanacWindow(Adw.ApplicationWindow):
             self._findings = findings
             shelves = featured.build(apps, findings, plugins)
             GLib.idle_add(self._feat_show, shelves)
+            if plugins:
+                GLib.idle_add(self._picks_reload, plugins)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _feat_show(self, shelves):
         self._busy(False)
         self._shelves = shelves
-        # Keep the hero; replace everything under it.
-        while (child := self.hero.get_next_sibling()) is not None:
+        # Keep the hero and the picks; replace everything under them.
+        while (child := self.picks_area.get_next_sibling()) is not None:
             self.feat_page.remove(child)
 
         problems = 0

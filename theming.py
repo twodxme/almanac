@@ -116,6 +116,118 @@ def contrast(a: str, b: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
+# Contrast targets. WCAG AA asks 4.5:1 of body text; secondary text here is
+# often small (captions, pills), so it is held to more than the minimum.
+TEXT_TARGET = 5.5        # secondary and accent-coloured text on any surface
+BODY_TARGET = 7.0        # primary text: WCAG AAA, the most legible tier
+
+
+def _hex6(value: str) -> str:
+    h = (value or "").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return "#" + h.lower() if len(h) == 6 else ""
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """`a` moved a fraction `t` of the way to `b`."""
+    a, b = _hex6(a), _hex6(b)
+    if not a or not b:
+        return a or b
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb))
+
+
+def legible(color: str, toward: str, surfaces: list[str], target: float) -> str:
+    """`color`, moved toward `toward` only as far as it takes to reach
+    `target` contrast on every surface -- the theme's hue, kept wherever it
+    already reads."""
+    if not color:
+        return ""
+    for step in range(0, 51):
+        c = mix(color, toward, step / 50)
+        if all(contrast(c, s) >= target for s in surfaces if s):
+            return c
+    # The theme's own text is not enough (a light theme's foreground can
+    # itself be ~5:1): go on toward black or white, whichever the surface
+    # wants.
+    extreme = readable_on(next((s for s in surfaces if s), "#000000"))
+    for step in range(1, 51):
+        c = mix(toward, extreme, step / 50)
+        if all(contrast(c, s) >= target for s in surfaces if s):
+            return c
+    return extreme
+
+
+def dim_opacity(fg: str, surfaces: list[str], target: float) -> int:
+    """The faintest libadwaita can draw dimmed text (an opacity of the
+    foreground) while it still reaches `target` on every surface, in percent.
+    Never fainter than libadwaita's own 55%."""
+    for pct in range(55, 101):
+        if all(contrast(mix(s, fg, pct / 100), s) >= target for s in surfaces if s):
+            return pct
+    return 100
+
+
+# Status pills are solid: the status colour as the fill, text measured against
+# it. Tinted pills kept the colour in the text, and on a low-contrast palette
+# that text could not be both coloured and readable (Everforest's red read at
+# 3.6:1); solid fills carry the colour and leave the text free to be legible.
+PILL_FILLS = (
+    ("pill-crit", "error"), ("pill-warn", "warning"),
+    ("pill-ok", "success"), ("pill-accent", "accent"),
+    ("count-badge.is-warn", "warning"),
+)
+
+
+def pill_css(fills: dict[str, str], prefer: tuple[str, ...] | list[str] = ()) -> str:
+    """Solid pill rules: each fill with the text that reads best on it.
+
+    `prefer` are the theme's own dark and light text colours; one is used
+    when it reaches 7:1, so the pill still looks like the theme, and black or
+    white otherwise.
+    """
+    lines = []
+    for cls, role in PILL_FILLS:
+        fill = _hex6(fills.get(role, ""))
+        if not fill:
+            continue
+        own = [c for c in prefer if c and contrast(c, fill) >= 7]
+        text = (max(own, key=lambda c: contrast(c, fill)) if own
+                else readable_on(fill))
+        lines.append(f".{cls} {{ background: {fill}; color: {text}; }}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+# Today's picks sit on the card colour washed toward the accent. That wash
+# lowers the contrast of everything on it, so the card's text is measured
+# against the strongest point of it rather than borrowed from a plain card.
+PICK_WASH = 0.12
+
+
+def pick_css(card: str, fg: str, accent: str) -> str:
+    """Text colours for the picks' accent-washed card."""
+    card, fg, accent = _hex6(card), _hex6(fg), _hex6(accent)
+    if not (card and fg and accent):
+        return ""
+    wash = mix(card, accent, PICK_WASH)
+    text = legible(fg, readable_on(wash), [wash], BODY_TARGET)
+    eyebrow = legible(accent, text, [wash], TEXT_TARGET)
+    return (f".pick-card {{ color: {text}; }}\n"
+            f".pick-eyebrow {{ color: {eyebrow}; }}\n")
+
+
+def flatten(rgba: tuple, under: tuple | None) -> str:
+    """A colour with alpha (0-1 channels), as the opaque hex it shows as
+    over `under` (an opaque rgb, 0-1). Contrast is only defined for what is
+    actually on screen."""
+    r, g, b, a = rgba
+    if under is not None and a < 1:
+        r, g, b = (c * a + u * (1 - a) for c, u in zip((r, g, b), under))
+    return "#" + "".join(f"{round(c * 255):02x}" for c in (r, g, b))
+
+
 def readable_on(background: str) -> str:
     """Black or white, whichever actually reads better on this colour.
 
@@ -154,6 +266,10 @@ def css_for(palette: dict) -> str:
     bg_dkr  = _pick(palette, "darker_background", "dark_background", "background")
     bg_lit  = _pick(palette, "lighter_background", "background")
     fg      = _pick(palette, "foreground")
+    # Primary text held to 7:1 on the lightest surface it is drawn on (the
+    # cards); a theme that already reads that well is left exactly as it is.
+    if fg:
+        fg = legible(fg, readable_on(bg_lit or bg), [bg_lit, bg], BODY_TARGET)
     fg_dim  = _pick(palette, "dark_foreground", "muted", "foreground")
     accent  = _pick(palette, "accent", "blue")
     select  = _pick(palette, "selection")
@@ -196,13 +312,39 @@ def css_for(palette: dict) -> str:
         ("success_fg_color", readable_on(_pick(palette, "green"))),
     ]
 
+    # Text colours, measured. A theme's accent and semantic colours are made
+    # for fills; as text on its own backgrounds they can fall short (in
+    # Everforest red text read at 3.6:1 in a pill). libadwaita keeps the text
+    # variants (accent_color, success_color…) apart from the fills
+    # (accent_bg_color…), so only the text is lifted, toward the foreground,
+    # and only as far as it needs to go.
+    surfaces = [bg_lit, bg]
+    css_pairs_raw = list(pairs)
+    if fg:
+        text = ("accent_color", "success_color", "warning_color",
+                "error_color", "destructive_color")
+        pairs = [(name, legible(value, fg, surfaces, TEXT_TARGET)
+                  if name in text and value else value)
+                 for name, value in pairs]
+
     lines = [f"@define-color {name} {value};"
              for name, value in pairs if value]
 
-    # Dim text is set as an opacity by libadwaita, which washes out on a
-    # low-contrast theme; the theme's own muted colour is the better answer.
-    if fg_dim:
-        lines.append(f".dim-label {{ color: {fg_dim}; opacity: 1; }}")
+    # Dimmed text in libadwaita is the foreground at --dim-opacity (55%).
+    # On a low-contrast palette that is unreadable -- 3.1:1 on Everforest's
+    # cards -- so the opacity is computed from the palette instead. (The
+    # theme's "dark_foreground" used to be painted here as dim text; it is a
+    # terminal colour, and read at 1.5:1.)
+    if fg and bg:
+        lines.append(f":root {{ --dim-opacity: "
+                     f"{dim_opacity(fg, surfaces, TEXT_TARGET)}%; }}")
+        lines.append(pick_css(bg_lit or bg, fg, accent).rstrip("\n"))
+        raw = dict(css_pairs_raw)
+        lines.append(pill_css({"error": raw.get("error_bg_color", ""),
+                               "warning": raw.get("warning_bg_color", ""),
+                               "success": raw.get("success_bg_color", ""),
+                               "accent": accent},
+                              prefer=[bg_dkr, fg]).rstrip("\n"))
     if select:
         lines.append(f"@define-color accent_hover_color {select};")
     return "\n".join(lines) + "\n"

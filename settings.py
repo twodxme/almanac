@@ -33,6 +33,7 @@ DEFAULTS: dict = {
     "net_market_artcraft": True,    # getartcraft.com + GitHub releases
     "net_market_themes": True,      # the omarchy-theme topic on GitHub
     "net_gh_token": True,           # use `gh auth token` for GitHub requests
+    "net_daily_picks": True,        # GitHub stats for Today's picks
 }
 
 START_PAGES = (("last", "Where you left off"), ("featured", "Today"),

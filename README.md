@@ -50,6 +50,7 @@ someone has to keep writing:
 
 | Shelf | What it is |
 |---|---|
+| **Today's picks** | The one or two standouts of the day: an app and a plugin, on wide cards that look nothing like the store's. Ranked on GitHub's own figures — stars and forks in the last 24 hours, downloads, comments this week — with each signal judged within its marketplace, so a 60-star plugin is not drowned out by a 15,000-star app. Each number says exactly what it counts: "stars in 10h" when the event feed reaches back only ten hours, "downloads of v0.8.0" until a day-over-day figure exists. Picks hold for the day and yesterday's make room for someone else. |
 | **Needs you** | Security updates, failed services, caches worth clearing, AUR packages that lost their maintainer. Worst first. Empty is the good outcome. |
 | **New in the marketplace** | Listed in the last three weeks, filtered to what is reviewed *and* installable — "new" plus "unverified" is the worst thing to put in front of someone. |
 | **Trending** | Worked on in the last week, ranked by stars, capped so no single marketplace can own the shelf. |
@@ -411,6 +412,13 @@ later, because nothing is themed individually.
 is watched, not sampled at startup. On a machine without Omarchy, your GTK
 theme shows through unmodified.
 
+Text is measured, not trusted to the theme. Primary text is held to 7:1
+(WCAG AAA) on the lightest surface it is drawn on, secondary text and
+accent-coloured text to 5.5:1, and status pills are solid fills with whichever
+text reads best on each. A theme that already clears those is left exactly as
+it is; one that does not (Everforest's dimmed captions measured 3.1:1 on a
+card) is lifted only as far as it needs to go.
+
 ---
 
 ## Keyboard
@@ -444,6 +452,10 @@ about this:
   have installed to a single third party.
 - **GitHub release checks** for AppImages and agent CLIs, conditional on ETags
   so an unchanged release costs no quota.
+- **Today's picks**: for a shortlist of about ten listings (four without a
+  GitHub sign-in), each repository's public event feed, its latest release and
+  its last week of issue comments, from the GitHub API. Cached for hours, so
+  this is a handful of requests a day.
 - **The Arch Security Tracker's advisory list**, downloaded whole and matched
   against your packages locally. Cached for six hours.
 - **Install from a link**: the repository and its latest release from the
@@ -467,7 +479,7 @@ better than I can.
 python3 test_app.py
 ```
 
-164 tests, weighted toward the destructive paths — removal, orphan cleanup,
+183 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

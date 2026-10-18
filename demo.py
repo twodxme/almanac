@@ -417,3 +417,22 @@ def user_services():
                 ("omarchy-sleep-lock.service", "Lock before suspend", True),
                 ("backup.timer", "Nightly backup", False),
                 ("wireplumber.service", "Multimedia session manager", True))]
+
+
+def picks(plugins):
+    """Two picks with fixed figures: screenshots must not ask GitHub, and
+    must not change from one run to the next."""
+    import picks as pk
+    pool = sorted((p for p in plugins if pk.eligible(p)), key=lambda p: -p.stars)
+    chosen, markets = [], set()
+    for p in pool:
+        if p.market not in markets:
+            chosen.append(p)
+            markets.add(p.market)
+        if len(chosen) == 2:
+            break
+    figures = (pk.Signals(stars_today=48, downloads=1312, downloads_today=True,
+                          comments=37),
+               pk.Signals(stars_today=21, comments=12))
+    return [pk.Pick(p, s, 1.0 - i / 10, pk.reasons(p, s))
+            for i, (p, s) in enumerate(zip(chosen, figures))]
