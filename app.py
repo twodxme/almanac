@@ -211,6 +211,15 @@ row:selected .count-badge.is-crit {
 .store-verified { color: @success_color; }
 .store-stars { font-size: 0.72rem; }
 .stats { font-size: 0.74rem; }
+/* The package table on its card: transparent, so the card's colour shows,
+   exactly as a boxed list's rows do. */
+columnview.almanac-table,
+columnview.almanac-table > listview,
+columnview.almanac-table > header { background: transparent; }
+/* Rows as tall as a boxed list's, so a table row and a list row are the same
+   size on every page. */
+columnview.almanac-table > listview > row { padding-top: 2px; padding-bottom: 2px; }
+columnview.almanac-table > listview > row > cell { padding-top: 4px; padding-bottom: 4px; }
 /* Sidebar rows at 36px rather than Adwaita's 50: fifteen destinations and
    the stats fit a laptop's height without the Maintenance group falling off
    the bottom. */
@@ -785,6 +794,17 @@ class AlmanacWindow(Adw.ApplicationWindow):
         scroller = Gtk.ScrolledWindow(vexpand=True)
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_child(self.view)
+        # The table sits on a card like every other page's lists -- same
+        # background, corners and outline -- rather than on the darker view
+        # background, edge to edge. One look for the whole app.
+        self.view.add_css_class("almanac-table")
+        scroller.add_css_class("card")
+        scroller.set_overflow(Gtk.Overflow.HIDDEN)
+        # As tall as its rows, like a boxed list -- not a card running to the
+        # bottom of the window under five updates. Past the window's height
+        # it scrolls as before.
+        scroller.set_propagate_natural_height(True)
+        scroller.set_valign(Gtk.Align.START)
         scroller.set_margin_start(12)
         scroller.set_margin_end(12)
         scroller.set_margin_bottom(12)

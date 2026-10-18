@@ -2000,6 +2000,10 @@ class RowsFitTheWindow(unittest.TestCase):
         sidebar to its minimum whenever an MCP server was failing."""
         import ai
         import app as app_mod
+        if app_mod.Gdk.Display.get_default() is None:
+            # A package build runs check() as another user, with no display
+            # to reach; building a widget there crashes rather than fails.
+            self.skipTest("no display")
         win = _Stub()
         win._plain = app_mod.AlmanacWindow._plain
         win._vendor_icon = mock.Mock()
@@ -2162,6 +2166,15 @@ class VisualSystem(unittest.TestCase):
         found = [name for name in retired if f'"{name}"' in src]
         self.assertEqual(found, [],
                          f"retired badge classes still referenced: {found}")
+
+    def test_the_table_sits_on_a_card_like_every_list(self):
+        """Updates, Applications and Everything used the darker view
+        background, edge to edge, while every other page put its rows on a
+        card. One look app-wide: the table is a card too."""
+        src = (Path(__file__).parent / "app.py").read_text()
+        self.assertIn('self.view.add_css_class("almanac-table")', src)
+        self.assertIn('scroller.add_css_class("card")', src)
+        self.assertIn("columnview.almanac-table > listview", src)
 
     def test_every_pill_class_is_defined_in_the_stylesheet(self):
         src = self._source()
