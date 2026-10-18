@@ -2,7 +2,7 @@
 # The release package: built from a tagged release. almanac-git, in the
 # repository root, builds the newest commit instead.
 pkgname=almanac
-pkgver=1.6.0
+pkgver=1.7.0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('any')
@@ -27,7 +27,7 @@ makedepends=('gettext')
 checkdepends=('git')
 conflicts=('almanac-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('3daed3cbb70788878702d986cbb7402b760a658f03917bffed495dd713545707')
+sha256sums=('55d1861b0592ee262907f0a215a44f6c38eee8506571c07b3146f78ece479570')
 
 check() {
   cd "$srcdir/$pkgname-$pkgver"
