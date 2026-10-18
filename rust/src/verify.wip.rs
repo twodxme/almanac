@@ -267,6 +267,25 @@ pub fn git_head(repo: &str) -> Probe {
     lenient(git_head_try(repo))
 }
 
+/// [`mise_version`], raising what `agents._mise_installed` raises (mise
+/// printing JSON that is not an object), as the Python probe does.
+pub fn mise_version_try(tool: &str) -> TryProbe {
+    let tool = tool.to_string();
+    Arc::new(move || {
+        let have = crate::agents::try_mise_installed()?;
+        // `.get(tool) or None`
+        Ok(have
+            .into_iter()
+            .rev()
+            .find(|(k, _)| *k == tool)
+            .map(|(_, v)| v)
+            .filter(crate::agents::Py::truthy)
+            .map(|v| ProbeValue::Str(v.py_str())))
+    })
+}
+
+#[deprecated(note = "the Python probe raises what agents._mise_installed raises; this one answers None ('could not tell') instead. Use mise_version_try and stop on Err as the Python caller would")]
+#[allow(deprecated)]
 pub fn mise_version(tool: &str) -> Probe {
     let tool = tool.to_string();
     Arc::new(move || {
@@ -442,8 +461,7 @@ fn for_app_py(app: &PyApp) -> Result<Option<TryProbe>, String> {
         let key = extra_get(extra, "key")?.filter(|k| k.truthy()).unwrap_or(&app.name);
         return Ok(Some(match key {
             Py::Str(k) => {
-                let p = mise_version(k);
-                Arc::new(move || Ok(p()))
+                mise_version_try(k)
             }
             // `_mise_installed().get(key)`: a list, set or dict is
             // unhashable; any other non-string is simply not one of its keys.
@@ -1108,7 +1126,7 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
         }
         "installed_package" => call(installed_package_try(&s("name"))),
         "git_head" => call(git_head_try(&s("repo"))),
-        "mise_version" => caught(&|| serde_json::to_value(mise_version(&s("tool"))()).unwrap_or(Value::Null)),
+        "mise_version" => call(mise_version_try(&s("tool"))),
         "binary_version" => caught(&|| call(binary_version_try(&s("binary")))),
         "file_identity" => call(file_identity_try(&s("path"))),
         "pending_updates" => caught(&|| serde_json::to_value(pending_updates()()).unwrap_or(Value::Null)),

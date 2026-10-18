@@ -706,3 +706,64 @@ def cases():
         yield "check", _args(plain, env, fetch=True), _call(plain, env, lambda: selfupdate.check(fetch=True))
         yield "as_app", _args(plain, env, check_updates=False), \
             _call(plain, env, lambda: selfupdate.as_app(check_updates=False))
+
+
+# ---- The compiled build's rule (intentionally not the Python's) ----
+#
+# A compiled Almanac cannot apply a pull by restarting, so it never updates
+# itself (selfupdate::compiled_check_in): a pacman-owned binary defers to
+# pacman, and a checkout that the Python would pull says to pull and rebuild
+# instead. `check` and `as_app` on the Rust side answer for that rule, with
+# `exe` standing in for the running binary: inside `root`, as a binary built
+# in that checkout is. That makes the kind the Python's in every case here
+# (the fake pacman scripts answer the same for the binary as for app.py, and
+# the real pacman owns neither), so the expected answer is the Python's with
+# the rule applied:
+#
+# * not a git checkout: the version is the crate's (Cargo.toml), not the
+#   Python release's VERSION;
+# * a checkout the Python would pull: can_update is False, the note gains
+#   REBUILD_NOTE, and the inventory row carries no update.
+#
+# Every other case (and every other function) is unchanged.
+
+import tomllib
+
+_CRATE_VERSION = tomllib.loads(
+    (Path(__file__).resolve().parent.parent / "Cargo.toml").read_text())["package"]["version"]
+REBUILD_NOTE = ("This copy is compiled, so pulling alone changes nothing that runs: "
+                "pull, then rebuild it with cargo build --release.")
+
+
+def _compiled_check(info):
+    info = dict(info)
+    if info["kind"] != selfupdate.GIT:
+        info["version"] = _CRATE_VERSION
+    elif info["can_update"]:
+        info["can_update"] = False
+        info["note"] = f"{info['note']} {REBUILD_NOTE}"
+    return info
+
+
+def _compiled_app(app):
+    if app.extra["kind"] != selfupdate.GIT:
+        app.version = _CRATE_VERSION
+    elif app.update:                      # only set when can_update was
+        note = f"{app.extra['note']} {REBUILD_NOTE}"
+        app.update = ""
+        app.extra["note"] = note
+        app.description = f"This application · {note}"
+    return app
+
+
+_cases_python_rule = cases
+
+
+def cases():
+    for func, args, fn in _cases_python_rule():
+        if func in ("check", "as_app"):
+            if "root" in args:
+                args = {**args, "exe": str(Path(args["root"]) / "rust/target/release/almanac-rs")}
+            post = _compiled_check if func == "check" else _compiled_app
+            fn = (lambda f=fn, p=post: p(f()))
+        yield func, args, fn

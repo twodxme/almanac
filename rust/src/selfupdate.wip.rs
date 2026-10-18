@@ -188,8 +188,12 @@ pub fn git_in(root: &Path, args: &[&str], timeout: u64) -> Result<(i32, String),
 
 /// `pacman -Qoq ROOT/app.py`, as both pacman callers run it.
 fn pacman_owner(root: &Path) -> Result<Result<Captured, RunError>, String> {
-    let app = py_path_join(root.as_os_str(), "app.py");
-    let argv: Vec<OsString> = vec!["pacman".into(), "-Qoq".into(), app];
+    pacman_owner_of(py_path_join(root.as_os_str(), "app.py"))
+}
+
+/// `pacman -Qoq <path>`, run the way `pacman_owner` runs it.
+fn pacman_owner_of(path: OsString) -> Result<Result<Captured, RunError>, String> {
+    let argv: Vec<OsString> = vec!["pacman".into(), "-Qoq".into(), path];
     match run_capture(&argv, Some(20)) {
         Err(RunError::Raise(e)) => Err(e),
         other => Ok(other),
@@ -290,17 +294,33 @@ pub fn check(fetch: bool) -> Info {
     try_check(fetch).unwrap_or_else(|e| uncaught(e, Info::default()))
 }
 
-/// `check`, with an exception the Python lets through as `Err`.
+/// `check`, with an exception the Python lets through as `Err`. This is a
+/// compiled build, so it is `compiled_check_in` for the running binary.
 pub fn try_check(fetch: bool) -> Result<Info, String> {
-    check_in(&ROOT, fetch)
+    compiled_check_in(&ROOT, &running_exe(), fetch)
 }
 
+/// `check` as the Python does it, against `root`. The app itself goes
+/// through `compiled_check_in`; this is the specification it builds on.
 pub fn check_in(root: &Path, fetch: bool) -> Result<Info, String> {
     let kind = install_kind_in(root)?;
-    let mut info = Info { kind: kind.to_string(), version: version_in(root)?, ..Default::default() };
+    let version = version_in(root)?;
+    check_as(root, kind, version, || owning_package_in(root), fetch)
+}
+
+/// The body of `check` once the kind, the version and how to name the owning
+/// package are settled.
+fn check_as(
+    root: &Path,
+    kind: &'static str,
+    version: String,
+    owner: impl FnOnce() -> Result<String, String>,
+    fetch: bool,
+) -> Result<Info, String> {
+    let mut info = Info { kind: kind.to_string(), version, ..Default::default() };
 
     if kind == PACKAGE {
-        let pkg = owning_package_in(root)?;
+        let pkg = owner()?;
         info.note = format!("Installed as the {pkg} package — it updates with the rest of the system.");
         return Ok(info);
     }
@@ -368,6 +388,73 @@ pub fn check_in(root: &Path, fetch: bool) -> Result<Info, String> {
     Ok(info)
 }
 
+// ---- A compiled build: the package manager, or a rebuild ----
+//
+// Not in the Python, deliberately. Python adopts new source on its next
+// start, so a fast-forward pull plus a restart *is* an update. A compiled
+// Almanac does not: pulling changes the source and nothing that runs, and
+// restarting would start the same binary (or the Python launcher). So a
+// compiled build never updates itself:
+//
+// * installed by pacman (the binary itself is owned by a package) -- it
+//   defers to pacman exactly as the Python package does;
+// * built in a git checkout -- everything `check` reports still applies,
+//   but where the Python would offer a pull, this says to pull and rebuild;
+// * anything else -- nothing to update from, as for a plain directory.
+//
+// What is checked for ownership is the running binary, not ROOT/app.py: an
+// installed binary has no checkout beside it, and ROOT then falls back to
+// the directory it was built in, which may not exist any more (or may be a
+// stale makepkg checkout -- which is why git only counts when the binary
+// lives inside ROOT).
+
+/// The version of this build (Cargo.toml). A compiled build reports it where
+/// the Python reports `VERSION`: the constant is the Python release's.
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// What the note says, after the Python's "N commit(s) behind", in a
+/// checkout that would otherwise offer to pull.
+pub const REBUILD_NOTE: &str = "This copy is compiled, so pulling alone changes nothing that runs: \
+                                pull, then rebuild it with cargo build --release.";
+
+/// The running binary, symlinks resolved.
+pub fn running_exe() -> PathBuf {
+    let exe = running_program().into_iter().next().unwrap_or_default();
+    py_resolve(Path::new(&exe))
+}
+
+/// `check` for a compiled build: see above.
+pub fn compiled_check_in(root: &Path, exe: &Path, fetch: bool) -> Result<Info, String> {
+    let in_checkout = exe.starts_with(root) && git_in(root, &["rev-parse", "--is-inside-work-tree"], 60)?.0 == 0;
+    let mut owner: Option<String> = None;
+    let kind = if in_checkout {
+        GIT
+    } else {
+        // except (OSError, subprocess.SubprocessError): not a package
+        match pacman_owner_of(exe.as_os_str().to_owned())? {
+            Ok(out) => {
+                let stdout = decode_text(&out.stdout)?;
+                decode_text(&out.stderr)?;
+                let name = py_strip(&stdout).to_string();
+                if out.code == 0 && !name.is_empty() {
+                    owner = Some(name);
+                    PACKAGE
+                } else {
+                    PLAIN
+                }
+            }
+            Err(_) => PLAIN,
+        }
+    };
+    let version = if kind == GIT { version_in(root)? } else { BUILD_VERSION.to_string() };
+    let mut info = check_as(root, kind, version, || Ok(owner.unwrap_or_default()), fetch)?;
+    if info.can_update {
+        info.can_update = false;
+        info.note = format!("{} {REBUILD_NOTE}", info.note);
+    }
+    Ok(info)
+}
+
 /// Steps for the task runner. Fast-forward only, deliberately.
 ///
 /// Each step is (title, argv).
@@ -389,8 +476,14 @@ pub fn restart_argv() -> Result<Vec<String>, String> {
 
 /// `restart_argv` with what `[sys.executable, str(ROOT / "app.py")]` stands
 /// for given: the program that is running, started again.
+///
+/// The launcher looked for is `~/.local/bin/` + `watcher::command_name()`:
+/// `almanac` as in the Python, `almanac-rs` when this binary runs under that
+/// name beside the Python app -- `~/.local/bin/almanac` is then the Python
+/// launcher, and restarting through it would swap the Rust app for the
+/// Python one.
 fn restart_argv_or(running: Vec<String>) -> Result<Vec<String>, String> {
-    let launcher = py_path_join(&py_home()?, ".local/bin/almanac");
+    let launcher = py_path_join(&py_home()?, &format!(".local/bin/{}", crate::watcher::command_name()));
     if Path::new(&launcher).exists() {
         return Ok(vec![launcher.to_string_lossy().into_owned()]);
     }
@@ -508,13 +601,27 @@ pub fn as_app(check_updates: bool) -> crate::inventory::App {
     try_as_app(check_updates).unwrap_or_else(|e| uncaught(e, app_from(&ROOT, Info::default(), String::new())))
 }
 
-/// `as_app`, with an exception the Python lets through as `Err`.
+/// `as_app`, with an exception the Python lets through as `Err`: the row for
+/// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {
-    as_app_in(&ROOT, check_updates)
+    compiled_as_app_in(&ROOT, &running_exe(), check_updates)
 }
 
+/// `as_app` as the Python does it, against `root`.
 pub fn as_app_in(root: &Path, check_updates: bool) -> Result<crate::inventory::App, String> {
     let info = check_in(root, check_updates)?;
+    app_with_home(root, info)
+}
+
+/// `as_app` for a compiled build: the same row, from `compiled_check_in`. It
+/// never carries an update (can_update is never set), so it stays out of the
+/// Updates list: pacman lists the package; a checkout says to rebuild.
+pub fn compiled_as_app_in(root: &Path, exe: &Path, check_updates: bool) -> Result<crate::inventory::App, String> {
+    let info = compiled_check_in(root, exe, check_updates)?;
+    app_with_home(root, info)
+}
+
+fn app_with_home(root: &Path, info: Info) -> Result<crate::inventory::App, String> {
     let exec_path = py_path_join(&py_home()?, ".local/bin/almanac").to_string_lossy().into_owned();
     Ok(app_from(root, info, exec_path))
 }
@@ -2636,6 +2743,10 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
         None => ROOT.clone(),
     };
     let root = root.as_path();
+    let exe: PathBuf = match args.get("exe").and_then(|v| v.as_str()) {
+        Some(e) => PathBuf::from(py_path(OsStr::new(e))),
+        None => running_exe(),
+    };
     fn val<T: Serialize>(v: Result<T, String>) -> Value {
         match v {
             Ok(x) => to_value(x).unwrap_or_default(),
@@ -2656,9 +2767,12 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
         "remote_url" => Some(val(remote_url_in(root))),
         "branch" => Some(val(branch_in(root))),
         "dirty" => Some(val(dirty_in(root))),
+        // check and as_app answer for the compiled build (compiled_check_in);
+        // `exe` stands in for the running binary. The cases apply the same
+        // rule to the Python's answer.
         "check" => {
             let fetch = args.get("fetch").and_then(|v| v.as_bool()).unwrap_or(true);
-            Some(val(check_in(root, fetch)))
+            Some(val(compiled_check_in(root, &exe, fetch)))
         }
         "update_steps" => Some(to_value(update_steps_in(root)).unwrap_or_default()),
         // `executable` is the Python side's sys.executable: the program that
@@ -2672,7 +2786,7 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
         })),
         "as_app" => {
             let c = args.get("check_updates").and_then(|v| v.as_bool()).unwrap_or(true);
-            Some(val(as_app_in(root, c)))
+            Some(val(compiled_as_app_in(root, &exe, c)))
         }
         "constants" => Some(json!({"NAME": NAME, "VERSION": VERSION, "GIT": GIT, "PACKAGE": PACKAGE,
                                    "PLAIN": PLAIN, "METAINFO": METAINFO,
@@ -2691,6 +2805,60 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sh_git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "A")
+            .env("GIT_AUTHOR_EMAIL", "a@example.invalid")
+            .env("GIT_COMMITTER_NAME", "A")
+            .env("GIT_COMMITTER_EMAIL", "a@example.invalid")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "git {args:?}");
+    }
+
+    /// A compiled build never offers to pull: a checkout behind its remote
+    /// says to rebuild, and a binary outside the checkout ignores it.
+    #[test]
+    fn compiled_build_rebuilds_or_defers_to_pacman() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        sh_git(&work, &["init", "-q", "-b", "main"]);
+        for (i, text) in ["one", "two"].iter().enumerate() {
+            std::fs::write(work.join("app.py"), text).unwrap();
+            sh_git(&work, &["add", "app.py"]);
+            sh_git(&work, &["commit", "-q", "-m", &format!("c{i}")]);
+        }
+        let clone = tmp.path().join("clone");
+        sh_git(tmp.path(), &["clone", "-q", work.to_str().unwrap(), clone.to_str().unwrap()]);
+        sh_git(&clone, &["reset", "-q", "--hard", "HEAD~1"]);
+
+        let exe = clone.join("rust/target/release/almanac-rs");
+        let py = check_in(&clone, false).unwrap();
+        assert!(py.can_update);
+        let info = compiled_check_in(&clone, &exe, false).unwrap();
+        assert_eq!(info.kind, GIT);
+        assert!(!info.can_update);
+        assert_eq!(info.note, format!("{} {REBUILD_NOTE}", py.note));
+        assert!(info.note.contains("cargo build --release"));
+        let app = compiled_as_app_in(&clone, &exe, false).unwrap();
+        assert_eq!(app.update, "");
+
+        // Installed elsewhere (/usr/bin, say): the checkout it was built in
+        // is not this copy, and pacman owns nothing under a temp dir.
+        let elsewhere = tmp.path().join("usr/bin/almanac");
+        let info = compiled_check_in(&clone, &elsewhere, false).unwrap();
+        assert_eq!(info.kind, PLAIN);
+        assert_eq!(info.version, BUILD_VERSION);
+        assert!(!info.can_update);
+    }
 
     // AboutWindow.test_whats_new_comes_from_the_shipped_metainfo
     #[test]

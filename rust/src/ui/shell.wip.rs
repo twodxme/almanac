@@ -492,6 +492,11 @@ pub const PAGE_KEYS: &[&str] = &[
     "switchboard", "maintenance", "history",
 ];
 
+/// The accelerator of the `n`th page key (1-based): `f"<Control>{n % 10}"`.
+pub fn page_accel(n: usize) -> String {
+    format!("<Control>{}", n % 10)
+}
+
 /// `self.SORTS_INSTALLED`: (key, label) of the package list's sort menu.
 pub fn sorts_installed() -> Vec<(&'static str, String)> {
     use crate::i18n::tr;
@@ -519,6 +524,21 @@ pub fn sorts_discover() -> Vec<(&'static str, String)> {
         ("name", tr("Name A → Z")),
         ("name_desc", tr("Name Z → A")),
     ]
+}
+
+/// `str(exc)` for an error the core modules spell "TypeError: message" (the
+/// form their `Err`s take, so parity can compare them): the message alone,
+/// which is what the Python shows when it formats a caught exception.
+pub fn exc_str(e: &str) -> String {
+    match e.split_once(": ") {
+        Some((t, m))
+            if t.ends_with("Error")
+                && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
+        {
+            m.to_string()
+        }
+        _ => e.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -606,8 +626,11 @@ pub use crate::ui::packages::PrimaryAction;
 pub struct Shared {
     pub filter_key: String,
     pub query: String,
-    /// `getattr(self, "_page", "packages")`
-    pub page: String,
+    /// `self._page`: None until `_show_page` first sets it. The Python
+    /// reads it with `getattr(self, "_page", <default>)` and a different
+    /// default in different places ("packages", "discover", ""), so readers
+    /// go through `page_or` with the default their Python line has.
+    pub page: Option<String>,
     /// `self.store`: every row of the package tables, as boxed `AppItem`s.
     pub store: gio::ListStore,
     /// Filter -> sort -> selection. Filtering first means the sorter only
@@ -642,7 +665,7 @@ pub struct Shared {
     pub store_timer: Option<glib::SourceId>,
     pub store_loaded_once: bool,
     pub pinning: bool,
-    pub findings: Vec<crate::maintenance::Finding>,
+    pub findings: Findings,
     pub maint_loaded_once: bool,
     pub ai_survey: Vec<crate::ai::Group>,
     pub ai_loaded_once: bool,
@@ -678,11 +701,12 @@ pub struct Shared {
     /// `self._filters_for`: whether the filter lists were last built for the
     /// Themes page (None: never built). Read by `pin_market`.
     pub filters_for: Option<bool>,
-    /// `self._plugins is None`: true until the catalog is first assigned,
-    /// and again after a Preferences marketplace switch (`reload_store`).
-    /// Whoever assigns `plugins` (`store_loaded`, `feat_reload`'s fetch)
-    /// sets it back to false; `plugins` stays a `Vec` because every other
-    /// reader treats None as an empty list.
+    /// `self._plugins is None`. The Python's `__init__` starts `_plugins` as
+    /// `[]`, so this starts false; a Preferences marketplace switch
+    /// (`reload_store`) sets it (and empties `plugins`, as None holds
+    /// nothing). Whoever assigns `plugins` (`store_loaded`, `feat_reload`'s
+    /// fetch) sets it back to false; `plugins` stays a `Vec` because every
+    /// other reader treats None as an empty list.
     pub plugins_none: bool,
 }
 
@@ -695,7 +719,7 @@ impl Default for Shared {
         Shared {
             filter_key: "all".to_string(),
             query: String::new(),
-            page: "packages".to_string(),
+            page: None,
             store,
             filter,
             sorted,
@@ -716,7 +740,7 @@ impl Default for Shared {
             store_timer: None,
             store_loaded_once: false,
             pinning: false,
-            findings: Vec::new(),
+            findings: Findings::default(),
             maint_loaded_once: false,
             ai_survey: Vec::new(),
             ai_loaded_once: false,
@@ -735,12 +759,37 @@ impl Default for Shared {
             store_grid: None,
             store_markets: vec![String::new()],
             filters_for: None,
-            plugins_none: true,
+            plugins_none: false,
         }
     }
 }
 
+/// `self._findings`. The Python assigns it from worker threads as well as
+/// the main one (`_feat_reload`'s worker sets it the moment it has run the
+/// checks, before its `idle_add`), and what reads it next -- the sidebar
+/// stats' "Free-able", the hero -- sees it at once. A handle the workers can
+/// hold keeps that: one list, behind a lock, shared by every clone.
+#[derive(Clone, Default)]
+pub struct Findings(std::sync::Arc<std::sync::Mutex<Vec<crate::maintenance::Finding>>>);
+
+impl Findings {
+    /// The list as it is now.
+    pub fn get(&self) -> Vec<crate::maintenance::Finding> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// `self._findings = findings`
+    pub fn set(&self, findings: Vec<crate::maintenance::Finding>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = findings;
+    }
+}
+
 impl Shared {
+    /// `getattr(self, "_page", default)`.
+    pub fn page_or(&self, default: &str) -> String {
+        self.page.clone().unwrap_or_else(|| default.to_string())
+    }
+
     /// `self.sidebar_rows.get(key)`.
     pub fn sidebar_row(&self, key: &str) -> Option<&SidebarRow> {
         self.sidebar_rows.iter().find(|r| r.key == key)
@@ -967,7 +1016,11 @@ impl Win {
             &self.theme_provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
-        self.apply_theme();
+        // Where this raises the Python's window is never built; here it is
+        // logged and GTK's own theme shows.
+        if let Err(e) = self.apply_theme() {
+            eprintln!("almanac: {e}");
+        }
         let w = self.downgrade();
         let monitors = crate::theming::watch(move || {
             if let Some(w) = w.upgrade() {
@@ -980,7 +1033,9 @@ impl Win {
             let w = w.clone();
             glib::idle_add_local_once(move || {
                 if let Some(w) = w.upgrade() {
-                    w.apply_theme();
+                    if let Err(e) = w.apply_theme() {
+                        eprintln!("almanac: {e}");
+                    }
                 }
             });
         });
@@ -1985,11 +2040,19 @@ impl Win {
                             Some(&if truthy(enabled) { tr("Turn off") } else { tr("Turn on") }),
                             Some(&format!("row.toggle::{n}")),
                         );
-                        if crate::shortcuts::available()
-                            && crate::shortcuts::has_panel(std::path::Path::new(&as_text(
+                        // What has_panel raises ends this bind: the row
+                        // keeps whatever menu it had.
+                        let panel = crate::shortcuts::available()
+                            && match crate::shortcuts::try_has_panel(std::path::Path::new(&as_text(
                                 extra.get("repo"),
-                            )))
-                        {
+                            ))) {
+                                Ok(panel) => panel,
+                                Err(e) => {
+                                    eprintln!("almanac: {e}");
+                                    return;
+                                }
+                            };
+                        if panel {
                             model.append(
                                 Some(&tr("Keyboard shortcut…")),
                                 Some(&format!("row.shortcut::{n}")),
@@ -2062,7 +2125,7 @@ impl Win {
         // the window fail to open at all.
         for (i, key) in PAGE_KEYS.iter().enumerate() {
             let key = *key;
-            add(&format!("<Control>{}", (i + 1) % 10), Rc::new(move |w| w.select_category(key)));
+            add(&page_accel(i + 1), Rc::new(move |w| w.select_category(key)));
         }
         self.window.add_controller(controller);
     }
@@ -2192,7 +2255,16 @@ impl Win {
             st.config_monitors.clear();
             st.config_pending = None;
         }
-        let reported: BTreeSet<String> = guard_resets()
+        // Where `guard.resets()` raises the Python's window is never built;
+        // here it is logged and nothing is watched.
+        let resets = match crate::guard::try_resets_at(None, crate::guard::PyStack::WINDOW) {
+            Ok(resets) => resets,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return;
+            }
+        };
+        let reported: BTreeSet<String> = resets
             .iter()
             .map(|r| r.backup.to_string_lossy().into_owned())
             .collect();
@@ -2253,12 +2325,17 @@ impl Win {
     pub fn config_check(&self) -> glib::ControlFlow {
         self.shell.borrow_mut().config_pending = None;
         let w = self.downgrade();
+        // What `guard.resets()` raises ends the Python's worker before its
+        // idle_add: nothing is reported.
         spawn_bg(
-            guard_resets,
-            move |found| {
-                if let Some(w) = w.upgrade() {
-                    w.config_report(found);
+            || crate::guard::try_resets_at(None, crate::guard::PyStack::WORKER),
+            move |found| match found {
+                Ok(found) => {
+                    if let Some(w) = w.upgrade() {
+                        w.config_report(found);
+                    }
                 }
+                Err(e) => eprintln!("almanac: {e}"),
             },
         );
         glib::ControlFlow::Break
@@ -2327,16 +2404,6 @@ impl Win {
         self.save_state();
         glib::Propagation::Proceed
     }
-}
-
-/// `guard.resets()`.
-///
-/// TEMPORARY: `guard::resets` is still a `todo!()` stub, and a panic inside
-/// a GTK signal handler aborts the process, so the window could not open at
-/// all. Until guard is ported, a stub reads as "no resets". Once it is,
-/// this is a plain call (the Python function itself never raises).
-fn guard_resets() -> Vec<crate::guard::Reset> {
-    std::panic::catch_unwind(|| crate::guard::resets(None)).unwrap_or_default()
 }
 
 /// Click handlers for recycled buttons: one permanent handler per button,
@@ -2456,6 +2523,8 @@ impl AlmanacApp {
             win: Rc::new(RefCell::new(None)),
         };
         let t = this.clone();
+        this.app.connect_handle_local_options(move |_app, opts| t.local_options(opts));
+        let t = this.clone();
         this.app.connect_command_line(move |_app, cmd| t.command_line(cmd));
         let t = this.clone();
         this.app.connect_startup(move |_app| t.startup());
@@ -2466,26 +2535,14 @@ impl AlmanacApp {
 
     /// `do_command_line`: `--page NAME` picks the first page.
     pub fn command_line(&self, cmd: &gio::ApplicationCommandLine) -> glib::ExitCode {
-        let opts = cmd.options_dict();
-        let wanted = opts
-            .lookup::<String>("page")
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .trim()
-            .to_lowercase();
+        let wanted = wanted_page(&cmd.options_dict());
         if !wanted.is_empty() {
             match resolve_page(&wanted) {
                 None => {
-                    let keys: BTreeSet<&str> = PAGE_ALIASES.iter().map(|(k, _)| *k).collect();
-                    // `printerr_literal` needs gio's v2_80 feature, which the
-                    // crate does not enable; this process's stderr is the
-                    // invoking terminal for the primary instance.
-                    eprint!(
-                        "almanac: unknown page {}. Try one of: {}\n",
-                        py_repr_str(&wanted),
-                        keys.into_iter().collect::<Vec<_>>().join(", ")
-                    );
+                    // Normally caught by `local_options` first; kept for a
+                    // command line that reaches the primary instance some
+                    // other way.
+                    eprint!("{}", unknown_page_message(&wanted));
                     return glib::ExitCode::from(2);
                 }
                 Some(resolved) => *self.start_page.borrow_mut() = resolved.to_string(),
@@ -2493,6 +2550,26 @@ impl AlmanacApp {
         }
         self.app.activate();
         glib::ExitCode::SUCCESS
+    }
+
+    /// The `--page` check of `do_command_line`, made in the invoking process.
+    ///
+    /// The Python reports an unknown page with `printerr_literal`, which
+    /// prints on the stderr of whoever ran the command -- also when another
+    /// Almanac is already running and receives the command line. That call
+    /// needs gio's v2_80 feature, which the crate does not enable, and a plain
+    /// `eprint!` in `command_line` lands on the *running* instance's stderr
+    /// instead. Checking here, before the command line is handed on, prints
+    /// in the right terminal with the same text and exit status 2 -- and,
+    /// like the Python, still does so where no display can be opened (GTK is
+    /// not started yet).
+    pub fn local_options(&self, opts: &glib::VariantDict) -> std::ops::ControlFlow<glib::ExitCode> {
+        let wanted = wanted_page(opts);
+        if !wanted.is_empty() && resolve_page(&wanted).is_none() {
+            eprint!("{}", unknown_page_message(&wanted));
+            return std::ops::ControlFlow::Break(glib::ExitCode::from(2));
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     /// `do_startup`: Almanac's own glyphs, shipped beside the code so they
@@ -2548,13 +2625,55 @@ impl Default for AlmanacApp {
     }
 }
 
+/// `(opts.get("page") or "").strip().lower()`.
+fn wanted_page(opts: &glib::VariantDict) -> String {
+    let page = opts.lookup::<String>("page").ok().flatten().unwrap_or_default();
+    py_strip(&page).to_lowercase()
+}
+
+/// The text `do_command_line` prints for a page it does not know.
+fn unknown_page_message(wanted: &str) -> String {
+    let keys: BTreeSet<&str> = PAGE_ALIASES.iter().map(|(k, _)| *k).collect();
+    format!(
+        "almanac: unknown page {}. Try one of: {}\n",
+        py_repr_str(wanted),
+        keys.into_iter().collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// `str.isspace()` for one character: Unicode White_Space plus the ASCII
+/// separators U+001C..U+001F, which Python counts as whitespace.
+fn py_isspace(c: char) -> bool {
+    c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
+}
+
+/// `str.strip()`.
+fn py_strip(s: &str) -> &str {
+    s.trim_matches(py_isspace)
+}
+
+/// Python's `str.isprintable()` for one character: everything but the
+/// Unicode categories Other (Cc, Cf, Cs, Co, Cn) and Separator (Zl, Zp, Zs),
+/// with the ASCII space let through.
+fn py_printable(c: char) -> bool {
+    static NON_PRINTABLE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    if c == ' ' {
+        return true;
+    }
+    match NON_PRINTABLE.get_or_init(|| regex::Regex::new(r"^[\p{C}\p{Z}]$").ok()) {
+        Some(re) => !re.is_match(c.encode_utf8(&mut [0; 4])),
+        None => !c.is_control(),
+    }
+}
+
 /// `repr(str)` for the error message: single quotes unless the text holds one
-/// and no double quote.
+/// and no double quote; what is not printable escaped as Python escapes it.
 fn py_repr_str(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
+        let n = c as u32;
         match c {
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
@@ -2564,10 +2683,10 @@ fn py_repr_str(s: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
-            }
-            c => out.push(c),
+            c if py_printable(c) => out.push(c),
+            _ if n < 0x100 => out.push_str(&format!("\\x{n:02x}")),
+            _ if n < 0x10000 => out.push_str(&format!("\\u{n:04x}")),
+            _ => out.push_str(&format!("\\U{n:08x}")),
         }
     }
     out.push(quote);
@@ -2579,7 +2698,9 @@ fn py_repr_str(s: &str) -> String {
 /// `almanac --guard` is the background settings watcher: no window, so it is
 /// dispatched before any GTK work.
 pub fn run() -> glib::ExitCode {
-    if std::env::args().skip(1).any(|a| a == "--guard") {
+    // `sys.argv` holds an argument that is not UTF-8 too (surrogate-escaped);
+    // `env::args` would panic on it, so the bytes are compared.
+    if std::env::args_os().skip(1).any(|a| a == "--guard") {
         let code = crate::watcher::main();
         return glib::ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
@@ -2610,13 +2731,19 @@ mod tests {
     #[test]
     fn every_page_shortcut_is_a_valid_accelerator() {
         assert!(PAGE_KEYS.len() <= 10);
-        // Parsing needs GTK; with no display to initialise it on, only the
-        // count can be checked.
-        if gtk::init().is_ok() {
-            for i in 1..=PAGE_KEYS.len() {
-                assert!(gtk::ShortcutTrigger::parse_string(&format!("<Control>{}", i % 10)).is_some());
-            }
+        // `Gtk.ShortcutTrigger.parse_string` needs GTK initialised on the
+        // main thread, which a test thread is not; the accelerator is
+        // checked the way GTK reads it instead: a modifier GTK knows, then a
+        // key name GDK resolves (gdk_keyval_from_name needs no GTK).
+        let mut seen = std::collections::BTreeSet::new();
+        for i in 1..=PAGE_KEYS.len() {
+            let accel = page_accel(i);
+            let key = accel.strip_prefix("<Control>").expect("a <Control> accelerator");
+            assert!(gdk::Key::from_name(key).is_some(), "{accel}: no such key");
+            assert!(seen.insert(accel.clone()), "{accel} used twice");
         }
+        // The check would catch the mistake it is for.
+        assert!(gdk::Key::from_name("10").is_none());
     }
 
     #[test]
@@ -2625,6 +2752,16 @@ mod tests {
         assert_eq!(resolve_page("store"), Some("discover"));
         assert_eq!(resolve_page("orphans"), Some(inventory::ORPHAN));
         assert_eq!(resolve_page("nope"), None);
+    }
+
+    /// `str.strip().lower()` as `do_command_line` reads `--page`.
+    #[test]
+    fn page_name_is_stripped_like_python() {
+        assert_eq!(py_strip("\x1c updates\u{a0}\x1f"), "updates");
+        assert_eq!(py_strip("\u{200b}x"), "\u{200b}x"); // not whitespace to Python either
+        let msg = unknown_page_message("nope");
+        assert!(msg.starts_with("almanac: unknown page 'nope'. Try one of: agents, ai, all, app-store,"));
+        assert!(msg.ends_with("today, update, updates\n"));
     }
 
     #[test]
@@ -2648,5 +2785,7 @@ mod tests {
     fn py_repr_quotes() {
         assert_eq!(py_repr_str("abc"), "'abc'");
         assert_eq!(py_repr_str("it's"), "\"it's\"");
+        assert_eq!(py_repr_str("a\u{200b}\u{a0}\x1c\u{e000}\u{10ffff}é日"), "'a\\u200b\\xa0\\x1c\\ue000\\U0010ffffé日'");
+        assert_eq!(py_repr_str("a\"b'c"), "'a\"b\\'c'");
     }
 }

@@ -18,7 +18,7 @@ use crate::i18n::tr;
 use crate::plugins as plugins_mod;
 use crate::services;
 use crate::util;
-use crate::ui::shell::{self, spawn_bg, Win};
+use crate::ui::shell::{self, exc_str, spawn_bg, Win};
 use crate::watcher;
 
 /// Switchboard state (`self.switch_body`, `self._switch_rows`).
@@ -128,7 +128,9 @@ fn service_apply(unit: &str, on: bool) -> ApplyResult {
         let text = py_strip(if !r.stderr.is_empty() { &r.stderr } else { &r.stdout });
         return Err(if !text.is_empty() { py_last_line(text).to_string() } else { "systemctl failed".to_string() });
     }
-    Ok(Some(services::is_enabled(unit)))
+    // What is_enabled raises (output that does not decode, a NUL in the
+    // name) is a ValueError: caught by the switch, which says why.
+    Ok(Some(services::try_is_enabled(unit).map_err(|e| exc_str(&e))?))
 }
 
 fn autostart_apply(e: &autostart::Entry, on: bool) -> ApplyResult {
@@ -149,11 +151,12 @@ fn guard(on: bool) -> ApplyResult {
 }
 
 fn schedule(on: bool) -> ApplyResult {
-    let (ok, msg) = autoupdate::set_enabled(on);
+    // What set_enabled / status raise, the switch reports as str(exc).
+    let (ok, msg) = autoupdate::try_set_enabled(on).map_err(|e| exc_str(&e))?;
     if !ok {
         return Err(msg);
     }
-    Ok(Some(autoupdate::status().enabled))
+    Ok(Some(autoupdate::try_status().map_err(|e| exc_str(&e))?.enabled))
 }
 
 impl Win {
@@ -189,16 +192,21 @@ impl Win {
 
         let w = self.downgrade();
         spawn_bg(
-            || {
-                let on = plugins_mod::enabled();
+            // What raises in here ends the Python's worker before its
+            // idle_add: the page is not rebuilt.
+            || -> Result<_, String> {
+                let on = plugins_mod::try_enabled()?;
                 let starts = autostart::entries();
-                let units = services::services();
-                (on, starts, units)
+                let units = services::try_services()?;
+                Ok((on, starts, units))
             },
-            move |(on, starts, units)| {
-                if let Some(w) = w.upgrade() {
-                    w.switchboard_show(on, starts, units);
+            move |res| match res {
+                Ok((on, starts, units)) => {
+                    if let Some(w) = w.upgrade() {
+                        w.switchboard_show(on, starts, units);
+                    }
                 }
+                Err(e) => eprintln!("almanac: {e}"),
             },
         );
     }
@@ -289,7 +297,15 @@ impl Win {
                 .map(|u| (self.switch_service_row(u), format!("{} {}", u.description, u.unit)))
                 .collect(),
         );
-        section(tr("Almanac"), tr("Almanac's own background work."), self.switch_almanac_rows());
+        // `autoupdate.status()` raising stops `_switchboard_show` here.
+        let almanac = match self.switch_almanac_rows() {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return glib::ControlFlow::Break;
+            }
+        };
+        section(tr("Almanac"), tr("Almanac's own background work."), almanac);
 
         let switches = starts.len() + units.len() + 2;
         self.summarize(
@@ -363,7 +379,11 @@ impl Win {
                     if let Some(w) = w.upgrade() {
                         w.say(&format!("{title} {word}"), 5);
                     }
-                    history::record(history::ALMANAC, &format!("{title} switched {word}"), "", "", &[]);
+                    if let Err(e) =
+                        history::record_checked(history::ALMANAC, &format!("{title} switched {word}"), "", "", &[])
+                    {
+                        eprintln!("almanac: {e}");
+                    }
                 } else if let Some(w) = w.upgrade() {
                     let body = if err.is_empty() { tr("The change did not take effect") } else { err };
                     w.notify(&format!("{title} was not switched {word}"), &body, "normal");
@@ -486,7 +506,8 @@ impl Win {
         )
     }
 
-    pub fn switch_almanac_rows(&self) -> Vec<(adw::ActionRow, String)> {
+    /// `Err` where `autoupdate.status()` raises, after the first row is made.
+    pub fn switch_almanac_rows(&self) -> Result<Vec<(adw::ActionRow, String)>, String> {
         let icon = || -> gtk::Widget {
             gtk::Image::builder()
                 .icon_name("io.github.twodxme.Almanac")
@@ -495,8 +516,7 @@ impl Win {
                 .build()
                 .upcast()
         };
-        vec![
-            (
+        let guard_row = (
                 self.switch_row(
                     &tr("Settings watcher"),
                     &tr("Notices settings reset to defaults, and plugin updates, \
@@ -506,18 +526,21 @@ impl Win {
                     SwitchOpts { prefix: Some(icon()), ..Default::default() },
                 ),
                 "settings watcher guard".to_string(),
-            ),
+            );
+        let enabled = autoupdate::try_status()?.enabled;
+        Ok(vec![
+            guard_row,
             (
                 self.switch_row(
                     &tr("Scheduled updates"),
                     &tr("What runs and how often: Preferences → Updates"),
-                    autoupdate::status().enabled,
+                    enabled,
                     schedule,
                     SwitchOpts { prefix: Some(icon()), ..Default::default() },
                 ),
                 "scheduled updates timer".to_string(),
             ),
-        ]
+        ])
     }
 }
 

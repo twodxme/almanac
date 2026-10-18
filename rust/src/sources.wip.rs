@@ -1749,21 +1749,23 @@ pub fn resolve(link: &str) -> Resolution {
 
 /// `resolve`, raising (here: `Err`) where the Python raises.
 pub fn try_resolve(link: &str) -> Result<Resolution, String> {
-    let repo_fn = |r: &str| crate::ghcache::repo(r, GH_TTL);
-    let release_fn = |r: &str| crate::ghcache::latest_release(r, GH_TTL);
+    // What ghcache.get_json raises (a cache or rate file of the wrong
+    // shape) raises out of resolve too.
+    let repo_fn = |r: &str| crate::ghcache::try_repo(r, GH_TTL);
+    let release_fn = |r: &str| crate::ghcache::try_latest_release(r, GH_TTL);
     resolve_with(link, &repo_fn, &release_fn, &|u: &str| get(u, 20))
 }
 
 fn resolve_with(
     link: &str,
-    repo_fn: &dyn Fn(&str) -> std::option::Option<Value>,
-    release_fn: &dyn Fn(&str) -> std::option::Option<Value>,
+    repo_fn: &dyn Fn(&str) -> Result<std::option::Option<Value>, String>,
+    release_fn: &dyn Fn(&str) -> Result<std::option::Option<Value>, String>,
     fetch: Fetch,
 ) -> Result<Resolution, String> {
     let Some((owner, repo)) = parse(link) else {
         return Ok(Resolution { error: "That is not a GitHub repository link.".into(), ..Default::default() });
     };
-    let meta = repo_fn(&format!("{owner}/{repo}")).map(|v| Py::from_value(&v)).unwrap_or(Py::None);
+    let meta = repo_fn(&format!("{owner}/{repo}"))?.map(|v| Py::from_value(&v)).unwrap_or(Py::None);
     let meta = or(Some(&meta), &EMPTY_DICT).clone();
     let has_name = match &meta {
         Py::Dict(_) => meta.get("name")?.is_some_and(Py::truthy),
@@ -1810,7 +1812,7 @@ fn resolve_with(
     if let Some(o) = official(&name) {
         opts.push(o);
     }
-    let release = release_fn(&format!("{}/{repo}", res.owner));
+    let release = release_fn(&format!("{}/{repo}", res.owner))?;
     if let Some(release @ Value::Object(_)) = &release {
         if let Some(o) = appimage_with(&Py::from_value(release), fetch)? {
             opts.push(o);
@@ -2128,8 +2130,8 @@ pub fn parity(func: &str, args: &Value) -> std::option::Option<Value> {
         "resolve" => {
             let meta = a("meta").clone();
             let release = a("release").clone();
-            let repo_fn = move |_r: &str| Some(meta.clone()).filter(|m| !m.is_null());
-            let release_fn = move |_r: &str| Some(release.clone()).filter(|m| !m.is_null());
+            let repo_fn = move |_r: &str| Ok(Some(meta.clone()).filter(|m| !m.is_null()));
+            let release_fn = move |_r: &str| Ok(Some(release.clone()).filter(|m| !m.is_null()));
             let responses = a("responses");
             let fetch = fake_fetch(responses);
             let r = resolve_with(&s("link"), &repo_fn, &release_fn, &fetch);

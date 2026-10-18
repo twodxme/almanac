@@ -59,3 +59,37 @@ jobs:
           sudo -u builder env GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 \
             makepkg --nodeps --noconfirm
           tar -tf almanac-git-*.pkg.tar.zst | grep -q usr/share/almanac/app.py
+
+  # The Rust port (rust/): its tests, then the parity runner, which runs the
+  # Python and the Rust on the same inputs (demo mode) and fails on any
+  # difference.
+  rust:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git rust gtk4 libadwaita openssl python python-gobject \
+            python-cairo pacman-contrib polkit xdg-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --locked
+
+      - name: Tests
+        working-directory: rust
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # GTK needs a display; Broadway is one with no screen.
+          gtk4-broadwayd :5 &
+          sleep 1
+          GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 cargo test --locked
+
+      - name: Parity
+        run: |
+          gtk4-broadwayd :6 &
+          sleep 1
+          GDK_BACKEND=broadway BROADWAY_DISPLAY=:6 python3 rust/parity/run.py --demo

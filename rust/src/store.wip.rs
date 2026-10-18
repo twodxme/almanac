@@ -602,6 +602,16 @@ impl Plugin {
         })
     }
 
+    /// `str(p.market_name)`: the text an f-string or a label shows.
+    pub fn try_market_name_text(&self) -> Result<String, String> {
+        Ok(py_str(&self.try_market_name()?))
+    }
+
+    /// `str(p.page)`, as for `try_market_name_text`.
+    pub fn try_page_text(&self) -> Result<String, String> {
+        Ok(py_str(&self.try_page()?))
+    }
+
     fn try_asset_v(&self, rel: &Value) -> Result<String, String> {
         match self.py_market()? {
             Some(m) if truthy(Some(rel)) => match rel {
@@ -2258,6 +2268,30 @@ pub fn annotate(plugins: &mut [Plugin]) {
     let _ = try_annotate(plugins);
 }
 
+/// `plugins = catalog(force); annotate(plugins)`, as the app's workers write
+/// it: the Python's `catalog()` hands out the cached list itself, so
+/// `annotate` marks the very objects every later `catalog()` caller gets.
+/// This marks the cached entries in place (under the cache's lock) and
+/// returns a copy of them as marked.
+///
+/// `Err` where either step raises in the Python; marks made before an
+/// `annotate` failure stay on the cache, as they do on the Python's objects.
+pub fn try_catalog_annotated(force: bool) -> Result<Vec<Plugin>, String> {
+    let fresh = try_catalog(force)?;
+    let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(cache) = cached.as_mut() else {
+        // Only a test clearing the cache in between gets here: annotate the
+        // list catalog() returned, as the Python would.
+        drop(cached);
+        let mut plugins = fresh;
+        try_annotate(&mut plugins)?;
+        return Ok(plugins);
+    };
+    let mut done = 0;
+    annotate_marks(cache, &mut done)?;
+    Ok(cache.clone())
+}
+
 // ---- sorting and filtering ---------------------------------------------------
 
 /// A sort's comparator: the Python's sort-key lambda, as an ordering.
@@ -3374,6 +3408,27 @@ mod tests {
         assert!(c.installed && c.enabled);
         assert_eq!(c.description, "");
         *cached = before;
+    }
+
+    #[test]
+    fn catalog_annotated_marks_the_cache_itself() {
+        let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
+        let before = cached.take();
+        // Marked installed before; nothing by this id is on any machine.
+        let p = Plugin { id: "almanac-test-no-such-plugin".into(), name: "X".into(), installed: true,
+                         enabled: true, ..Plugin::default() };
+        *cached = Some(vec![p]);
+        drop(cached);
+        let got = try_catalog_annotated(false);
+        let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
+        let c = cached.as_ref().expect("cache")[0].clone();
+        *cached = before;
+        drop(cached);
+        if let Ok(got) = got {
+            assert!(!got[0].installed && !got[0].enabled);
+            assert_eq!(got[0], c);
+            assert!(!c.installed && !c.enabled);
+        }
     }
 
     #[test]

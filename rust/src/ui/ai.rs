@@ -444,9 +444,19 @@ impl Win {
 
         let (key, domain, url) = Win::icon_source(app);
         if !key.is_empty() {
-            if let Some(hit) = crate::icons::cached(&key) {
-                self.set_icon(image, &hit, size);
-                return true;
+            // `icons.cached` raising ends `_app_icon` with the image as it
+            // was; `icons.fetch` raising on the pool is kept by its future,
+            // unseen, and the glyph stays.
+            match crate::icons::cached_checked(&key) {
+                Ok(Some(hit)) => {
+                    self.set_icon(image, &hit, size);
+                    return true;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    return false;
+                }
             }
             // Not fetched yet: show the glyph now, swap it in when it lands.
             image.set_icon_name(Some(
@@ -455,9 +465,11 @@ impl Win {
             let w = self.clone();
             let image = image.clone();
             self.thumb_submit(
-                move || crate::icons::fetch(&key, &url, &domain),
+                move || crate::icons::fetch_checked(&key, &url, &domain),
                 move |path| {
-                    w.icon_arrived(&image, size, path);
+                    if let Ok(path) = path {
+                        w.icon_arrived(&image, size, path);
+                    }
                 },
             );
             return true;
@@ -530,20 +542,29 @@ impl Win {
         if !(!e.icon_key.is_empty() && (!e.icon_domain.is_empty() || !e.icon_url.is_empty())) {
             return;
         }
-        if let Some(hit) = crate::icons::cached(&e.icon_key) {
-            self.set_icon(image, &hit, SET_ICON_SIZE);
-            return;
+        // As in `app_icon`: a raise from `cached` ends this, one from
+        // `fetch` is never seen.
+        match crate::icons::cached_checked(&e.icon_key) {
+            Ok(Some(hit)) => {
+                self.set_icon(image, &hit, SET_ICON_SIZE);
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("almanac: {err}");
+                return;
+            }
         }
 
         let w = self.clone();
         let image = image.clone();
-        let done = move |path: Option<PathBuf>| {
-            if let Some(path) = path {
+        let done = move |path: Result<Option<PathBuf>, String>| {
+            if let Ok(Some(path)) = path {
                 w.set_icon(&image, &path, SET_ICON_SIZE);
             }
         };
         let (key, url, domain) = (e.icon_key.clone(), e.icon_url.clone(), e.icon_domain.clone());
-        self.thumb_submit(move || crate::icons::fetch(&key, &url, &domain), done);
+        self.thumb_submit(move || crate::icons::fetch_checked(&key, &url, &domain), done);
     }
 
     pub fn set_icon(&self, image: &gtk::Image, path: &Path, size: i32) {
@@ -672,9 +693,19 @@ impl Win {
             })
             .collect();
         // Major releases are updated one at a time, with their notes shown.
-        let (held, upd): (Vec<Entry>, Vec<Entry>) = upd
-            .into_iter()
-            .partition(|e| crate::agents::hold_major(&e.version, &e.update));
+        // What hold_major raises ends the handler here.
+        let mut held: Vec<Entry> = Vec::new();
+        for e in &upd {
+            match crate::agents::try_hold_major(&e.version, &e.update) {
+                Ok(true) => held.push(e.clone()),
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+            }
+        }
+        let upd: Vec<Entry> = upd.into_iter().filter(|e| !held.contains(e)).collect();
         if !held.is_empty() {
             self.say(
                 &(tr("Held back (major release, update it on its own): ")

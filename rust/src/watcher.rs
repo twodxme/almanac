@@ -36,17 +36,34 @@ fn reported_path() -> PathBuf {
     crate::xdg::state_home().join("almanac").join("guard-reported.json")
 }
 
+/// The command Almanac is installed as: `almanac`, or `almanac-rs` when this
+/// binary runs under that name beside the Python app (the same test that
+/// picks the `….Rs` application id in `ui::shell::application_id`).
+///
+/// The Python looks up `almanac` because that is *its* command. Run as
+/// `almanac-rs`, looking up `almanac` would find the Python launcher, and an
+/// autostart entry, a notification's "Open Almanac" or a restart after an
+/// update written by the Rust app would start the Python app instead.
+pub fn command_name() -> &'static str {
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    match Path::new(&argv0).file_name() {
+        Some(base) if base == "almanac-rs" => "almanac-rs",
+        _ => "almanac",
+    }
+}
+
 /// How to start Almanac from an autostart entry, however it is installed.
 ///
 /// The Python falls back to `[sys.executable, <dir of watcher.py>/app.py]`:
 /// "the interpreter running this, on the app beside it". The port's
-/// equivalent is the binary running this.
+/// equivalent is the binary running this. What is looked up on PATH is
+/// `command_name()`, so the entry starts the app that wrote it.
 ///
 /// The paths are kept as bytes: Python's `shutil.which` gives a
 /// surrogateescape'd str, which an argv carries through unchanged and which
 /// `enable` fails to write.
 pub fn launcher() -> Vec<OsString> {
-    if let Some(found) = which("almanac") {
+    if let Some(found) = which(command_name()) {
         return vec![found.into_os_string()];
     }
     match std::env::current_exe() {
@@ -1034,32 +1051,11 @@ pub fn plugin_updates() -> Vec<PyStr> {
     out
 }
 
-/// `plugins.classify(d, {}).updatable`.
-///
-/// `plugins::classify` hands git the path as a lossy string, so a plugin
-/// whose path is not UTF-8 cannot be reached by it; the Python passes git
-/// the bytes. Such a directory is classified through a UTF-8 name for the
-/// same directory: `/proc/<our pid>/fd/<n>/.git/..`, `n` being the
-/// directory opened here. That name is not itself a symlink (its last part
-/// is `..`), holds the same `.git`, and git -- another process -- reaches
-/// it through our pid.
+/// `plugins.classify(d, {}).updatable`. `classify` hands git the
+/// directory's own bytes, so a plugin whose path is not UTF-8 is reached as
+/// the Python reaches it.
 fn updatable(d: &Path) -> bool {
-    use std::os::fd::AsRawFd;
-    let classify = |p: &Path| crate::plugins::classify(p, Some(&mut crate::plugins::FetchCache::new()), true).updatable();
-    if d.to_str().is_some() {
-        return classify(d);
-    }
-    // A symlink is LOCAL ("symlink") whatever it points to.
-    if d.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
-        return false;
-    }
-    let Ok(dir) = std::fs::File::open(d) else {
-        return false; // unreadable: not a git checkout the Python could use either
-    };
-    let alias = format!("/proc/{}/fd/{}/.git/..", std::process::id(), dir.as_raw_fd());
-    let ok = classify(Path::new(&alias));
-    drop(dir);
-    ok
+    crate::plugins::classify(d, Some(&mut crate::plugins::FetchCache::new()), true).updatable()
 }
 
 /// Notify only when something new is waiting -- not the same list again,
@@ -1422,6 +1418,14 @@ mod tests {
 
     // Tests share the process environment; one at a time.
     static ENV: Mutex<()> = Mutex::new(());
+
+    /// Run under any name but `almanac-rs` (this test binary, the parity
+    /// runner, the packaged `/usr/bin/almanac`), the command looked up is the
+    /// Python's own `almanac`.
+    #[test]
+    fn command_name_is_almanac_unless_run_as_almanac_rs() {
+        assert_eq!(command_name(), "almanac");
+    }
 
     /// `mock.patch.dict("os.environ", {key: value})`.
     struct EnvVar(&'static str, Option<std::ffi::OsString>);

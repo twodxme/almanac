@@ -15,7 +15,7 @@ use gtk::{gdk, glib};
 use crate::i18n::tr;
 use crate::store as store_mod;
 use crate::store::Plugin;
-use crate::ui::shell::{compact, page_spec, sorts_discover, spawn_bg, PluginItem, Win, INSTALL_ICON};
+use crate::ui::shell::{compact, exc_str, page_spec, sorts_discover, spawn_bg, PluginItem, Win, INSTALL_ICON};
 
 use gtk::gio;
 
@@ -147,17 +147,6 @@ fn missing(attr: &str) {
     eprintln!("AttributeError: 'AlmanacWindow' object has no attribute '{attr}'");
 }
 
-/// `str(exc)` for a panic caught off the main thread.
-fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = e.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = e.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        String::new()
-    }
-}
-
 impl Win {
     pub const STORE_PAGE: u32 = 100;
 
@@ -204,13 +193,9 @@ impl Win {
         widget
     }
 
-    /// `getattr(self, "_page", "discover")`. `Shared.page` cannot say "never
-    /// set" (it starts as "packages", a real page), so before the first
-    /// `show_page` this reads "packages" where the Python falls back to
-    /// "discover". `show_page` runs while the window is built, before any
-    /// catalogue can arrive, so no store helper sees the difference.
+    /// `getattr(self, "_page", "discover")`.
     fn store_page(&self) -> String {
-        self.shared.borrow().page.clone()
+        self.shared.borrow().page_or("discover")
     }
 
     /// `getattr(self, "_plugins", None) or []`
@@ -277,7 +262,15 @@ impl Win {
         // single entry. It appears on its own once a second one is registered.
         let store_market = gtk::DropDown::from_strings(&["All marketplaces"]);
         store_market.set_tooltip_text(Some(&tr("Marketplace")));
-        store_market.set_visible(store_mod::enabled_markets().len() > 1);
+        // Where `enabled_markets()` raises the Python's window is never
+        // built; here it is logged and the control stays hidden.
+        store_market.set_visible(match store_mod::try_enabled_markets() {
+            Ok(markets) => markets.len() > 1,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                false
+            }
+        });
         let w = self.downgrade();
         store_market.connect_selected_notify(move |_| {
             if let Some(w) = w.upgrade() {
@@ -548,7 +541,13 @@ impl Win {
             store_cat.set_selected(i as u32);
         }
 
-        let trusts = store_mod::trust_counts(&pool);
+        let trusts = match store_mod::try_trust_counts(&pool) {
+            Ok(trusts) => trusts,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return;
+            }
+        };
         self.store.borrow_mut().store_trusts =
             std::iter::once(String::new()).chain(trusts.iter().map(|(k, _l, _n)| k.clone())).collect();
         let labels: Vec<String> = std::iter::once("Any provenance".to_string())
@@ -631,7 +630,14 @@ impl Win {
         } else if page == "themes" {
             self.summarize(&format!("{total} Omarchy themes · {installed} installed"), Some(&page));
         } else {
-            let markets = store_mod::enabled_markets()
+            let markets = match store_mod::try_enabled_markets() {
+                Ok(markets) => markets,
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+            };
+            let markets = markets
                 .iter()
                 .map(|m| m.name.clone())
                 .collect::<Vec<_>>()
@@ -814,7 +820,15 @@ impl Win {
         w.installed.set_text(&if off { tr("Off") } else { tr("Installed") });
         w.installed.remove_css_class(if !off { "pill-quiet" } else { "pill-ok" });
         w.installed.add_css_class(if off { "pill-quiet" } else { "pill-ok" });
-        w.sub.set_text(&p.subtitle());
+        // What a listing property raises ends this bind, logged.
+        let subtitle = match p.try_subtitle() {
+            Ok(subtitle) => subtitle,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return;
+            }
+        };
+        w.sub.set_text(&subtitle);
         w.desc.set_text(if !p.description.is_empty() { &p.description } else { &p.install_note });
         w.cat.set_text(&p.category);
         w.stars.set_text(&if p.stars != 0 { format!("★ {}", compact(p.stars)) } else { String::new() });
@@ -826,13 +840,19 @@ impl Win {
         w.name.set_tooltip_text(Some(&format!("{} · {}", p.name, p.category)));
 
         // Provenance
-        let t = p.trust();
-        let publisher = p.publisher();
+        let props = p.try_trust().and_then(|t| Ok((t, p.try_publisher()?, p.try_market_name_text()?)));
+        let (t, publisher, market_name) = match props {
+            Ok(props) => props,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return;
+            }
+        };
         w.prov.set_text(&publisher);
         w.prov_row.set_tooltip_text(Some(&if !p.repo.is_empty() {
-            format!("{}\nListed by {}", publisher, p.market_name())
+            format!("{}\nListed by {}", publisher, market_name)
         } else {
-            format!("Listed by {}", p.market_name())
+            format!("Listed by {}", market_name)
         }));
         w.trust.set_text(&t.label);
         for css in ["pill-accent", "pill-ok", "pill-warn", "pill-quiet"] {
@@ -1089,25 +1109,14 @@ impl Win {
         self.busy(true);
         self.summarize(&tr("Loading the plugin marketplace…"), Some("discover"));
 
-        // `except Exception as exc: _store_failed(str(exc))`: what can fail
-        // in here panics in Rust, so the panic is caught and reported the same
-        // way, and the spinner always stops.
-        //
-        // `catalog` hands back a copy of the process-wide cache, where the
-        // Python returns the cached list itself; annotating it therefore
-        // marks only this copy, not the cache later `catalog()` callers get.
-        let work = move || {
-            std::panic::catch_unwind(move || {
-                let mut plugins = store_mod::catalog(force);
-                store_mod::annotate(&mut plugins);
-                plugins
-            })
-            .map_err(|e| panic_message(&*e))
-        };
+        // `except Exception as exc: _store_failed(str(exc))`. The catalogue
+        // is marked where it is cached, as the Python marks the cached list
+        // `catalog()` hands back.
+        let work = move || store_mod::try_catalog_annotated(force);
         let w = self.clone();
         spawn_bg(work, move |result| match result {
             Ok(plugins) => w.store_loaded(plugins),
-            Err(message) => w.store_failed(&message),
+            Err(message) => w.store_failed(&exc_str(&message)),
         });
     }
 
@@ -1166,7 +1175,7 @@ impl Win {
             return glib::ControlFlow::Break;
         };
         let market = pick_key(&self.shared.borrow().store_markets, store_market.selected());
-        let results = store_mod::browse(
+        let results = match store_mod::try_browse(
             &pool,
             &query,
             &category,
@@ -1175,7 +1184,13 @@ impl Win {
             store_verified.is_active(),
             &market,
             &trust,
-        );
+        ) {
+            Ok(results) => results,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return glib::ControlFlow::Break;
+            }
+        };
 
         let none = results.is_empty();
         self.store.borrow_mut().store_results = results;
@@ -1310,14 +1325,6 @@ mod tests {
         assert_eq!(pool_of(&all, &pool_page(Some("themes"), "discover")), vec![theme]);
     }
 
-    /// `_store_failed(str(exc))`: a failed load reports its message.
-    #[test]
-    fn a_failed_load_reports_its_message() {
-        let e = std::panic::catch_unwind(|| panic!("network down")).unwrap_err();
-        assert_eq!(panic_message(&*e), "network down");
-        let e = std::panic::catch_unwind(|| panic!("{} rows", 3)).unwrap_err();
-        assert_eq!(panic_message(&*e), "3 rows");
-    }
 
     #[test]
     fn star_tooltips_group_thousands() {

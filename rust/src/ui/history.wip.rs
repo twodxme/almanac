@@ -356,7 +356,7 @@ impl Win {
 
     pub fn maint_show(&self, findings: Vec<maintenance::Finding>) {
         self.busy(false);
-        self.shared.borrow_mut().findings = findings.clone();
+        self.shared.borrow().findings.set(findings.clone());
         let Some(maint_list) = self.history.borrow().maint_list.clone() else {
             // Python raises AttributeError here and PyGObject prints it.
             eprintln!("AttributeError: 'Almanac' object has no attribute 'maint_list'");
@@ -576,7 +576,7 @@ impl Win {
     pub fn reclaim_space(&self) {
         let wanted = ["pacman-cache", "yay-cache", "journal"];
         let (mut steps, mut detail, mut total) = (Vec::new(), Vec::new(), 0.0);
-        let findings = self.shared.borrow().findings.clone();
+        let findings = self.shared.borrow().findings.get();
         for f in &findings {
             if wanted.contains(&f.id.as_str()) && f.actionable() {
                 steps.push(fix_step(format!("{}: {}", f.title, f.fix_label), f));
@@ -607,6 +607,7 @@ impl Win {
                     .shared
                     .borrow()
                     .findings
+                    .get()
                     .iter()
                     .filter(|f| wanted.contains(&f.id.as_str()) && f.actionable())
                     .cloned()

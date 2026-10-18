@@ -20,7 +20,7 @@ use crate::patches::{self, PatchState};
 use crate::sources::{self, Option as SourceOption, Resolution};
 use crate::tasks::{self, LogFn, OnDone, Step, StepAction};
 use crate::ui::shell::{spawn_bg, Win, WeakWin};
-use crate::verify::{self, Outcome, Probe, ProbeValue};
+use crate::verify::{self, Outcome, Probe, ProbeValue, TryProbe};
 use crate::{agents, appimage, ghcache, history, mimeguard, plugins, selfupdate, settings,
             snapshots, theming, xdg};
 
@@ -779,7 +779,10 @@ impl Win {
 
     /// Update Almanac, then offer to restart into the new code.
     pub fn on_self_update(&self) {
-        let info = selfupdate::check(true);
+        let info = match selfupdate::try_check(true) {
+            Ok(info) => info,
+            Err(e) => return raised(&e),
+        };
         if !info.can_update {
             let note = if info.note.is_empty() { "Almanac is up to date".to_string() } else { info.note };
             self.say(&note, 8);
@@ -841,7 +844,11 @@ impl Win {
     }
 
     pub fn on_about(&self) {
-        let info = selfupdate::check(false);
+        // What raises in here ends on_about before the dialog is presented.
+        let info = match selfupdate::try_check(false) {
+            Ok(info) => info,
+            Err(e) => return raised(&e),
+        };
         let about = adw::AboutDialog::builder()
             .application_name("Almanac")
             .application_icon("io.github.twodxme.Almanac")
@@ -863,16 +870,25 @@ impl Win {
                 "ArtCraft https://getartcraft.com",
             ],
         );
+        let described = theming::try_describe().and_then(|t| Ok((t, ghcache::try_describe()?)));
+        let (theme, github) = match described {
+            Ok(both) => both,
+            Err(e) => return raised(&e),
+        };
         about.set_debug_info(&format!(
             "Installed as: {}\n{}\n{}\n{}",
             info.kind,
             info.note,
-            theming::describe(),
-            ghcache::describe()
+            theme,
+            github
         ));
-        if let Some((version, markup)) = selfupdate::release_notes() {
-            about.set_release_notes_version(&version);
-            about.set_release_notes(&markup);
+        match selfupdate::try_release_notes() {
+            Ok(Some((version, markup))) => {
+                about.set_release_notes_version(&version);
+                about.set_release_notes(&markup);
+            }
+            Ok(None) => {}
+            Err(e) => return raised(&e),
         }
         about.present(Some(&self.window));
     }
@@ -926,10 +942,17 @@ impl Win {
     /// `probe` is asked now and again once the task is over, and `judge`
     /// turns the two answers into what the user is told (see verify.py).
     /// Every silent failure this app has had passed an exit-status check.
-    pub fn checked(&self, probe: Option<Probe>, judge: Judge, then: Option<OnDone>) -> OnDone {
-        let before = probe.as_ref().and_then(|p| p());
+    ///
+    /// `Err` where the first asking raises, as `_checked` itself then does
+    /// (and the action it was building never starts). A raise on the second
+    /// asking ends the worker: nothing is reported.
+    pub fn checked(&self, probe: Option<TryProbe>, judge: Judge, then: Option<OnDone>) -> Result<OnDone, String> {
+        let before = match &probe {
+            Some(p) => p()?,
+            None => None,
+        };
         let w = self.downgrade();
-        Box::new(move |ok| {
+        Ok(Box::new(move |ok| {
             if let Some(then) = then {
                 then(ok);
             }
@@ -937,44 +960,57 @@ impl Win {
                 return;
             };
             spawn_bg(
-                move || judge(before, probe()),
-                move |out| {
-                    if let Some(win) = w.upgrade() {
-                        win.report_outcome(&out);
+                move || probe().map(|after| judge(before, after)),
+                move |out| match out {
+                    Ok(out) => {
+                        if let Some(win) = w.upgrade() {
+                            win.report_outcome(&out);
+                        }
                     }
+                    Err(e) => raised(&e),
                 },
             );
-        })
+        }))
     }
 
     /// `_checked` for a `done` that may run more than once (the Python
     /// reuses one `done` each time `tasks.confirm` answers yes).
-    fn checked_again(&self, probe: Probe, judge: JudgeAgain, then: Rc<dyn Fn(bool)>) -> Rc<dyn Fn(bool)> {
-        let before = probe();
+    fn checked_again(
+        &self,
+        probe: TryProbe,
+        judge: JudgeAgain,
+        then: Rc<dyn Fn(bool)>,
+    ) -> Result<Rc<dyn Fn(bool)>, String> {
+        let before = probe()?;
         let w = self.downgrade();
-        Rc::new(move |ok| {
+        Ok(Rc::new(move |ok| {
             then(ok);
             let (probe, judge, before) = (probe.clone(), judge.clone(), before.clone());
             let w = w.clone();
             spawn_bg(
-                move || judge(before, probe()),
-                move |out| {
-                    if let Some(win) = w.upgrade() {
-                        win.report_outcome(&out);
+                move || probe().map(|after| judge(before, after)),
+                move |out| match out {
+                    Ok(out) => {
+                        if let Some(win) = w.upgrade() {
+                            win.report_outcome(&out);
+                        }
                     }
+                    Err(e) => raised(&e),
                 },
             );
-        })
+        }))
     }
 
     pub fn report_outcome(&self, out: &Outcome) {
-        history::record(
+        if let Err(e) = history::record_checked(
             history::ALMANAC,
             &out.message,
             "",
             if out.changed == Some(false) { "warn" } else { "" },
             &[],
-        );
+        ) {
+            return raised(&e);
+        }
         if out.changed == Some(false) {
             // Something the user asked for did not happen. A toast can be
             // missed; this is the one result that must not be.
@@ -988,24 +1024,16 @@ impl Win {
     }
 
     /// Put a Snapper snapshot ahead of a package change, when available.
-    pub fn snapshot_first(&self, steps: Vec<Step>, what: &str) -> Vec<Step> {
-        let step = snapshots::create_step(&format!("Almanac: before {what}"));
-        with_snapshot(step, steps)
+    ///
+    /// `Err` where `create_step` raises: the action it was for never starts.
+    pub fn snapshot_first(&self, steps: Vec<Step>, what: &str) -> Result<Vec<Step>, String> {
+        let step = snapshots::try_create_step(&format!("Almanac: before {what}"))?;
+        Ok(with_snapshot(step, steps))
     }
 
     // ---- which files an install took over ----------------------------------
     /// Read every file type's default app now, before an install.
     ///
-    /// Port note: a thread that cannot start raised out of `_watch_defaults`
-    /// and stopped the install; this prints it and carries on. Callers that
-    /// must stop use `try_watch_defaults`.
-    pub fn watch_defaults(&self) -> DefaultsWatch {
-        self.try_watch_defaults().unwrap_or_else(|e| {
-            raised(&e);
-            DefaultsWatch { before: Arc::default(), thread: mpsc::channel().1 }
-        })
-    }
-
     /// `_watch_defaults`; `Err` is what raised out of it.
     pub fn try_watch_defaults(&self) -> Result<DefaultsWatch, String> {
         let before: Arc<Mutex<Option<BTreeMap<String, String>>>> = Arc::new(Mutex::new(None));
@@ -1019,14 +1047,6 @@ impl Win {
             }
         })?;
         Ok(DefaultsWatch { before, thread })
-    }
-
-    /// Port note: as `watch_defaults`; `try_check_defaults` is the one that
-    /// lets the caller stop before its reload, as the Python did.
-    pub fn check_defaults(&self, holder: DefaultsWatch) {
-        if let Err(e) = self.try_check_defaults(holder) {
-            raised(&e);
-        }
     }
 
     /// `_check_defaults`; `Err` is what raised out of it.
@@ -1045,7 +1065,11 @@ impl Win {
     pub fn offer_defaults_back(&self, moved: Vec<(String, String, String)>) {
         let returnable: Vec<(String, String, String)> =
             moved.iter().filter(|m| !m.1.is_empty()).cloned().collect();
-        let body = mimeguard::summary(&moved).join("\n")
+        let summary = match mimeguard::try_summary(&moved) {
+            Ok(summary) => summary,
+            Err(e) => return raised(&e),
+        };
+        let body = summary.join("\n")
             + &if !returnable.is_empty() {
                 tr("\n\nGive them back to what opened them before?")
             } else {
@@ -1064,16 +1088,28 @@ impl Win {
         dialog.set_close_response("keep");
 
         let w = self.downgrade();
-        history::record(history::ALMANAC, "File types changed hands", "", "",
-                        &mimeguard::summary(&moved));
+        // What raises here ends `_offer_defaults_back` before the dialog
+        // is shown.
+        let recorded = mimeguard::try_summary(&moved)
+            .and_then(|items| history::record_checked(history::ALMANAC, "File types changed hands", "", "", &items));
+        if let Err(e) = recorded {
+            return raised(&e);
+        }
         dialog.connect_response(None, move |_d, resp| {
             if resp == "restore" {
-                let n = mimeguard::restore(&returnable, None);
+                let n = match mimeguard::try_restore(&returnable, None) {
+                    Ok(n) => n,
+                    Err(e) => return raised(&e),
+                };
                 if let Some(win) = w.upgrade() {
                     win.say(&format!("{n} file type(s) handed back"), 5);
                 }
-                history::record(history::ALMANAC, &format!("{n} file type(s) handed back"),
-                                "", "", &mimeguard::summary(&returnable));
+                let recorded = mimeguard::try_summary(&returnable).and_then(|items| {
+                    history::record_checked(history::ALMANAC, &format!("{n} file type(s) handed back"), "", "", &items)
+                });
+                if let Err(e) = recorded {
+                    raised(&e);
+                }
             }
         });
         dialog.present(Some(&self.window));
@@ -1116,12 +1152,16 @@ impl Win {
             win.say(&tr("Looking it up…"), 5);
 
             let w2 = win.downgrade();
+            // What resolve raises ends the Python's worker: no options shown.
             spawn_bg(
-                move || sources::resolve(&text),
-                move |res| {
-                    if let Some(win) = w2.upgrade() {
-                        win.show_link_options(res);
+                move || sources::try_resolve(&text),
+                move |res| match res {
+                    Ok(res) => {
+                        if let Some(win) = w2.upgrade() {
+                            win.show_link_options(res);
+                        }
                     }
+                    Err(e) => raised(&e),
                 },
             );
         });
@@ -1255,10 +1295,13 @@ impl Win {
         let argv = yay_argv(&opt.name);
         let name = opt.name.clone();
         let judge_name = name.clone();
-        let steps = self.snapshot_first(vec![Step::argv(format!("Installing {name}"), argv)],
-                                        &format!("installing {name}"));
+        let steps = match self.snapshot_first(vec![Step::argv(format!("Installing {name}"), argv)],
+                                              &format!("installing {name}")) {
+            Ok(steps) => steps,
+            Err(e) => return raised(&e),
+        };
         let done = self.checked(
-            Some(verify::installed_package(&name)),
+            Some(verify::installed_package_try(&name)),
             Box::new(move |b, a| {
                 let landed = probe_truthy(&a) && a != b;
                 Outcome::new(
@@ -1272,6 +1315,10 @@ impl Win {
             }),
             Some(after),
         );
+        let done = match done {
+            Ok(done) => done,
+            Err(e) => return raised(&e),
+        };
         tasks::run(&self.window, &format!("Installing {name}"), steps, Some(done));
     }
 
@@ -1359,7 +1406,14 @@ impl Win {
                     vec![Step::argv(format!("Updating {}", app.name), argv.clone())],
                     &format!("updating {}", app.name),
                 );
-                let done = win.checked(verify::for_app(&app), app_judge(&app), Some(after_pacman_cb(&win)));
+                let steps = match steps {
+                    Ok(steps) => steps,
+                    Err(e) => return raised(&e),
+                };
+                let done = match win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win))) {
+                    Ok(done) => done,
+                    Err(e) => return raised(&e),
+                };
                 tasks::run(&win.window, &format!("Updating {}", app.name), steps, Some(done));
             },
         );
@@ -1387,12 +1441,17 @@ impl Win {
             let repo = extra_str(app, "repo");
             let w = self.downgrade();
             let app_c = app.clone();
+            // What release_notes raises ends the Python's worker: nothing
+            // is asked.
             spawn_bg(
-                move || agents::release_notes(&repo, 2000),
-                move |notes| {
-                    if let Some(win) = w.upgrade() {
-                        win.confirm_agent_cmd(&app_c, cmd, &notes);
+                move || agents::try_release_notes(&repo, 2000),
+                move |notes| match notes {
+                    Ok(notes) => {
+                        if let Some(win) = w.upgrade() {
+                            win.confirm_agent_cmd(&app_c, cmd, &notes);
+                        }
                     }
+                    Err(e) => raised(&e),
                 },
             );
             return;
@@ -1438,7 +1497,10 @@ impl Win {
         tasks::confirm(&self.window, &heading, &body, &detail, &action, false, move || {
             let Some(win) = w.upgrade() else { return };
             let app = app_c.clone();
-            let done = win.checked(verify::for_app(&app), app_judge(&app), Some(after_pacman_cb(&win)));
+            let done = match win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win))) {
+                Ok(done) => done,
+                Err(e) => return raised(&e),
+            };
             tasks::run(
                 &win.window,
                 &format!("Updating {}", app.name),
@@ -1468,9 +1530,14 @@ impl Win {
         let app_c = app.clone();
         // patches._git runs `git -C str(repo)`.
         let repo_c = py_str(&repo);
+        // What analyze raises ends the Python's worker: nothing is asked.
         spawn_bg(
-            move || patches::analyze(&repo_c, None),
+            move || patches::try_analyze(&repo_c, None),
             move |state| {
+                let state = match state {
+                    Ok(state) => state,
+                    Err(e) => return raised(&e),
+                };
                 if let Some(win) = w.upgrade() {
                     match &repo {
                         Value::String(repo) => win.confirm_pull(&app_c, repo, &state),
@@ -1498,7 +1565,10 @@ impl Win {
             }
         };
         let steps = patches::steps(repo, state, &app.name, pull.as_deref());
-        let done = self.checked_again(verify::git_head(repo), app_judge_again(app), after_pacman_again(self));
+        let done = match self.checked_again(verify::git_head_try(repo), app_judge_again(app), after_pacman_again(self)) {
+            Ok(done) => done,
+            Err(e) => return raised(&e),
+        };
         if state.kind == patches::CLEAN || state.kind == patches::UNKNOWN {
             tasks::run(&self.window, &format!("Updating {}", app.name), steps, Some(Box::new(move |ok| done(ok))));
             return;
@@ -1640,8 +1710,13 @@ impl Win {
                 }
                 return;
             }
-            let judged = gio::spawn_blocking(move || verify::judge_pending(before.as_ref(), probe().as_ref()));
+            let judged = gio::spawn_blocking(move || verify::try_judge_pending(before.as_ref(), probe().as_ref()));
             let Ok(out) = judged.await else { return };
+            // judge_pending raising ends the Python's `wait` thread there.
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => return raised(&e),
+            };
             if let Some(win) = w.upgrade() {
                 win.report_outcome(&out);
             }
@@ -1817,7 +1892,7 @@ mod tests {
         let main = vec![Step::argv("Updating somepkg", argv)];
         // The real step, where Snapper is set up on this machine (the Python
         // patches snapper_configs, which is private here).
-        if let Some(step) = snapshots::create_step("Almanac: before updating somepkg") {
+        if let Ok(Some(step)) = snapshots::try_create_step("Almanac: before updating somepkg") {
             let steps = with_snapshot(Some(step), main.clone());
             assert_eq!(steps[0].label, "Taking a snapshot first");
             assert!(step_text(&steps[1]).unwrap_or_default().contains("yay -S"));

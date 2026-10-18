@@ -1383,7 +1383,9 @@ fn save_latest_here(versions: &Py) {
 /// The release page is `d.get("html_url", "")`: None, or whatever else the
 /// release holds there, comes back as is. Err for a tag that is not a string.
 pub fn github_latest(repo: &str) -> Result<(String, Py), String> {
-    let d = crate::ghcache::latest_release(repo, crate::ghcache::DEFAULT_TTL).map(|v| Py::from_value(&v));
+    // What ghcache.get_json raises (a broken cache or rate file) raises
+    // out of here too.
+    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?.map(|v| Py::from_value(&v));
     let Some(d @ Py::Dict(_)) = d else {
         return Ok((String::new(), Py::s("")));
     };
@@ -1725,7 +1727,9 @@ pub fn try_release_notes(repo: &str, limit: i64) -> Result<String, String> {
     if repo.is_empty() {
         return Ok(String::new());
     }
-    let d = crate::ghcache::latest_release(repo, crate::ghcache::DEFAULT_TTL).map(|v| Py::from_value(&v));
+    // What ghcache.get_json raises (a broken cache or rate file) raises
+    // out of here too.
+    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?.map(|v| Py::from_value(&v));
     let mut body = match &d {
         Some(d @ Py::Dict(_)) => match d.get("body")?.cloned().unwrap_or(Py::None).or(Py::s("")) {
             Py::Str(s) => py_strip(&s).to_string(),

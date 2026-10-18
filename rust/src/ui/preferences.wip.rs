@@ -57,7 +57,7 @@ impl Win {
 
     fn build_preferences(&self) -> Result<(), String> {
         let cfg = autoupdate::load()?;
-        let st = autoupdate::status();
+        let st = autoupdate::try_status()?;
         let dialog = adw::PreferencesDialog::builder().title(tr("Preferences")).build();
 
         // ---- General
@@ -256,7 +256,7 @@ impl Win {
         let log_row = adw::ActionRow::builder()
             .title(tr("Last run log"))
             .subtitle(
-                xdg::state_home()
+                xdg::try_state_home()?
                     .join("omarchy-auto-update/last-run.log")
                     .to_string_lossy()
                     .as_ref(),
@@ -284,7 +284,10 @@ impl Win {
             let w = self.downgrade();
             Rc::new(move || {
                 if let Some(w) = w.upgrade() {
-                    w.shared.borrow_mut().plugins_none = true;
+                    // `setattr(self, "_plugins", None)`
+                    let mut sh = w.shared.borrow_mut();
+                    sh.plugins_none = true;
+                    sh.plugins.clear();
                 }
             })
         };
@@ -422,9 +425,14 @@ impl Win {
                 }
             }
             if enabled.is_active() != st_enabled {
-                let (ok, msg) = autoupdate::set_enabled(enabled.is_active());
-                if !ok {
-                    say(format!("Could not change the timer: {msg}"));
+                // What set_enabled raises ends the close handler, logged.
+                match autoupdate::try_set_enabled(enabled.is_active()) {
+                    Ok((true, _msg)) => {}
+                    Ok((false, msg)) => say(format!("Could not change the timer: {msg}")),
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return;
+                    }
                 }
             }
             let Some(w) = w.upgrade() else { return };

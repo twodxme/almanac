@@ -34,6 +34,20 @@ pub struct State {}
 
 /// `shlex.split(p.install_cmd)`, plus `--yes` where the command takes it.
 /// Err where `shlex.split` raises (an unclosed quote), with its message.
+/// `x?` for a handler that returns nothing: what the Python raises there
+/// (a listing property of the wrong type, say) ends the handler, logged.
+macro_rules! or_log {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("almanac: {e}");
+                return;
+            }
+        }
+    };
+}
+
 pub fn install_argv(install_cmd: &str) -> Result<Vec<String>, String> {
     let mut argv = shlex_split(install_cmd)?;
     // `plugin add` has a prompt to skip; `plugin enable` does not take the
@@ -140,18 +154,20 @@ pub fn install_body(p: &Plugin) -> String {
 }
 
 /// The detail (provenance and the command) of the plugin install confirmation.
-pub fn install_detail(p: &Plugin, argv: &[String]) -> String {
-    let t = p.trust();
+///
+/// `Err` where a listing property raises.
+pub fn install_detail(p: &Plugin, argv: &[String]) -> Result<String, String> {
+    let t = p.try_trust()?;
     let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
-    format!(
+    Ok(format!(
         "Publisher   {}\nProvenance  {} — {}\nLicence     {}\nListed by   {}\n\n$ {}",
-        p.publisher(),
+        p.try_publisher()?,
         t.label,
         t.why,
         licence,
-        p.market_name(),
+        p.try_market_name_text()?,
         argv.join(" ")
-    )
+    ))
 }
 
 /// The steps of a plugin removal: the plugin, then its shortcut.
@@ -211,17 +227,20 @@ pub fn store_appimage_path(p: &Plugin) -> PathBuf {
 }
 
 /// The registry record a store AppImage is written with.
-pub fn appimage_record(p: &Plugin, dest: &Path) -> Value {
-    json!({
+///
+/// `Err` where `p.owner` raises.
+pub fn appimage_record(p: &Plugin, dest: &Path) -> Result<Value, String> {
+    let owner = p.try_owner()?;
+    Ok(json!({
         "name": p.id, "path": dest.to_string_lossy(), "version": p.version,
         "description": p.description, "url": p.repo,
         "latest": {}, "checked_at": 0,
         // Tracked the same way a hand-added AppImage is, so the existing
         // update check picks it up without knowing about marketplaces.
-        "update_spec": {"kind": "github", "owner": p.owner(),
+        "update_spec": {"kind": "github", "owner": owner,
                         "repo": p.id, "release": "latest",
                         "pattern": format!("{}-*-linux-x86_64.AppImage", p.id)},
-    })
+    }))
 }
 
 /// `s[:n]` on characters, as Python slices a str.
@@ -325,7 +344,7 @@ fn registry_with(p: &Plugin, dest: &Path) -> Result<serde_json::Map<String, Valu
             return Err(format!("'{kind}' object does not support item assignment"));
         }
     };
-    reg.insert(p.id.clone(), appimage_record(p, dest));
+    reg.insert(p.id.clone(), appimage_record(p, dest).map_err(|e| crate::ui::shell::exc_str(&e))?);
     Ok(reg)
 }
 
@@ -475,7 +494,7 @@ pub fn plugin_install<H: Host>(h: &H, p: &Plugin) {
             return;
         }
     };
-    let detail = install_detail(p, &argv);
+    let detail = or_log!(install_detail(p, &argv));
     let body = install_body(p);
 
     let (host, p) = (h.clone(), p.clone());
@@ -555,7 +574,7 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
     let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
     let detail = format!(
         "Publisher  {}\nLicence    {}\nStars      {}\n\n$ omarchy theme install {}",
-        p.publisher(),
+        or_log!(p.try_publisher()),
         licence,
         p.stars,
         url
@@ -643,7 +662,7 @@ impl Win {
     /// Err where the Python raises: a manifest whose JSON is not an object
     /// has no `.get`, and the AttributeError is not one of those caught.
     pub fn plugin_dir(&self, p: &Plugin) -> Result<Option<PathBuf>, String> {
-        let root = py_join(&xdg::config_home(), "omarchy/plugins");
+        let root = py_join(&xdg::try_config_home()?, "omarchy/plugins");
         let direct = py_join(&root, &p.id);
         if direct.is_dir() {
             return Ok(Some(direct));
@@ -797,13 +816,15 @@ impl Win {
                     eprintln!("almanac: {}: {}", py_os_error_class(&e), py_os_error(&e, Path::new(&argv[0])));
                     return;
                 }
-                history::record(
+                if let Err(e) = history::record_checked(
                     history::ALMANAC,
                     &format!("Setup commands run for {}", p.name),
                     "",
                     "",
                     &plan.commands,
-                );
+                ) {
+                    eprintln!("almanac: {e}");
+                }
             }
         };
 
@@ -813,17 +834,27 @@ impl Win {
                 .map(|s| (*s).to_string())
                 .collect();
             argv.extend(plan.packages.iter().cloned());
-            history::record(
+            // What record raises ends `_run_setup` before the task starts.
+            if let Err(e) = history::record_checked(
                 history::ALMANAC,
                 &format!("Setup packages for {}", p.name),
                 "",
                 "",
                 &plan.packages,
-            );
-            let steps = self.snapshot_first(
+            ) {
+                eprintln!("almanac: {e}");
+                return;
+            }
+            let steps = match self.snapshot_first(
                 vec![Step::argv(tr("Installing what it needs"), argv)],
                 &format!("setting up {}", p.name),
-            );
+            ) {
+                Ok(steps) => steps,
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+            };
             let w = self.downgrade();
             tasks::run(
                 &self.window,
@@ -910,7 +941,10 @@ impl Win {
 
     pub fn after_theme(&self, ok: bool, p: &Plugin) {
         if ok {
-            self.apply_theme();
+            if let Err(e) = self.apply_theme() {
+                eprintln!("almanac: {e}");
+                return;
+            }
             let has_hero = self.today.borrow().hero.is_some();
             if has_hero {
                 self.refresh_hero();
@@ -926,12 +960,12 @@ impl Win {
     // ---- store entries that are AppImages, not plugins ----
     pub fn install_store_appimage(&self, p: &Plugin) {
         let dest = store_appimage_path(p);
-        let t = p.trust();
+        let t = or_log!(p.try_trust());
         let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
         let detail = format!(
             "Publisher   {}\nProvenance  {} — {}\nLicence     {}\nVersion     {}\n\
              Download    {} ({:.0} MB)\nInstalls to {}",
-            p.publisher(),
+            or_log!(p.try_publisher()),
             t.label,
             t.why,
             licence,
@@ -961,7 +995,14 @@ impl Win {
                     Arc::new(move |log: LogFn<'_>| Win::fetch_appimage(log, &step_p, &step_dest));
                 // `holder=self._watch_defaults()`: a default argument, so it
                 // is read when this runs, before the task starts.
-                let holder = win.watch_defaults();
+                // Raising there ends the callback before the task starts.
+                let holder = match win.try_watch_defaults() {
+                    Ok(holder) => holder,
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return;
+                    }
+                };
                 let w = w.clone();
                 let after_p = p.clone();
                 tasks::run(
@@ -971,7 +1012,10 @@ impl Win {
                     Some(Box::new(move |ok| {
                         let Some(win) = w.upgrade() else { return };
                         if ok {
-                            win.check_defaults(holder);
+                            if let Err(e) = win.try_check_defaults(holder) {
+                                eprintln!("almanac: {e}");
+                                return;
+                            }
                         }
                         win.store_after(ok, &after_p, "installed");
                     })),
@@ -1072,28 +1116,24 @@ impl Win {
 
     /// `store_mod.annotate(self._plugins)`. False where the Python raises:
     /// `_plugins` is None after Preferences' `reload_store`, annotate's loop
-    /// raises TypeError, and the caller stops there (logged, no toast).
-    ///
-    /// `_plugins` starts as `[]` in the Python, but `plugins_none` starts
-    /// true in `Shared`, so the flag alone cannot tell the two apart: with
-    /// the list still empty it is taken as the `[]` it begins as (annotate
-    /// over nothing is a no-op either way); with entries in it, only
-    /// `reload_store` can have set the flag.
+    /// raises TypeError; or annotate itself raises. Either way the caller
+    /// stops there (logged, no toast).
     ///
     /// The list is taken out for the call and put back, so nothing annotate
     /// reaches can find `shared` borrowed.
     fn annotate_plugins(&self) -> bool {
-        let none = {
-            let sh = self.shared.borrow();
-            sh.plugins_none && !sh.plugins.is_empty()
-        };
+        let none = self.shared.borrow().plugins_none;
         if none {
             eprintln!("almanac: TypeError: 'NoneType' object is not iterable");
             return false;
         }
         let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
-        store_mod::annotate(&mut plugins);
+        let r = store_mod::try_annotate(&mut plugins);
         self.shared.borrow_mut().plugins = plugins;
+        if let Err(e) = r {
+            eprintln!("almanac: {e}");
+            return false;
+        }
         true
     }
 
@@ -1142,7 +1182,7 @@ impl Win {
         let title = gtk::Label::builder().label(&p.name).xalign(0.0).wrap(true).build();
         title.add_css_class("title-2");
         head.append(&title);
-        let subtitle = p.subtitle();
+        let subtitle = or_log!(p.try_subtitle());
         if !subtitle.is_empty() {
             let byline = gtk::Label::builder().label(&subtitle).xalign(0.0).build();
             byline.add_css_class("dim-label");
@@ -1151,7 +1191,7 @@ impl Win {
 
         let badges = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         badges.set_halign(gtk::Align::Start);
-        for (text, css) in Win::plugin_badges(p) {
+        for (text, css) in or_log!(Win::plugin_badges(p)) {
             let lbl = gtk::Label::new(Some(&text));
             lbl.add_css_class(&css);
             badges.append(&lbl);
@@ -1173,14 +1213,14 @@ impl Win {
         hero.add(&head);
         page.add(&hero);
 
-        let t = p.trust();
+        let t = or_log!(p.try_trust());
         let prov = adw::PreferencesGroup::builder()
             .title(tr("Provenance"))
             .description(tr("Where this comes from and what has actually been \
                              checked about it"))
             .build();
-        Win::detail_row(&prov, &tr("Marketplace"), &p.market_name());
-        Win::detail_row(&prov, &tr("Publisher"), &p.publisher());
+        Win::detail_row(&prov, &tr("Marketplace"), &or_log!(p.try_market_name_text()));
+        Win::detail_row(&prov, &tr("Publisher"), &or_log!(p.try_publisher()));
         Win::detail_row(&prov, &tr("Declared author"), &p.author);
         Win::detail_row(&prov, &tr("Assurance"), &format!("{} — {}", t.label, t.why));
         if !p.review_method.is_empty() {
@@ -1242,7 +1282,7 @@ impl Win {
 
         let links = adw::PreferencesGroup::new();
         for (label, url, icon) in [
-            ("Marketplace listing", p.page(), "web-browser-symbolic"),
+            ("Marketplace listing", or_log!(p.try_page_text()), "web-browser-symbolic"),
             ("Source repository", p.repo.clone(), "folder-remote-symbolic"),
         ] {
             if url.is_empty() {
@@ -1329,15 +1369,17 @@ impl Win {
                 holder.append(&gtk::Label::new(Some(&tr("On"))));
                 let sw = gtk::Switch::builder().active(p.enabled).valign(gtk::Align::Center).build();
                 name(&sw, &if p.enabled { format!("{} on", p.name) } else { format!("{} off", p.name) });
-                let info = plugins_mod::Installed {
+                // One object for the dialog's life, as the Python's `info`:
+                // each toggle sees what the last one wrote to it.
+                let info = std::rc::Rc::new(std::cell::RefCell::new(plugins_mod::Installed {
                     id: p.id.clone(),
                     name: p.name.clone(),
                     enabled: p.enabled,
                     ..Default::default()
-                };
+                }));
                 let w = self.downgrade();
                 sw.connect_state_set(move |sw, on| match w.upgrade() {
-                    Some(win) => win.plugin_switch(sw, on, &info),
+                    Some(win) => win.plugin_switch(sw, on, info.clone()),
                     None => glib::Propagation::Proceed,
                 });
                 holder.append(&sw);
@@ -1352,7 +1394,17 @@ impl Win {
                     }
                 };
                 if let Some(folder) = folder {
-                    if shortcuts::available() && shortcuts::has_panel(&folder) {
+                    // What has_panel raises ends `_show_plugin` before the
+                    // dialog is presented.
+                    let panel = shortcuts::available()
+                        && match shortcuts::try_has_panel(&folder) {
+                            Ok(panel) => panel,
+                            Err(e) => {
+                                eprintln!("almanac: {e}");
+                                return;
+                            }
+                        };
+                    if panel {
                         let sc = gtk::Button::with_label(&tr("Shortcut…"));
                         let (w, p, close) = (self.downgrade(), p.clone(), closer.clone());
                         sc.connect_clicked(move |_b| {
@@ -1401,7 +1453,8 @@ impl Win {
     }
 
     /// `@staticmethod _plugin_badges`: (text, css class) pills for a plugin.
-    pub fn plugin_badges(p: &Plugin) -> Vec<(String, String)> {
+    /// `Err` where `p.trust` raises.
+    pub fn plugin_badges(p: &Plugin) -> Result<Vec<(String, String)>, String> {
         let mut out = Vec::new();
         if p.installed {
             out.push((
@@ -1409,7 +1462,7 @@ impl Win {
                 "pill-ok".to_string(),
             ));
         }
-        let t = p.trust();
+        let t = p.try_trust()?;
         out.push((t.label, t.css));
         if !p.status.is_empty() && p.status != "Available" {
             out.push((p.status.clone(), "pill".to_string()));
@@ -1420,7 +1473,7 @@ impl Win {
         if !p.category.is_empty() {
             out.push((p.category.clone(), "pill".to_string()));
         }
-        out
+        Ok(out)
     }
 }
 

@@ -6,13 +6,21 @@
 #   ALMANAC_RS=/path/to/almanac-rs                      which Rust binary
 # Pages: today store themes updates apps all ai health history plugins
 #        switchboard orphans
-# Each call takes its own Broadway display (picked from the page and side), so
-# Python and Rust shots can run at the same time. The window is 1024x768.
+# Each call locks its own Broadway display, so any number of shots can run
+# at the same time. The window is 1024x768.
 set -eu
 side=$1 page=$2 out=$3
 here=$(cd "$(dirname "$0")/../.." && pwd)
-n=$(printf '%s%s' "$side" "$page" | cksum | cut -c1-2)
-display=$((30 + n % 60)); port=$((8080 + display))
+# Claim a free display with a lock held for the whole run, so any number of
+# shots can run at once without two apps drawing on one display.
+locks=/tmp/claude-1000/almanac-displays; mkdir -p "$locks"
+display=
+for d in $(seq 30 99); do
+  exec 9>"$locks/$d"
+  if flock -n 9; then display=$d; break; fi
+done
+[ -n "$display" ] || { echo "no free display" >&2; exit 1; }
+port=$((8080 + display))
 tmp=$(mktemp -d)
 trap 'kill $app $bw 2>/dev/null || true; rm -rf "$tmp"' EXIT
 gtk4-broadwayd ":$display" >/dev/null 2>&1 & bw=$!

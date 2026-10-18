@@ -2333,12 +2333,16 @@ fn open(mut req: Req, depth: usize) -> Result<Resp, String> {
     Ok(resp)
 }
 
+// Per thread: tests run in parallel, and another test's fetch must not
+// count as this one's. `fetch` calls `_fetch` on the caller's thread.
 #[cfg(test)]
-static FETCHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static FETCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 fn _fetch(url: &str, timeout: u64) -> Result<Vec<u8>, String> {
     #[cfg(test)]
-    FETCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    FETCHES.with(|n| n.set(n.get() + 1));
     let ua = [("User-Agent".to_string(), UA.to_string())];
     let req = Req::new(url, &ua, true, Duration::from_secs(timeout))?;
     match open(req, 0)? {
@@ -2614,7 +2618,6 @@ fn restore(var: &str, old: Option<std::ffi::OsString>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
     use std::sync::Mutex;
 
     // Tests share the process environment; one at a time.
@@ -2657,9 +2660,9 @@ mod tests {
             crate::settings::set(key, Value::Bool(false)).unwrap();
         }
         // The cache is empty (cached() is None) and _fetch must not run.
-        let before = FETCHES.load(Ordering::SeqCst);
+        let before = FETCHES.with(|n| n.get());
         assert_eq!(fetch("tailscale.com", "", "tailscale.com"), None);
-        assert_eq!(FETCHES.load(Ordering::SeqCst), before, "fetched");
+        assert_eq!(FETCHES.with(|n| n.get()), before, "fetched");
     }
 
     #[test]
@@ -2712,9 +2715,9 @@ mod tests {
         // A recent miss is not retried.
         crate::settings::set("net_vendor_icons", Value::Bool(true)).unwrap();
         _save_miss("nothing.invalid").unwrap();
-        let before = FETCHES.load(Ordering::SeqCst);
+        let before = FETCHES.with(|n| n.get());
         assert_eq!(fetch("nothing.invalid", "", "nothing.invalid"), None);
-        assert_eq!(FETCHES.load(Ordering::SeqCst), before);
+        assert_eq!(FETCHES.with(|n| n.get()), before);
         // A misses file that is not an object raises in the Python.
         std::fs::write(misses(), "[1]").unwrap();
         assert!(fetch_checked("k", "", "").is_err());

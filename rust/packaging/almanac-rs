@@ -1,0 +1,16 @@
+#!/bin/sh
+# Almanac (Rust), side by side with the Python app, straight from this
+# checkout: runs the release build in rust/target/release. Run as
+# almanac-rs it takes the io.github.twodxme.Almanac.Rs application id, so the
+# two never fight over one D-Bus name. Nothing is installed; to use it, put
+# this script (or a symlink to it) on PATH, and the desktop file beside it in
+# ~/.local/share/applications if you want a launcher entry.
+#
+# Build first:  cd /home/tim/.local/share/almanac/rust && cargo build --release --bin almanac-rs
+bin=/home/tim/.local/share/almanac/rust/target/release/almanac-rs
+if [ ! -x "$bin" ]; then
+  echo "almanac-rs: no release build at $bin" >&2
+  echo "build it with: cd /home/tim/.local/share/almanac/rust && cargo build --release --bin almanac-rs" >&2
+  exit 1
+fi
+exec "$bin" "$@"

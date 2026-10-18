@@ -8,6 +8,7 @@ dir is written.
 import atexit
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -35,15 +36,34 @@ def _esc(v):
     return v
 
 
+APP_RECURSION_LIMIT = 1000  # sys.getrecursionlimit() in the app
+
+
 def at(cur, fn):
-    """Call `fn` with theming.CURRENT pointed at `cur`."""
+    """Call `fn` as the app would with its state under `cur`'s root:
+    theming.STATE and theming.CURRENT (both bound when theming was imported)
+    pointed at the fixture, and Python's recursion limit at the app's own.
+
+    The limit matters because tomllib recurses: a deeply nested colors.toml
+    raises RecursionError in the app, and tomllib sized MAX_KEY_PARTS from
+    the limit when it was imported. Other modules' cases raise the limit for
+    the whole process (cases_ghcache sets 20000 at import), so without this
+    the answer for those files depended on which modules ran first."""
+    import tomllib._parser as tp
+
     def run():
-        old = theming.CURRENT
+        old_state, old_cur = theming.STATE, theming.CURRENT
+        old_limit, old_parts = sys.getrecursionlimit(), tp.MAX_KEY_PARTS
         theming.CURRENT = Path(cur)
+        theming.STATE = Path(cur).parent.parent.parent
+        sys.setrecursionlimit(APP_RECURSION_LIMIT)
+        tp.MAX_KEY_PARTS = APP_RECURSION_LIMIT
         try:
             return _esc(fn())
         finally:
-            theming.CURRENT = old
+            sys.setrecursionlimit(old_limit)
+            tp.MAX_KEY_PARTS = old_parts
+            theming.STATE, theming.CURRENT = old_state, old_cur
     return run
 
 

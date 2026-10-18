@@ -23,6 +23,7 @@
 //! `git pull` never did.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -279,14 +280,19 @@ fn os_error(n: i32, prog: &str) -> String {
 /// does not keep the errno. The program is found as `_posixsubprocess` finds
 /// it: each PATH entry tried in turn, the first error other than ENOENT /
 /// ENOTDIR reported if none starts.
-fn py_run(argv: &[&str], env: &[(std::ffi::OsString, std::ffi::OsString)], timeout: u64) -> Result<Ran, RunErr> {
+///
+/// The arguments are OS strings, as Python's are once `os.fsencode`d: a
+/// path that is not UTF-8 reaches the child as its own bytes.
+fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], timeout: u64) -> Result<Ran, RunErr> {
     use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     const ENOENT: i32 = 2;
     const ENOTDIR: i32 = 20;
     let prog = argv[0];
-    let candidates: Vec<PathBuf> = if prog.contains('/') {
+    let prog_s = prog.to_string_lossy();
+    let candidates: Vec<PathBuf> = if prog.as_bytes().contains(&b'/') {
         vec![PathBuf::from(prog)]
     } else {
         // os.get_exec_path(): the child's PATH, else os.defpath.
@@ -325,7 +331,7 @@ fn py_run(argv: &[&str], env: &[(std::ffi::OsString, std::ffi::OsString)], timeo
     }
     let Some(mut child) = child else {
         // Report the first exec error, not the last.
-        return Err(RunErr::Os(os_error(saved.unwrap_or(last), prog)));
+        return Err(RunErr::Os(os_error(saved.unwrap_or(last), &prog_s)));
     };
     // Drain both pipes on their own threads, or a chatty child fills one and
     // blocks forever while we wait on it.
@@ -369,11 +375,15 @@ fn py_run(argv: &[&str], env: &[(std::ffi::OsString, std::ffi::OsString)], timeo
 /// cannot be started and TimeoutExpired (caught by `classify`); ValueError
 /// for a NUL in an argument and UnicodeDecodeError for output that is not
 /// UTF-8 (not caught).
+///
+/// The directory goes to git as its bytes (`str(d)` is fsencoded back to
+/// them), so a plugin folder whose name is not UTF-8 is reached as it is.
 fn _git(d: &Path, args: &[&str], timeout: u64) -> Result<Ran, PyErr> {
-    let dir = path_str(d);
-    let mut argv: Vec<&str> = vec!["git", "-C", &dir];
-    argv.extend_from_slice(args);
-    if argv.iter().any(|a| a.contains('\0')) {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = py_path(d);
+    let mut argv: Vec<&OsStr> = vec![OsStr::new("git"), OsStr::new("-C"), dir.as_os_str()];
+    argv.extend(args.iter().map(OsStr::new));
+    if argv.iter().any(|a| a.as_bytes().contains(&0)) {
         return Err(PyErr::Raise("ValueError: embedded null byte".to_string()));
     }
     let ssh = std::env::var_os("GIT_SSH_COMMAND").unwrap_or_else(|| "ssh -oBatchMode=yes".into());
@@ -382,7 +392,7 @@ fn _git(d: &Path, args: &[&str], timeout: u64) -> Result<Ran, PyErr> {
         Ok(ran) => Ok(ran),
         Err(RunErr::Os(e)) => Err(PyErr::Caught(e)),
         Err(RunErr::Timeout) => {
-            let cmd: Vec<String> = argv.iter().map(|a| py_repr_str(a)).collect();
+            let cmd: Vec<String> = argv.iter().map(|a| py_repr_str(&a.to_string_lossy())).collect();
             Err(PyErr::Caught(format!("Command '[{}]' timed out after {timeout} seconds", cmd.join(", "))))
         }
         Err(RunErr::Decode(e)) => Err(PyErr::Raise(e)),
@@ -1436,7 +1446,8 @@ fn _manifests(root: &Path) -> Result<PyDict<(Py, PathBuf)>, String> {
 /// missing, timed out, output that is not UTF-8 or not JSON), `Err` for the
 /// RecursionError it lets through.
 fn omarchy_list() -> Result<Option<Py>, String> {
-    let Ok(out) = py_run(&["omarchy", "plugin", "list", "--json"], &[], 25) else { return Ok(None) };
+    let argv = ["omarchy", "plugin", "list", "--json"].map(OsStr::new);
+    let Ok(out) = py_run(&argv, &[], 25) else { return Ok(None) };
     match py_loads(&out.stdout) {
         Ok(v) => Ok(Some(v)),
         Err(LoadErr::Value) => Ok(None),

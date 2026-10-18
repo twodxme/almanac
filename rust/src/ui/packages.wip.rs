@@ -880,7 +880,7 @@ impl Win {
 
     fn build_details(&self, item: &AppItem) -> Result<(), String> {
         let app = &item.app;
-        let extra: Map<String, Value> = inventory::details(app);
+        let extra: Map<String, Value> = inventory::try_details(app)?;
         let has = |key: &str| truthy(extra.get(key));
 
         let page = adw::PreferencesPage::new();
@@ -1359,7 +1359,7 @@ impl Win {
             ));
         }
 
-        let findings = self.shared.borrow().findings.clone();
+        let findings = self.shared.borrow().findings.get();
         let free = crate::maintenance::reclaimable_mb(&findings);
         if free != 0.0 {
             rows.push((
@@ -1594,26 +1594,31 @@ impl Win {
         );
 
         let q = query.clone();
-        let work = move || {
+        // What the searches raise ends the Python's worker before its
+        // idle_add: the results are never shown.
+        let work = move || -> Result<Vec<inventory::App>, String> {
             if browsing {
                 // Nothing typed: show the marketplace itself. Packages are
                 // excluded here -- 15,669 of them is a database dump, not a
                 // storefront, and there is no popularity signal to rank them.
-                inventory::search_plugins("", 200)
+                inventory::try_search_plugins("", 200)
             } else {
-                let mut plugins = inventory::search_plugins(&q, 25);
-                let packages = inventory::search_available(&q, 60);
+                let mut plugins = inventory::try_search_plugins(&q, 25)?;
+                let packages = inventory::try_search_available(&q, 60)?;
                 // Plugins lead: on an Omarchy box they are the likelier intent,
                 // and the package list is long enough to bury them otherwise.
                 plugins.extend(packages);
-                plugins
+                Ok(plugins)
             }
         };
         let w = self.downgrade();
-        spawn_bg(work, move |results| {
-            if let Some(w) = w.upgrade() {
-                w.show_discover(&query, results);
+        spawn_bg(work, move |results| match results {
+            Ok(results) => {
+                if let Some(w) = w.upgrade() {
+                    w.show_discover(&query, results);
+                }
             }
+            Err(e) => eprintln!("almanac: {e}"),
         });
         glib::ControlFlow::Break
     }
@@ -1673,7 +1678,7 @@ impl Win {
     pub fn on_search(&self, entry: &gtk::SearchEntry) {
         let (page, filter_key) = {
             let sh = self.shared.borrow();
-            (sh.page.clone(), sh.filter_key.clone())
+            (sh.page_or(""), sh.filter_key.clone())
         };
         if page == "plugins" {
             self.plugins_filter(&entry.text());
@@ -1851,7 +1856,7 @@ impl Win {
                 self.shared.borrow_mut().maint_loaded_once = true;
                 self.maint_reload();
             } else {
-                let findings = self.shared.borrow().findings.clone();
+                let findings = self.shared.borrow().findings.get();
                 self.maint_show(findings);
             }
             return;
@@ -1920,7 +1925,7 @@ impl Win {
     /// Apply one page's chrome. The only place that touches it.
     pub fn show_page(&self, key: &str, category: &str) {
         let Some(spec) = page_spec(key).or_else(|| page_spec("packages")) else { return };
-        self.shared.borrow_mut().page = key.to_string();
+        self.shared.borrow_mut().page = Some(key.to_string());
         self.content_stack.set_visible_child_name(spec.view);
         let title = tr(spec.title);
         self.title.set_title(&if !category.is_empty() {
@@ -1961,7 +1966,7 @@ impl Win {
 
     /// Re-read whatever the current page shows. One action, every page.
     pub fn refresh_page(&self) {
-        let page = self.shared.borrow().page.clone();
+        let page = self.shared.borrow().page_or("packages");
         match page.as_str() {
             "featured" => self.feat_reload(),
             "discover" => self.store_reload(true),
@@ -2027,7 +2032,7 @@ impl Win {
         let Some(store_market) = self.shared.borrow().store_market.clone() else { return };
         let i = store_market.selected() as usize;
         let market = keys.get(i).cloned().unwrap_or_default();
-        let page = self.shared.borrow().page.clone();
+        let page = self.shared.borrow().page_or("discover");
         if market == "themes" {
             self.title.set_title(&tr("Themes"));
         } else if page == "themes" && market.is_empty() {
@@ -2041,7 +2046,7 @@ impl Win {
 
     /// Put the current page's main action in the header button.
     pub fn sync_primary(&self) {
-        let page = self.shared.borrow().page.clone();
+        let page = self.shared.borrow().page_or("packages");
         let action = self.primary_actions().remove(&page);
         self.shared.borrow_mut().primary = action.clone();
         let Some(action) = action else {
@@ -2076,7 +2081,7 @@ impl Win {
                         && e.action.as_ref().is_some_and(|a| !a.is_empty())
                 })
                 .count();
-            (harnesses, crate::maintenance::reclaimable_mb(&sh.findings), sh.plugin_updates)
+            (harnesses, crate::maintenance::reclaimable_mb(&sh.findings.get()), sh.plugin_updates)
         };
         let mut out = BTreeMap::new();
         out.insert(
@@ -2162,16 +2167,19 @@ impl Win {
     ///
     /// Absence is a valid state: with no Omarchy theme the provider is
     /// emptied and GTK's own theme shows through unmodified.
-    pub fn apply_theme(&self) {
-        let palette = crate::theming::load_palette();
-        let mut css = crate::theming::css_for(&palette);
+    ///
+    /// `Err` where the Python raises (out of `theming`), before the
+    /// provider is touched.
+    pub fn apply_theme(&self) -> Result<(), String> {
+        let palette = crate::theming::try_load_palette()?;
+        let mut css = crate::theming::try_css_for(&palette)?;
         if palette.is_empty() {
             // No Omarchy palette: measure the pills against whatever theme GTK
             // is showing, so they read as well there as on an Omarchy one.
-            let fills = self.theme_fills();
+            let fills = self.theme_fills()?;
             css += &crate::theming::pill_css(&fills, &[]);
             let get = |k: &str| fills.get(k).cloned().unwrap_or_default();
-            css += &crate::theming::pick_css(&get("card"), &get("fg"), &get("accent"));
+            css += &crate::theming::try_pick_css(&get("card"), &get("fg"), &get("accent"))?;
         }
         // load_from_data raised GLib.Error on a parse failure in older GTK;
         // GTK 4.12+ reports parse errors through a signal and never fails.
@@ -2184,12 +2192,13 @@ impl Win {
                 adw::ColorScheme::ForceLight
             });
         }
+        Ok(())
     }
 
     /// The active GTK theme's status fills, as hex. lookup_color is the
     /// only way GTK 4 exposes a named colour; it is deprecated, not gone.
     #[allow(deprecated)]
-    pub fn theme_fills(&self) -> BTreeMap<String, String> {
+    pub fn theme_fills(&self) -> Result<BTreeMap<String, String>, String> {
         let mut out = BTreeMap::new();
         let ctx = self.window.style_context();
         // Translucent colours are flattened onto the window first:
@@ -2209,7 +2218,7 @@ impl Win {
             if let Some(rgba) = ctx.lookup_color(color) {
                 out.insert(
                     role.to_string(),
-                    crate::theming::flatten(
+                    crate::theming::try_flatten(
                         (
                             f64::from(rgba.red()),
                             f64::from(rgba.green()),
@@ -2217,11 +2226,11 @@ impl Win {
                             f64::from(rgba.alpha()),
                         ),
                         base,
-                    ),
+                    )?,
                 );
             }
         }
-        out
+        Ok(out)
     }
 
     pub fn on_theme_changed(&self) {
@@ -2243,12 +2252,19 @@ impl Win {
 
     pub fn theme_tick(&self) -> glib::ControlFlow {
         self.packages.borrow_mut().theme_timer = None;
-        self.apply_theme();
+        // What raises in here ends the Python's timeout callback, logged.
+        if let Err(e) = self.apply_theme() {
+            eprintln!("almanac: {e}");
+            return glib::ControlFlow::Break;
+        }
         let has_hero = self.today.borrow().hero.is_some();
         if has_hero {
             self.refresh_hero();
         }
-        self.say(&crate::theming::describe(), 3);
+        match crate::theming::try_describe() {
+            Ok(text) => self.say(&text, 3),
+            Err(e) => eprintln!("almanac: {e}"),
+        }
         glib::ControlFlow::Break
     }
 
@@ -2269,7 +2285,7 @@ impl Win {
     /// overwrite the store's summary with "129 installed · showing 0".
     pub fn summarize(&self, text: &str, page: Option<&str>) {
         if let Some(page) = page {
-            if page != self.shared.borrow().page {
+            if page != self.shared.borrow().page_or("packages") {
                 return;
             }
         }

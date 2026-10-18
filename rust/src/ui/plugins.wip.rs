@@ -18,7 +18,7 @@ use crate::tasks;
 use crate::ui::actions::Judge;
 use crate::ui::shell::{name, source_label, spawn_bg, AppItem, WeakWin, Win};
 use crate::util;
-use crate::verify::{self, Outcome, Probe, ProbeValue};
+use crate::verify::{self, Outcome, ProbeValue, TryProbe};
 use crate::xdg;
 
 /// State only the Plugins section reads and writes.
@@ -77,7 +77,12 @@ pub fn plugin_matches(i: &plugins_mod::Installed, text: &str) -> bool {
 
 /// The row menu `_plugin_row` builds: (label msgid, action name) in order.
 /// Split out so the decision can be tested without a display.
-pub fn plugin_menu(i: &plugins_mod::Installed, shortcuts_available: bool) -> Vec<(&'static str, &'static str)> {
+///
+/// `Err` where `i.has_panel` raises.
+pub fn plugin_menu(
+    i: &plugins_mod::Installed,
+    shortcuts_available: bool,
+) -> Result<Vec<(&'static str, &'static str)>, String> {
     let st = i.state.as_ref();
     let mut out = Vec::new();
     if let Some(st) = st {
@@ -85,7 +90,7 @@ pub fn plugin_menu(i: &plugins_mod::Installed, shortcuts_available: bool) -> Vec
             out.push(("Update…", "update"));
         }
     }
-    if shortcuts_available && i.has_panel() && i.folder.is_some() {
+    if shortcuts_available && i.try_has_panel()? && i.folder.is_some() {
         out.push(("Keyboard shortcut…", "shortcut"));
     }
     if i.folder.is_some() {
@@ -97,7 +102,7 @@ pub fn plugin_menu(i: &plugins_mod::Installed, shortcuts_available: bool) -> Vec
     if !i.built_in {
         out.push(("Remove…", "remove"));
     }
-    out
+    Ok(out)
 }
 
 /// `f"{i.name} on" if on else f"{i.name} off"`: the switch's accessible name.
@@ -142,6 +147,9 @@ pub struct UpdatePlan {
     /// update.
     pub scope_label: Option<String>,
     pub lines: Vec<String>,
+    /// What `s.describe()` raised building the "needs you" lines (the
+    /// Python raises there, after the scope label is looked up).
+    pub raised: Option<String>,
 }
 
 /// The planning half of `_confirm_plugin_updates`. `trust` maps plugin id
@@ -180,14 +188,21 @@ pub fn plan_plugin_updates(
             lines.push(format!("  {} — {}", s.id, if t.is_empty() { "not listed" } else { t }));
         }
     }
+    let mut raised = None;
     if !blocked.is_empty() {
         lines.push(String::new());
         lines.push("Not updated (needs you):".to_string());
         for s in &blocked {
-            lines.push(format!("  {} — {}", s.id, s.describe()));
+            match s.try_describe() {
+                Ok(d) => lines.push(format!("  {} — {d}", s.id)),
+                Err(e) => {
+                    raised = Some(e);
+                    break;
+                }
+            }
         }
     }
-    UpdatePlan { ready, held, blocked, scope_label, lines }
+    UpdatePlan { ready, held, blocked, scope_label, lines, raised }
 }
 
 /// The orphan split of `on_clean_orphans`: `(source, advice, name)` per row
@@ -379,7 +394,14 @@ fn plugin_switch_shared(
     let id = i.borrow().id.clone();
     let work = move || {
         let r = run_checked(&plugins_mod::toggle_argv(&id, on), 60).ok()?;
-        let now = plugins_mod::enabled().get(&id).copied();
+        // What `enabled()` raises ends the worker: the switch stays as it is.
+        let now = match plugins_mod::try_enabled() {
+            Ok(on) => on.get(&id).copied(),
+            Err(e) => {
+                uncaught_err(&e);
+                return None;
+            }
+        };
         Some((r, now))
     };
 
@@ -403,7 +425,9 @@ fn plugin_switch_shared(
             if let Some(w) = &win {
                 w.say(&format!("{nm} {word}"), 5);
             }
-            history::record(history::ALMANAC, &format!("{nm} switched {word}"), "", "", &[]);
+            if let Err(e) = history::record_checked(history::ALMANAC, &format!("{nm} switched {word}"), "", "", &[]) {
+                return uncaught_err(&e);
+            }
         } else {
             let text = if r.stderr.is_empty() { &r.stdout } else { &r.stderr };
             let why: Vec<&str> = py_splitlines(py_strip(text));
@@ -413,9 +437,13 @@ fn plugin_switch_shared(
             }
         }
         if let Some(w) = &win {
+            // `if getattr(self, "_plugins", None): annotate(self._plugins)`;
+            // what annotate raises ends this idle callback, logged.
             let mut shared = w.shared.borrow_mut();
-            if !shared.plugins.is_empty() {
-                store_mod::annotate(&mut shared.plugins);
+            if !shared.plugins_none && !shared.plugins.is_empty() {
+                if let Err(e) = store_mod::try_annotate(&mut shared.plugins) {
+                    eprintln!("almanac: {e}");
+                }
             }
         }
     };
@@ -452,6 +480,11 @@ fn py_oserror_class(e: &std::io::Error) -> &'static str {
 /// header and the last line can be reproduced.
 fn uncaught(class: &str, message: &str) {
     eprintln!("Traceback (most recent call last):\n{class}: {message}");
+}
+
+/// `uncaught` for an error already spelled "Type: message".
+fn uncaught_err(e: &str) {
+    eprintln!("Traceback (most recent call last):\n{e}");
 }
 
 /// The `G_SPAWN_ERROR` domain, read back as the errno it was made from.
@@ -718,9 +751,11 @@ impl Win {
                 let entry = cache
                     .entry("_plugins".to_string())
                     .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                // What `installed` raises ends the worker: the page stays at
+                // "Reading plugins…".
                 let found = match entry {
-                    serde_json::Value::Object(m) => plugins_mod::installed(true, Some(m)),
-                    serde_json::Value::Null => plugins_mod::installed(true, None),
+                    serde_json::Value::Object(m) => plugins_mod::try_installed(true, Some(m)),
+                    serde_json::Value::Null => plugins_mod::try_installed(true, None),
                     other => {
                         // `setdefault` hands back whatever is stored, and
                         // `_remote` then reads it with `.get` (or, when it is
@@ -728,20 +763,27 @@ impl Win {
                         // raises, the worker dies, and the page stays at
                         // "Reading plugins…".
                         let mut scratch = plugins_mod::FetchCache::new();
-                        let found = plugins_mod::installed(true, Some(&mut scratch));
-                        if let Some(exc) = foreign_cache_error(other, &found, &scratch) {
+                        let found = plugins_mod::try_installed(true, Some(&mut scratch));
+                        if let Some(exc) = found.as_ref().ok().and_then(|f| foreign_cache_error(other, f, &scratch)) {
                             uncaught(exc.0, &exc.1);
                             return None;
                         }
                         found
                     }
                 };
-                let trust: BTreeMap<String, store_mod::Plugin> =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let catalog = if have.is_empty() { store_mod::catalog(false) } else { have };
-                        catalog.into_iter().map(|c| (c.id.clone(), c)).collect()
-                    }))
-                    .unwrap_or_default();
+                let found = match found {
+                    Ok(found) => found,
+                    Err(e) => {
+                        uncaught_err(&e);
+                        return None;
+                    }
+                };
+                // `except Exception: trust = {}`
+                let catalog = if have.is_empty() { store_mod::try_catalog(false) } else { Ok(have) };
+                let trust: BTreeMap<String, store_mod::Plugin> = match catalog {
+                    Ok(catalog) => catalog.into_iter().map(|c| (c.id.clone(), c)).collect(),
+                    Err(_) => BTreeMap::new(),
+                };
                 let raw = if shortcuts::available() {
                     shortcuts::_read().map(|r| r.0).unwrap_or_default()
                 } else {
@@ -749,7 +791,16 @@ impl Win {
                 };
                 let mut keys = BTreeMap::new();
                 for i in &found {
-                    if !raw.is_empty() && i.has_panel() {
+                    // `i.has_panel` raising ends the worker.
+                    let panel = !raw.is_empty()
+                        && match i.try_has_panel() {
+                            Ok(panel) => panel,
+                            Err(e) => {
+                                uncaught_err(&e);
+                                return None;
+                            }
+                        };
+                    if panel {
                         keys.insert(i.id.clone(), shortcuts::current(&i.id, Some(&raw)).unwrap_or_default());
                     }
                 }
@@ -798,13 +849,21 @@ impl Win {
             let section = Win::section(&format!("{title} ({})", group.len()), &note, None);
             for i in group.iter() {
                 let listing = trust.get(&i.id);
-                let t = listing.map(|l| l.trust());
-                let row = self.plugin_row(
+                // What raises building a row (`listing.trust`, the logo's
+                // icon cache) ends `_plugins_show` there.
+                let t = match listing.map(|l| l.try_trust()).transpose() {
+                    Ok(t) => t,
+                    Err(e) => return uncaught_err(&e),
+                };
+                let row = match self.plugin_row(
                     i,
                     t.as_ref(),
                     keys.get(&i.id).map(String::as_str).unwrap_or(""),
                     listing,
-                );
+                ) {
+                    Ok(row) => row,
+                    Err(e) => return uncaught_err(&e),
+                };
                 section.rows.append(&row.0);
                 self.plugins.borrow_mut().plugin_rows.push(row);
             }
@@ -842,20 +901,20 @@ impl Win {
         trust: Option<&store_mod::Trust>,
         shortcut: &str,
         listing: Option<&store_mod::Plugin>,
-    ) -> (adw::ActionRow, std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>) {
+    ) -> Result<(adw::ActionRow, std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>), String> {
         let subtitle = if i.description.is_empty() { &i.id } else { &i.description };
         let row: adw::ActionRow = Win::plain(&i.name, subtitle);
         row.set_title_lines(1);
         row.set_subtitle_lines(1);
         row.set_tooltip_text(Some(subtitle));
-        row.add_prefix(&self.plugin_logo(i, listing));
+        row.add_prefix(&self.plugin_logo(i, listing)?);
 
         let st = i.state.as_ref();
         let key = plugin_state_key(st);
         if let Some((label, css)) = plugin_state_pill(&key) {
             let pill = gtk::Label::builder().label(tr(label)).valign(gtk::Align::Center).build();
             pill.add_css_class(css);
-            pill.set_tooltip_text(Some(&st.map(|s| s.describe()).unwrap_or_default()));
+            pill.set_tooltip_text(Some(&st.map(|s| s.try_describe()).transpose()?.unwrap_or_default()));
             row.add_suffix(&pill);
         }
         if let Some(trust) = trust {
@@ -880,7 +939,7 @@ impl Win {
         // The actions, behind a menu; the switch beside it is the one control
         // that is always one click.
         let menu = gio::Menu::new();
-        for (label, act) in plugin_menu(i, shortcuts::available()) {
+        for (label, act) in plugin_menu(i, shortcuts::available())? {
             menu.append(Some(&tr(label)), Some(&format!("plugin.{act}::{}", i.id)));
         }
         if menu.n_items() != 0 {
@@ -910,7 +969,7 @@ impl Win {
         switch.connect_state_set(move |sw, on| plugin_switch_shared(&w, sw, on, ic.clone()));
         row.add_suffix(&switch);
         row.set_activatable_widget(Some(&switch));
-        (row, shared)
+        Ok((row, shared))
     }
 
     /// The mark beside a plugin, best source first (see plugins.py):
@@ -924,7 +983,7 @@ impl Win {
         &self,
         i: &plugins_mod::Installed,
         listing: Option<&store_mod::Plugin>,
-    ) -> gtk::Box {
+    ) -> Result<gtk::Box, String> {
         let frame = gtk::Box::builder()
             .width_request(36)
             .height_request(36)
@@ -980,22 +1039,30 @@ impl Win {
             }
         };
 
-        let fetch = |key: String, url: String, domain: String| {
-            if let Some(hit) = crate::icons::cached(&key) {
+        // `icons.cached` raising ends `_plugin_logo` (and the row with it);
+        // `icons.fetch` raising on the pool is kept by its future, unseen,
+        // and nothing is shown.
+        let fetch = |key: String, url: String, domain: String| -> Result<(), String> {
+            if let Some(hit) = crate::icons::cached_checked(&key)? {
                 show(Some(hit), false);
-                return;
+                return Ok(());
             }
             let show = show.clone();
             self.thumb_bg(
-                move || crate::icons::fetch(&key, &url, &domain),
-                move |path| show(path, false),
+                move || crate::icons::fetch_checked(&key, &url, &domain),
+                move |path| {
+                    if let Ok(path) = path {
+                        show(path, false);
+                    }
+                },
             );
+            Ok(())
         };
 
         let domain = plugins_mod::vendor_for(i);
         let owner = plugins_mod::github_owner(i.state.as_ref().map(|s| s.url.as_str()).unwrap_or(""));
         if !domain.is_empty() {
-            fetch(domain.clone(), String::new(), domain);
+            fetch(domain.clone(), String::new(), domain)?;
         } else if let Some(listing) = listing.filter(|l| !l.thumb.is_empty()) {
             let cached = store_mod::thumb_path(listing, false);
             let present = cached
@@ -1012,9 +1079,9 @@ impl Win {
                 );
             }
         } else if symbol == plugins_mod::GENERIC && !owner.is_empty() {
-            fetch(format!("github-{owner}"), crate::icons::github_avatar(&owner), String::new());
+            fetch(format!("github-{owner}"), crate::icons::github_avatar(&owner), String::new())?;
         }
-        frame
+        Ok(frame)
     }
 
     /// A task step: drop a removed plugin's shortcut. Otherwise the
@@ -1043,11 +1110,11 @@ impl Win {
         &self,
         switch: &gtk::Switch,
         on: bool,
-        i: &plugins_mod::Installed,
+        i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
     ) -> glib::Propagation {
-        // The caller's own object cannot be shared from here (it is passed
-        // by reference); this copy is the one `done` updates.
-        plugin_switch_shared(&self.downgrade(), switch, on, std::rc::Rc::new(std::cell::RefCell::new(i.clone())))
+        // `i` is the caller's own object (the store dialog's `info`), shared,
+        // so what `done` writes to it the caller sees on the next toggle.
+        plugin_switch_shared(&self.downgrade(), switch, on, i)
     }
 
     pub fn plugin_action(&self, action: &str, pid: &str) {
@@ -1076,7 +1143,11 @@ impl Win {
             extra.insert("repo".into(), folder.into());
             extra.insert("plugin_id".into(), i.id.clone().into());
             extra.insert("plugin_state".into(), st.as_ref().map(|s| s.kind.clone()).unwrap_or_default().into());
-            extra.insert("plugin_detail".into(), st.as_ref().map(|s| s.describe()).unwrap_or_default().into());
+            let detail = match st.as_ref().map(|s| s.try_describe()).transpose() {
+                Ok(detail) => detail.unwrap_or_default(),
+                Err(e) => return uncaught_err(&e),
+            };
+            extra.insert("plugin_detail".into(), detail.into());
             let app = inventory::App {
                 update: st.as_ref().map(|s| format!("{} commits", s.behind)).unwrap_or_default(),
                 extra,
@@ -1099,8 +1170,8 @@ impl Win {
                 move || {
                     let Some(w) = w.upgrade() else { return };
                     let id = i.id.clone();
-                    let probe: Probe = std::sync::Arc::new(move || {
-                        Some(ProbeValue::Bool(plugins_mod::enabled().contains_key(&id)))
+                    let probe: TryProbe = std::sync::Arc::new(move || {
+                        Ok(Some(ProbeValue::Bool(plugins_mod::try_enabled()?.contains_key(&id))))
                     });
                     let nm = i.name.clone();
                     let judge: Judge = Box::new(move |_b, a| {
@@ -1117,7 +1188,10 @@ impl Win {
                             w.after_pacman(ok);
                         }
                     });
-                    let on_done = w.checked(Some(probe), judge, Some(then));
+                    let on_done = match w.checked(Some(probe), judge, Some(then)) {
+                        Ok(on_done) => on_done,
+                        Err(e) => return uncaught_err(&e),
+                    };
                     tasks::run(
                         &w.window,
                         &format!("Removing {}", i.name),
@@ -1156,7 +1230,8 @@ impl Win {
     pub fn toggle_plugin(&self, pid: &str, on: bool, label: &str) {
         let label = if label.is_empty() { pid.to_string() } else { label.to_string() };
         let p = pid.to_string();
-        let probe: Probe = std::sync::Arc::new(move || plugins_mod::enabled().get(&p).map(|b| ProbeValue::Bool(*b)));
+        let probe: TryProbe =
+            std::sync::Arc::new(move || Ok(plugins_mod::try_enabled()?.get(&p).map(|b| ProbeValue::Bool(*b))));
         let lb = label.clone();
         let judge: Judge = Box::new(move |_b, a| {
             let a = match a {
@@ -1181,6 +1256,12 @@ impl Win {
                 }
             }
         });
+        // `_checked` asks the probe at once; what it raises ends this
+        // before the task starts.
+        let on_done = match self.checked(Some(probe), judge, Some(then)) {
+            Ok(on_done) => on_done,
+            Err(e) => return uncaught_err(&e),
+        };
         tasks::run(
             &self.window,
             &format!("{} {label}", if on { "Turning on" } else { "Turning off" }),
@@ -1188,7 +1269,7 @@ impl Win {
                 format!("omarchy plugin {} {pid}", if on { "enable" } else { "disable" }),
                 plugins_mod::toggle_argv(pid, on),
             )],
-            Some(self.checked(Some(probe), judge, Some(then))),
+            Some(on_done),
         );
     }
 
@@ -1277,16 +1358,18 @@ impl Win {
             let pid = pid.clone();
             let w = w.clone();
             spawn_bg(
+                // What record raises (a log that is not UTF-8) is a
+                // ValueError: caught with the rest.
                 move || match shortcuts::set_shortcut(&pid, combo.as_deref()) {
-                    Ok(msg) => {
-                        history::record(history::ALMANAC, &msg, "", "", &[]);
-                        (msg, true)
-                    }
+                    Ok(msg) => match history::record_checked(history::ALMANAC, &msg, "", "", &[]) {
+                        Ok(()) => (msg, true),
+                        Err(exc) => (format!("Shortcut not saved: {}", crate::ui::shell::exc_str(&exc)), false),
+                    },
                     Err(exc) => (format!("Shortcut not saved: {exc}"), false),
                 },
                 move |(msg, saved)| {
                     let Some(w) = w.upgrade() else { return };
-                    let on_page = w.shared.borrow().page == "plugins";
+                    let on_page = w.shared.borrow().page_or("") == "plugins";
                     if saved && on_page {
                         w.plugins_reload();
                     }
@@ -1302,10 +1385,13 @@ impl Win {
     /// chosen in Preferences; say which were held back and why.
     pub fn on_update_plugins(&self) {
         let have = self.shared.borrow().plugins.clone();
-        let work = move || {
-            let plugins = if have.is_empty() { store_mod::catalog(false) } else { have };
-            let trust: BTreeMap<String, String> =
-                plugins.iter().map(|p| (p.id.clone(), p.trust().key)).collect();
+        // What raises in here ends the Python's worker: nothing is asked.
+        let work = move || -> Result<_, String> {
+            let plugins = if have.is_empty() { store_mod::try_catalog(false)? } else { have };
+            let mut trust: BTreeMap<String, String> = BTreeMap::new();
+            for p in &plugins {
+                trust.insert(p.id.clone(), p.try_trust()?.key);
+            }
             let mut cache = plugins_mod::FetchCache::new();
             let mut states = Vec::new();
             let pdir = plugins_mod::plugins_dir();
@@ -1319,18 +1405,21 @@ impl Win {
                 dirs.sort();
                 for d in dirs {
                     if d.join("manifest.json").is_file() {
-                        states.push(plugins_mod::classify(&d, Some(&mut cache), true));
+                        states.push(plugins_mod::try_classify(&d, Some(&mut cache), true)?);
                     }
                 }
             }
-            (states, trust)
+            Ok((states, trust))
         };
         self.say(&tr("Checking plugins…"), 5);
         let w = self.downgrade();
-        spawn_bg(work, move |(states, trust)| {
-            if let Some(w) = w.upgrade() {
-                w.confirm_plugin_updates(states, trust);
+        spawn_bg(work, move |res| match res {
+            Ok((states, trust)) => {
+                if let Some(w) = w.upgrade() {
+                    w.confirm_plugin_updates(states, trust);
+                }
             }
+            Err(e) => uncaught_err(&e),
         });
     }
 
@@ -1339,7 +1428,10 @@ impl Win {
         states: Vec<plugins_mod::State>,
         trust: BTreeMap<String, String>,
     ) {
-        let scope = plugins_mod::scope();
+        let scope = match plugins_mod::try_scope() {
+            Ok(scope) => scope,
+            Err(e) => return uncaught_err(&e),
+        };
         let plan = plan_plugin_updates(&states, &trust, &scope);
         if plan.ready.is_empty() {
             let held = if plan.held.is_empty() {
@@ -1356,19 +1448,25 @@ impl Win {
             uncaught("KeyError", &py_repr(&scope));
             return;
         };
+        if let Some(e) = &plan.raised {
+            return uncaught_err(e);
+        }
         let ready = plan.ready.clone();
 
         fn step(pid: String) -> tasks::StepFn {
             std::sync::Arc::new(move |log: tasks::LogFn<'_>| {
                 // Checked again now: the dialog may have stayed open while the
                 // plugin was edited, or swapped for a development link.
-                let now = plugins_mod::classify(
+                // What classify raises fails the step with str(exc).
+                let now = plugins_mod::try_classify(
                     &plugins_mod::plugins_dir().join(&pid),
                     Some(&mut plugins_mod::FetchCache::new()),
                     true,
-                );
+                )
+                .map_err(|e| crate::ui::shell::exc_str(&e))?;
                 if !now.updatable() {
-                    log(&format!("{pid}: skipped — {}", now.describe()));
+                    let why = now.try_describe().map_err(|e| crate::ui::shell::exc_str(&e))?;
+                    log(&format!("{pid}: skipped — {why}"));
                     return Err(format!("{pid} changed since the check"));
                 }
                 let r = run_checked(&plugins_mod::update_argv(&pid), 300)?;
@@ -1404,16 +1502,16 @@ impl Win {
             move || {
                 let Some(w) = w.upgrade() else { return };
                 let probe_heads = heads.clone();
-                let probe: Probe = std::sync::Arc::new(move || {
+                let probe: TryProbe = std::sync::Arc::new(move || {
                     let mut out = BTreeMap::new();
                     for (pid, path) in &probe_heads {
-                        let head = match verify::git_head(path)() {
+                        let head = match verify::git_head_try(path)()? {
                             Some(ProbeValue::Str(s)) => Some(s),
                             _ => None,
                         };
                         out.insert(pid.clone(), head);
                     }
-                    Some(ProbeValue::Map(out))
+                    Ok(Some(ProbeValue::Map(out)))
                 });
                 let judge_heads = heads.clone();
                 let judge: Judge = Box::new(move |before, after| {
@@ -1449,14 +1547,18 @@ impl Win {
                         w.after_pacman(ok);
                     }
                 });
-                let on_done = w.checked(Some(probe), judge, Some(then));
+                let steps: Vec<tasks::Step> = ready
+                    .iter()
+                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), step(s.id.clone())))
+                    .collect();
+                let on_done = match w.checked(Some(probe), judge, Some(then)) {
+                    Ok(on_done) => on_done,
+                    Err(e) => return uncaught_err(&e),
+                };
                 tasks::run(
                     &w.window,
                     &tr("Updating plugins"),
-                    ready
-                        .iter()
-                        .map(|s| tasks::Step::call(format!("Updating {}", s.id), step(s.id.clone())))
-                        .collect(),
+                    steps,
                     Some(on_done),
                 );
             },
@@ -1467,7 +1569,11 @@ impl Win {
         let restart = || {
             let argv = plugins_mod::restart_argv(true);
             match popen_detached(&argv) {
-                Ok(()) => history::record(history::ALMANAC, "Shell restarted", "", "", &[]),
+                Ok(()) => {
+                    if let Err(e) = history::record_checked(history::ALMANAC, "Shell restarted", "", "", &[]) {
+                        uncaught_err(&e);
+                    }
+                }
                 Err(e) => {
                     // Not caught in the Python: the OSError escapes the
                     // confirm callback, so its traceback goes to stderr and
@@ -1702,13 +1808,18 @@ impl Win {
 
     /// Install through yay: snapshot first, then check what changed.
     pub fn install_package(&self, name: &str, argv: Vec<String>) {
-        let holder = self.watch_defaults();
+        let holder = match self.try_watch_defaults() {
+            Ok(holder) => holder,
+            Err(e) => return uncaught_err(&e),
+        };
 
         let w = self.downgrade();
         let after: tasks::OnDone = Box::new(move |ok| {
             let Some(w) = w.upgrade() else { return };
             if ok {
-                w.check_defaults(holder);
+                if let Err(e) = w.try_check_defaults(holder) {
+                    return uncaught_err(&e);
+                }
             }
             w.after_pacman(ok);
         });
@@ -1725,11 +1836,19 @@ impl Win {
                 if changed { format!("{nm} {a_s} installed") } else { format!("{nm} was not installed") },
             )
         });
-        let steps = self.snapshot_first(
+        // What the snapshot or the first probe raises ends this before the
+        // task starts.
+        let steps = match self.snapshot_first(
             vec![tasks::Step::argv(format!("Installing {name}"), argv)],
             &format!("installing {name}"),
-        );
-        let on_done = self.checked(Some(verify::installed_package(name)), judge, Some(after));
+        ) {
+            Ok(steps) => steps,
+            Err(e) => return uncaught_err(&e),
+        };
+        let on_done = match self.checked(Some(verify::installed_package_try(name)), judge, Some(after)) {
+            Ok(on_done) => on_done,
+            Err(e) => return uncaught_err(&e),
+        };
         tasks::run(&self.window, &format!("Installing {name}"), steps, Some(on_done));
     }
 
@@ -2135,15 +2254,15 @@ mod tests {
             state: Some(plugins_mod::State::new("x", "update", "", 2, "https://github.com/a/x")),
             ..Default::default()
         };
-        let acts: Vec<&str> = plugin_menu(&i, true).iter().map(|(_l, a)| *a).collect();
+        let acts: Vec<&str> = plugin_menu(&i, true).expect("menu").iter().map(|(_l, a)| *a).collect();
         assert_eq!(acts, ["update", "shortcut", "folder", "page", "remove"]);
         i.built_in = true;
         i.folder = None;
         i.state = None;
-        assert!(plugin_menu(&i, true).is_empty());
+        assert!(plugin_menu(&i, true).expect("menu").is_empty());
         // Local edits with upstream commits waiting can still be updated.
         i.state = Some(plugins_mod::State::new("x", "local-changes", "modified", 1, ""));
-        let acts: Vec<&str> = plugin_menu(&i, false).iter().map(|(_l, a)| *a).collect();
+        let acts: Vec<&str> = plugin_menu(&i, false).expect("menu").iter().map(|(_l, a)| *a).collect();
         assert_eq!(acts, ["update"]);
     }
 

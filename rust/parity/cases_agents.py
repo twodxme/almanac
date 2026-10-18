@@ -533,6 +533,13 @@ def review_cases():
         yield case("github_latest", {"repo": repo}, lambda r=repo: agents._github_latest(r), files=gh_files)
     yield case("release_notes", {"repo": "o/numbody", "limit": 2000},
                lambda: agents.release_notes("o/numbody", 2000), files=gh_files)
+    # A broken rate file or cache entry: ghcache.get_json raises, and so do
+    # _github_latest and release_notes.
+    for bad in [{"github-rate.json": "[1]"}, {_gh_file("o/broken", {})[0]: "[1]"}]:
+        files = {**gh_files, **bad}
+        yield case("github_latest", {"repo": "o/broken"}, lambda: agents._github_latest("o/broken"), files=files)
+        yield case("release_notes", {"repo": "o/broken", "limit": 2000},
+                   lambda: agents.release_notes("o/broken", 2000), files=files)
 
     # detect: cached latest entries that Python unpacks differently.
     fenv2 = {"PATH": f"{_FAKE2}:/usr/bin", "FAKE_MISE_DIR": _mise_dir(ls={}, outdated={})}

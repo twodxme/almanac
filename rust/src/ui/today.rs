@@ -123,12 +123,20 @@ impl Win {
             flow.remove(&child);
         }
         for (i, pick) in found.iter().enumerate() {
-            flow.append(&self.pick_card(pick, i));
+            // What a card raises ends `_picks_show` there.
+            match self.pick_card(pick, i) {
+                Ok(card) => flow.append(&card),
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+            }
         }
         area.set_visible(!found.is_empty());
     }
 
-    pub fn pick_card(&self, pick: &Pick, index: usize) -> gtk::Box {
+    /// `Err` where a listing property raises.
+    pub fn pick_card(&self, pick: &Pick, index: usize) -> Result<gtk::Box, String> {
         let p = &pick.plugin;
         let card = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         card.add_css_class("pick-card");
@@ -197,7 +205,7 @@ impl Win {
         name_l.add_css_class("pick-name");
         body.append(&name_l);
         let sub = gtk::Label::builder()
-            .label(p.subtitle())
+            .label(p.try_subtitle()?)
             .xalign(0.0)
             .ellipsize(pango::EllipsizeMode::End)
             .build();
@@ -269,7 +277,7 @@ impl Win {
         } else {
             p.description.as_str()
         }));
-        card
+        Ok(card)
     }
 
     /// The listing's screenshot, at a size worth looking at; the accent
@@ -392,7 +400,8 @@ impl Win {
         }
     }
 
-    pub fn hero_text(&self, problems: usize) {
+    /// `Err` where `theming.theme_name()` raises, before anything is set.
+    pub fn hero_text(&self, problems: usize) -> Result<(), String> {
         let hour = chrono::Local::now().hour();
         let part = if hour < 12 {
             "Good morning"
@@ -401,12 +410,12 @@ impl Win {
         } else {
             "Good evening"
         };
-        let name = theming::theme_name();
+        let name = theming::try_theme_name()?;
         let (head, sub) = {
             let st = self.today.borrow();
             (st.hero_head.clone(), st.hero_sub.clone())
         };
-        let (Some(head), Some(sub)) = (head, sub) else { return };
+        let (Some(head), Some(sub)) = (head, sub) else { return Ok(()) };
         if problems > 0 {
             head.set_text(&format!(
                 "{problems} thing{} need you",
@@ -418,7 +427,7 @@ impl Win {
         let mut bits: Vec<String> = Vec::new();
         let (store, findings) = {
             let sh = self.shared.borrow();
-            (sh.store.clone(), sh.findings.clone())
+            (sh.store.clone(), sh.findings.get())
         };
         let updates = (0..store.n_items())
             .filter(|&i| {
@@ -439,6 +448,7 @@ impl Win {
             bits.push(format!("wearing {name}"));
         }
         sub.set_text(&bits.join(" · "));
+        Ok(())
     }
 
     pub fn feat_reload(&self) {
@@ -447,11 +457,13 @@ impl Win {
 
         // The worker cannot reach the list store or `shared` (both live on
         // the main thread), so what the Python's `work()` reads from `self`
-        // is read here and handed over, and what it assigns to `self` is
-        // assigned when its result arrives, before `_feat_show` runs.
-        let (store, findings, plugins, plugins_none) = {
+        // is read here and handed over. `_findings` it assigns itself, as
+        // the Python's worker does (`Findings` is shared with workers), so a
+        // sidebar refresh before the shelves arrive already sees it;
+        // `_plugins` is assigned when the result arrives, before `_feat_show`.
+        let (store, findings, plugins) = {
             let sh = self.shared.borrow();
-            (sh.store.clone(), sh.findings.clone(), sh.plugins.clone(), sh.plugins_none)
+            (sh.store.clone(), sh.findings.clone(), sh.plugins.clone())
         };
         let apps: Vec<App> = (0..store.n_items())
             .filter_map(|i| store.item(i).as_ref().and_then(AppItem::of).map(|it| it.app.clone()))
@@ -459,28 +471,34 @@ impl Win {
         let w = self.downgrade();
         spawn_bg(
             move || {
-                let findings = if findings.is_empty() { maintenance::run_all() } else { findings };
-                // The Python's `except Exception: plugins = []` has nothing to
-                // catch here: `catalog` and `annotate` fall back themselves.
-                let (plugins, fresh) = if plugins_none || plugins.is_empty() {
-                    let mut plugins = store_mod::catalog(false);
-                    store_mod::annotate(&mut plugins);
-                    (plugins, true)
+                // `getattr(self, "_findings", None) or maintenance.run_all()`
+                let have = findings.get();
+                let found = if have.is_empty() { maintenance::run_all() } else { have };
+                // Assigned as soon as it is known, not after the catalog: the
+                // Python's GIL-bound worker sets `_findings` long before its
+                // slow main thread first applies the inventory, so the
+                // sidebar stats always show "Free-able"; Rust's main thread
+                // gets there first, and a later assignment came too late.
+                findings.set(found.clone());
+                // `if not plugins: try: catalog(); annotate(); self._plugins
+                // = plugins / except Exception: plugins = []`.
+                let (plugins, fresh) = if plugins.is_empty() {
+                    match store_mod::try_catalog_annotated(false) {
+                        Ok(plugins) => (plugins, true),
+                        Err(_) => (Vec::new(), false),
+                    }
                 } else {
                     (plugins, false)
                 };
-                let shelves = featured::build(&apps, &findings, &plugins);
-                (findings, plugins, fresh, shelves)
+                let shelves = featured::build(&apps, &found, &plugins);
+                (plugins, fresh, shelves)
             },
-            move |(findings, plugins, fresh, shelves)| {
+            move |(plugins, fresh, shelves)| {
                 let Some(w) = w.upgrade() else { return };
-                {
+                if fresh {
                     let mut sh = w.shared.borrow_mut();
-                    if fresh {
-                        sh.plugins = plugins.clone();
-                        sh.plugins_none = false;
-                    }
-                    sh.findings = findings;
+                    sh.plugins = plugins.clone();
+                    sh.plugins_none = false;
                 }
                 w.feat_show(shelves);
                 if !plugins.is_empty() {
@@ -548,13 +566,24 @@ impl Win {
                 if item.severity == "crit" || item.severity == "warn" {
                     problems += 1;
                 }
-                section.rows.append(&self.feat_row(item));
+                // What a row raises ends `_feat_show` there.
+                match self.feat_row(item) {
+                    Ok(row) => section.rows.append(&row),
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return;
+                    }
+                }
             }
             feat_page.append(&section.root);
         }
 
         self.refresh_hero();
-        self.hero_text(problems);
+        // What `_hero_text` raises ends `_feat_show` here.
+        if let Err(e) = self.hero_text(problems) {
+            eprintln!("almanac: {e}");
+            return;
+        }
         self.summarize(
             &if problems > 0 {
                 format!("{problems} thing(s) need you")
@@ -609,7 +638,8 @@ impl Win {
         self.select_category(page);
     }
 
-    pub fn feat_row(&self, item: &Item) -> adw::ActionRow {
+    /// `Err` where a listing property raises.
+    pub fn feat_row(&self, item: &Item) -> Result<adw::ActionRow, String> {
         let row: adw::ActionRow = Win::plain(&item.title, &item.detail);
         row.set_subtitle_lines(1);
         row.set_tooltip_text(Some(&item.detail));
@@ -640,7 +670,7 @@ impl Win {
 
         if let Some(plugin) = &item.plugin {
             let chip = gtk::Label::builder()
-                .label(plugin.market_name())
+                .label(plugin.try_market_name_text()?)
                 .valign(gtk::Align::Center)
                 .build();
             chip.add_css_class("pill");
@@ -682,7 +712,7 @@ impl Win {
                 w.feat_open(&it);
             }
         });
-        row
+        Ok(row)
     }
 
     /// A marketplace entry's own card art, scaled down to a row icon.
