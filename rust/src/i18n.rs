@@ -2496,7 +2496,9 @@ fn normalize_encoding(encoding: &str) -> String {
 // ---------------------------------------------------------------------------
 // `gettext.c2py`: Plural-Forms expressions. Python turns the C expression
 // into Python source text and `exec`s it, so the expression means what that
-// Python text means (`!n == 1` becomes `not n == 1`, i.e. `!(n == 1)`).
+// Python text means. Since CPython 3.14.8 a negated operand is wrapped in
+// parentheses (`!n == 1` becomes `(not n) == 1`, as in C); before, it read
+// `not n == 1`, i.e. `!(n == 1)`.
 // The port builds the same text, then parses and evaluates it as Python.
 
 /// `str.isalnum()`: the code point ranges where it is true (Unicode 16.0,
@@ -2631,6 +2633,11 @@ fn parse_c(tokens: &mut Tokens, priority: i32) -> Result<(String, String), Strin
         };
         result = format!("{result}{value}");
     }
+    // Unary '!' binds tighter than binary operators in C, unlike 'not'.
+    // (CPython 3.14.8, gh-157451; before it, `!n == 1` meant `!(n == 1)`.)
+    if result.starts_with("not ") {
+        result = format!("({result})");
+    }
     nexttok = tokens.next()?;
 
     let mut j = 100;
@@ -2680,7 +2687,14 @@ fn parse_c(tokens: &mut Tokens, priority: i32) -> Result<(String, String), Strin
 
 /// `gettext.c2py`: Gets a C expression as used in PO files for plural forms
 /// and returns a function that implements an equivalent expression.
+///
+/// Parsing recurses once per `!` or nested operand, up to the 1000
+/// characters an expression may have: on a thread with room for that.
 fn c2py(plural: &str) -> Result<Expr, String> {
+    crate::util::with_stack(crate::util::DEEP_STACK, || c2py_here(plural))
+}
+
+fn c2py_here(plural: &str) -> Result<Expr, String> {
     if plural.chars().count() > 1000 {
         return Err("plural form expression is too long".into());
     }
@@ -2965,6 +2979,36 @@ impl Expr {
     /// `round(n)` does (NaN, infinity); otherwise it warns (`warned`) and
     /// keeps the float, which the expression then works on.
     fn call(&self, n: &PluralN, warned: &mut bool) -> Result<BigInt, String> {
+        // Evaluation recurses once per level of the expression: a real
+        // catalog's few levels here, a pathological one's (`!!!…!n`, up to
+        // ~1000) on a thread with room for them.
+        if self.depth() > 64 {
+            return crate::util::with_stack(crate::util::DEEP_STACK, || self.call_here(n, warned));
+        }
+        self.call_here(n, warned)
+    }
+
+    /// How many levels deep the expression goes.
+    fn depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut todo = vec![(self, 1)];
+        while let Some((e, d)) = todo.pop() {
+            deepest = deepest.max(d);
+            match e {
+                Expr::N | Expr::Num(_) => {}
+                Expr::Not(a) => todo.push((a, d + 1)),
+                Expr::Or(a, b) | Expr::And(a, b) | Expr::Bin(_, a, b) => todo.extend([(&**a, d + 1), (&**b, d + 1)]),
+                Expr::IfElse(a, b, c) => todo.extend([(&**a, d + 1), (&**b, d + 1), (&**c, d + 1)]),
+                Expr::Compare(a, rest) => {
+                    todo.push((a, d + 1));
+                    todo.extend(rest.iter().map(|(_, x)| (x, d + 1)));
+                }
+            }
+        }
+        deepest
+    }
+
+    fn call_here(&self, n: &PluralN, warned: &mut bool) -> Result<BigInt, String> {
         let v = match n {
             PluralN::Int(i) => Value::Int(i.clone()),
             PluralN::Float(f) => {
@@ -5913,5 +5957,27 @@ mod tests {
         let t = lc_time();
         assert_eq!((t.abday.len(), t.day.len(), t.abmon.len(), t.mon.len()), (7, 7, 12, 12));
         assert_eq!(LcTime::c().mon[0], "January");
+    }
+
+    #[test]
+    fn a_pathological_plural_parses_and_evaluates_on_a_small_stack() {
+        // 999 negations: one parse and eval frame each.
+        let plural = "!".repeat(999) + "n";
+        std::thread::Builder::new()
+            .stack_size(128 << 10)
+            .spawn(move || {
+                let f = c2py(&plural).unwrap();
+                assert_eq!(f.call(&PluralN::Int(BigInt::from(0)), &mut false).unwrap(), BigInt::from(1));
+                assert_eq!(f.call(&PluralN::Int(BigInt::from(2)), &mut false).unwrap(), BigInt::from(0));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        // gh-157451 (3.14.8): `!` binds tighter than `==` and `+`, as in C.
+        let f = c2py("!n == 1").unwrap();
+        let at = |n: i64| f.call(&PluralN::Int(BigInt::from(n)), &mut false).unwrap();
+        assert_eq!((at(0), at(1), at(2)), (BigInt::from(1), BigInt::from(0), BigInt::from(0)));
+        let g = c2py("n+!n").unwrap();
+        assert_eq!(g.call(&PluralN::Int(BigInt::from(0)), &mut false).unwrap(), BigInt::from(1));
     }
 }

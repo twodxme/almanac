@@ -581,10 +581,33 @@ impl PyJson {
         }
     }
 
-    /// As a serde value, for the calls that take one: what serde cannot
-    /// hold degrades (a lone surrogate to U+FFFD, NaN/inf to null, an int
-    /// past u64/i64 to the nearest float).
-    fn to_value(&self, id: usize) -> Value {
+    /// A node's children, for the walks in `util::tree`: none for a
+    /// scalar, `Some(is_dict)` for a container.
+    fn kids(&self, id: usize, out: &mut Vec<usize>) -> Option<bool> {
+        match &self.nodes[id] {
+            Node::Arr(items) => {
+                out.extend(items);
+                Some(false)
+            }
+            Node::Obj(entries) => {
+                out.extend(entries.iter().map(|(_, c)| *c));
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    /// The keys of a dict node (none for anything else).
+    fn keys(&self, id: usize) -> impl Iterator<Item = &PyStr> {
+        let entries: &[(PyStr, usize)] = match &self.nodes[id] {
+            Node::Obj(entries) => entries,
+            _ => &[],
+        };
+        entries.iter().map(|(k, _)| k)
+    }
+
+    /// A scalar as a serde value.
+    fn scalar_value(&self, id: usize, text: fn(&[u32]) -> String) -> Value {
         match &self.nodes[id] {
             Node::Null => Value::Null,
             Node::Bool(b) => Value::Bool(*b),
@@ -594,106 +617,170 @@ impl PyJson {
                 .or_else(|_| s.parse::<u64>().map(Value::from))
                 .unwrap_or_else(|_| float_value(s.parse::<f64>().unwrap_or(f64::NAN))),
             Node::Float(f) => float_value(*f),
-            Node::Str(s) => Value::String(render_lossy(s)),
-            Node::Arr(items) => Value::Array(items.iter().map(|c| self.to_value(*c)).collect()),
-            Node::Obj(entries) => {
-                Value::Object(entries.iter().map(|(k, c)| (render_lossy(k), self.to_value(*c))).collect())
-            }
+            Node::Str(s) => Value::String(text(s)),
+            Node::Arr(_) | Node::Obj(_) => Value::Null,
         }
+    }
+
+    /// As a serde value, for the calls that take one: what serde cannot
+    /// hold degrades (a lone surrogate to U+FFFD, NaN/inf to null, an int
+    /// past u64/i64 to the nearest float). Built without recursion: a
+    /// registry nests as deep as Python's json goes. A deep result is the
+    /// caller's to drop with `util::tree::drop_value`.
+    fn to_value(&self, id: usize) -> Value {
+        self.value_with(id, render_lossy)
     }
 
     /// `to_value`, with lone surrogates written as `render` writes them
     /// (for parity results, which cannot carry them either).
     fn to_value_rendered(&self, id: usize) -> Value {
-        match &self.nodes[id] {
-            Node::Str(s) => Value::String(render(s)),
-            Node::Arr(items) => Value::Array(items.iter().map(|c| self.to_value_rendered(*c)).collect()),
-            Node::Obj(entries) => {
-                Value::Object(entries.iter().map(|(k, c)| (render(k), self.to_value_rendered(*c))).collect())
-            }
-            _ => self.to_value(id),
-        }
+        self.value_with(id, render)
     }
 
-    /// `str(x)` (an f-string's `{x}`).
-    fn py_str(&self, id: usize) -> PyStr {
+    fn value_with(&self, id: usize, text: fn(&[u32]) -> String) -> Value {
+        crate::util::tree::fold_ids(
+            id,
+            |n, out| self.kids(n, out),
+            |n| self.scalar_value(n, text),
+            |_, kids| Value::Array(kids),
+            |n, kids| Value::Object(self.keys(n).map(|k| text(k)).zip(kids).collect()),
+        )
+    }
+
+    /// `str(x)` (an f-string's `{x}`); Err is repr's RecursionError.
+    fn py_str(&self, id: usize) -> Result<PyStr, String> {
         match &self.nodes[id] {
-            Node::Str(s) => s.clone(),
+            Node::Str(s) => Ok(s.clone()),
             _ => self.py_repr(id),
         }
     }
 
-    /// `repr(x)`.
-    fn py_repr(&self, id: usize) -> PyStr {
-        match &self.nodes[id] {
-            Node::Null => pystr("None"),
-            Node::Bool(true) => pystr("True"),
-            Node::Bool(false) => pystr("False"),
-            Node::Int(s) => pystr(s),
-            Node::Float(f) => pystr(&py_float_str(*f)),
-            // repr() escapes what is not printable, surrogates included
-            Node::Str(s) => pystr(&py_repr_py(s)),
-            Node::Arr(items) => {
-                let parts: Vec<PyStr> = items.iter().map(|c| self.py_repr(*c)).collect();
-                cat(&[&pystr("["), &parts.join(&pystr(", ")[..]), &pystr("]")])
-            }
-            Node::Obj(entries) => {
-                let parts: Vec<PyStr> = entries
-                    .iter()
-                    .map(|(k, c)| cat(&[&pystr(&py_repr_py(k)), &pystr(": "), &self.py_repr(*c)]))
-                    .collect();
-                cat(&[&pystr("{"), &parts.join(&pystr(", ")[..]), &pystr("}")])
+    /// `repr(x)`, without recursion, and with the RecursionError CPython
+    /// raises past the C stack it has for it (see `shortcuts::REPR_BUDGET`).
+    fn py_repr(&self, id: usize) -> Result<PyStr, String> {
+        use crate::shortcuts::{REPR_BUDGET, REPR_DICT_COST, REPR_LIST_COST, REPR_OVERFLOW};
+        enum W<'a> {
+            Val(usize),
+            Lit(&'static str),
+            Key(&'a PyStr),
+            Exit(u64),
+        }
+        let mut out = PyStr::new();
+        let mut used = 0u64;
+        let mut stack = vec![W::Val(id)];
+        while let Some(w) = stack.pop() {
+            match w {
+                W::Lit(s) => out.extend(pystr(s)),
+                W::Key(k) => out.extend(pystr(&py_repr_py(k))),
+                W::Exit(cost) => used -= cost,
+                W::Val(n) => match &self.nodes[n] {
+                    Node::Null => out.extend(pystr("None")),
+                    Node::Bool(true) => out.extend(pystr("True")),
+                    Node::Bool(false) => out.extend(pystr("False")),
+                    Node::Int(s) => out.extend(pystr(s)),
+                    Node::Float(f) => out.extend(pystr(&py_float_str(*f))),
+                    // repr() escapes what is not printable, surrogates included
+                    Node::Str(s) => out.extend(pystr(&py_repr_py(s))),
+                    Node::Arr(items) if items.is_empty() => out.extend(pystr("[]")),
+                    Node::Obj(entries) if entries.is_empty() => out.extend(pystr("{}")),
+                    Node::Arr(items) => {
+                        used += REPR_LIST_COST;
+                        if used > REPR_BUDGET {
+                            return Err(format!("RecursionError: {REPR_OVERFLOW}"));
+                        }
+                        out.extend(pystr("["));
+                        stack.push(W::Exit(REPR_LIST_COST));
+                        stack.push(W::Lit("]"));
+                        for (i, c) in items.iter().enumerate().rev() {
+                            stack.push(W::Val(*c));
+                            if i > 0 {
+                                stack.push(W::Lit(", "));
+                            }
+                        }
+                    }
+                    Node::Obj(entries) => {
+                        used += REPR_DICT_COST;
+                        if used > REPR_BUDGET {
+                            return Err(format!("RecursionError: {REPR_OVERFLOW}"));
+                        }
+                        out.extend(pystr("{"));
+                        stack.push(W::Exit(REPR_DICT_COST));
+                        stack.push(W::Lit("}"));
+                        for (i, (k, c)) in entries.iter().enumerate().rev() {
+                            stack.push(W::Val(*c));
+                            stack.push(W::Lit(": "));
+                            stack.push(W::Key(k));
+                            if i > 0 {
+                                stack.push(W::Lit(", "));
+                            }
+                        }
+                    }
+                },
             }
         }
+        Ok(out)
     }
 
     /// `json.dumps(x, indent=2)`: `ensure_ascii`, NaN/Infinity allowed.
+    /// Without recursion (CPython's C encoder takes any depth json.loads
+    /// gave it).
     fn dumps_indent2(&self, id: usize) -> String {
+        enum W<'a> {
+            Val(usize, usize),
+            Lit(&'static str),
+            Nl(usize),
+            Key(&'a PyStr),
+        }
         let mut out = String::new();
-        self.dump(id, 0, &mut out);
-        out
-    }
-
-    fn dump(&self, id: usize, level: usize, out: &mut String) {
-        let nl = |out: &mut String, level: usize| {
-            out.push('\n');
-            out.push_str(&" ".repeat(2 * level));
-        };
-        match &self.nodes[id] {
-            Node::Null => out.push_str("null"),
-            Node::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Node::Int(s) => out.push_str(s),
-            Node::Float(f) => out.push_str(&crate::util::py_float_repr(*f)),
-            Node::Str(s) => push_json_str(out, s),
-            Node::Arr(items) if items.is_empty() => out.push_str("[]"),
-            Node::Obj(entries) if entries.is_empty() => out.push_str("{}"),
-            Node::Arr(items) => {
-                out.push('[');
-                for (i, c) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    nl(out, level + 1);
-                    self.dump(*c, level + 1, out);
+        let mut stack = vec![W::Val(id, 0)];
+        while let Some(w) = stack.pop() {
+            match w {
+                W::Lit(s) => out.push_str(s),
+                W::Nl(level) => {
+                    out.push('\n');
+                    out.push_str(&" ".repeat(2 * level));
                 }
-                nl(out, level);
-                out.push(']');
-            }
-            Node::Obj(entries) => {
-                out.push('{');
-                for (i, (k, c)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    nl(out, level + 1);
-                    push_json_str(out, k);
+                W::Key(k) => {
+                    push_json_str(&mut out, k);
                     out.push_str(": ");
-                    self.dump(*c, level + 1, out);
                 }
-                nl(out, level);
-                out.push('}');
+                W::Val(n, level) => match &self.nodes[n] {
+                    Node::Null => out.push_str("null"),
+                    Node::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+                    Node::Int(s) => out.push_str(s),
+                    Node::Float(f) => out.push_str(&crate::util::py_float_repr(*f)),
+                    Node::Str(s) => push_json_str(&mut out, s),
+                    Node::Arr(items) if items.is_empty() => out.push_str("[]"),
+                    Node::Obj(entries) if entries.is_empty() => out.push_str("{}"),
+                    Node::Arr(items) => {
+                        out.push('[');
+                        stack.push(W::Lit("]"));
+                        stack.push(W::Nl(level));
+                        for (i, c) in items.iter().enumerate().rev() {
+                            stack.push(W::Val(*c, level + 1));
+                            stack.push(W::Nl(level + 1));
+                            if i > 0 {
+                                stack.push(W::Lit(","));
+                            }
+                        }
+                    }
+                    Node::Obj(entries) => {
+                        out.push('{');
+                        stack.push(W::Lit("}"));
+                        stack.push(W::Nl(level));
+                        for (i, (k, c)) in entries.iter().enumerate().rev() {
+                            stack.push(W::Val(*c, level + 1));
+                            stack.push(W::Key(k));
+                            stack.push(W::Nl(level + 1));
+                            if i > 0 {
+                                stack.push(W::Lit(","));
+                            }
+                        }
+                    }
+                },
             }
         }
+        out
     }
 }
 
@@ -1592,7 +1679,10 @@ pub fn update_appimages_with(
     for (key, rec) in entries {
         // the stand-ins and install_desktop_entry take the key as a Rust str
         let key_s = render(&key);
-        let latest = match check(&key_s, &reg.to_value(rec)) {
+        let rec_value = reg.to_value(rec);
+        let checked = check(&key_s, &rec_value);
+        crate::util::tree::drop_value(rec_value);
+        let latest = match checked {
             Ok(l) => l,
             Err(exc) => {
                 log_py(&cat(&[&key, &pystr(&format!(": check failed: {}", py_exc_str(&exc)))]))?;
@@ -1612,7 +1702,8 @@ pub fn update_appimages_with(
             return Err(format!("AttributeError: '{}' object has no attribute 'get'", reg.type_name(rec)));
         }
         let have = match reg.get(rec, "version") {
-            Some(v) => reg.py_str(v),
+            // repr of a value nested past its stack: RecursionError
+            Some(v) => reg.py_str(v)?,
             None => pystr("None"),
         };
         let Some(version) = latest.get("version").cloned() else {
@@ -3041,7 +3132,7 @@ mod tests {
             doc.dumps_indent2(doc.root),
             "{\n  \"a\": [\n    1.5,\n    \"\\udcff\"\n  ],\n  \"b\": 0,\n  \"c\": Infinity,\n  \"d\": NaN\n}"
         );
-        assert_eq!(render(&doc.py_str(doc.get(doc.root, "c").unwrap())), "inf");
+        assert_eq!(render(&doc.py_str(doc.get(doc.root, "c").unwrap()).unwrap()), "inf");
         for bad in ["", "[1,]", "{\"a\": 01}", "1 x", "\u{feff}1", "\"\t\""] {
             assert!(parse_json(bad).is_err(), "{bad:?}");
         }
@@ -3080,5 +3171,35 @@ mod tests {
         assert_eq!(py_net_error("OSError: No space left on device (os error 28)"), "OSError: [Errno 28] No space left on device");
         let e = std::io::Error::from_raw_os_error(13);
         assert_eq!(py_os_error(&e, &[Path::new("/a.tmp")]), "[Errno 13] Permission denied: '/a.tmp'");
+    }
+
+    #[test]
+    fn a_registry_as_deep_as_python_reads_is_walked_without_recursion() {
+        // A registry nested as deep as json.loads goes, on a default 2 MiB
+        // thread: converting, writing and repr'ing it recursed per level.
+        let n = JSON_MAX_DEPTH - 2;
+        let text = format!("{{\"k\": {}{}}}", "[".repeat(n), "]".repeat(n));
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let Ok(doc) = parse_json(&text) else { panic!("Python reads it") };
+                let v = doc.to_value(doc.root);
+                assert_eq!(crate::util::tree::value_depth(&v), n + 1);
+                crate::util::tree::drop_value(v);
+                let k = doc.get(doc.root, "k").unwrap();
+                // repr(): RecursionError past the C stack CPython has for it
+                assert_eq!(
+                    doc.py_str(k).unwrap_err(),
+                    "RecursionError: Stack overflow (used 8148 kB) while getting the repr of an object"
+                );
+                assert!(doc.dumps_indent2(doc.root).starts_with("{\n  \"k\": [\n    ["));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let shallow = parse_json("{\"k\": [[1, {\"a\": []}], \"x\"]}").ok().unwrap();
+        let k = shallow.get(shallow.root, "k").unwrap();
+        assert_eq!(render(&shallow.py_str(k).unwrap()), "[[1, {'a': []}], 'x']");
+        assert_eq!(shallow.dumps_indent2(shallow.root), "{\n  \"k\": [\n    [\n      1,\n      {\n        \"a\": []\n      }\n    ],\n    \"x\"\n  ]\n}");
     }
 }

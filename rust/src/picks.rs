@@ -339,7 +339,7 @@ fn ps_string(s: &[u32]) -> Option<String> {
 
 /// A value as Python's `json` module hands it over: ints of any size, NaN and
 /// the infinities, strs with lone surrogates, dicts in insertion order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum PyJson {
     None,
     Bool(bool),
@@ -349,6 +349,11 @@ pub enum PyJson {
     List(Vec<PyJson>),
     Dict(PyDict),
 }
+
+// As deep as Python's json goes (MAX_DEPTH): cloned and compared without
+// recursion.
+crate::util::tree_clone_eq!(PyJson, key: PStr, units: [None], leaves: [Bool, Int, Float, Str], list: List, dict: Dict(PyDict));
+
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PyDict(pub Vec<(PStr, PyJson)>);

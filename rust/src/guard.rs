@@ -1395,24 +1395,50 @@ pub fn try_finding_at(at: PyStack) -> Result<crate::maintenance::Finding, String
 
 // ---- parity -------------------------------------------------------------------
 
+/// The parsed document as serde JSON, for the parity hook. Built without
+/// recursion, as deep as the document is (Python's limit, which follows
+/// `ulimit -s`, allows 100000 levels on a 16 MiB stack): a container's
+/// children sit before it in the arena, so one pass in index order builds
+/// each node from its children's finished values.
 fn doc_json(d: &Doc, n: usize) -> serde_json::Value {
     use serde_json::Value;
-    match &d.nodes[n] {
-        Node::None => Value::Null,
-        Node::Bool(b) => Value::Bool(*b),
-        Node::Int(i) => match i64::try_from(*i) {
-            Ok(n) => Value::from(n),
-            Err(_) => match u64::try_from(*i) {
-                Ok(n) => Value::from(n),
-                Err(_) => Value::from(*i as f64),
-            },
-        },
-        Node::BigInt(s) => Value::from(s.parse::<f64>().unwrap_or(0.0)),
-        Node::Float(f) => Value::from(*f),
-        Node::Str(s) => Value::String(pystr_lossy(s)),
-        Node::List(items) => Value::Array(items.iter().map(|i| doc_json(d, *i)).collect()),
-        Node::Dict(items) => Value::Object(items.iter().map(|(k, v)| (pystr_lossy(k), doc_json(d, *v))).collect()),
+    // Only the nodes reachable from `n` (a duplicate key leaves its first
+    // value in the arena, unreferenced).
+    let mut wanted = vec![false; d.nodes.len()];
+    let mut todo = vec![n];
+    while let Some(i) = todo.pop() {
+        wanted[i] = true;
+        match &d.nodes[i] {
+            Node::List(items) => todo.extend(items),
+            Node::Dict(items) => todo.extend(items.iter().map(|(_, v)| *v)),
+            _ => {}
+        }
     }
+    let mut done: Vec<Option<Value>> = vec![None; d.nodes.len()];
+    for i in 0..=n {
+        if !wanted[i] {
+            continue;
+        }
+        let mut take = |c: usize| done[c].take().unwrap_or(Value::Null);
+        let v = match &d.nodes[i] {
+            Node::None => Value::Null,
+            Node::Bool(b) => Value::Bool(*b),
+            Node::Int(i) => match i64::try_from(*i) {
+                Ok(n) => Value::from(n),
+                Err(_) => match u64::try_from(*i) {
+                    Ok(n) => Value::from(n),
+                    Err(_) => Value::from(*i as f64),
+                },
+            },
+            Node::BigInt(s) => Value::from(s.parse::<f64>().unwrap_or(0.0)),
+            Node::Float(f) => Value::from(*f),
+            Node::Str(s) => Value::String(pystr_lossy(s)),
+            Node::List(items) => Value::Array(items.iter().map(|c| take(*c)).collect()),
+            Node::Dict(items) => Value::Object(items.iter().map(|(k, c)| (pystr_lossy(k), take(*c))).collect()),
+        };
+        done[i] = Some(v);
+    }
+    done[n].take().unwrap_or(Value::Null)
 }
 
 fn json_doc(v: &serde_json::Value) -> Doc {
@@ -1819,5 +1845,24 @@ mod tests {
         assert_eq!(py_relative_to(b"/tmp/cfg/a", b"//tmp/cfg"), None);
         assert_eq!(py_relative_to(b"///tmp/cfg/a", b"/tmp/cfg").as_deref(), Some(&b"a"[..]));
         assert!(py_with_name(Path::new("/a/..bak.1"), b".").is_err());
+    }
+
+    #[test]
+    fn a_document_as_deep_as_python_allows_converts_without_recursion() {
+        // Python's limit grows with `ulimit -s` (100000 levels at 16 MiB);
+        // the parity hook's conversion must not recurse with it.
+        let n = 100_000;
+        let raw = "[".repeat(n) + &"]".repeat(n);
+        std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(move || {
+                let doc = py_json_loads(raw.as_bytes(), n + 1).ok().unwrap();
+                let v = doc_json(&doc, doc.root);
+                assert_eq!(crate::util::tree::value_depth(&v), n);
+                crate::util::tree::drop_value(v);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

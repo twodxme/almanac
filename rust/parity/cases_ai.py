@@ -45,6 +45,17 @@ _claude.write_text(
     '  *) echo "2.0.5 (Claude Code)" ;;\n'
     "esac\n")
 _claude.chmod(0o755)
+# mise, so the fake cases do not depend on whether this machine has a real
+# one (on PATH in /usr/bin) and what it manages: nothing, unless the case
+# sets FAKE_MISE_LS to the `mise ls --json` it should answer.
+_mise = _FAKE / "mise"
+_mise.write_text(
+    "#!/bin/sh\n"
+    'case "$1" in\n'
+    '  ls) if [ -n "$FAKE_MISE_LS" ]; then printf \'%s\\n\' "$FAKE_MISE_LS"; else echo "{}"; fi ;;\n'
+    '  *) echo "{}" ;;\n'
+    "esac\n")
+_mise.chmod(0o755)
 FAKE_PATH = f"{_FAKE}:/usr/bin"
 
 
@@ -259,7 +270,8 @@ def cases():
     # mise owns claude here, so its update comes from the mise-outdated cache.
     mise_up = json.dumps({"at": NOW, "data": {"claude": {"current": "2.0.5", "latest": "3.1.0",
                                                          "release_url": "https://rel/ü"}}})
-    yield case("harnesses", {}, _raises(ai.harnesses), env=fenv,
+    mise_env = {**fenv, "FAKE_MISE_LS": json.dumps({"claude": [{"version": "2.0.5", "active": True}]})}
+    yield case("harnesses", {}, _raises(ai.harnesses), env=mise_env,
                files={"agent-latest.json": update, "mise-outdated.json": mise_up})
     yield case("harnesses", {}, _raises(ai.harnesses), env={"PATH": str(_EMPTY)})
     # The real machine.

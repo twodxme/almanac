@@ -5,6 +5,7 @@ difference.
     python3 rust/parity/run.py                 # every module with cases
     python3 rust/parity/run.py inventory picks  # just these
     python3 rust/parity/run.py --demo theming   # with ALMANAC_DEMO=1 on both sides
+    python3 rust/parity/run.py --each --demo    # each module in a process of its own (CI)
 
 Each module's cases live in `rust/parity/cases_<module>.py`, which defines
 
@@ -94,6 +95,12 @@ def same(a, b, path="$"):
     return None if a == b else f"{path}: {a!r:.200} != {b!r:.200}"
 
 
+def _unary_not(diff: str) -> bool:
+    """The case's plural expression has a unary `!` (not `!=`)."""
+    m = re.search(r'"plural": "((?:[^"\\]|\\.)*)"', diff)
+    return bool(m and re.search(r"!(?!=)", m.group(1)))
+
+
 # Differences that are understood and accepted, each with the reason. They are
 # still printed on every run; they just do not fail it. Anything not matched
 # here fails. Keep this list short and specific.
@@ -117,6 +124,15 @@ KNOWN = [
     # process, before this case's SSL_CERT_FILE is set, when other modules'
     # cases ran first. Passes when the module runs alone.
     ("appimage", "download", lambda d: "127.0.0.1" in d, "TLS context built before the case's CA was set"),
+    # The port follows CPython 3.14.8, the Python Arch ships: gettext.c2py
+    # reads `!n == 1` as C does, `(!n) == 1` (gh-157451), and stringprep's
+    # case map takes Unicode 3.2's data only (gh-155292), which changes what
+    # the `idna` codec decodes. Only an older interpreter running the cases
+    # differs; the port itself does not use the machine's Python.
+    ("i18n", "c2py", lambda d: sys.version_info < (3, 14, 8) and _unary_not(d), "Python before 3.14.8 (gh-157451)"),
+    ("i18n", "c2py_str", lambda d: sys.version_info < (3, 14, 8) and _unary_not(d), "Python before 3.14.8 (gh-157451)"),
+    ("i18n", "codec_decode", lambda d: sys.version_info < (3, 14, 8) and '"idna"' in d,
+     "Python before 3.14.8 (gh-155292)"),
 ]
 
 
@@ -167,8 +183,13 @@ def run_module(binary: Path, module: str) -> tuple[int, int, list[str]]:
         if kind == "raise":
             # Python raised: Rust must report an error object, {"error": ...}.
             if not (isinstance(have, dict) and "error" in have):
-                failed += 1
-                errors.append(f"{module}.{func}({json.dumps(args)[:120]}): python raised {want}, rust gave {json.dumps(have)[:200]}")
+                line = f"{module}.{func}({json.dumps(args)[:120]}): python raised {want}, rust gave {json.dumps(have)[:200]}"
+                why = known(module, func, line)
+                if why:
+                    errors.append(f"(known: {why}) {line}")
+                else:
+                    failed += 1
+                    errors.append(line)
             continue
         d = same(want, have)
         if d:
@@ -182,12 +203,68 @@ def run_module(binary: Path, module: str) -> tuple[int, int, list[str]]:
     return len(cases), failed, errors
 
 
+def each(binary: Path, modules: list[str]) -> int:
+    """Every module in a process of its own: a crash, a hang or the OOM
+    killer then names its module, and the modules after it still run."""
+    env = {**os.environ, "ALMANAC_PARITY_BIN": str(binary)}
+    flags = ["--demo"] if os.environ.get("ALMANAC_DEMO") == "1" else []
+    failed = []
+    for m in modules:
+        print(f"== {m}", flush=True)
+        try:
+            rc = subprocess.run([sys.executable, "-u", __file__, *flags, m], env=env, timeout=3600).returncode
+        except subprocess.TimeoutExpired:
+            rc = "timed out"
+        if rc != 0:
+            if isinstance(rc, int) and rc < 0:
+                why = f"killed by signal {-rc}" + (" (out of memory?)" if rc == -9 else "")
+            elif isinstance(rc, int):
+                why = f"exit status {rc}"
+            else:
+                why = rc
+            print(f"{m}: FAILED, {why}", flush=True)
+            failed.append(f"{m} ({why})")
+    print(f"{len(modules) - len(failed)}/{len(modules)} modules pass"
+          + (": failed " + ", ".join(failed) if failed else ""))
+    return 1 if failed else 0
+
+
+def pin_stack():
+    """Run with the default 8 MiB stack (`ulimit -s 8192`), as a desktop
+    session gives every user.
+
+    CPython 3.14 bounds json's nesting (and repr's, and more) by the C stack
+    left, so the depth at which a case raises RecursionError follows the
+    stack size: the cases, and the port's limits, are measured at 8 MiB. A
+    larger stack (some CI containers have one) moves every limit, and a case
+    that expects a RecursionError instead nests 60000 levels deep and writes
+    gigabytes. The process re-executes itself, since the main thread's stack
+    is sized when it starts. ALMANAC_PARITY_STACK=keep runs with the stack
+    as it is."""
+    import resource
+    want = 8 << 20
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    if soft == want or os.environ.get("ALMANAC_PARITY_STACK") == "keep":
+        return
+    if hard != resource.RLIM_INFINITY and hard < want:
+        print(f"note: stack limit {hard} bytes is under 8 MiB; RecursionError cases will differ", flush=True)
+        return
+    resource.setrlimit(resource.RLIMIT_STACK, (want, hard))
+    print(f"note: stack limit {'unlimited' if soft == resource.RLIM_INFINITY else soft} -> 8 MiB", flush=True)
+    os.execv(sys.executable, [sys.executable, *(["-u"] if sys.flags.unbuffered else []), *sys.argv])
+
+
 def main(argv):
+    pin_stack()
     if "--demo" in argv:
         os.environ["ALMANAC_DEMO"] = "1"
         argv = [a for a in argv if a != "--demo"]
+    isolate = "--each" in argv
+    argv = [a for a in argv if a != "--each"]
     modules = argv or sorted(p.stem[len("cases_"):] for p in HERE.glob("cases_*.py"))
     binary = build()
+    if isolate:
+        return each(binary, modules)
     total = bad = 0
     for m in modules:
         n, f, errs = run_module(binary, m)

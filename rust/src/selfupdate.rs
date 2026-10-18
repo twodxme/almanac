@@ -132,7 +132,15 @@ pub fn try_release_notes() -> Result<Option<(String, String)>, String> {
 }
 
 /// `release_notes` with `ROOT` given (the parity cases point it at a temp dir).
+///
+/// On a thread of its own: `tostring` recurses once per level of the
+/// description, to Python's recursion limit (about 1000), which a small
+/// caller's stack cannot be trusted to hold.
 pub fn release_notes_in(root: &Path) -> Result<Option<(String, String)>, String> {
+    util::with_stack(util::DEEP_STACK, || release_notes_here(root))
+}
+
+fn release_notes_here(root: &Path) -> Result<Option<(String, String)>, String> {
     let paths = [
         py_path_join(root.as_os_str(), &format!("docs/{METAINFO}")),
         OsString::from(format!("/usr/share/metainfo/{METAINFO}")),
@@ -2999,6 +3007,28 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "done\n");
         drop(keep);
+    }
+
+    #[test]
+    fn release_notes_nested_past_the_recursion_limit_do_not_overflow_a_small_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        let deep = |n: usize| "<p>".repeat(n) + "x" + &"</p>".repeat(n);
+        for (n, ok) in [(10, true), (5000, false)] {
+            let xml = format!(
+                "<component><releases><release version=\"1.0\"><description>{}</description></release></releases></component>",
+                deep(n)
+            );
+            std::fs::write(dir.path().join("docs").join(METAINFO), xml).unwrap();
+            let root = dir.path().to_path_buf();
+            let got = std::thread::Builder::new()
+                .stack_size(128 << 10)
+                .spawn(move || release_notes_in(&root))
+                .unwrap()
+                .join()
+                .unwrap();
+            assert_eq!(got.is_ok(), ok, "{n}: {got:?}");
+        }
     }
 }
 // ---- Tables generated from CPython 3.14 / expat 2.8 (see the parity notes) ----

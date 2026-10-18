@@ -258,10 +258,10 @@ fn str_from_units(units: Vec<u32>) -> PyVal {
 /// overflow ... while getting the repr of an object"): 37228 lists or 30651
 /// dicts; a mix uses the stack in proportion. Each level costs the other
 /// kind's count, out of a budget of their product.
-const REPR_LIST_COST: u64 = 30651;
-const REPR_DICT_COST: u64 = 37228;
-const REPR_BUDGET: u64 = 37228 * 30651;
-const REPR_OVERFLOW: &str = "Stack overflow (used 8148 kB) while getting the repr of an object";
+pub(crate) const REPR_LIST_COST: u64 = 30651;
+pub(crate) const REPR_DICT_COST: u64 = 37228;
+pub(crate) const REPR_BUDGET: u64 = 37228 * 30651;
+pub(crate) const REPR_OVERFLOW: &str = "Stack overflow (used 8148 kB) while getting the repr of an object";
 
 impl PyVal {
     /// From a serde value (the parity hook's arguments).

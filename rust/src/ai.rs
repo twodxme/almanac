@@ -130,12 +130,59 @@ pub struct Entry {
     /// typed field holds the value as `str()` would print it; serialising
     /// the entry writes this value instead.
     #[serde(skip)]
-    pub py_values: Map<String, Value>,
+    pub py_values: PyValues,
     /// The bytes behind a field Python holds as a str with surrogate escapes
     /// (a file name that is not UTF-8, decoded with surrogateescape). The
     /// typed field holds it with U+FFFD; `entries_json` writes it exactly.
     #[serde(skip)]
     pub py_bytes: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
+/// [`Entry::py_values`]: values straight from a JSON file, so as deeply
+/// nested as Python's json allows. Cloned, compared and dropped without
+/// recursion, so an entry can go anywhere (the window's main thread
+/// included) whatever its values hold.
+#[derive(Debug, Default)]
+pub struct PyValues(pub Map<String, Value>);
+
+impl std::ops::Deref for PyValues {
+    type Target = Map<String, Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PyValues {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Clone for PyValues {
+    fn clone(&self) -> Self {
+        PyValues(self.0.iter().map(|(k, v)| (k.clone(), util::tree::clone_value(v))).collect())
+    }
+}
+
+impl PartialEq for PyValues {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(k, v)| other.0.get(k).is_some_and(|w| util::tree::eq_value(v, w)))
+    }
+}
+
+impl Drop for PyValues {
+    fn drop(&mut self) {
+        for (_, v) in std::mem::take(&mut self.0) {
+            util::tree::drop_value(v);
+        }
+    }
+}
+
+impl From<Map<String, Value>> for PyValues {
+    fn from(m: Map<String, Value>) -> Self {
+        PyValues(m)
+    }
 }
 
 impl Serialize for Entry {
@@ -162,8 +209,8 @@ impl Serialize for Entry {
         put("icon_domain", self.icon_domain.clone().into());
         put("icon_url", self.icon_url.clone().into());
         put("fallback_icon", self.fallback_icon.clone().into());
-        for (k, v) in &self.py_values {
-            m.insert(k.clone(), v.clone());
+        for (k, v) in self.py_values.iter() {
+            m.insert(k.clone(), util::tree::clone_value(v));
         }
         m.serialize(s)
     }
@@ -236,7 +283,7 @@ impl Default for Entry {
             icon_domain: String::new(),
             icon_url: String::new(),
             fallback_icon: "application-x-executable-symbolic".into(),
-            py_values: Map::new(),
+            py_values: PyValues::default(),
             py_bytes: Default::default(),
         }
     }
@@ -961,6 +1008,13 @@ pub fn harnesses() -> Result<Vec<Entry>, String> {
             fallback_icon: "utilities-terminal-symbolic".into(),
             ..Default::default()
         });
+        // A release url that is not a string (a hand-edited cache: `5`) is
+        // kept as is by the Python, not turned into its str.
+        if let (Some(e), Some(v)) = (out.last_mut(), ex.get("url")) {
+            if !v.is_string() && !v.is_null() {
+                e.py_values.insert("url".into(), v.clone());
+            }
+        }
     }
     Ok(out)
 }
@@ -1261,7 +1315,7 @@ pub fn plugins() -> Result<Vec<Entry>, String> {
             action_label: if enabled { "Disable" } else { "Enable" }.into(),
             fallback_icon: "application-x-addon-symbolic".into(),
             action: Some(vec!["claude".into(), "plugin".into(), verb.into(), name]),
-            py_values,
+            py_values: py_values.into(),
             ..Default::default()
         });
     }
@@ -1702,7 +1756,9 @@ pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value>
             }
         }
     }
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parity_call(func, args)))
+    // An entry can hold a value as deep as Python's json decodes; turning
+    // the result into serde JSON (serde's serializer recurses) needs room.
+    let out = util::with_stack(util::JSON_STACK, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parity_call(func, args))))
         .unwrap_or_else(|_| Some(serde_json::json!({ "error": "blocked: panicked (a module still todo!()?)" })));
     for (k, old) in saved {
         match old {
@@ -1831,6 +1887,34 @@ mod tests {
     fn host_of_targets() {
         assert_eq!(host("https://mcp.example.org:8080/x"), "mcp.example.org");
         assert_eq!(host("npx foo"), "");
+    }
+
+    #[test]
+    fn entries_holding_a_deep_value_clone_compare_and_drop_on_a_small_stack() {
+        let n = 100_000;
+        let deep: Value = {
+            let mut v = Value::from(5);
+            for _ in 0..n {
+                v = Value::Array(vec![v]);
+            }
+            v
+        };
+        let mut e = Entry::default();
+        e.py_values.insert("url".into(), deep);
+        std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(move || {
+                let f = e.clone();
+                assert!(e == f);
+                let mut g = f.clone();
+                if let Some(old) = g.py_values.insert("url".into(), Value::from(5)) {
+                    util::tree::drop_value(old);
+                }
+                assert!(e != g);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
 

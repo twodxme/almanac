@@ -118,7 +118,7 @@ fn ps_string(s: &[u32]) -> String {
 
 /// What `json.loads` returns: None, bool, int (any size), float (inf and nan
 /// included), str, list, dict (insertion ordered).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum PyValue {
     None,
     Bool(bool),
@@ -128,6 +128,9 @@ pub enum PyValue {
     List(Vec<PyValue>),
     Dict(Vec<(PyStr, PyValue)>),
 }
+
+// As deep as Python's json goes: cloned and compared without recursion.
+crate::util::tree_clone_eq!(PyValue, key: PyStr, units: [None], leaves: [Bool, Int, Float, Str], list: List, dict: Dict);
 
 impl PyValue {
     fn int(n: i64) -> PyValue {

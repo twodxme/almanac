@@ -152,7 +152,7 @@ impl PyStr {
 /// What `json.loads` gives: ints of any size (and `-0` is the int 0),
 /// floats including NaN and the infinities, dicts in file order with the
 /// last of a duplicate key winning.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum PyValue {
     None,
     Bool(bool),
@@ -162,6 +162,9 @@ pub enum PyValue {
     List(Vec<PyValue>),
     Dict(Vec<(PyStr, PyValue)>),
 }
+
+// As deep as Python's json goes: cloned and compared without recursion.
+crate::util::tree_clone_eq!(PyValue, key: PyStr, units: [None], leaves: [Bool, Int, Float, Str], list: List, dict: Dict);
 
 impl Drop for PyValue {
     // Python takes a JSON file nested 50,000 deep; dropping that recursively
@@ -754,8 +757,13 @@ impl Config {
         self.insert(PyKey::Str(PyStr::new(key)), from_value(&value.into()));
     }
 
-    /// The parity runner's `normalise(cfg)`: `str(k)` keys.
+    /// The parity runner's `normalise(cfg)`: `str(k)` keys. Recursive, to
+    /// Python's recursion limit: on a thread with room for it.
     fn normalised(&self) -> Result<Value, String> {
+        crate::util::with_stack(crate::util::DEEP_STACK, || self.normalised_here())
+    }
+
+    fn normalised_here(&self) -> Result<Value, String> {
         let mut m = Map::new();
         for (k, v) in &self.items {
             let v = to_value(v, 1, NORMALISE_MAX_DEPTH)

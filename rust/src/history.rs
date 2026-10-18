@@ -271,8 +271,9 @@ fn decode_strict(raw: Vec<u8>) -> Result<String, String> {
 /// A Python `str`: code points, lone surrogates included.
 pub type PyStr = Vec<u32>;
 
-/// A value as Python's `json.loads` returns it.
-#[derive(Debug, Clone, PartialEq)]
+/// A value as Python's `json.loads` returns it. As deep as Python's json
+/// goes (52105 levels), so cloning, comparing and dropping it never recurse.
+#[derive(Debug)]
 pub enum PyVal {
     None,
     Bool(bool),
@@ -301,6 +302,8 @@ impl Drop for PyVal {
         }
     }
 }
+
+crate::util::tree_clone_eq!(PyVal, key: PyStr, units: [None], leaves: [Bool, Int, Float, Str], list: List, dict: Dict);
 
 impl PyVal {
     fn type_name(&self) -> &'static str {
@@ -339,20 +342,28 @@ impl PyVal {
     /// with `wire` such values are spelled out (`{"__float__": "inf"}`,
     /// `{"__str__": [code points]}`, as the parity cases encode Python's),
     /// without it they degrade (inf/NaN to null, a surrogate to U+FFFD).
+    /// Built without recursion; the caller drops (or writes) the result on
+    /// a stack that can take its depth.
     pub fn to_value(&self, wire: bool) -> Value {
-        match self {
-            PyVal::None => Value::Null,
-            PyVal::Bool(b) => Value::Bool(*b),
-            PyVal::Int(i) => i64::try_from(i).map(Value::from)
-                .or_else(|_| u64::try_from(i).map(Value::from))
-                .unwrap_or_else(|_| float_value(int_f64(i), wire)),
-            PyVal::Float(f) => float_value(*f, wire),
-            PyVal::Str(s) => str_value(s, wire),
-            PyVal::List(xs) => Value::Array(xs.iter().map(|x| x.to_value(wire)).collect()),
-            PyVal::Dict(entries) => {
-                Value::Object(entries.iter().map(|(k, x)| (lossy(k), x.to_value(wire))).collect())
-            }
-        }
+        crate::util::tree::fold(
+            self,
+            PyVal::tree_shape,
+            |n| match n {
+                PyVal::None => Value::Null,
+                PyVal::Bool(b) => Value::Bool(*b),
+                PyVal::Int(i) => i64::try_from(i).map(Value::from)
+                    .or_else(|_| u64::try_from(i).map(Value::from))
+                    .unwrap_or_else(|_| float_value(int_f64(i), wire)),
+                PyVal::Float(f) => float_value(*f, wire),
+                PyVal::Str(s) => str_value(s, wire),
+                PyVal::List(_) | PyVal::Dict(_) => unreachable!("containers are built from their children"),
+            },
+            |_, kids| Value::Array(kids),
+            |n, kids| match n {
+                PyVal::Dict(entries) => Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect()),
+                _ => unreachable!("only a dict is built as one"),
+            },
+        )
     }
 }
 
@@ -1890,5 +1901,24 @@ mod tests {
         assert_eq!(splitlines("a\nb\r\nc\rd\x1ce\u{2028}f\n"), vec!["a", "b", "c", "d", "e", "f"]);
         assert_eq!(splitlines(""), Vec::<&str>::new());
         assert_eq!(splitlines("\n\n"), vec!["", ""]);
+    }
+
+    #[test]
+    fn a_line_as_deep_as_python_reads_is_cloned_compared_and_dropped_on_a_plain_thread() {
+        // An item nested as deep as json.loads goes, on a default 2 MiB
+        // thread: a derived Clone or PartialEq recursed once per level.
+        let n = MAX_DEPTH - 2;
+        let text = format!("{{\"ts\": 1, \"items\": {}{}}}", "[".repeat(n), "]".repeat(n));
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let Ok(v) = py_loads(&text) else { panic!("Python reads it") };
+                let w = v.clone();
+                assert!(v == w);
+                crate::util::tree::drop_value(v.to_value(true));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

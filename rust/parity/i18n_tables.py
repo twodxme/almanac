@@ -189,6 +189,9 @@ def idna_tables(exclusions_path):
     with Unicode 16.0's tables, whatever the version object)."""
     import stringprep
     from unicodedata import ucd_3_2_0
+    # CPython 3.14.8 (gh-155292) maps case in table B.2 with Unicode 3.2's
+    # data only; an older stringprep gives a different (larger) table.
+    assert hasattr(stringprep, "unicodedata_320"), "needs CPython 3.14.8 or later's stringprep"
     allcp = range(0x110000)
     b1 = ranges(lambda cp: stringprep.in_table_b1(chr(cp)), surrogates=True)
     b2 = [[cp, stringprep.map_table_b2(chr(cp))] for cp in allcp

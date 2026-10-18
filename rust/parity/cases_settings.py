@@ -311,6 +311,16 @@ def _in_thread(fn):
     return out["v"]
 
 
+def _thread_limit():
+    """The depth CPython's json reaches on a worker thread, whose stack is
+    RLIMIT_STACK (2 MiB when unlimited): 160 bytes a level, 43920 before
+    the first (measured; 52154 under 8 MiB). As guard.rs computes it."""
+    import resource
+    soft = resource.getrlimit(resource.RLIMIT_STACK)[0]
+    size = 2 << 20 if soft == resource.RLIM_INFINITY else (max(soft, 16384) + 4095) // 4096 * 4096
+    return (size - 43920) // 160
+
+
 def _round2c():
     # On a worker thread CPython's limit is 52154 containers, every run
     # (measured), where the main thread's moves around 52098-52131; Rust
@@ -325,8 +335,9 @@ def _round2c():
             h = _home()
             yield "get", _args(h, f, key="hold_majors", thread=True), \
                 _with(h, f, lambda: _in_thread(lambda: settings.get("hold_majors")))
-            if total > 52154:
-                # (Only past the limit: under it, indent=2 writes GBs.)
+            if total > _thread_limit():
+                # (Only past the limit: under it, indent=2 writes GBs. The
+                # limit follows `ulimit -s`; 52154 is the 8 MiB one.)
                 h = _home()
                 yield "set", _args(h, f, key="start_page", value="x", thread=True), \
                     _with(h, f, lambda: _in_thread(lambda: _set("start_page", "x")))
