@@ -68,7 +68,12 @@ const CS_PATH: &str = "/bin:/usr/bin";
 /// and that is not a directory. (`util::which` asks for a regular file with
 /// any x bit, which is not the same.)
 fn which(cmd: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(CS_PATH));
+    which_in(cmd, std::env::var_os("PATH"))
+}
+
+/// `which` along `path`, the value PATH would have (None: unset).
+fn which_in(cmd: &str, path: Option<OsString>) -> Option<PathBuf> {
+    let path = path.unwrap_or_else(|| OsString::from(CS_PATH));
     if path.is_empty() {
         return None; // PATH='' doesn't match, whereas PATH=':' looks in the current directory
     }
@@ -125,11 +130,16 @@ fn popen_detached(argv: &[OsString], quiet: bool) -> Result<(), String> {
 ///
 /// Python default: `start_now=True`.
 pub fn enable(start_now: bool) -> Result<(), String> {
+    enable_with(start_now, &launcher())
+}
+
+/// `enable`, with the command that starts Almanac given.
+fn enable_with(start_now: bool, launcher: &[OsString]) -> Result<(), String> {
     let path = autostart_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("OSError: {e}"))?;
     }
-    let mut argv = launcher();
+    let mut argv = launcher.to_vec();
     argv.push("--guard".into());
     let mut exec_line = PyStr::new();
     for (i, a) in argv.iter().enumerate() {
@@ -163,7 +173,7 @@ pub fn enable(start_now: bool) -> Result<(), String> {
         }
     }
     if start_now && running()? == 0 {
-        let mut argv = launcher();
+        let mut argv = launcher.to_vec();
         argv.push("--guard".into());
         popen_detached(&argv, true)?;
     }
@@ -1481,9 +1491,11 @@ mod tests {
         std::fs::create_dir(&bin).unwrap();
         std::fs::write(bin.join("almanac"), "").unwrap();
         std::fs::set_permissions(bin.join("almanac"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let _p = EnvVar::set("PATH", &bin);
+        // As launcher() finds it on PATH, without swapping PATH for every
+        // other test that spawns a program meanwhile.
+        let found = which_in("almanac", Some(bin.clone().into_os_string())).unwrap();
         let _c = EnvVar::set("XDG_CONFIG_HOME", d.path());
-        let e = enable(false).unwrap_err();
+        let e = enable_with(false, &[found.into_os_string()]).unwrap_err();
         assert!(e.starts_with("UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff' in position "), "{e}");
         // write_text truncated the file before failing
         assert_eq!(std::fs::read_to_string(autostart_path()).unwrap(), "");
@@ -1509,9 +1521,7 @@ mod tests {
         std::fs::write(b.join("t"), "").unwrap();
         std::fs::set_permissions(b.join("t"), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = std::env::join_paths([&a, &b]).unwrap();
-        let _p = EnvVar::set("PATH", Path::new(&path));
-        assert_eq!(which("t"), Some(b.join("t")));
-        let _e = EnvVar::set("PATH", Path::new(""));
-        assert_eq!(which("sh"), None);
+        assert_eq!(which_in("t", Some(path)), Some(b.join("t")));
+        assert_eq!(which_in("sh", Some(OsString::new())), None);
     }
 }

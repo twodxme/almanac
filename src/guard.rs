@@ -1259,9 +1259,18 @@ where
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
 {
+    reload_for_with(paths, |cmd| py_which(cmd).is_some())
+}
+
+/// `reload_for`, asking `installed` whether a command is on PATH.
+fn reload_for_with<I, P>(paths: I, installed: impl Fn(&str) -> bool) -> Vec<Vec<String>>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
     let mut cmds = Vec::new();
     let names: HashSet<Vec<u8>> = paths.into_iter().map(|p| py_name(p.as_ref())).collect();
-    if names.contains(&b"shell.json"[..]) && py_which("omarchy-restart-shell").is_some() {
+    if names.contains(&b"shell.json"[..]) && installed("omarchy-restart-shell") {
         cmds.push(vec!["omarchy-restart-shell".to_string()]);
     }
     cmds
@@ -1572,21 +1581,12 @@ mod tests {
 
     #[test]
     fn test_restoring_shell_json_restarts_never_refreshes() {
-        use std::os::unix::fs::PermissionsExt;
+        // The lookup is passed in rather than PATH swapped for a fake one:
+        // every other test spawning git or pacman meanwhile would fail.
         let t = ConfigReset::set_up();
-        // In place of mocking shutil.which: an executable of that name on PATH.
-        let bin = tempfile::tempdir().unwrap();
-        let exe = bin.path().join("omarchy-restart-shell");
-        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let old = std::env::var_os("PATH");
-        std::env::set_var("PATH", bin.path());
-        let cmds = reload_for([&t.cfg]);
-        match old {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
+        let cmds = reload_for_with([&t.cfg], |cmd| cmd == "omarchy-restart-shell");
         assert_eq!(cmds, vec![vec!["omarchy-restart-shell".to_string()]]);
+        assert_eq!(reload_for_with([&t.cfg], |_| false), Vec::<Vec<String>>::new());
     }
 
     #[test]
