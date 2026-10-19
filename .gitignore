@@ -1,3 +1,4 @@
 target/
 *.bak.*
 locale/
+__pycache__/
