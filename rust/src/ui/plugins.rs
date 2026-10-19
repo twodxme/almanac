@@ -34,21 +34,6 @@ pub enum LogoChoice {
     Symbol { name: String },
 }
 
-/// Parity hook for `plugin_logo_choice` (reached through `ui::ai::parity`).
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    match func {
-        "plugin_logo_choice" => {
-            let i: plugins_mod::Installed =
-                serde_json::from_value(args.get("i").cloned().unwrap_or_default()).ok()?;
-            let listing: Option<store_mod::Plugin> = args
-                .get("listing")
-                .filter(|v| !v.is_null())
-                .and_then(|v| serde_json::from_value(v.clone()).ok());
-            serde_json::to_value(Win::plugin_logo_choice(&i, listing.as_ref())).ok()
-        }
-        _ => None,
-    }
-}
 
 #[derive(Default)]
 pub struct State {

@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// HTTP header sent with every request (`UA = {"User-Agent": "almanac"}`).
@@ -2052,148 +2052,15 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
 
 // ---- parity ------------------------------------------------------------------
 
-/// A fake `_get` for parity: `responses` maps a URL to its body, or to null
-/// for a URL that fails.
-fn fake_fetch(responses: &Value) -> impl Fn(&str) -> Result<Vec<u8>, String> + '_ {
-    move |u: &str| match responses.get(u) {
-        Some(Value::String(s)) => Ok(s.as_bytes().to_vec()),
-        _ => Err(format!("OSError: no response for {u}")),
-    }
-}
 
-fn opt_json(o: std::option::Option<Option>) -> Value {
-    o.map(|o| serde_json::to_value(o).unwrap_or_default()).unwrap_or(Value::Null)
-}
 
-fn res_json(r: Result<Value, String>) -> Value {
-    r.unwrap_or_else(|e| json!({ "error": e }))
-}
 
-/// Every file under `d`, relative, sorted.
-fn tree(d: &Path) -> Vec<String> {
-    fn walk(root: &Path, d: &Path, out: &mut Vec<String>) {
-        if let Ok(rd) = std::fs::read_dir(d) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk(root, &p, out);
-                } else if let Ok(rel) = p.strip_prefix(root) {
-                    out.push(rel.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(d, d, &mut out);
-    out.sort();
-    out
-}
 
-/// NaN and the infinities as the JSON tokens that spell them (the case reads
-/// the registry with `parse_constant`), since JSON cannot carry them.
-fn constants_as_tokens(v: Py) -> Py {
-    match v {
-        Py::Float(f) if f.is_nan() => Py::Str("NaN".into()),
-        Py::Float(f) if f.is_infinite() => Py::Str(if f > 0.0 { "Infinity" } else { "-Infinity" }.into()),
-        Py::List(l) => Py::List(l.into_iter().map(constants_as_tokens).collect()),
-        Py::Dict(d) => Py::Dict(d.into_iter().map(|(k, x)| (k, constants_as_tokens(x))).collect()),
-        other => other,
-    }
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &Value) -> std::option::Option<Value> {
-    let s = |k: &str| crate::util::arg_str(args, k).to_string();
-    let strs = |k: &str| crate::util::arg_strs(args, k);
-    let null = Value::Null;
-    let a = |k: &str| args.get(k).unwrap_or(&null);
-    let out = match func {
-        "parse" => json!(parse(&s("link")).map(|(o, r)| vec![o, r])),
-        "_get" => match get(&s("url"), 20) {
-            Ok(b) => json!(String::from_utf8_lossy(&b)),
-            Err(e) => json!({ "error": e }),
-        },
-        "_official" => opt_json(official(&s("name"))),
-        "_norm" => json!(norm(&s("url"))),
-        "_aur" => {
-            let names = strs("names");
-            let homes = strs("homes");
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            let homes: Vec<&str> = homes.iter().map(String::as_str).collect();
-            if args.get("live").is_some() {
-                res_json(aur(&names, &homes).map(|v| json!(v)))
-            } else {
-                // The raw answer (`data`) as `_get` would have returned it.
-                let data = s("data");
-                let homes: Vec<Py> = homes.iter().map(|h| Py::Str(h.to_string())).collect();
-                res_json(aur_with(&names, &homes, &|_u: &str| Ok(data.as_bytes().to_vec())).map(|v| json!(v)))
-            }
-        }
-        "_sums" => {
-            let assets: Vec<Value> = a("assets").as_array().cloned().unwrap_or_default();
-            res_json(sums(&assets).map(|m| json!(m)))
-        }
-        "_appimage" => res_json(appimage(a("release")).map(opt_json)),
-        "resolve" => {
-            let meta = a("meta").clone();
-            let release = a("release").clone();
-            let repo_fn = move |_r: &str| Ok(Some(meta.clone()).filter(|m| !m.is_null()));
-            let release_fn = move |_r: &str| Ok(Some(release.clone()).filter(|m| !m.is_null()));
-            let responses = a("responses");
-            let fetch = fake_fetch(responses);
-            let r = resolve_with(&s("link"), &repo_fn, &release_fn, &fetch);
-            if args.get("raises_as_value").is_some() {
-                // The case turned a Python raise into "python raised <Type>".
-                match r {
-                    Ok(r) => json!(r),
-                    Err(e) => json!(format!("python raised {}", e.split(':').next().unwrap_or(""))),
-                }
-            } else {
-                res_json(r.map(|r| json!(r)))
-            }
-        }
-        "Resolution.url" | "Resolution.best" => {
-            let r: Resolution = serde_json::from_value(a("res").clone()).unwrap_or_default();
-            if func == "Resolution.url" {
-                json!(r.url())
-            } else {
-                json!(r.best())
-            }
-        }
-        "install_appimage" => {
-            // State, data and history go under the temp dir `root`.
-            let root = PathBuf::from(s("root"));
-            std::env::set_var("XDG_STATE_HOME", root.join("state"));
-            std::env::set_var("XDG_DATA_HOME", root.join("data"));
-            let res: Resolution = serde_json::from_value(a("res").clone()).unwrap_or_default();
-            let opt: Option = serde_json::from_value(a("opt").clone()).unwrap_or_default();
-            let lines = std::cell::RefCell::new(Vec::<String>::new());
-            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                install_appimage(&res, &opt, &|m: &str| lines.borrow_mut().push(m.to_string()))
-            }));
-            match run {
-                Err(_) => json!({ "error": "blocked: a module this calls is still a stub" }),
-                Ok(Err(e)) => json!({ "error": e, "log": lines.into_inner(), "files": tree(&root) }),
-                Ok(Ok(p)) => {
-                    let rel = p.strip_prefix(&root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_default();
-                    // The registry records the absolute path; the temp dir is
-                    // not the same on both sides.
-                    let registry = std::fs::read_to_string(root.join("state/almanac/appimages.json"))
-                        .ok()
-                        .map(|r| r.replace(&root.to_string_lossy().into_owned(), "<root>"))
-                        .and_then(|r| loads(r.as_bytes()).ok())
-                        .map(|r| serde_json::to_value(constants_as_tokens(r)).unwrap_or_default());
-                    json!({ "path": rel, "log": lines.into_inner(), "files": tree(&root), "registry": registry })
-                }
-            }
-        }
-        _ => return None,
-    };
-    Some(out)
-}
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use super::*;
 
     // InstallFromLink

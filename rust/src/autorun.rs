@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::{agents, appimage, autoupdate, inventory, plugins, store};
 
@@ -120,6 +120,7 @@ fn cat(parts: &[&[u32]]) -> PyStr {
     parts.concat()
 }
 
+#[cfg(test)]
 /// Run `f` with `log` captured; returns its result and the lines logged.
 fn capture_log<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
     let prev = LOG_SINK.with(|s| s.borrow_mut().replace(Vec::new()));
@@ -130,6 +131,7 @@ fn capture_log<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
     (out, lines)
 }
 
+#[cfg(test)]
 /// Run `f` with `_run` replaced by `fake`.
 fn with_run_fake<T>(fake: RunFake, f: impl FnOnce() -> T) -> T {
     let prev = RUN_FAKE.with(|r| r.borrow_mut().replace(fake));
@@ -631,11 +633,6 @@ impl PyJson {
         self.value_with(id, render_lossy)
     }
 
-    /// `to_value`, with lone surrogates written as `render` writes them
-    /// (for parity results, which cannot carry them either).
-    fn to_value_rendered(&self, id: usize) -> Value {
-        self.value_with(id, render)
-    }
 
     fn value_with(&self, id: usize, text: fn(&[u32]) -> String) -> Value {
         crate::util::tree::fold_ids(
@@ -2629,6 +2626,7 @@ fn main_with(args: &[PyStr]) -> i32 {
 
 // ----------------------------------------------------------------- parity --
 
+#[cfg(test)]
 /// A `_run` stand-in that records `[argv, timeout]` and answers `ok`.
 fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
     Box::new(move |argv: &[Value], timeout: u64| {
@@ -2637,284 +2635,9 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
     })
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Nothing here runs an updater: `update_*` go through a recording `_run`
-/// and (for AppImages) recording check/download/install/save stand-ins,
-/// matching the Python case's mocks. `env` (`{name: value | null}`) is set
-/// for the call and restored after.
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    let saved: Vec<(String, Option<std::ffi::OsString>)> = args
-        .get("env")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| {
-                    let old = std::env::var_os(k);
-                    match v.as_str() {
-                        Some(s) => std::env::set_var(k, s),
-                        None => std::env::remove_var(k),
-                    }
-                    (k.clone(), old)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parity_call(func, args)))
-        .unwrap_or_else(|_| Some(json!({"error": "blocked: panicked (a module this calls is still a stub)"})));
-    // a panic mid-call leaves the stand-ins installed
-    LOG_SINK.with(|s| *s.borrow_mut() = None);
-    RUN_FAKE.with(|r| *r.borrow_mut() = None);
-    SECTION_FAKE.with(|r| *r.borrow_mut() = None);
-    STDIN_FAKE.with(|r| *r.borrow_mut() = None);
-    for (k, old) in saved {
-        match old {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-    out
-}
 
-/// `argv` from parity args: `argv_bytes` (each argument as the bytes the
-/// OS would pass, which Python holds fsdecoded) for arguments that are not
-/// UTF-8 -- the runner's JSON cannot carry a lone surrogate -- else `argv`.
-fn arg_argv(args: &Value) -> Vec<PyStr> {
-    match args.get("argv_bytes").and_then(Value::as_array) {
-        Some(list) => list
-            .iter()
-            .map(|b| {
-                let bytes: Vec<u8> = b
-                    .as_array()
-                    .map(|a| a.iter().filter_map(Value::as_u64).map(|x| x as u8).collect())
-                    .unwrap_or_default();
-                fsdecode(&bytes)
-            })
-            .collect(),
-        None => crate::util::arg_strs(args, "argv").iter().map(|a| pystr(a)).collect(),
-    }
-}
 
-/// A path as the Python str holding it, written as `render` writes it.
-fn path_text(p: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    render(&fsdecode(p.as_os_str().as_bytes()))
-}
 
-fn parity_call(func: &str, args: &Value) -> Option<Value> {
-    use crate::util::{arg_bool, arg_str};
-    use std::rc::Rc;
-    let run_ok = args.get("run_ok").and_then(Value::as_bool).unwrap_or(true);
-    // an exception the Python lets out comes back as {"error": ...}
-    let done_or_error = |r: Result<usize, String>, lines: Vec<String>, extra: (&str, Value)| match r {
-        Ok(done) => {
-            let mut m = Map::new();
-            m.insert("done".into(), json!(done));
-            m.insert("log".into(), json!(lines));
-            m.insert(extra.0.into(), extra.1);
-            Value::Object(m)
-        }
-        Err(e) => {
-            crate::util::tree::drop_value(extra.1);
-            json!({"error": e, "log": lines})
-        }
-    };
-    Some(match func {
-        "log" => {
-            let ((), lines) = capture_log(|| log(arg_str(args, "msg")));
-            json!({"log": lines})
-        }
-        "_run" => {
-            let argv = arg_argv(args);
-            let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(1800);
-            // `stdin`: what the Python case put on fd 0 for the child to inherit
-            let stdin = args.get("stdin").and_then(Value::as_str).map(String::from);
-            STDIN_FAKE.with(|s| *s.borrow_mut() = stdin);
-            let (ok, lines) = capture_log(|| run_py(&argv, timeout));
-            STDIN_FAKE.with(|s| *s.borrow_mut() = None);
-            match ok {
-                Ok(ok) => json!({"ok": ok, "log": lines}),
-                Err(e) => json!({"error": e, "log": lines}),
-            }
-        }
-        "update_agents" => {
-            let apps: Vec<inventory::App> =
-                serde_json::from_value(args.get("apps").cloned().unwrap_or(json!([]))).unwrap_or_default();
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            let (done, lines) = with_run_fake(recording_run(calls.clone(), run_ok), || {
-                capture_log(|| update_agents_from(apps))
-            });
-            let calls = calls.borrow().clone();
-            done_or_error(done, lines, ("calls", json!(calls)))
-        }
-        "update_appimages" => {
-            // `reg` null: the real registry (inventory, under XDG_STATE_HOME).
-            let reg = match args.get("reg") {
-                Some(v @ Value::Object(_)) => PyJson::from_value(v),
-                _ => match load_registry() {
-                    Ok(r) => r,
-                    Err(e) => return Some(json!({"error": e})),
-                },
-            };
-            let real_check = arg_bool(args, "real_check");
-            let checks = args.get("check").cloned().unwrap_or(json!({}));
-            let fails = |table: &str, key: &str| -> Option<String> {
-                args.get(table)
-                    .and_then(|t| t.get(key))
-                    .and_then(Value::as_str)
-                    .map(String::from)
-            };
-            let events = Rc::new(RefCell::new(Vec::<Value>::new()));
-            let (e1, e2, e3) = (events.clone(), events.clone(), events.clone());
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            let (done, lines) = with_run_fake(recording_run(calls.clone(), run_ok), || {
-                capture_log(|| {
-                    update_appimages_with(
-                        reg,
-                        &mut |key, rec| {
-                            if real_check {
-                                return check_record(rec);
-                            }
-                            // the Python stand-in: {} when unlisted, the
-                            // listed error, else `c["ok"] or {}`
-                            match checks.get(key) {
-                                None | Some(Value::Null) => Ok(json!({})),
-                                Some(Value::Object(c)) if c.contains_key("err") => {
-                                    Err(format!("RuntimeError: {}", py_str(&c["err"])))
-                                }
-                                Some(Value::Object(c)) => match c.get("ok") {
-                                    None => Err("KeyError: 'ok'".into()),
-                                    Some(v) if truthy(v) => Ok(v.clone()),
-                                    Some(_) => Ok(json!({})),
-                                },
-                                Some(_) => Ok(json!({})),
-                            }
-                        },
-                        &mut |url, dest| {
-                            let key = path_text(dest);
-                            e1.borrow_mut().push(json!(["download", url, key]));
-                            match fails("download_err", &key) {
-                                Some(m) => Err(format!("OSError: {m}")),
-                                None => Ok(()),
-                            }
-                        },
-                        &mut |dest, key| {
-                            e2.borrow_mut().push(json!(["install", path_text(dest), key]));
-                            match fails("install_err", key) {
-                                Some(m) => Err(format!("OSError: {m}")),
-                                None => Ok(()),
-                            }
-                        },
-                        &mut |reg| {
-                            // (not json!: it re-serialises the value, recursively)
-                            e3.borrow_mut().push(Value::Array(vec!["save".into(), reg.to_value_rendered(reg.root)]));
-                            match args.get("save_err").and_then(Value::as_str) {
-                                Some(m) => Err(format!("OSError: {m}")),
-                                None => Ok(()),
-                            }
-                        },
-                    )
-                })
-            });
-            // (taken, not cloned: a saved registry can be as deep as Python's
-            // json reads, and serde's clone recurses)
-            let events = std::mem::take(&mut *events.borrow_mut());
-            done_or_error(done, lines, ("events", Value::Array(events)))
-        }
-        "update_plugins" => {
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            let trust: BTreeMap<String, String> = args
-                .get("trust")
-                .and_then(Value::as_object)
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let pdir = PathBuf::from(arg_str(args, "pdir"));
-            let scope = arg_str(args, "scope").to_string();
-            let (done, lines) = with_run_fake(recording_run(calls.clone(), run_ok), || {
-                capture_log(|| update_plugins_in(&pdir, &scope, &trust))
-            });
-            let calls = calls.borrow().clone();
-            done_or_error(done, lines, ("calls", json!(calls)))
-        }
-        // update_agents with the real agents.detect(), on a fake machine
-        // (`files` seeds the Rust side's cache dir, as the agents cases do)
-        "update_agents_detect" => {
-            if let Some(files) = args.get("files").and_then(Value::as_object) {
-                for (path, text) in files {
-                    let path = Path::new(path);
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    if let Some(text) = text.as_str() {
-                        let _ = std::fs::write(path, text);
-                    }
-                }
-            }
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            let (done, lines) = with_run_fake(recording_run(calls.clone(), run_ok), || capture_log(update_agents));
-            let calls = calls.borrow().clone();
-            done_or_error(done, lines, ("calls", json!(calls)))
-        }
-        // `inventory.save_registry(inventory._load_registry())`: the file
-        // text written back (registry under XDG_STATE_HOME)
-        "save_registry" => match load_registry().and_then(|r| save_registry(&r)) {
-            Ok(()) => json!(std::fs::read_to_string(inventory::registry()).ok()),
-            Err(e) => json!({"error": e}),
-        },
-        // update_plugins' trust table, from catalog rows: `{p.id:
-        // p.trust.key for p in plugins}`, `{}` where that raises
-        "trust_keys" => {
-            let rows = args.get("rows").and_then(Value::as_array).cloned().unwrap_or_default();
-            let plugins: Result<Vec<store::Plugin>, String> = rows
-                .iter()
-                .map(|r| match r {
-                    Value::Object(m) => store::Plugin::from_row(m),
-                    other => Err(format!("TypeError: not a mapping: {}", py_type(other))),
-                })
-                .collect();
-            json!(plugins.and_then(trust_map).unwrap_or_default())
-        }
-        "main" => {
-            // `cfg` null: the real auto-update.json (read only).
-            let cfg = match args.get("cfg") {
-                Some(Value::Object(m)) => {
-                    let mut c = autoupdate::DEFAULTS.clone();
-                    for (k, v) in m {
-                        c.set(k, v.clone());
-                    }
-                    c
-                }
-                _ => match autoupdate::load() {
-                    Ok(c) => c,
-                    Err(e) => return Some(json!({"error": e})),
-                },
-            };
-            let argv = arg_argv(args);
-            let counts = args.get("counts").cloned().unwrap_or(json!({}));
-            let called = Rc::new(RefCell::new(Vec::<String>::new()));
-            let c2 = called.clone();
-            let fake: SectionFake = Box::new(move |name: &str| {
-                c2.borrow_mut().push(name.to_string());
-                counts.get(name).and_then(Value::as_u64).unwrap_or(0) as usize
-            });
-            SECTION_FAKE.with(|s| *s.borrow_mut() = Some(fake));
-            let (r, lines) = capture_log(|| run_main(&cfg, &argv, PROG, columns(), can_colorize()));
-            SECTION_FAKE.with(|s| *s.borrow_mut() = None);
-            let called = called.borrow().clone();
-            match r {
-                Ok((code, out, err)) => {
-                    json!({"code": code, "stdout": out, "stderr": err, "log": lines, "called": called})
-                }
-                Err(e) => json!({"error": e}),
-            }
-        }
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

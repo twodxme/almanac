@@ -37,26 +37,6 @@ pub enum IconChoice {
     Glyph { name: String },
 }
 
-/// Parity hook for the icon choices the tables make (`almanac-parity ui`).
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    let app = || -> App {
-        serde_json::from_value(args.get("app").cloned().unwrap_or_default()).unwrap_or_default()
-    };
-    Some(match func {
-        "_icon_source" => {
-            let (k, d, u) = Win::icon_source(&app());
-            serde_json::json!([k, d, u])
-        }
-        "app_icon_choice" => {
-            let names: Vec<String> = args
-                .get("has_icon")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default();
-            serde_json::to_value(Win::app_icon_choice(&app(), &|n| names.iter().any(|x| x == n))).ok()?
-        }
-        _ => return crate::ui::plugins::parity(func, args),
-    })
-}
 
 #[derive(Clone)]
 pub struct Section {

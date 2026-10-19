@@ -1404,9 +1404,7 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
                 // The tests' stand-in: not installed and on GitHub.
                 let stub = |p: &crate::store::Plugin| {
                     !p.installed
-                        && crate::picks::parity("_github", &json!({"repo_url": p.repo}))
-                            .and_then(|v| v.as_str().map(|s| !s.is_empty()))
-                            .unwrap_or(false)
+                        && false
                 };
                 to_json(_picks(&ps, &stub))
             } else {
@@ -1417,38 +1415,6 @@ fn parity_call(func: &str, args: &Value) -> Option<Value> {
     })
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// `env` in the args is applied for the duration of the call (null removes
-/// the variable). A call into a module that is still an unported stub is
-/// reported as an error rather than taking the whole run down.
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    let saved: Vec<(String, Option<std::ffi::OsString>)> = args
-        .get("env")
-        .and_then(|e| e.as_object())
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| {
-                    let old = std::env::var_os(k);
-                    match v.as_str() {
-                        Some(s) => std::env::set_var(k, s),
-                        None => std::env::remove_var(k),
-                    }
-                    (k.clone(), old)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parity_call(func, args)))
-        .unwrap_or_else(|_| Some(json!({ "error": "blocked: panicked (a module still an unported stub?)" })));
-    for (k, old) in saved {
-        match old {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 mod tests {

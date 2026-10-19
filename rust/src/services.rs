@@ -850,58 +850,6 @@ pub fn try_is_enabled(unit: &str) -> Result<bool, String> {
     Ok(py_strip(&run(&[u16s("is-enabled"), u16s(unit)], 20)?) == "enabled")
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// `services_fake` stands in for systemctl with the `files` and `shown`
-/// outputs (as the Python test mocks `_run`) and also returns the argv of
-/// every `_run` call, so the `show` command line is checked too. Like the
-/// Python stand-in, it os.fsencode()s every argument first. JSON from here
-/// cannot carry a lone surrogate, so it reports one as U+FFFD; the Python
-/// side does the same to its strings before comparing.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::{arg_bool, arg_str};
-    use serde_json::{json, to_value};
-    let res = |r: Result<serde_json::Value, String>| match r {
-        Ok(v) => v,
-        Err(e) => json!({"error": e}),
-    };
-    // demo::user_services may still be a stub: report, don't crash.
-    let guarded = || match std::panic::catch_unwind(try_services) {
-        Ok(r) => Some(res(r.map(|v| to_value(v).unwrap_or_default()))),
-        Err(_) => Some(json!({"blocked": "panicked (demo::user_services stub?)"})),
-    };
-    match func {
-        "available" => Some(json!(available())),
-        "essential_for" => Some(json!(essential_for(arg_str(args, "unit")))),
-        "toggle_argv" => Some(json!(toggle_argv(arg_str(args, "unit"), arg_bool(args, "on")))),
-        "is_enabled" => Some(res(try_is_enabled(arg_str(args, "unit")).map(|b| json!(b)))),
-        "services" => guarded(),
-        "services_fake" => {
-            let files = arg_str(args, "files").to_owned();
-            let shown = arg_str(args, "shown").to_owned();
-            let calls = std::cell::RefCell::new(Vec::<Vec<String>>::new());
-            let fake = |a: &[Vec<u16>]| -> Result<String, String> {
-                for x in a {
-                    fsencode(x)?;
-                }
-                calls.borrow_mut().push(a.iter().map(|s| lossy(s)).collect());
-                Ok(if a.first().map(|x| lossy(x)).as_deref() == Some("list-unit-files") { files.clone() } else { shown.clone() })
-            };
-            // Demo mode answers before systemctl is ever asked, as in services().
-            let result = if crate::demo::active() {
-                guarded()?
-            } else {
-                match services_with(arg_bool(args, "available"), &fake) {
-                    Ok(v) => to_value(v).ok()?,
-                    // services() raised: the whole case is an error, as in Python.
-                    Err(e) => return Some(json!({"error": e})),
-                }
-            };
-            Some(json!({"result": result, "calls": calls.into_inner()}))
-        }
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 mod tests {

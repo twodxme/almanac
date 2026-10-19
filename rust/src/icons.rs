@@ -640,42 +640,6 @@ fn as_number(n: &Node) -> Result<f64, String> {
     }
 }
 
-/// The parsed file as plain JSON (for the parity output). NaN and the
-/// infinities, which JSON cannot hold, become null; lone surrogates U+FFFD.
-/// Built without recursion: a file can nest as deep as Python's json reads.
-fn to_value(doc: &Doc, id: usize) -> Value {
-    crate::util::tree::fold_ids(
-        id,
-        |n, out| match &doc.nodes[n] {
-            Node::List(items) => {
-                out.extend(items);
-                Some(false)
-            }
-            Node::Dict(items) => {
-                out.extend(items.iter().map(|(_, c)| *c));
-                Some(true)
-            }
-            _ => None,
-        },
-        |n| match &doc.nodes[n] {
-            Node::Null => Value::Null,
-            Node::Bool(b) => Value::Bool(*b),
-            Node::Int(s) => s
-                .parse::<i64>()
-                .map(Value::from)
-                .or_else(|_| s.parse::<u64>().map(Value::from))
-                .unwrap_or_else(|_| serde_json::Number::from_f64(s.parse::<f64>().unwrap_or(0.0)).map_or(Value::Null, Value::Number)),
-            Node::Float(f) => serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number),
-            Node::Str(s) => Value::String(String::from_utf16_lossy(s)),
-            Node::List(_) | Node::Dict(_) => Value::Null,
-        },
-        |_, kids| Value::Array(kids),
-        |n, kids| match &doc.nodes[n] {
-            Node::Dict(items) => Value::Object(items.iter().map(|(k, _)| String::from_utf16_lossy(k)).zip(kids).collect()),
-            _ => Value::Null,
-        },
-    )
-}
 
 const RECURSION_LOADS: &str = "RecursionError: maximum recursion depth exceeded while decoding a JSON object from a unicode string";
 const RECURSION_DUMPS: &str = "RecursionError: maximum recursion depth exceeded while encoding a JSON object";
@@ -2488,70 +2452,9 @@ pub fn github_avatar(owner: &str) -> String {
 
 // ---------------------------------------------------------------- parity
 
-/// Lay out a cache / state directory from the parity args, the same way the
-/// Python case does before it runs: `cache_home` is emptied and `setup`
-/// entries (`{"path", "bytes" | "text" | "dir" | "symlink"}`) written under
-/// it; `state_home` gets `settings` (text) as its settings file.
-fn parity_prepare(args: &Value) {
-    if let Some(dir) = args.get("cache_home").and_then(Value::as_str) {
-        let root = PathBuf::from(dir);
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::create_dir_all(&root);
-        for e in args.get("setup").and_then(Value::as_array).into_iter().flatten() {
-            let p = root.join(e.get("path").and_then(Value::as_str).unwrap_or_default());
-            if let Some(parent) = p.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Some(b) = e.get("bytes").and_then(Value::as_array) {
-                let raw: Vec<u8> = b.iter().filter_map(Value::as_u64).map(|b| b as u8).collect();
-                let _ = std::fs::write(&p, raw);
-            } else if let Some(t) = e.get("text").and_then(Value::as_str) {
-                let _ = std::fs::write(&p, t);
-            } else if e.get("dir").is_some() {
-                let _ = std::fs::create_dir_all(&p);
-            } else if let Some(t) = e.get("symlink").and_then(Value::as_str) {
-                let _ = std::os::unix::fs::symlink(t, &p);
-            }
-        }
-    }
-    if let Some(dir) = args.get("state_home").and_then(Value::as_str) {
-        let p = PathBuf::from(dir).join("almanac").join("settings.json");
-        let _ = std::fs::remove_file(&p);
-        if let Some(t) = args.get("settings").and_then(Value::as_str) {
-            let _ = std::fs::create_dir_all(PathBuf::from(dir).join("almanac"));
-            let _ = std::fs::write(&p, t);
-        }
-    }
-}
 
-/// What a `fetch` left behind: every file under `cache_home/almanac` with
-/// its size, and the misses file with `key`'s fresh time stamp as `T`.
-fn parity_after(args: &Value, key: &str) -> Value {
-    use serde_json::json;
-    let root = PathBuf::from(args.get("cache_home").and_then(Value::as_str).unwrap_or_default());
-    let mut files = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            let rel = p.strip_prefix(&root).unwrap_or(&p).to_string_lossy().into_owned();
-            match std::fs::symlink_metadata(&p) {
-                Ok(m) if m.is_dir() => stack.push(p),
-                // The misses file's size depends on the time stamp's digits.
-                Ok(_) if rel.ends_with("icon-misses.json") => files.push(json!([rel, null])),
-                Ok(m) => files.push(json!([rel, m.len()])),
-                Err(_) => {}
-            }
-        }
-    }
-    files.sort_by_key(|f| f[0].as_str().unwrap_or_default().to_string());
-    let misses_text = std::fs::read_to_string(root.join("almanac").join("icon-misses.json"))
-        .ok()
-        .map(|t| stamp_out(&t, key));
-    json!({ "files": files, "misses": misses_text })
-}
 
+#[cfg(test)]
 /// Replace the number after `"<key>": ` with `T`.
 fn stamp_out(text: &str, key: &str) -> String {
     let needle = format!("{}: ", crate::util::py_json_string(key));
@@ -2565,77 +2468,9 @@ fn stamp_out(text: &str, key: &str) -> String {
     format!("{}T{}", &text[..start], &text[end..])
 }
 
-/// A path for the parity output (a name that is not UTF-8 comes out with
-/// U+FFFD, as the Python case writes it too).
-fn lossy(p: &Path) -> Value {
-    Value::String(p.to_string_lossy().into_owned())
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// `cache_home` / `state_home` set `XDG_CACHE_HOME` / `XDG_STATE_HOME` for
-/// the call (restored after), laid out first by `parity_prepare`.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_str;
-    use serde_json::json;
 
-    let old_cache = std::env::var_os("XDG_CACHE_HOME");
-    let old_state = std::env::var_os("XDG_STATE_HOME");
-    parity_prepare(args);
-    if let Some(d) = args.get("cache_home").and_then(Value::as_str) {
-        std::env::set_var("XDG_CACHE_HOME", d);
-    }
-    if let Some(d) = args.get("state_home").and_then(Value::as_str) {
-        std::env::set_var("XDG_STATE_HOME", d);
-    }
-    let err = |e: String| json!({ "error": e });
-    let opt_path = |p: Option<PathBuf>| p.as_deref().map_or(Value::Null, lossy);
-    let key = arg_str(args, "key");
-    let out = match func {
-        "CACHE" => Some(lossy(&cache())),
-        "ICONS" => Some(lossy(&icons())),
-        "MISSES" => Some(lossy(&misses())),
-        "MISS_TTL" => Some(json!(MISS_TTL)),
-        "UA" => Some(json!({ "User-Agent": UA })),
-        "PATHS" => Some(json!(PATHS)),
-        "_kind" => {
-            let data: Vec<u8> = args["data"]
-                .as_array()
-                .map(|a| a.iter().filter_map(Value::as_u64).map(|b| b as u8).collect())
-                .unwrap_or_default();
-            Some(json!(_kind(&data)))
-        }
-        "_safe" => Some(json!(_safe(key))),
-        "registrable" => Some(json!(registrable(arg_str(args, "host")))),
-        "host_of" => Some(json!(host_of(arg_str(args, "url")))),
-        "github_avatar" => Some(json!(github_avatar(arg_str(args, "owner")))),
-        "_load_misses" => Some(match _load_misses() {
-            Ok(doc) => to_value(&doc, doc.root),
-            Err(e) => err(e),
-        }),
-        "cached" => Some(match cached_checked(key) {
-            Ok(p) => opt_path(p),
-            Err(e) => err(e),
-        }),
-        "_fetch" => Some(match _fetch(arg_str(args, "url"), 12) {
-            Ok(b) => json!(b),
-            Err(e) => err(e),
-        }),
-        "_save_miss" => Some(match _save_miss(key) {
-            Ok(()) => parity_after(args, key),
-            Err(e) => err(e),
-        }),
-        "fetch" => Some(match fetch_checked(key, arg_str(args, "url"), arg_str(args, "domain")) {
-            Ok(p) => json!({ "result": opt_path(p), "after": parity_after(args, key) }),
-            Err(e) => err(e),
-        }),
-        _ => None,
-    };
-    restore("XDG_CACHE_HOME", old_cache);
-    restore("XDG_STATE_HOME", old_state);
-    out
-}
-
+#[cfg(test)]
 fn restore(var: &str, old: Option<std::ffi::OsString>) {
     match old {
         Some(v) => std::env::set_var(var, v),

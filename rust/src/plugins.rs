@@ -190,11 +190,6 @@ enum PyErr {
 }
 
 impl PyErr {
-    fn message(self) -> String {
-        match self {
-            PyErr::Caught(m) | PyErr::Raise(m) => m,
-        }
-    }
 }
 
 /// What `subprocess.run(argv, capture_output=True, text=True, timeout=n)`
@@ -546,11 +541,6 @@ fn py_float(v: Option<&Value>) -> Result<f64, String> {
     }
 }
 
-/// The upstream head, fetched -- as Omarchy fetches it, `origin HEAD` --
-/// at most once an hour; counted against locally between fetches.
-fn _remote(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<String, String> {
-    remote_head(d, cache, fetch).map_err(PyErr::message)
-}
 
 fn remote_head(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<String, PyErr> {
     let key = path_str(d);
@@ -591,9 +581,6 @@ fn remote_head(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<
     Ok(sha)
 }
 
-fn _count(d: &Path, head: &str, remote: &str) -> Result<i64, String> {
-    count(d, head, remote).map_err(PyErr::message)
-}
 
 fn count(d: &Path, head: &str, remote: &str) -> Result<i64, PyErr> {
     let range = format!("{head}..{remote}");
@@ -1802,161 +1789,7 @@ pub fn set_scope(value: &str) -> Result<(), String> {
     crate::settings::set("plugin_scope", Value::String(value.to_string()))
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Args every function accepts: `env` (`{VAR: value | null}`, applied for the
-/// call and restored after) and `files` (`[[path, text | null], ...]`, written
-/// or removed first, as the Python case does before its call).
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    let saved: Vec<(String, Option<std::ffi::OsString>)> = args
-        .get("env")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| {
-                    let old = std::env::var_os(k);
-                    match v.as_str() {
-                        Some(s) => std::env::set_var(k, s),
-                        None => std::env::remove_var(k),
-                    }
-                    (k.clone(), old)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    for f in args.get("files").and_then(Value::as_array).into_iter().flatten() {
-        let Some(p) = f.get(0).and_then(Value::as_str) else { continue };
-        match f.get(1).and_then(Value::as_str) {
-            Some(text) => {
-                if let Some(parent) = Path::new(p).parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(p, text);
-            }
-            None => {
-                let _ = std::fs::remove_file(p);
-            }
-        }
-    }
-    let out = parity_call(func, args);
-    for (k, old) in saved {
-        match old {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-    out
-}
 
-fn parity_call(func: &str, args: &Value) -> Option<Value> {
-    use serde_json::json;
-    use util::{arg_bool, arg_str, arg_strs};
-    let installed_arg = || Installed {
-        id: arg_str(args, "id").to_string(),
-        name: arg_str(args, "name").to_string(),
-        kinds: arg_strs(args, "kinds"),
-        ..Default::default()
-    };
-    let opt_str = |k: &str| args.get(k).and_then(Value::as_str);
-    let mut cache: Option<FetchCache> = args.get("cache").and_then(Value::as_object).cloned();
-    // The cache after the call, without the times (they are now()); an
-    // entry that is not a dict as it is.
-    let remotes = |c: &Option<FetchCache>| -> Value {
-        match c {
-            None => Value::Null,
-            Some(c) => Value::Object(c.iter().map(|(k, v)| {
-                let remote = match v {
-                    Value::Object(o) => o.get("remote").cloned().unwrap_or(Value::Null),
-                    other => other.clone(),
-                };
-                (k.clone(), remote)
-            }).collect()),
-        }
-    };
-    Some(match func {
-        "CONSTANTS" => json!({
-            "kinds": [CURRENT, UPDATE, LOCAL_CHANGES, LOCAL, ERROR],
-            "FETCH_EVERY": FETCH_EVERY,
-            "SCOPES": SCOPES.iter().map(|(k, l, s)| json!([k, l, s.map(|s| { let mut v = s.to_vec(); v.sort(); v })])).collect::<Vec<_>>(),
-            "VENDORS": VENDORS, "SYMBOLS": SYMBOLS, "GENERIC": GENERIC,
-        }),
-        "plugins_dir" => json!(path_str(&plugins_dir())),
-        "State" => {
-            let st = State::new(arg_str(args, "id"), arg_str(args, "kind"), arg_str(args, "detail"),
-                                util::arg_i64(args, "behind"), arg_str(args, "url"));
-            match st.try_describe() {
-                Ok(text) => json!({"describe": text, "updatable": st.updatable()}),
-                Err(e) => json!({"error": e}),
-            }
-        }
-        "classify" => match try_classify(Path::new(arg_str(args, "d")), cache.as_mut(), arg_bool(args, "fetch")) {
-            Ok(st) => json!({"state": st, "cache": remotes(&cache)}),
-            Err(e) => json!({"error": e}),
-        },
-        "_remote" => match _remote(Path::new(arg_str(args, "d")), cache.as_mut(), arg_bool(args, "fetch")) {
-            Ok(sha) => json!({"sha": sha, "cache": remotes(&cache)}),
-            Err(e) => json!({"error": e}),
-        },
-        "_count" => match _count(Path::new(arg_str(args, "d")), arg_str(args, "head"), arg_str(args, "remote")) {
-            Ok(n) => json!(n),
-            Err(e) => json!({"error": e}),
-        },
-        "has_panel" => json!(installed_arg().has_panel()),
-        // {str(id): [manifest, folder]}, as the runner normalises the dict.
-        "_manifests" => match _manifests(Path::new(arg_str(args, "root"))) {
-            Ok(d) => Value::Object(d.items.iter()
-                .map(|(k, (m, f))| (k.py_str(), json!([m.to_value(), path_str(f)]))).collect()),
-            Err(e) => json!({"error": e}),
-        },
-        // {str(id): folder}: for manifests holding NaN, which neither side
-        // can compare (NaN != NaN).
-        "_manifests_folders" => match _manifests(Path::new(arg_str(args, "root"))) {
-            Ok(d) => Value::Object(d.items.iter().map(|(k, (_m, f))| (k.py_str(), json!(path_str(f)))).collect()),
-            Err(e) => json!({"error": e}),
-        },
-        "installed" => match try_installed(arg_bool(args, "fetch"), cache.as_mut())
-            .and_then(|found| found.iter().map(Installed::try_has_panel).collect::<Result<Vec<_>, _>>()
-                .map(|panels| (found, panels)))
-        {
-            Ok((found, panels)) => json!({"installed": found, "has_panel": panels, "cache": remotes(&cache)}),
-            Err(e) => json!({"error": e}),
-        },
-        // [name, has_panel, enabled] of each: for listings holding values
-        // serde cannot carry to the runner (inf, NaN).
-        "installed_names" => match try_installed(arg_bool(args, "fetch"), None) {
-            Ok(found) => json!(found.iter().map(|i| json!([i.name, i.has_panel(), i.enabled])).collect::<Vec<_>>()),
-            Err(e) => json!({"error": e}),
-        },
-        "_words" => {
-            let texts = arg_strs(args, "texts");
-            json!(_words(&texts.iter().map(String::as_str).collect::<Vec<_>>()))
-        }
-        "_own_words" => json!(_own_words(&installed_arg())),
-        "vendor_for" => json!(vendor_for(&installed_arg())),
-        "symbol_for" => json!(symbol_for(&installed_arg())),
-        "github_owner" => json!(github_owner(arg_str(args, "url"))),
-        "enabled" => match try_enabled() {
-            Ok(m) => json!(m),
-            Err(e) => json!({"error": e}),
-        },
-        "toggle_argv" => json!(toggle_argv(arg_str(args, "pid"), arg_bool(args, "on"))),
-        "update_argv" => json!(update_argv(arg_str(args, "pid"))),
-        "in_scope" => json!(in_scope(opt_str("trust_key"), arg_str(args, "scope"))),
-        "restart_argv" => json!(restart_argv(args.get("clear_cache").and_then(Value::as_bool).unwrap_or(true))),
-        "_settings_path" => json!(path_str(&_settings_path())),
-        // With the old file's fate, so the carry-over is compared too.
-        "scope" => match try_scope() {
-            Ok(sc) => json!({"scope": sc, "old_exists": _settings_path().exists(),
-                             "settings": std::fs::read_to_string(crate::settings::path()).ok()}),
-            Err(e) => json!({"error": e}),
-        },
-        "set_scope" => match set_scope(arg_str(args, "value")) {
-            Ok(()) => json!(std::fs::read_to_string(crate::settings::path()).ok()),
-            Err(e) => json!({"error": e}),
-        },
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

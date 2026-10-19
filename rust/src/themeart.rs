@@ -1020,12 +1020,6 @@ impl Env {
     fn get(&self, name: &str) -> Option<&OsStr> {
         self.0.iter().find(|(k, _)| k.as_os_str() == OsStr::new(name)).map(|(_, v)| v.as_os_str())
     }
-    fn set(&mut self, name: &str, value: &str) {
-        match self.0.iter_mut().find(|(k, _)| k.as_os_str() == OsStr::new(name)) {
-            Some(e) => e.1 = value.into(),
-            None => self.0.push((name.into(), value.into())),
-        }
-    }
 }
 
 /// `urllib.request.getproxies_environment()`: every `<scheme>_proxy`
@@ -1721,88 +1715,9 @@ pub fn thumbnail(repo: &str) -> Option<PathBuf> {
     render(&fetch_palette(repo), &dest).ok().flatten()
 }
 
-/// Parity helper: sha1 of a PNG's pixels as cairo holds them (B,G,R,A
-/// premultiplied, row by row), so both sides compare what was drawn rather
-/// than how each encoder compressed it; plus the file's own sha1, since the
-/// encoder is now the same one.
-fn png_pixels(path: &Path) -> serde_json::Value {
-    use gtk::gdk;
-    use gtk::prelude::*;
-    use sha1::{Digest, Sha1};
-    let Ok(texture) = gdk::Texture::from_filename(path) else {
-        return serde_json::Value::Null;
-    };
-    let stride = texture.width() as usize * 4;
-    let mut buf = vec![0u8; stride * texture.height() as usize];
-    texture.download(&mut buf, stride);
-    serde_json::json!({
-        "size": [texture.width(), texture.height()],
-        "sha1": hex::encode(Sha1::digest(&buf)),
-    })
-}
 
-fn path_result(p: Option<PathBuf>) -> serde_json::Value {
-    match p {
-        Some(p) => serde_json::json!({
-            "path": p.to_string_lossy(),
-            "pixels": png_pixels(&p),
-            "file_sha1": std::fs::read(&p).ok().map(|b| {
-                use sha1::{Digest, Sha1};
-                hex::encode(Sha1::digest(&b))
-            }),
-        }),
-        None => serde_json::Value::Null,
-    }
-}
 
-fn palette_json(p: &Palette) -> serde_json::Value {
-    serde_json::Value::Object(p.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect())
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_str;
-    let palette = || -> Palette {
-        let mut v: Vec<(String, String)> = crate::util::str_map(args.get("palette").unwrap_or(&serde_json::Value::Null))
-            .into_iter()
-            .collect();
-        v.sort();
-        v.into_iter().collect()
-    };
-    Some(match func {
-        "palette_url" => serde_json::json!(palette_url(arg_str(args, "repo"))),
-        "fetch_palette" => {
-            // "_env": variables the Python side ran with, in a subprocess.
-            let mut env = Env::current();
-            if let Some(extra) = args.get("_env").and_then(|e| e.as_object()) {
-                for (k, v) in extra {
-                    env.set(k, v.as_str().unwrap_or_default());
-                }
-            }
-            let p = fetch_palette_env(arg_str(args, "repo"), &env);
-            if args.get("_keys").is_some() {
-                serde_json::json!(p.keys().collect::<Vec<_>>())
-            } else {
-                palette_json(&p)
-            }
-        }
-        "art_path" => serde_json::json!(art_path(arg_str(args, "repo")).to_string_lossy()),
-        "_rgb" => {
-            match _rgb(arg_str(args, "value"), GREY) {
-                Ok(c) => serde_json::json!([c.0, c.1, c.2]),
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "render" => match render(&palette(), Path::new(arg_str(args, "dest"))) {
-            Ok(p) => path_result(p),
-            Err(e) => serde_json::json!({"error": e}),
-        },
-        "thumbnail" => path_result(thumbnail(arg_str(args, "repo"))),
-        "lower" => serde_json::json!(py_lower(arg_str(args, "s"))),
-        "toml_ok" => serde_json::json!(tomllib::loads(arg_str(args, "text")).is_ok()),
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

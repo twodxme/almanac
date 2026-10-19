@@ -1125,66 +1125,7 @@ fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec
     }
 }
 
-/// A parity step: an argv list, `{"log": [lines]}` (a callable that logs
-/// them) or `{"fail": msg}` (a callable that raises `msg`).
-fn parity_step(v: &serde_json::Value) -> Step {
-    let label = v[0].as_str().unwrap_or_default().to_string();
-    let a = &v[1];
-    if let Some(list) = a.as_array() {
-        let argv = list.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect();
-        return Step::argv(label, argv);
-    }
-    if let Some(msg) = a.get("fail").and_then(|m| m.as_str()) {
-        let msg = msg.to_string();
-        return Step::call(label, Arc::new(move |_log: LogFn<'_>| Err(msg.clone())));
-    }
-    let lines: Vec<String> = a
-        .get("log")
-        .and_then(|l| l.as_array())
-        .map(|l| l.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect())
-        .unwrap_or_default();
-    Step::call(label, Arc::new(move |log: LogFn<'_>| {
-        for l in &lines {
-            log(l);
-        }
-        Ok(())
-    }))
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_strs;
-    use serde_json::json;
-    match func {
-        "needs_root" => Some(json!(needs_root(&arg_strs(args, "argv")))),
-        "elevate" => Some(json!(elevate(&arg_strs(args, "argv")))),
-        "preview_removal" => Some(match preview_removal_checked(&arg_strs(args, "names")) {
-            Ok(v) => json!(v),
-            Err(e) => json!({ "error": e }),
-        }),
-        "_quote" => Some(json!(shlex_quote(crate::util::arg_str(args, "s")))),
-        // TaskDialog._work without the window: the labels it shows, the
-        // text it logs, and what _finish is told.
-        "_work" => {
-            let steps: Vec<Step> = args["steps"]
-                .as_array()
-                .map(|s| s.iter().map(parity_step).collect())
-                .unwrap_or_default();
-            let events = Mutex::new(Vec::<serde_json::Value>::new());
-            let push = |v: serde_json::Value| events.lock().unwrap_or_else(|e| e.into_inner()).push(v);
-            let set_label = |l: &str| push(json!(["label", l]));
-            let log = |l: &str| push(json!(["log", with_newline(l)]));
-            let cancelled = AtomicBool::new(crate::util::arg_bool(args, "cancelled"));
-            match work(&steps, &cancelled, &Mutex::new(None), &set_label, &log) {
-                Ok(ok) => push(json!(["finish", ok])),
-                // The thread died: Python's stand-in raises.
-                Err(e) => return Some(json!({ "error": e })),
-            }
-            Some(json!(events.into_inner().unwrap_or_else(|e| e.into_inner())))
-        }
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 mod tests {

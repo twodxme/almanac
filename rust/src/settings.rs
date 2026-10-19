@@ -721,91 +721,9 @@ pub fn set(key: &str, value: impl Into<Setting>) -> Result<(), String> {
     write().map_err(|e| format!("OSError: {e}"))
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Args every function accepts: `state_home` (sets `XDG_STATE_HOME` for the
-/// call, restored after), and `file` (text) or `file_bytes` (raw bytes) to
-/// write as the settings file first; `file: null` removes it. `thread: true`
-/// makes the call on a worker thread, as the app's background loaders do.
-/// `set` takes `value_json` (the value as `json.dumps` text) over `value`,
-/// for values the runner's serde args cannot carry (ints past u64/i64).
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    let old = std::env::var_os("XDG_STATE_HOME");
-    if let Some(dir) = args.get("state_home").and_then(Value::as_str) {
-        std::env::set_var("XDG_STATE_HOME", dir);
-        let p = path();
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Some(bytes) = args.get("file_bytes").and_then(Value::as_array) {
-            let raw: Vec<u8> = bytes.iter().filter_map(|b| b.as_u64()).map(|b| b as u8).collect();
-            let _ = std::fs::write(&p, raw);
-        } else if let Some(file) = args.get("file") {
-            match file.as_str() {
-                Some(text) => {
-                    let _ = std::fs::write(&p, text);
-                }
-                None => {
-                    let _ = std::fs::remove_file(&p);
-                }
-            }
-        }
-    }
-    let out = if args.get("thread").and_then(Value::as_bool) == Some(true) {
-        std::thread::scope(|s| s.spawn(|| parity_call(func, args)).join().ok().flatten())
-    } else {
-        parity_call(func, args)
-    };
-    restore(old);
-    out
-}
 
-fn parity_call(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_str;
-    use serde_json::json;
 
-    let err = |e: String| json!({ "error": e });
-    let key = arg_str(args, "key");
-    Some(match func {
-        "DEFAULTS" => Value::Object(DEFAULTS.iter().map(|(k, v)| ((*k).to_owned(), v.to_value())).collect()),
-        "START_PAGES" => json!(START_PAGES),
-        "path" => json!(path()),
-        "_load" => match load() {
-            Ok(doc) => doc.to_value(0),
-            Err(e) => err(e),
-        },
-        // `json.dumps(_load())`: the parsed file exactly, where `_load`'s
-        // serde value cannot hold it (huge ints, NaN, lone surrogates).
-        "_load_json" => match load() {
-            Ok(doc) => json!(doc.dumps(None, false)),
-            Err(e) => err(e),
-        },
-        "get" => get(key).unwrap_or_else(err),
-        // `json.dumps(get(key))`: exact where a serde value is not (a lone
-        // surrogate, which the runner's JSON can only carry escaped).
-        "get_json" => get_exact(key).map(|v| json!(v.to_json())).unwrap_or_else(err),
-        "get_bool" => json!(get_bool(key)),
-        "get_str" => json!(get_str(key)),
-        // `json.dumps(get_str(key))`, exactly.
-        "get_str_json" => json!(match get_exact(key) {
-            Ok(v) if v.as_str_lossy().is_some() => v.to_json(),
-            _ => "\"\"".to_owned(),
-        }),
-        // The file as it stands after the write, so the bytes are compared.
-        "set" => {
-            let value = match args.get("value_json").and_then(Value::as_str) {
-                Some(text) => Setting::from_json(text),
-                None => Ok(Setting::from(args.get("value").cloned().unwrap_or(Value::Null))),
-            };
-            match value.and_then(|v| set(key, v)) {
-                Ok(()) => json!(std::fs::read_to_string(path()).ok()),
-                Err(e) => err(e),
-            }
-        }
-        _ => return None,
-    })
-}
-
+#[cfg(test)]
 fn restore(old: Option<std::ffi::OsString>) {
     match old {
         Some(v) => std::env::set_var("XDG_STATE_HOME", v),

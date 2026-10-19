@@ -419,38 +419,7 @@ pub fn explain(state: &PatchState, name: &str) -> (String, String, String) {
     (format!("Update {name}?"), String::new(), "Update".to_string())
 }
 
-/// A step as the Python tuple `(label, argv)`.
-fn step_json(s: &crate::tasks::Step) -> serde_json::Value {
-    match &s.action {
-        crate::tasks::StepAction::Argv(a) => serde_json::json!([s.label, a]),
-        crate::tasks::StepAction::Call(_) => serde_json::json!([s.label, "<callable>"]),
-    }
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_str;
-    let st = || -> PatchState {
-        serde_json::from_value(args.get("state").cloned().unwrap_or_default()).unwrap_or_default()
-    };
-    Some(match func {
-        "analyze" => {
-            let up = args.get("upstream").and_then(|v| v.as_str());
-            match try_analyze(arg_str(args, "repo"), up) {
-                Ok(st) => serde_json::to_value(st).ok()?,
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "steps" => {
-            let pull: Option<Vec<String>> = args.get("pull")
-                .and_then(|v| serde_json::from_value(v.clone()).ok());
-            let out = steps(arg_str(args, "repo"), &st(), arg_str(args, "label"), pull.as_deref());
-            serde_json::Value::Array(out.iter().map(step_json).collect())
-        }
-        "explain" => serde_json::to_value(explain(&st(), arg_str(args, "name"))).ok()?,
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

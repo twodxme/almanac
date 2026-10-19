@@ -24,7 +24,6 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use num_bigint::BigInt;
-use serde_json::Value;
 
 pub const ENTRY_NAME: &str = "io.github.twodxme.Almanac.Guard.desktop";
 
@@ -575,33 +574,6 @@ impl Seen {
         Ok(format!("[{}]", items.join(", ")))
     }
 
-    /// For the parity hook: the set as run.py normalises one (a sorted list).
-    fn parity_json(&self) -> Value {
-        match self.sorted() {
-            Err(e) => serde_json::json!({ "error": e }),
-            Ok(items) => Value::Array(
-                items
-                    .into_iter()
-                    .map(|i| match i {
-                        Item::Str(s) => Value::String(
-                            s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect(),
-                        ),
-                        Item::None => Value::Null,
-                        Item::Num(Num::Bool(b)) => Value::Bool(b),
-                        Item::Num(Num::Int(i)) => i64::try_from(&i)
-                            .map(Value::from)
-                            .or_else(|_| u64::try_from(&i).map(Value::from))
-                            .unwrap_or_else(|_| {
-                                serde_json::json!(i.to_string().parse::<f64>().unwrap_or(f64::NAN))
-                            }),
-                        // JSON has no NaN or Infinity: their json.dumps text.
-                        Item::Num(Num::Float(f)) if !f.is_finite() => Value::String(crate::util::py_float_repr(f)),
-                        Item::Num(Num::Float(f)) => serde_json::json!(f),
-                    })
-                    .collect(),
-            ),
-        }
-    }
 }
 
 /// One hashable value from `json.loads`.
@@ -1285,134 +1257,11 @@ pub fn main() -> i32 {
     0
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Every function accepts `env` (`{NAME: value or null}`, set for the call
-/// and restored after) and `files` (`{path: text or null}`, written or
-/// removed first). Functions that notify return `{"result", "calls"}`, the
-/// calls captured instead of shown.
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    use crate::util::{arg_str, arg_strs};
-    use serde_json::json;
 
-    let mut saved: Vec<(String, Option<std::ffi::OsString>)> = Vec::new();
-    if let Some(env) = args.get("env").and_then(Value::as_object) {
-        for (k, v) in env {
-            saved.push((k.clone(), std::env::var_os(k)));
-            match v.as_str() {
-                Some(s) => std::env::set_var(k, s),
-                None => std::env::remove_var(k),
-            }
-        }
-    }
-    if let Some(files) = args.get("files").and_then(Value::as_object) {
-        for (p, v) in files {
-            let p = Path::new(p);
-            match v.as_str() {
-                Some(text) => {
-                    if let Some(parent) = p.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(p, text);
-                }
-                None => {
-                    let _ = std::fs::remove_file(p);
-                }
-            }
-        }
-    }
-    let set_arg = |key: &str| -> BTreeSet<PyStr> { arg_strs(args, key).iter().map(|s| pystr(s)).collect() };
-    let lossy = |s: &PyStr| -> String { s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect() };
-    let lossy_os = |s: &OsString| -> String { s.to_string_lossy().into_owned() };
-    let captured = |f: &dyn Fn() -> Value| -> Value {
-        CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
-        let result = f();
-        let calls = CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
-        json!({ "result": result, "calls": calls })
-    };
-    let err = |e: String| json!({ "error": e });
-    let out = match func {
-        "ENTRY_NAME" => json!(ENTRY_NAME),
-        "PLUGIN_CHECK_EVERY" => json!(PLUGIN_CHECK_EVERY),
-        "autostart_path" => json!(autostart_path()),
-        "_reported_path" => json!(reported_path()),
-        "_plugins_seen_path" => json!(plugins_seen_path()),
-        "_pid_path" => json!(pid_path()),
-        "launcher" => json!(launcher().iter().map(lossy_os).collect::<Vec<_>>()),
-        "enabled" => json!(enabled()),
-        // Never with start_now: that would start a real guard.
-        "enable" => match enable(false) {
-            Ok(()) => json!({ "entry": std::fs::read_to_string(autostart_path()).ok(), "enabled": enabled() }),
-            Err(e) => json!({ "error": e }),
-        },
-        "disable" => match disable() {
-            Ok(()) => json!({ "enabled": enabled() }),
-            Err(e) => json!({ "error": e }),
-        },
-        "_quote" => json!(quote(arg_str(args, "arg"))),
-        "_which" => json!(which(arg_str(args, "name"))),
-        "running" => running().map_or_else(err, |p| json!(p)),
-        "_load_reported" => load_reported().map_or_else(err, |s| s.parity_json()),
-        // json.dumps(sorted(_load_reported())): NaN and Infinity, which no
-        // JSON transport carries as numbers, compared as their text.
-        "_load_reported_dumps" => load_reported().and_then(|s| s.dumps()).map_or_else(err, |t| json!(t)),
-        // _save_reported(_load_reported()), then the file: what a restart
-        // of the guard does to the file, surrogates and numbers included.
-        "_reported_roundtrip" => match load_reported().and_then(|s| save_reported(&s)) {
-            Ok(()) => json!(std::fs::read_to_string(reported_path()).ok()),
-            Err(e) => err(e),
-        },
-        // The same, as the sorted list of the members' texts: where a NaN
-        // lands in sorted() is up to the set's order, which hangs on the
-        // address of json's NaN object, so only the members are compared.
-        "_reported_roundtrip_members" => match load_reported().and_then(|s| save_reported(&s)) {
-            Ok(()) => json!(std::fs::read_to_string(reported_path()).ok().map(|t| {
-                let inner = t.strip_prefix('[').and_then(|t| t.strip_suffix(']')).unwrap_or(&t).to_string();
-                let mut parts: Vec<String> = inner.split(", ").map(str::to_string).collect();
-                parts.sort();
-                parts
-            })),
-            Err(e) => err(e),
-        },
-        "_save_reported" => match save_reported(&Seen::from_strs(arg_strs(args, "seen"))) {
-            Ok(()) => json!(std::fs::read_to_string(reported_path()).ok()),
-            Err(e) => err(e),
-        },
-        "announce" => {
-            let found: Vec<crate::guard::Reset> =
-                serde_json::from_value(args.get("found").cloned().unwrap_or(json!([]))).unwrap_or_default();
-            let seen = Seen::from_strs(arg_strs(args, "seen"));
-            captured(&|| announce(&found, &seen).parity_json())
-        }
-        "plugin_updates" => json!(plugin_updates().iter().map(lossy).collect::<Vec<_>>()),
-        // Each name as json.dumps gives it: lone surrogates escaped, as no
-        // JSON transport carries them.
-        "_plugin_updates_escaped" => json!(plugin_updates().iter().map(pystr_json).collect::<Vec<_>>()),
-        "announce_plugin_updates" => {
-            let waiting: Vec<PyStr> = arg_strs(args, "waiting").iter().map(|s| pystr(s)).collect();
-            let last = set_arg("last");
-            captured(&|| json!(announce_plugin_updates(&waiting, &last).iter().map(lossy).collect::<Vec<_>>()))
-        }
-        _ => {
-            restore_env(saved);
-            return None;
-        }
-    };
-    restore_env(saved);
-    Some(out)
-}
-
-fn restore_env(saved: Vec<(String, Option<std::ffi::OsString>)>) {
-    for (k, v) in saved.into_iter().rev() {
-        match v {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use super::*;
 
     // Tests share the process environment; one at a time.

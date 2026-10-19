@@ -223,6 +223,7 @@ impl PyValue {
         }
     }
 
+    #[cfg(test)]
     /// The other way, for parity arguments.
     fn from_value(v: &Value) -> PyValue {
         match v {
@@ -288,45 +289,6 @@ impl Drop for PyValue {
 }
 
 impl PyValue {
-    /// The exact value as JSON for the parity runner: what JSON-in-Rust
-    /// cannot hold (an int beyond 64 bits, inf/nan, a lone surrogate) as a
-    /// tagged object, `{"$py": "int"|"float"|"str", "v": ...}`, which the
-    /// Python side of the parity cases produces from its own value.
-    fn to_exact(&self) -> Value {
-        let has_surrogate = |s: &[u32]| s.iter().any(|c| (0xd800..=0xdfff).contains(c));
-        let tagged = |kind: &str, v: String| serde_json::json!({"$py": kind, "v": v});
-        let key = |k: &[u32]| {
-            if has_surrogate(k) {
-                let mut out = String::new();
-                dump_str(&mut out, k);
-                out
-            } else {
-                ps_string(k)
-            }
-        };
-        match self {
-            PyValue::Int(n) => match (i64::try_from(n), u64::try_from(n)) {
-                (Ok(i), _) => Value::from(i),
-                (_, Ok(u)) => Value::from(u),
-                _ => tagged("int", n.to_string()),
-            },
-            PyValue::Float(f) if !f.is_finite() => tagged("float", float_repr(*f)),
-            PyValue::Str(s) if has_surrogate(s) => {
-                let mut out = String::new();
-                dump_str(&mut out, s);
-                tagged("str", out)
-            }
-            PyValue::List(v) => Value::Array(v.iter().map(PyValue::to_exact).collect()),
-            PyValue::Dict(d) => {
-                let mut m = Map::new();
-                for (k, v) in d {
-                    m.insert(key(k), v.to_exact());
-                }
-                Value::Object(m)
-            }
-            other => other.to_value(),
-        }
-    }
 }
 
 /// Runs `f` on a thread with a [`DEEP_STACK`] stack: the JSON code is
@@ -933,32 +895,6 @@ fn gt_int(v: &PyValue, n: i64) -> Result<bool, String> {
     }
 }
 
-/// `v == w`, numbers compared by value as Python does.
-fn py_eq(v: &PyValue, w: &PyValue) -> bool {
-    use PyValue as P;
-    let num = |x: &PyValue| match x {
-        P::Bool(b) => Some(P::Int(BigInt::from(i64::from(*b)))),
-        P::Int(_) | P::Float(_) => Some(x.clone()),
-        _ => Option::None,
-    };
-    if let (Some(a), Some(b)) = (num(v), num(w)) {
-        return match (&a, &b) {
-            (P::Int(x), P::Int(y)) => x == y,
-            (P::Float(x), P::Float(y)) => x == y,
-            (P::Float(x), P::Int(y)) | (P::Int(y), P::Float(x)) => cmp_float_int(*x, y) == Some(Ordering::Equal),
-            _ => false,
-        };
-    }
-    match (v, w) {
-        (P::None, P::None) => true,
-        (P::Str(a), P::Str(b)) => a == b,
-        (P::List(a), P::List(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| py_eq(x, y)),
-        (P::Dict(a), P::Dict(b)) => {
-            a.len() == b.len() && a.iter().all(|(k, x)| b.iter().any(|(kk, y)| kk == k && py_eq(x, y)))
-        }
-        _ => false,
-    }
-}
 
 /// `str.isspace()` for one code point.
 fn py_isspace(c: u32) -> bool {
@@ -1242,14 +1178,6 @@ impl Budget {
         })
     }
 
-    fn to_exact(&self) -> Value {
-        serde_json::json!({
-            "remaining": self.remaining.to_exact(),
-            "limit": self.limit.to_exact(),
-            "reset": self.reset.to_exact(),
-            "known": self.known,
-        })
-    }
 }
 
 /// What is left, as far as the last response told us. Err where Python
@@ -3057,155 +2985,10 @@ fn _describe() -> Result<String, String> {
         + &(if mins != BigInt::from(0) { format!(", resets in {mins}m") } else { String::new() }))
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Args every function accepts:
-/// - `cache_home`: `XDG_CACHE_HOME` for the call. Its `almanac` directory is
-///   wiped and rebuilt first from `entries` (url → entry object), `raw`
-///   (url → file text) and `state` (rate file text), so both sides start alike.
-/// - `state_home`: `XDG_STATE_HOME` for the call, with `settings` (an object)
-///   written as `almanac/settings.json`.
-///
-/// Network functions report `{"result", "entry", "state"}`: the entry and
-/// rate file after the call, their `at` replaced by whether it changed.
-/// Values are reported exactly (see [`PyValue::to_exact`]).
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    deep(|| _parity(func, args))
-}
 
-fn _parity(func: &str, args: &Value) -> Option<Value> {
-    use crate::util::{arg_bool, arg_str};
-    use serde_json::json;
 
-    let old_cache = std::env::var_os("XDG_CACHE_HOME");
-    let old_state = std::env::var_os("XDG_STATE_HOME");
-    if let Some(ch) = args.get("cache_home").and_then(Value::as_str) {
-        std::env::set_var("XDG_CACHE_HOME", ch);
-        let _ = std::fs::remove_dir_all(cache());
-        let _ = std::fs::create_dir_all(dir());
-        if let Some(m) = args.get("entries").and_then(Value::as_object) {
-            for (url, e) in m {
-                let _ = std::fs::write(_path(url), crate::util::dumps(e, None, false));
-            }
-        }
-        if let Some(m) = args.get("raw").and_then(Value::as_object) {
-            for (url, t) in m {
-                let _ = std::fs::write(_path(url), t.as_str().unwrap_or_default());
-            }
-        }
-        if let Some(t) = args.get("state").and_then(Value::as_str) {
-            let _ = std::fs::write(state_file(), t);
-        }
-    }
-    if let Some(sh) = args.get("state_home").and_then(Value::as_str) {
-        std::env::set_var("XDG_STATE_HOME", sh);
-        let p = crate::settings::path();
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Some(s) = args.get("settings") {
-            let _ = std::fs::write(&p, crate::util::dumps(s, None, false));
-        }
-    }
 
-    // The ttl as Python got it: an int or a float, any sign.
-    let ttl: Ttl = match args.get("ttl") {
-        Some(Value::Number(n)) if n.is_i64() => Ttl::Int(n.as_i64().unwrap_or(0).into()),
-        Some(Value::Number(n)) if n.is_u64() => Ttl::Int(n.as_u64().unwrap_or(0).into()),
-        Some(Value::Number(n)) => Ttl::Float(n.as_f64().unwrap_or(0.0)),
-        _ => DEFAULT_TTL.into(),
-    };
-    let sha = |t: String| {
-        use sha1::{Digest, Sha1};
-        if t.is_empty() { String::new() } else { hex::encode(Sha1::digest(t.as_bytes())) }
-    };
-    let err = |e: String| json!({ "error": e });
-    let report = |url: String, result: Result<PyValue, String>| {
-        let result = match result {
-            Ok(r) => r.to_exact(),
-            Err(e) => return err(e),
-        };
-        let orig_at = args.get("entries").and_then(|m| m.get(&url)).and_then(|e| e.get("at")).map(PyValue::from_value);
-        let entry = std::fs::read_to_string(_path(&url)).ok().and_then(|t| loads(&t).ok()).map(|mut v| {
-            if let PyValue::Dict(d) = &mut v {
-                let at = d.iter().position(|(k, _)| *k == ps("at")).map(|i| d.remove(i).1);
-                let changed = match (&at, &orig_at) {
-                    (Some(a), Some(b)) => !py_eq(a, b),
-                    (None, None) => false,
-                    _ => true,
-                };
-                d.push((ps("at_changed"), PyValue::Bool(changed)));
-            }
-            v.to_exact()
-        });
-        json!({"result": result, "entry": entry, "state": _state_report()})
-    };
-    let out = match func {
-        "token" => try_token().map(|t| json!(sha(t))).unwrap_or_else(err),
-        "reset_token" => {
-            reset_token();
-            try_token().map(|t| json!(sha(t))).unwrap_or_else(err)
-        }
-        "_path" => json!(_path(arg_str(args, "url"))),
-        "_read" => _read(arg_str(args, "url")).map(|v| v.map_or(Value::Null, |v| v.to_exact())).unwrap_or_else(err),
-        "_state" => _state().map(|v| v.to_exact()).unwrap_or_else(err),
-        "_note_limits" => {
-            let h = args.get("headers").cloned().unwrap_or(Value::Null);
-            _note_limits_with(|name| {
-                h.as_object().and_then(|m| {
-                    m.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).and_then(|(_, v)| v.as_str().map(ps))
-                })
-            });
-            _state_report()
-        }
-        "budget" => budget().map(|b| b.to_exact()).unwrap_or_else(err),
-        "can_spend" => can_spend().map(|b| json!(b)).unwrap_or_else(err),
-        "describe" => try_describe().map(|s| json!(s)).unwrap_or_else(err),
-        "get_json" => {
-            let url = arg_str(args, "url").to_owned();
-            let allow_stale = args.get("allow_stale").map(|_| arg_bool(args, "allow_stale")).unwrap_or(true);
-            let accept = args.get("accept").and_then(Value::as_str).unwrap_or(ACCEPT);
-            let r = _get_json(&url, ttl, allow_stale, accept);
-            report(url, r)
-        }
-        "latest_release" => {
-            let o = arg_str(args, "owner_repo");
-            let url = format!("{API}/repos/{o}/releases/latest");
-            report(url.clone(), _get_json(&url, ttl, true, ACCEPT))
-        }
-        "repo" => {
-            let o = arg_str(args, "owner_repo");
-            let url = format!("{API}/repos/{o}");
-            report(url.clone(), _get_json(&url, ttl, true, ACCEPT))
-        }
-        "org_repos" => {
-            let o = arg_str(args, "org");
-            let url = format!("{API}/orgs/{o}/repos?per_page=100");
-            report(url.clone(), _get_json(&url, ttl, true, ACCEPT))
-        }
-        _ => {
-            restore(old_cache, old_state);
-            return None;
-        }
-    };
-    restore(old_cache, old_state);
-    Some(out)
-}
-
-/// The rate file after a call, `at` replaced by whether it is there.
-fn _state_report() -> Value {
-    match std::fs::read_to_string(state_file()).ok().and_then(|t| loads(&t).ok()) {
-        Some(mut v) => {
-            if let PyValue::Dict(d) = &mut v {
-                let at = d.iter().position(|(k, _)| *k == ps("at")).map(|i| d.remove(i).1);
-                d.push((ps("at_present"), PyValue::Bool(at.is_some_and(|a| a != PyValue::None))));
-            }
-            v.to_exact()
-        }
-        None => Value::Null,
-    }
-}
-
+#[cfg(test)]
 fn restore(cache_home: Option<std::ffi::OsString>, state_home: Option<std::ffi::OsString>) {
     for (k, v) in [("XDG_CACHE_HOME", cache_home), ("XDG_STATE_HOME", state_home)] {
         match v {

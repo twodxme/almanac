@@ -11,7 +11,6 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 
-use crate::util;
 
 fn base(var: &str, default: &str) -> Result<PathBuf, String> {
     // var_os: Python reads the environment through surrogateescape, so a
@@ -259,50 +258,6 @@ fn system_update_command_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> String
     "sudo pacman -Syu".into()
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// `args.env` (optional) is `{VAR: value | null}` applied for the duration of
-/// the call (null removes the variable), mirroring the Python case's
-/// `mock.patch.dict(os.environ, ...)`. The parity runner is single-threaded.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    let saved: Vec<(String, Option<std::ffi::OsString>)> = args
-        .get("env")
-        .and_then(|e| e.as_object())
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| {
-                    let old = std::env::var_os(k);
-                    match v.as_str() {
-                        Some(s) => std::env::set_var(k, s),
-                        None => std::env::remove_var(k),
-                    }
-                    (k.clone(), old)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let path = |p: Result<PathBuf, String>| match p {
-        Ok(p) => serde_json::Value::String(p.to_string_lossy().into_owned()),
-        Err(e) => serde_json::json!({ "error": e }),
-    };
-    let out = match func {
-        "data_home" => Some(path(try_data_home())),
-        "config_home" => Some(path(try_config_home())),
-        "state_home" => Some(path(try_state_home())),
-        "cache_home" => Some(path(try_cache_home())),
-        "bin_home" => Some(path(try_bin_home())),
-        "terminal_argv" => Some(serde_json::to_value(terminal_argv(&util::arg_strs(args, "command"))).unwrap_or_default()),
-        "system_update_command" => Some(serde_json::Value::String(system_update_command())),
-        _ => None,
-    };
-    for (k, old) in saved {
-        match old {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-    out
-}
 
 #[cfg(test)]
 mod tests {

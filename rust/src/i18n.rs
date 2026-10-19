@@ -358,6 +358,7 @@ fn py_lossy(s: &str) -> String {
     py_codepoints(s).into_iter().map(|u| char::from_u32(u).unwrap_or('\u{fffd}')).collect()
 }
 
+#[cfg(test)]
 /// `ascii(s)`.
 fn py_ascii(s: &str) -> String {
     let cps = py_codepoints(s);
@@ -3113,119 +3114,6 @@ impl Expr {
     }
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::{arg_str, arg_strs};
-    use serde_json::{json, Value as J};
-    let err = |e: String| json!({ "error": e });
-    let opt_str = |k: &str| args.get(k).and_then(|v| v.as_str()).map(String::from);
-    let opt_langs = || args.get("languages").and_then(|v| v.as_array()).map(|_| arg_strs(args, "languages"));
-    // A Python number or other object as JSON; floats JSON cannot carry
-    // ("nan", "inf", "-inf") come as {"float": "..."}.
-    let plural_n = |v: Option<&J>| -> PluralN {
-        match v {
-            Some(J::Bool(b)) => PluralN::from(*b),
-            Some(J::Number(num)) => {
-                if let Some(i) = num.as_i64() {
-                    i.into()
-                } else if let Some(u) = num.as_u64() {
-                    u.into()
-                } else {
-                    PluralN::Float(num.as_f64().unwrap_or(f64::NAN))
-                }
-            }
-            Some(J::Object(o)) if o.contains_key("float") => {
-                PluralN::Float(o.get("float").and_then(|f| f.as_str()).and_then(|f| f.parse().ok()).unwrap_or(f64::NAN))
-            }
-            Some(J::String(_)) => PluralN::Other("str".into()),
-            Some(J::Array(_)) => PluralN::Other("list".into()),
-            Some(J::Object(_)) => PluralN::Other("dict".into()),
-            Some(J::Null) | None => PluralN::Other("NoneType".into()),
-        }
-    };
-    match func {
-        "DOMAIN" => Some(json!(DOMAIN)),
-        "localedir" => Some(json!(localedir())),
-        "_" | "tr" => Some(json!(tr(arg_str(args, "text")))),
-        "ngettext" => Some(match try_ngettext(arg_str(args, "singular"), arg_str(args, "plural"), plural_n(args.get("n"))) {
-            Ok(s) => json!(s),
-            Err(e) => err(e),
-        }),
-        "init" => Some(match init() {
-            Ok(()) => json!(null),
-            Err(e) => err(e),
-        }),
-        // The standard-library pieces, checked against Python's own.
-        "normalize" => Some(json!(normalize(arg_str(args, "loc")))),
-        "expand_lang" => Some(json!(expand_lang(arg_str(args, "loc")))),
-        "find" => Some(json!(find(arg_str(args, "domain"), opt_str("localedir").as_deref(), opt_langs()))),
-        "default_localedir" => Some(json!(default_localedir())),
-        "str_lower" => Some(json!(py_lossy(&py_lower(&py_from_str(arg_str(args, "s")))))),
-        "lc_time" => {
-            let t = lc_time();
-            Some(json!({ "abday": t.abday, "day": t.day, "abmon": t.abmon, "mon": t.mon }))
-        }
-        // `ascii(str(bytes.fromhex(hex), charset))`
-        "codec_decode" => {
-            let Ok(b) = hex::decode(arg_str(args, "hex")) else { return Some(err("bad hex".into())) };
-            Some(match decode(&b, arg_str(args, "charset")) {
-                Ok(s) => json!(py_ascii(&s)),
-                Err(e) => err(e),
-            })
-        }
-        // `c2py_str` gives each value as its decimal digits; `c2py` as a JSON
-        // number (a float beyond i64, which is all JSON numbers carry here).
-        "c2py" | "c2py_str" => {
-            let ns: Vec<PluralN> = args
-                .get("ns")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().map(|x| plural_n(Some(x))).collect())
-                .unwrap_or_default();
-            Some(match c2py(arg_str(args, "plural")) {
-                Err(e) => err(e),
-                Ok(f) => match ns.iter().map(|n| f.call(n, &mut false)).collect::<Result<Vec<_>, _>>() {
-                    Ok(v) => json!(v
-                        .iter()
-                        .map(|x| if func == "c2py_str" {
-                            json!(x.to_string())
-                        } else if let Ok(i) = i64::try_from(x) {
-                            json!(i)
-                        } else {
-                            json!(x.to_string().parse::<f64>().unwrap_or(f64::NAN))
-                        })
-                        .collect::<Vec<_>>()),
-                    Err(e) => err(e),
-                },
-            })
-        }
-        // `_ascii`: each result as `ascii()` shows it, for text JSON
-        // cannot carry (lone surrogates).
-        "translation_gettext" | "translation_ngettext" | "translation_gettext_ascii" | "translation_ngettext_ascii" => {
-            let t = match translation(arg_str(args, "domain"), opt_str("localedir").as_deref(), opt_langs()) {
-                Ok(t) => t,
-                Err(e) => return Some(err(e)),
-            };
-            let msgs = arg_strs(args, "messages");
-            let n = plural_n(args.get("n"));
-            let mut out = Vec::new();
-            for m in &msgs {
-                let m = py_from_str(m);
-                let r = if func.starts_with("translation_gettext") {
-                    t.gettext_py(&m)
-                } else {
-                    t.ngettext_py(&m, &py_from_str(arg_str(args, "plural")), &n, &mut false)
-                };
-                match r {
-                    Ok(s) if func.ends_with("_ascii") => out.push(json!(py_ascii(&s))),
-                    Ok(s) => out.push(json!(py_lossy(&s))),
-                    Err(e) => return Some(err(e)),
-                }
-            }
-            Some(json!(out))
-        }
-        _ => None,
-    }
-}
 
 /// Python's `locale.locale_alias` (CPython 3.14), verbatim.
 const LOCALE_ALIAS: &[(&str, &str)] = &[

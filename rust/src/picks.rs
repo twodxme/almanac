@@ -2618,10 +2618,6 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
 
 // ---- parity ------------------------------------------------------------------
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    _with_env(args, || _parity(func, args))
-}
 
 /// `{"env": {"XDG_STATE_HOME": "/tmp/..."}}` in the args: set for the call,
 /// put back after (the Python case does the same around its call).
@@ -2750,7 +2746,7 @@ fn _parity(func: &str, args: &Value) -> Option<Value> {
                     "plugins": args.get("plugins").cloned().unwrap_or(Value::Array(vec![])),
                     "eligible_stub": arg_bool(args, "eligible_stub"),
                 });
-                crate::demo::parity("picks", &demo_args).unwrap_or(Value::Null)
+                { let _ = demo_args; Value::Null }
             } else {
                 let deps = Deps {
                     get,

@@ -749,66 +749,8 @@ fn guess_extension(type_: &str, strict: bool) -> Result<Option<String>, String> 
         .map(|e| e.chars().map(|c| if is_escaped_byte(c) { '\u{fffd}' } else { c }).collect()))
 }
 
-fn moved_arg(args: &serde_json::Value) -> Vec<(String, String, String)> {
-    args.get("moved").and_then(|v| v.as_array()).map(|rows| {
-        rows.iter().filter_map(|r| {
-            let r = r.as_array()?;
-            let s = |i: usize| r.get(i).and_then(|x| x.as_str()).unwrap_or("").to_string();
-            Some((s(0), s(1), s(2)))
-        }).collect()
-    }).unwrap_or_default()
-}
 
-fn map_arg(args: &serde_json::Value, key: &str) -> Option<BTreeMap<String, serde_json::Value>> {
-    let o = args.get(key)?.as_object()?;
-    Some(o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use serde_json::json;
-    Some(match func {
-        "snapshot" => json!(snapshot()),
-        "changes" => {
-            // `before`'s values as they are (a None old id is carried through).
-            let b = map_arg(args, "before");
-            // `after` in its JSON order (serde_json keeps it), as the dict is.
-            let a: Option<Vec<(String, String)>> = args.get("after")
-                .and_then(|v| v.as_object())
-                .map(|o| o.iter()
-                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                    .collect());
-            json!(changes(b.as_ref(), a.as_ref().map(|v| v.iter().map(|(k, v)| (k, v)))))
-        }
-        "app_name" => json!(app_name(util::arg_str(args, "desktop_id"))),
-        "label" => match try_label(util::arg_str(args, "mime")) {
-            Ok(l) => json!(l),
-            Err(e) => json!({"error": e}),
-        },
-        "summary" => match try_summary(&moved_arg(args)) {
-            Ok(l) => json!(l),
-            Err(e) => json!({"error": e}),
-        },
-        "restore" => {
-            // A fake `xdg-mime` on PATH (set in both the Python case and here)
-            // so nothing on the machine changes.
-            let path = util::arg_str(args, "path").to_string();
-            let mut lines: Vec<String> = Vec::new();
-            let mut log = |s: &str| lines.push(s.to_string());
-            let r = restore_with(&moved_arg(args), Some(&mut log), &mut |argv| {
-                let mut a: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-                a[0] = format!("{path}/{}", a[0]);
-                let a: Vec<&str> = a.iter().map(String::as_str).collect();
-                xdg_mime_ok(&a)
-            });
-            match r {
-                Ok(n) => json!([n, lines]),
-                Err(e) => json!({"error": e}),
-            }
-        }
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

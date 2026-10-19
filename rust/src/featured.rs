@@ -73,11 +73,6 @@ pub const DAY: i64 = 86400;
 /// just "whichever catalogue has the biggest projects in it".
 pub const PER_MARKET: usize = 3;
 
-// `limit` and `per_market` are Python ints: a negative one is compared as is
-// (`len(out) >= -1` stops after the first pick), never wrapped.
-fn _diversify(ranked: &[Plugin], limit: i64, per_market: i64) -> Vec<Plugin> {
-    _diversify_n(ranked, limit as f64, per_market as f64)
-}
 
 /// `_diversify` for any Python number: the parity hook passes floats and
 /// bools through, as Python compares them as they are (`len(out) >= 2.5`).
@@ -520,115 +515,10 @@ pub fn build(apps: &[App], findings: &[Finding], plugins: &[Plugin]) -> Vec<Shel
     shelves
 }
 
-/// A list of dataclass instances from parity args. Like the Python
-/// constructor, a missing required field or an unknown one is a TypeError,
-/// and a value of the wrong shape an error too -- never silently dropped.
-fn _arg_list<T>(args: &Value, key: &str, cls: &str, required: &[&str]) -> Result<Vec<T>, String>
-where
-    T: serde::de::DeserializeOwned + serde::Serialize + Default,
-{
-    let Some(items) = args.get(key).and_then(|v| v.as_array()) else {
-        return Ok(Vec::new());
-    };
-    let known = serde_json::to_value(T::default()).ok();
-    let mut out = Vec::new();
-    for x in items {
-        if let Some(obj) = x.as_object() {
-            let missing: Vec<&str> = required.iter().copied().filter(|k| !obj.contains_key(*k)).collect();
-            if !missing.is_empty() {
-                return Err(format!("TypeError: {cls}.__init__() missing required arguments: {}", missing.join(", ")));
-            }
-            if let Some(Value::Object(k)) = &known {
-                if let Some(bad) = obj.keys().find(|f| !k.contains_key(*f)) {
-                    return Err(format!("TypeError: {cls}.__init__() got an unexpected keyword argument '{bad}'"));
-                }
-            }
-        }
-        out.push(serde_json::from_value(x.clone()).map_err(|e| format!("TypeError: {cls}: {e}"))?);
-    }
-    Ok(out)
-}
 
-/// A Python number from parity args, as Python compares it: a bool is 0 or 1.
-fn _arg_or(args: &Value, key: &str, default: i64) -> f64 {
-    match args.get(key) {
-        Some(Value::Number(n)) => n.as_f64().unwrap_or(default as f64),
-        Some(Value::Bool(b)) => f64::from(u8::from(*b)),
-        _ => default as f64,
-    }
-}
 
-/// A Python number from parity args, with its `str()`: `21`, `1.5`, `True`.
-fn _arg_num(args: &Value, key: &str, default: i64) -> (f64, String) {
-    match args.get(key) {
-        Some(Value::Number(n)) => match (n.as_i64(), n.as_u64()) {
-            (Some(i), _) => (i as f64, i.to_string()),
-            (_, Some(u)) => (u as f64, u.to_string()),
-            _ => {
-                let f = n.as_f64().unwrap_or_default();
-                (f, crate::util::py_float_repr(f))
-            }
-        },
-        Some(Value::Bool(b)) => (f64::from(u8::from(*b)), if *b { "True" } else { "False" }.to_string()),
-        _ => (default as f64, default.to_string()),
-    }
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &Value) -> Option<Value> {
-    // A case that panics inside another module must fail on its own, not
-    // take every other case in the run down with it.
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let out = std::panic::catch_unwind(|| _parity(func, args));
-    std::panic::set_hook(hook);
-    match out {
-        Ok(v) => v,
-        Err(e) => {
-            let msg = e
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default();
-            Some(serde_json::json!({"error": format!("panicked: {msg}")}))
-        }
-    }
-}
 
-fn _parity(func: &str, args: &Value) -> Option<Value> {
-    let parsed = (|| {
-        Ok::<_, String>((
-            _arg_list::<App>(args, "apps", "App", &["name", "version", "source"])?,
-            _arg_list::<Finding>(args, "findings", "Finding", &["id", "title", "detail"])?,
-            _arg_list::<Plugin>(args, "plugins", "Plugin", &["id", "name"])?,
-        ))
-    })();
-    let (apps, findings, plugins) = match parsed {
-        Ok(t) => t,
-        Err(e) => return Some(serde_json::json!({ "error": e })),
-    };
-    let v = match func {
-        "_diversify" => serde_json::to_value(_diversify_n(
-            &plugins,
-            _arg_or(args, "limit", 8),
-            _arg_or(args, "per_market", PER_MARKET as i64),
-        )),
-        "_ts" => serde_json::to_value(_ts(crate::util::arg_str(args, "value"))),
-        "needs_you" => serde_json::to_value(needs_you(&apps, &findings)),
-        "new_listings" => {
-            let (days, text) = _arg_num(args, "days", 21);
-            serde_json::to_value(_new_listings(&plugins, days, &text, _arg_or(args, "limit", 8)))
-        }
-        "trending" => {
-            let (days, text) = _arg_num(args, "days", 7);
-            serde_json::to_value(_trending(&plugins, days, &text, _arg_or(args, "limit", 8)))
-        }
-        "because_you_run" => serde_json::to_value(_because_you_run(&plugins, _arg_or(args, "limit", 8))),
-        "build" => serde_json::to_value(build(&apps, &findings, &plugins)),
-        _ => return None,
-    };
-    Some(v.unwrap_or_else(|e| serde_json::json!({"error": e.to_string()})))
-}
 
 #[cfg(test)]
 mod tests {

@@ -675,56 +675,7 @@ pub fn describe(p: &SetupPlan) -> String {
     if joined.is_empty() { "The README asks for nothing beyond the install.".to_string() } else { joined }
 }
 
-/// The plan a parity case names: `{"plan": {...}}` given whole, or
-/// `{"dir": "..."}` read with `plan()`.
-fn parity_plan(args: &serde_json::Value) -> Result<SetupPlan, String> {
-    if let Some(v) = args.get("plan") {
-        return serde_json::from_value(v.clone()).map_err(|e| e.to_string());
-    }
-    plan(Path::new(crate::util::arg_str(args, "dir")))
-}
 
-/// Parity hook: see ARCHITECTURE.md.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use crate::util::arg_str;
-    use serde_json::json;
-    let err = |e: String| json!({ "error": e });
-    let v = match func {
-        "plan" => match plan(Path::new(arg_str(args, "dir"))) {
-            Ok(p) => serde_json::to_value(p).ok()?,
-            Err(e) => err(e),
-        },
-        "automatable" => match parity_plan(args) {
-            Ok(p) => json!(p.automatable()),
-            Err(e) => err(e),
-        },
-        "empty" => match parity_plan(args) {
-            Ok(p) => json!(p.empty()),
-            Err(e) => err(e),
-        },
-        "terminal_script" => match parity_plan(args) {
-            Ok(p) => json!(terminal_script(&p)),
-            Err(e) => err(e),
-        },
-        "describe" => match parity_plan(args) {
-            Ok(p) => json!(describe(&p)),
-            Err(e) => err(e),
-        },
-        "_logical_lines" => json!(_logical_lines(arg_str(args, "block"))),
-        "_sections" => json!(_sections(arg_str(args, "text"))
-            .into_iter()
-            .map(|(_, p)| p)
-            .collect::<Vec<_>>()),
-        "_is_setup" => json!(_is_setup(&crate::util::arg_strs(args, "path"))),
-        "shlex_split" => match shlex_split(arg_str(args, "s")) {
-            Ok(v) => json!(v),
-            Err(e) => err(e),
-        },
-        "shlex_quote" => json!(shlex_quote(arg_str(args, "s"))),
-        _ => return None,
-    };
-    Some(v)
-}
 
 #[cfg(test)]
 mod tests {

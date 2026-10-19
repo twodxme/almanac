@@ -391,29 +391,6 @@ impl PyApp {
         }
     }
 
-    /// `App(**d)`.
-    fn from_json(v: Option<&serde_json::Value>) -> Result<PyApp, String> {
-        let Some(serde_json::Value::Object(d)) = v else {
-            return Err("TypeError: inventory.App() argument after ** must be a mapping".into());
-        };
-        const FIELDS: [&str; 7] = ["name", "version", "source", "description", "update", "exec_path", "extra"];
-        if let Some(k) = d.keys().find(|k| !FIELDS.contains(&k.as_str())) {
-            return Err(format!("TypeError: App.__init__() got an unexpected keyword argument '{k}'"));
-        }
-        let missing: Vec<&str> = FIELDS[..3].iter().copied().filter(|k| !d.contains_key(*k)).collect();
-        if !missing.is_empty() {
-            return Err(format!("TypeError: App.__init__() missing required argument(s): {}", missing.join(", ")));
-        }
-        let get = |k: &str, default: Py| d.get(k).map(Py::plain).unwrap_or(default);
-        Ok(PyApp {
-            name: get("name", Py::None),
-            version: get("version", Py::None),
-            source: get("source", Py::None),
-            update: get("update", Py::Str(String::new())),
-            exec_path: get("exec_path", Py::Str(String::new())),
-            extra: get("extra", Py::Dict(Vec::new())),
-        })
-    }
 }
 
 /// `extra.get(key)`: a non-dict `extra` has no `.get`.
@@ -630,6 +607,7 @@ impl PyFinding {
         }
     }
 
+    #[cfg(test)]
     /// `None if d is None else Finding(**d)`.
     fn from_json(v: Option<&serde_json::Value>) -> Result<Option<PyFinding>, String> {
         let d = match v {
@@ -849,39 +827,8 @@ impl Py {
         }
     }
 
-    /// `set(items)`: unhashable items raise, equal ones collapse.
-    fn set_of(items: Vec<Py>) -> Result<Py, String> {
-        let mut out: Vec<Py> = Vec::new();
-        for x in items {
-            if matches!(x, Py::List(_) | Py::Set(_) | Py::Dict(_)) {
-                return Err(format!("TypeError: unhashable type: '{}'", x.type_name()));
-            }
-            if !out.iter().any(|y| py_eq(y, &x)) {
-                out.push(x);
-            }
-        }
-        Ok(Py::Set(out))
-    }
 
-    /// The cases' `_py`: a list of two ints is a `(size, mtime)` tuple, any
-    /// other list a set.
-    fn probe_answer(v: &serde_json::Value) -> Result<Py, String> {
-        match Py::plain(v) {
-            Py::List(a) if a.len() == 2 && a.iter().all(|x| matches!(x, Py::Int(_))) => Ok(Py::Tuple(a)),
-            Py::List(a) => Py::set_of(a),
-            other => Ok(other),
-        }
-    }
 
-    /// `set(b)`, as the judge_pending cases build their sets.
-    fn set_from(v: &serde_json::Value) -> Result<Py, String> {
-        match Py::plain(v) {
-            Py::List(a) => Py::set_of(a),
-            Py::Str(s) => Py::set_of(s.chars().map(|c| Py::Str(c.to_string())).collect()),
-            Py::Dict(d) => Py::set_of(d.into_iter().map(|(k, _)| Py::Str(k)).collect()),
-            other => Err(format!("TypeError: '{}' object is not iterable", other.type_name())),
-        }
-    }
 
     fn number(&self) -> Option<Result<i128, f64>> {
         match self {
@@ -1061,131 +1008,6 @@ fn judge_pending_py(before: Option<&Py>, after: Option<&Py>) -> Result<Outcome, 
     Ok(Outcome::new(Some(true), format!("All {} update(s) installed", done.len())))
 }
 
-/// Parity hook: see ARCHITECTURE.md.
-///
-/// Probes are called and their answer returned; a probe that raises answers
-/// `{"error": ...}`. `for_app` answers `{"probe": bool, "value": answer}`.
-/// Probe values in args are JSON: a string, `[size, mtime]`, a list (a set),
-/// a bool, or an object. Values `ProbeValue` cannot hold are judged as the
-/// Python values the cases build from them; apps and findings likewise.
-pub fn parity(func: &str, args: &serde_json::Value) -> Option<serde_json::Value> {
-    use serde_json::{json, Value};
-    let s = |k: &str| crate::util::arg_str(args, k).to_string();
-    let raw = |k: &str| args.get(k).filter(|v| !v.is_null());
-    let pv = |k: &str| -> Result<Option<ProbeValue>, ()> {
-        match raw(k) {
-            None => Ok(None),
-            Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|_| ()),
-        }
-    };
-    let py = |k: &str, conv: fn(&Value) -> Result<Py, String>| -> Result<Option<Py>, String> {
-        raw(k).map(conv).transpose()
-    };
-    let err = |e: String| json!({ "error": e });
-    let to = |r: Result<Outcome, String>| match r {
-        Ok(o) => serde_json::to_value(o).unwrap_or(Value::Null),
-        Err(e) => err(e),
-    };
-    let call = |p: TryProbe| -> Value {
-        match p() {
-            Ok(v) => serde_json::to_value(v).unwrap_or(Value::Null),
-            Err(e) => err(e),
-        }
-    };
-    let caught = |f: &dyn Fn() -> Value| -> Value {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-            .unwrap_or_else(|_| json!({"error": "blocked: panicked (a module still todo!()?)"}))
-    };
-    Some(match func {
-        "outcome" => {
-            let o = Outcome::new(args.get("changed").and_then(|v| v.as_bool()), s("message"));
-            json!({"changed": o.changed, "message": o.message, "ok": o.ok()})
-        }
-        "_out" => {
-            // subprocess: a str is one program name, a list is argv (every
-            // item a str), anything else raises.
-            let cmd: Result<Vec<String>, String> = match args.get("cmd").map(Py::plain).unwrap_or(Py::None) {
-                Py::Str(c) => Ok(vec![c]),
-                Py::List(a) => a.iter().map(subprocess_arg).collect(),
-                Py::Dict(d) => Ok(d.into_iter().map(|(k, _)| k).collect()),
-                other => Err(format!("TypeError: '{}' object is not iterable", other.type_name())),
-            };
-            // timeout=None is no timeout; left out, it is 30.
-            let timeout = match args.get("timeout") {
-                None => Ok(30.0),
-                Some(Value::Null) => Ok(f64::INFINITY),
-                Some(v) => v.as_f64().ok_or_else(|| {
-                    format!("TypeError: unsupported operand type(s) for +: 'float' and '{}'", Py::plain(v).type_name())
-                }),
-            };
-            match (cmd, timeout) {
-                (Ok(cmd), Ok(t)) => {
-                    let cmd: Vec<&str> = cmd.iter().map(|x| x.as_str()).collect();
-                    match out(&cmd, t) {
-                        Ok(o) => json!(o),
-                        Err(e) => err(e),
-                    }
-                }
-                (Err(e), _) | (_, Err(e)) => err(e),
-            }
-        }
-        "installed_package" => call(installed_package_try(&s("name"))),
-        "git_head" => call(git_head_try(&s("repo"))),
-        "mise_version" => call(mise_version_try(&s("tool"))),
-        "binary_version" => caught(&|| call(binary_version_try(&s("binary")))),
-        "file_identity" => call(file_identity_try(&s("path"))),
-        "pending_updates" => caught(&|| serde_json::to_value(pending_updates()()).unwrap_or(Value::Null)),
-        "for_app" => caught(&|| match PyApp::from_json(args.get("app")).and_then(|a| for_app_py(&a)) {
-            Err(e) => err(e),
-            Ok(Some(p)) => match p() {
-                Ok(v) => json!({"probe": true, "value": v}),
-                Err(e) => err(e),
-            },
-            Ok(None) => json!({"probe": false, "value": null}),
-        }),
-        "judge_app" => {
-            let a = match PyApp::from_json(args.get("app")) {
-                Ok(a) => a,
-                Err(e) => return Some(err(e)),
-            };
-            match (pv("before"), pv("after")) {
-                (Ok(b), Ok(c)) => to(judge_app_any(&a, b.as_ref(), c.as_ref())),
-                _ => match (py("before", Py::probe_answer), py("after", Py::probe_answer)) {
-                    (Ok(b), Ok(c)) => to(judge_app_any(&a, b.as_ref(), c.as_ref())),
-                    (Err(e), _) | (_, Err(e)) => err(e),
-                },
-            }
-        }
-        "judge_pending" => {
-            // The cases pass `set(b)`: a list of strings is a ProbeValue::Set.
-            let strs = |k: &str| -> Result<Option<ProbeValue>, ()> {
-                match raw(k) {
-                    None => Ok(None),
-                    Some(Value::Array(a)) if a.iter().all(|x| x.is_string()) => Ok(Some(ProbeValue::Set(
-                        a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
-                    ))),
-                    Some(_) => Err(()),
-                }
-            };
-            match (strs("before"), strs("after")) {
-                (Ok(b), Ok(c)) => to(try_judge_pending(b.as_ref(), c.as_ref())),
-                _ => match (py("before", Py::set_from), py("after", Py::set_from)) {
-                    (Ok(b), Ok(c)) => to(judge_pending_py(b.as_ref(), c.as_ref())),
-                    (Err(e), _) | (_, Err(e)) => err(e),
-                },
-            }
-        }
-        "judge_finding" => match (PyFinding::from_json(args.get("before")), PyFinding::from_json(args.get("after"))) {
-            (Ok(b), Ok(c)) => to(judge_finding_any(b.as_ref(), c.as_ref())),
-            (Err(e), _) | (_, Err(e)) => err(e),
-        },
-        "recheck" => match recheck_inner(&s("finding_id")) {
-            Ok(f) => serde_json::to_value(f).ok()?,
-            Err(()) => json!({"error": "blocked: panicked (a module still todo!()?)"}),
-        },
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 #[allow(deprecated)]
