@@ -164,6 +164,66 @@ pub struct UpdatePlan {
     pub raised: Option<String>,
 }
 
+/// Every installed plugin classified (fetching), with its trust key: what
+/// a bulk update plans from. `have` is the catalog already loaded, if any.
+pub(super) fn plugin_update_states(
+    have: Vec<crate::store::Plugin>,
+) -> Result<(Vec<plugins_mod::State>, BTreeMap<String, String>), String> {
+    let plugins = if have.is_empty() { store_mod::try_catalog(false)? } else { have };
+    let mut trust: BTreeMap<String, String> = BTreeMap::new();
+    for p in &plugins {
+        trust.insert(p.id.clone(), p.try_trust()?.key);
+    }
+    let mut cache = plugins_mod::FetchCache::new();
+    let mut states = Vec::new();
+    let pdir = plugins_mod::plugins_dir();
+    if pdir.is_dir() {
+        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&pdir)
+            .map(|rd| {
+                // pathlib's glob("*") matches hidden entries too.
+                rd.filter_map(|e| e.ok()).map(|e| e.path()).collect()
+            })
+            .unwrap_or_default();
+        dirs.sort();
+        for d in dirs {
+            if d.join("manifest.json").is_file() {
+                states.push(plugins_mod::try_classify(&d, Some(&mut cache), true)?);
+            }
+        }
+    }
+    Ok((states, trust))
+}
+
+/// One plugin's update, as a task step.
+pub(super) fn plugin_step(pid: String) -> tasks::StepFn {
+    std::sync::Arc::new(move |log: tasks::LogFn<'_>| {
+        // Checked again now: the dialog may have stayed open while the
+        // plugin was edited, or swapped for a development link.
+        // What classify raises fails the step with str(exc).
+        let now = plugins_mod::try_classify(
+            &plugins_mod::plugins_dir().join(&pid),
+            Some(&mut plugins_mod::FetchCache::new()),
+            true,
+        )
+        .map_err(|e| crate::ui::shell::exc_str(&e))?;
+        if !now.updatable() {
+            let why = now.try_describe().map_err(|e| crate::ui::shell::exc_str(&e))?;
+            log(&format!("{pid}: skipped — {why}"));
+            return Err(format!("{pid} changed since the check"));
+        }
+        let r = run_checked(&plugins_mod::update_argv(&pid), 300)?;
+        let both = r.stdout.clone() + &r.stderr;
+        let lines: Vec<&str> = py_splitlines(&both);
+        for line in &lines[lines.len().saturating_sub(6)..] {
+            log(line);
+        }
+        if !r.ok() {
+            return Err(format!("{pid} was not updated"));
+        }
+        Ok(())
+    })
+}
+
 /// The planning half of `_confirm_plugin_updates`. `trust` maps plugin id
 /// to its marketplace trust key.
 pub fn plan_plugin_updates(
@@ -1420,31 +1480,7 @@ impl Win {
     pub fn on_update_plugins(&self) {
         let have = self.shared.borrow().plugins.clone();
         // What raises in here ends the Python's worker: nothing is asked.
-        let work = move || -> Result<_, String> {
-            let plugins = if have.is_empty() { store_mod::try_catalog(false)? } else { have };
-            let mut trust: BTreeMap<String, String> = BTreeMap::new();
-            for p in &plugins {
-                trust.insert(p.id.clone(), p.try_trust()?.key);
-            }
-            let mut cache = plugins_mod::FetchCache::new();
-            let mut states = Vec::new();
-            let pdir = plugins_mod::plugins_dir();
-            if pdir.is_dir() {
-                let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&pdir)
-                    .map(|rd| {
-                        // pathlib's glob("*") matches hidden entries too.
-                        rd.filter_map(|e| e.ok()).map(|e| e.path()).collect()
-                    })
-                    .unwrap_or_default();
-                dirs.sort();
-                for d in dirs {
-                    if d.join("manifest.json").is_file() {
-                        states.push(plugins_mod::try_classify(&d, Some(&mut cache), true)?);
-                    }
-                }
-            }
-            Ok((states, trust))
-        };
+        let work = move || plugin_update_states(have);
         self.say(&tr("Checking plugins…"), 5);
         let w = self.downgrade();
         spawn_bg(work, move |res| match res {
@@ -1487,34 +1523,6 @@ impl Win {
         }
         let ready = plan.ready.clone();
 
-        fn step(pid: String) -> tasks::StepFn {
-            std::sync::Arc::new(move |log: tasks::LogFn<'_>| {
-                // Checked again now: the dialog may have stayed open while the
-                // plugin was edited, or swapped for a development link.
-                // What classify raises fails the step with str(exc).
-                let now = plugins_mod::try_classify(
-                    &plugins_mod::plugins_dir().join(&pid),
-                    Some(&mut plugins_mod::FetchCache::new()),
-                    true,
-                )
-                .map_err(|e| crate::ui::shell::exc_str(&e))?;
-                if !now.updatable() {
-                    let why = now.try_describe().map_err(|e| crate::ui::shell::exc_str(&e))?;
-                    log(&format!("{pid}: skipped — {why}"));
-                    return Err(format!("{pid} changed since the check"));
-                }
-                let r = run_checked(&plugins_mod::update_argv(&pid), 300)?;
-                let both = r.stdout.clone() + &r.stderr;
-                let lines: Vec<&str> = py_splitlines(&both);
-                for line in &lines[lines.len().saturating_sub(6)..] {
-                    log(line);
-                }
-                if !r.ok() {
-                    return Err(format!("{pid} was not updated"));
-                }
-                Ok(())
-            })
-        }
 
         let heads: Vec<(String, String)> = ready
             .iter()
@@ -1583,7 +1591,7 @@ impl Win {
                 });
                 let steps: Vec<tasks::Step> = ready
                     .iter()
-                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), step(s.id.clone())))
+                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone())))
                     .collect();
                 let on_done = match w.checked(Some(probe), judge, Some(then)) {
                     Ok(on_done) => on_done,

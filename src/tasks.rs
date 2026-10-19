@@ -146,6 +146,18 @@ impl TaskDialog {
         steps: Vec<Step>,
         on_done: Option<OnDone>,
     ) -> TaskDialog {
+        TaskDialog::build(parent, title, steps, on_done, false)
+    }
+
+    /// `keep_going`: a failed step is logged and the rest still run, for a
+    /// batch of unrelated work. The task still ends failed.
+    fn build(
+        parent: &impl gtk::glib::object::IsA<gtk::Widget>,
+        title: &str,
+        steps: Vec<Step>,
+        on_done: Option<OnDone>,
+        keep_going: bool,
+    ) -> TaskDialog {
         let dialog = adw::Dialog::builder().title(c_str(title)).build();
         dialog.set_content_width(720);
         dialog.set_content_height(520);
@@ -264,7 +276,7 @@ impl TaskDialog {
                     glib::idle_add_once(move || g.get_ref().step_label.set_text(c_str(&label)));
                 };
                 let log = |line: &str| idle_append(&guard, line);
-                work(&steps, &cancelled, &proc, &set_label, &log)
+                work(&steps, &cancelled, &proc, &set_label, &log, keep_going)
             };
             match result {
                 Ok(ok) => {
@@ -893,6 +905,7 @@ fn work(
     proc_slot: &Mutex<Option<Arc<Proc>>>,
     set_label: &dyn Fn(&str),
     log: LogFn<'_>,
+    keep_going: bool,
 ) -> Result<bool, String> {
     let mut ok = true;
     for step in steps {
@@ -910,7 +923,9 @@ fn work(
                 if let Err(exc) = f(log) {
                     log(&format!("failed: {exc}"));
                     ok = false;
-                    break;
+                    if !keep_going {
+                        break;
+                    }
                 }
                 log("");
                 continue;
@@ -925,7 +940,11 @@ fn work(
             Err(SpawnError::Os(exc)) => {
                 log(&format!("could not start: {exc}"));
                 ok = false;
-                break;
+                if !keep_going {
+                    break;
+                }
+                log("");
+                continue;
             }
             Err(SpawnError::Other(exc)) => return Err(exc),
         };
@@ -937,7 +956,9 @@ fn work(
         if code != 0 {
             log(&format!("— exited {code} —"));
             ok = false;
-            break;
+            if !keep_going {
+                break;
+            }
         }
         log("");
     }
@@ -952,6 +973,16 @@ pub fn run(
     on_done: Option<OnDone>,
 ) -> TaskDialog {
     TaskDialog::new(parent, title, steps, on_done)
+}
+
+/// [`run`], but one failed step does not stop the others.
+pub fn run_each(
+    parent: &impl gtk::glib::object::IsA<gtk::Widget>,
+    title: &str,
+    steps: Vec<Step>,
+    on_done: Option<OnDone>,
+) -> TaskDialog {
+    TaskDialog::build(parent, title, steps, on_done, true)
 }
 
 /// Ask before doing something that cannot be undone by clicking again.
@@ -1132,6 +1163,32 @@ mod tests {
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A batch of unrelated updates runs every step; the first failure
+    /// still fails the whole, and a plain task still stops at it.
+    #[test]
+    fn keep_going_runs_past_a_failed_step() {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let step = |name: &'static str, ok: bool| {
+            let ran = ran.clone();
+            Step::call(name, Arc::new(move |_log: LogFn<'_>| {
+                ran.lock().unwrap().push(name);
+                if ok { Ok(()) } else { Err(format!("{name} broke")) }
+            }))
+        };
+        let steps = vec![step("a", true), step("b", false), step("c", true)];
+        let lines = Mutex::new(Vec::new());
+        let log = |l: &str| lines.lock().unwrap().push(l.to_string());
+        let run = |keep_going| {
+            ran.lock().unwrap().clear();
+            work(&steps, &AtomicBool::new(false), &Mutex::new(None), &|_| {}, &log, keep_going)
+        };
+        assert_eq!(run(true), Ok(false));
+        assert_eq!(*ran.lock().unwrap(), vec!["a", "b", "c"]);
+        assert!(lines.lock().unwrap().contains(&"failed: b broke".to_string()));
+        assert_eq!(run(false), Ok(false));
+        assert_eq!(*ran.lock().unwrap(), vec!["a", "b"]);
     }
 
     #[test]

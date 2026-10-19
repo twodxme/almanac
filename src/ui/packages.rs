@@ -614,7 +614,7 @@ impl Win {
 
     /// Every row of `self.store`, as the model's own objects (a reference
     /// each, not a copy of the row); read them in place with `AppItem::of`.
-    fn store_objects(&self) -> Vec<glib::Object> {
+    pub(super) fn store_objects(&self) -> Vec<glib::Object> {
         let store = self.shared.borrow().store.clone();
         (0..store.n_items()).filter_map(|i| store.item(i)).collect()
     }
@@ -2138,7 +2138,8 @@ impl Win {
                 },
                 enabled: pending != 0,
                 tooltip: "Runs `omarchy update` in a terminal, which is where it can ask for \
-                          your password"
+                          your password, then updates everything else waiting — plugins, AppImages, \
+                          agent CLIs, local checkouts"
                     .to_string(),
                 handler: Rc::new(|w: &Win| w.on_update_all()),
             },

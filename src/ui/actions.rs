@@ -20,9 +20,9 @@ use crate::patches::{self, PatchState};
 use crate::sources::{self, Option as SourceOption, Resolution};
 use crate::tasks::{self, LogFn, OnDone, Step, StepAction};
 use crate::ui::shell::{spawn_bg, Win, WeakWin};
-use crate::verify::{self, Outcome, Probe, ProbeValue, TryProbe};
+use crate::verify::{self, Outcome, ProbeValue, TryProbe};
 use crate::{agents, appimage, ghcache, history, mimeguard, plugins, selfupdate, settings,
-            snapshots, theming, xdg};
+            snapshots, theming};
 
 #[derive(Default)]
 pub struct State {}
@@ -96,7 +96,7 @@ fn start_thread(work: impl FnOnce() + Send + 'static) -> Result<(), String> {
 
 /// An exception the Python lets out of a GTK handler: PyGObject prints it
 /// to stderr and the handler stops there.
-fn raised(exc: &str) {
+pub(super) fn raised(exc: &str) {
     eprintln!("{exc}");
 }
 
@@ -117,7 +117,7 @@ fn not_a_path(v: &Value) -> String {
 }
 
 /// Python truthiness of a JSON value.
-fn truthy(v: &Value) -> bool {
+pub(super) fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -408,7 +408,7 @@ pub fn update_one(app: &App, synced: impl FnOnce(&str) -> String) -> UpdateOne {
 /// `app.extra.get("update_cmd") or []` as `' '.join(cmd)` and `tasks.run`
 /// see it: a string is its characters, a dict its keys. `Err` is the
 /// TypeError the join raises.
-fn update_cmd(app: &App) -> Result<Vec<String>, String> {
+pub(super) fn update_cmd(app: &App) -> Result<Vec<String>, String> {
     match app.extra.get("update_cmd") {
         Some(v) if truthy(v) => match v {
             Value::String(s) => Ok(s.chars().map(String::from).collect()),
@@ -428,6 +428,33 @@ fn update_cmd(app: &App) -> Result<Vec<String>, String> {
         },
         _ => Ok(Vec::new()),
     }
+}
+
+/// Download `app`'s newer AppImage over the current one and record it.
+/// `Err`: network, disk, permissions.
+pub(super) fn appimage_update_work(app: &App) -> Result<(), String> {
+    let url = app.extra.get("download").cloned().unwrap_or_default();
+    let dest = py_path(&app.exec_path);
+    // urllib's Request takes str(url).
+    appimage::download(&py_str(&url), &dest, None)?;
+    let mut reg = inventory::load_registry();
+    let key = registry_key(app);
+    let update = app.update.clone();
+    if let Some(entry) = key_str(&key)?.and_then(|k| reg.get_mut(k)) {
+        let Some(entry) = entry.as_object_mut() else {
+            return Err(match entry {
+                Value::Array(_) => "list indices must be integers or slices, not str".to_string(),
+                other => format!("'{}' object does not support item assignment", py_type(other)),
+            });
+        };
+        entry.insert("version".to_string(), Value::String(update));
+        // Force a re-check rather than trusting the stale entry.
+        entry.insert("checked_at".to_string(), Value::from(0));
+        entry.insert("latest".to_string(), Value::Object(Default::default()));
+        inventory::save_registry(&reg)?;
+    }
+    appimage::install_desktop_entry(&dest, &py_str(&key))?;
+    Ok(())
 }
 
 /// `app.extra.get("key", app.name)`, as Python holds it.
@@ -650,7 +677,7 @@ fn version_output(dest: &Path) -> Result<Option<String>, String> {
 /// Popen it resets SIGPIPE, closes other descriptors and reports a failed
 /// exec as an error. The OSError Popen would raise when the program cannot
 /// be run is found first, the way its execvp searches.
-fn popen_new_session(argv: &[String]) -> Result<gio::Subprocess, String> {
+pub(super) fn popen_new_session(argv: &[String]) -> Result<gio::Subprocess, String> {
     let Some(prog) = argv.first() else {
         return Err("[Errno 2] No such file or directory: ''".to_string());
     };
@@ -1595,34 +1622,11 @@ impl Win {
             self.say(&format!("No download URL for {}", app.name), 5);
             return;
         }
-        let url = app.extra.get("download").cloned().unwrap_or_default();
-        let dest = py_path(&app.exec_path);
         button.set_sensitive(false);
         self.summarize(&format!("Downloading {} {}…", app.name, app.update), None);
 
         let app_c = app.clone();
-        let work = move || -> Result<(), String> {
-            // urllib's Request takes str(url).
-            appimage::download(&py_str(&url), &dest, None)?;
-            let mut reg = inventory::load_registry();
-            let key = registry_key(&app_c);
-            let update = app_c.update.clone();
-            if let Some(entry) = key_str(&key)?.and_then(|k| reg.get_mut(k)) {
-                let Some(entry) = entry.as_object_mut() else {
-                    return Err(match entry {
-                        Value::Array(_) => "list indices must be integers or slices, not str".to_string(),
-                        other => format!("'{}' object does not support item assignment", py_type(other)),
-                    });
-                };
-                entry.insert("version".to_string(), Value::String(update));
-                // Force a re-check rather than trusting the stale entry.
-                entry.insert("checked_at".to_string(), Value::from(0));
-                entry.insert("latest".to_string(), Value::Object(Default::default()));
-                inventory::save_registry(&reg)?;
-            }
-            appimage::install_desktop_entry(&dest, &py_str(&key))?;
-            Ok(())
-        };
+        let work = move || appimage_update_work(&app_c);
         let w = self.downgrade();
         let (name, version) = (app.name.clone(), app.update.clone());
         spawn_bg(
@@ -1654,69 +1658,6 @@ impl Win {
             self.say(&format!("{name} updated to {version}"), 5);
             self.reload();
         }
-    }
-
-    /// Hand the full upgrade to the system's own updater, in a terminal.
-    ///
-    /// The terminal is the point: `omarchy update` needs a password, and a GUI
-    /// cannot answer that prompt. Running it where the user can type is the
-    /// honest solution; the alternative is passwordless root.
-    ///
-    /// The list rescans itself when the terminal closes. Leaving that to the
-    /// user meant everything just updated stayed listed as needing an update.
-    pub fn on_update_all(&self) {
-        let command = xdg::system_update_command();
-        let script = update_all_script(&command);
-        let Some(argv) = xdg::terminal_argv(&["bash", "-lc", script.as_str()]) else {
-            self.say(&tr("No terminal found to run the update in"), 5);
-            return;
-        };
-        if argv.is_empty() {
-            self.say(&tr("No terminal found to run the update in"), 5);
-            return;
-        }
-        let started = Instant::now();
-        let proc = match popen_new_session(&argv) {
-            Ok(p) => p,
-            Err(e) => {
-                self.say(&format!("Could not start the update: {e}"), 5);
-                return;
-            }
-        };
-        self.say(&tr("Update running in a terminal — the list refreshes when it closes"), 5);
-        let probe: Probe = verify::pending_updates();
-
-        // The `wait` thread, as a main-loop future: a GSubprocess is waited
-        // on there, and the probes still run off the UI thread.
-        let w = self.downgrade();
-        glib::spawn_future_local(async move {
-            // Asked while the user types their password, which is longer
-            // than checkupdates takes.
-            let p = probe.clone();
-            let Ok(before) = gio::spawn_blocking(move || p()).await else { return };
-            let _ = proc.wait_future().await;
-            if let Some(win) = w.upgrade() {
-                win.after_pacman(true);
-            }
-            if started.elapsed() < Duration::from_secs(5) {
-                // The launcher handed the window to a terminal server and
-                // returned at once, so there is no "finished" to wait for.
-                if let Some(win) = w.upgrade() {
-                    win.say("Rescan when the update finishes", 8);
-                }
-                return;
-            }
-            let judged = gio::spawn_blocking(move || verify::try_judge_pending(before.as_ref(), probe().as_ref()));
-            let Ok(out) = judged.await else { return };
-            // judge_pending raising ends the Python's `wait` thread there.
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => return raised(&e),
-            };
-            if let Some(win) = w.upgrade() {
-                win.report_outcome(&out);
-            }
-        });
     }
 
     pub fn on_add_appimage(&self) {

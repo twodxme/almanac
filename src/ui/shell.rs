@@ -240,7 +240,7 @@ fn as_int(v: Option<&Value>) -> i64 {
 }
 
 /// `e.get(key, "")` for a string field.
-fn as_text(v: Option<&Value>) -> String {
+pub(super) fn as_text(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => s.clone(),
         _ => String::new(),
