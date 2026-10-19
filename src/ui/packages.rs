@@ -1056,7 +1056,8 @@ impl Win {
                 Value::String(u) => u.clone(),
                 other => return Err(format!("TypeError: url must be a str: {}", py_repr(other))),
             };
-            let r = adw::ActionRow::builder().title(tr("Project page")).subtitle(&url).build();
+            // Plain text: a query string's `&` is not markup.
+            let r: adw::ActionRow = Win::plain(&tr("Project page"), &url);
             r.set_subtitle_selectable(true);
             let btn = gtk::Button::builder()
                 .icon_name("adw-external-link-symbolic")
@@ -1090,10 +1091,10 @@ impl Win {
                 let Value::String(text) = &extra[key] else {
                     return Err(format!("AttributeError: {key} has no attribute 'split'"));
                 };
-                let row = adw::ActionRow::builder()
-                    .title(label)
-                    .subtitle(squeeze(text, 400))
-                    .build();
+                // Plain text: package relations carry version constraints
+                // (`glibc>=2.40`), and a `<` or `&` read as markup would
+                // blank the row.
+                let row: adw::ActionRow = Win::plain(label, &squeeze(text, 400));
                 row.set_subtitle_lines(4);
                 row.set_subtitle_selectable(true);
                 deps.add(&row);
@@ -2159,7 +2160,9 @@ impl Win {
     ///
     /// `timeout` defaulted to 5 in Python (`SAY_TIMEOUT`).
     pub fn say(&self, message: &str, timeout: u32) {
-        let toast = adw::Toast::builder().title(message).timeout(timeout).build();
+        // Messages carry names and error text from outside the app, so they
+        // are shown as written rather than parsed as markup.
+        let toast = adw::Toast::builder().title(message).use_markup(false).timeout(timeout).build();
         self.toasts.add_toast(toast);
     }
 
@@ -2416,6 +2419,32 @@ mod tests {
             .and_then(|s| s.split("pub fn set_narrow").next())
             .unwrap_or("");
         assert!(body.contains("self.apply_all_group_states()"));
+    }
+
+    /// Package relations carry version constraints (`glibc>=2.40`) and
+    /// project URLs carry query strings (`?a=1&b=2`): read as Pango markup,
+    /// either one blanked its row. Every row in the details dialog goes
+    /// through `Win::plain`, which switches markup off before the text
+    /// goes in, and toasts show names and errors as written.
+    #[test]
+    fn details_and_toasts_show_outside_text_as_written() {
+        let details = code()
+            .split("fn build_details")
+            .nth(1)
+            .and_then(|s| s.split("let dialog = adw::Dialog::new()").next())
+            .unwrap_or("");
+        assert!(details.contains("\"Dependencies\""), "the split found the dialog");
+        assert!(!details.contains("ActionRow::builder()"), "a row built with markup on");
+        let say = code().split("pub fn say(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
+        assert!(say.contains(".use_markup(false)"));
+
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) {
+            return; // no display, or GTK already belongs to another test thread
+        }
+        let text = "glibc>=2.40 lib<foo> a&b";
+        let row: adw::ActionRow = Win::plain("Requires", text);
+        assert!(!row.uses_markup());
+        assert_eq!(row.subtitle().as_deref(), Some(text));
     }
 
     #[test]

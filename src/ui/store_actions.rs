@@ -898,7 +898,11 @@ impl Win {
             return;
         }
         self.store_refresh();
-        let toast = adw::Toast::builder().title(format!("{} installed", p.name)).timeout(0).build();
+        let toast = adw::Toast::builder()
+            .title(format!("{} installed", p.name))
+            .use_markup(false)
+            .timeout(0)
+            .build();
         toast.set_button_label(Some("Apply"));
         let w = self.downgrade();
         let p = p.clone();
