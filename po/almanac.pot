@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-18 18:09-0700\n"
+"POT-Creation-Date: 2026-10-18 18:39-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -33,7 +33,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: src/ui/actions.rs:806 src/ui/actions.rs:1494 src/ui/ai.rs:812
-#: src/ui/packages.rs:1116 src/ui/plugins.rs:1535 src/ui/shell.rs:2075
+#: src/ui/packages.rs:1144 src/ui/plugins.rs:1535 src/ui/shell.rs:2087
 msgid "Update"
 msgstr ""
 
@@ -107,12 +107,12 @@ msgstr ""
 
 #: src/ui/actions.rs:1248 src/ui/plugins.rs:1753 src/ui/plugins.rs:1796
 #: src/ui/plugins.rs:1834 src/ui/store_actions.rs:505
-#: src/ui/store_actions.rs:588 src/ui/store_actions.rs:988
-#: src/ui/store_actions.rs:1437
+#: src/ui/store_actions.rs:588 src/ui/store_actions.rs:992
+#: src/ui/store_actions.rs:1441
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1375 src/ui/packages.rs:854 src/ui/shell.rs:967
+#: src/ui/actions.rs:1375 src/ui/packages.rs:855 src/ui/shell.rs:970
 msgid "Update all"
 msgstr ""
 
@@ -155,7 +155,7 @@ msgstr ""
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: src/ui/ai.rs:433 src/ui/history.rs:490
+#: src/ui/ai.rs:433 src/ui/history.rs:501
 msgid "manual"
 msgstr ""
 
@@ -169,113 +169,117 @@ msgid ""
 "touches your agent configuration."
 msgstr ""
 
-#: src/ui/history.rs:69
+#: src/ui/history.rs:70
 msgid "Everything is up to date"
 msgstr ""
 
-#: src/ui/history.rs:70
+#: src/ui/history.rs:71
 msgid "Nothing installed has a newer version waiting."
 msgstr ""
 
-#: src/ui/history.rs:74
+#: src/ui/history.rs:75
 msgid "No orphans"
 msgstr ""
 
-#: src/ui/history.rs:75
+#: src/ui/history.rs:76
 msgid ""
 "Every installed package is either asked for directly or needed by something "
 "that is."
 msgstr ""
 
-#: src/ui/history.rs:79
+#: src/ui/history.rs:80
 msgid "No Flatpaks"
 msgstr ""
 
-#: src/ui/history.rs:80
+#: src/ui/history.rs:81
 msgid "Nothing is installed through Flatpak on this machine."
 msgstr ""
 
-#: src/ui/history.rs:84
+#: src/ui/history.rs:85
 msgid "No AppImages tracked"
 msgstr ""
 
-#: src/ui/history.rs:85
+#: src/ui/history.rs:86
 msgid ""
 "Install one from the App Store, or add an existing file with ☰ → Track an "
 "AppImage."
 msgstr ""
 
-#: src/ui/history.rs:89
+#: src/ui/history.rs:90
 msgid "No local builds"
 msgstr ""
 
-#: src/ui/history.rs:90
+#: src/ui/history.rs:91
 msgid "Nothing here is running from a git checkout."
 msgstr ""
 
-#: src/ui/history.rs:94
+#: src/ui/history.rs:95
 msgid "No AUR packages"
 msgstr ""
 
-#: src/ui/history.rs:95
+#: src/ui/history.rs:96
 msgid "Nothing foreign is installed."
 msgstr ""
 
-#: src/ui/history.rs:123
+#: src/ui/history.rs:124
 msgid "Critical"
 msgstr ""
 
-#: src/ui/history.rs:124
+#: src/ui/history.rs:125
 msgid "Attention"
 msgstr ""
 
-#: src/ui/history.rs:125
+#: src/ui/history.rs:126
 msgid "Optional"
 msgstr ""
 
-#: src/ui/history.rs:126
+#: src/ui/history.rs:127
 msgid "OK"
 msgstr ""
 
-#: src/ui/history.rs:223
+#: src/ui/history.rs:224
 msgid ""
 "Each check reads the system and offers the one command that acts on what it "
 "found. Nothing here runs until you ask it to."
 msgstr ""
 
-#: src/ui/history.rs:257
+#: src/ui/history.rs:258
 msgid "Reading the last 30 days…"
 msgstr ""
 
-#: src/ui/history.rs:282
+#: src/ui/history.rs:283
 msgid "Nothing recorded yet"
 msgstr ""
 
-#: src/ui/history.rs:283
+#: src/ui/history.rs:284
 msgid ""
 "Package changes, snapshots and settings resets from the last 30 days appear "
 "here."
 msgstr ""
 
-#: src/ui/history.rs:286
+#: src/ui/history.rs:287
 msgid "Nothing in the last 30 days"
 msgstr ""
 
-#: src/ui/history.rs:342
+#: src/ui/history.rs:295
+msgid "In the last 24 hours"
+msgstr ""
+
+#: src/ui/history.rs:353
 msgid "Checking the system…"
 msgstr ""
 
-#: src/ui/history.rs:593
+#: src/ui/history.rs:604
 msgid "Nothing to reclaim"
 msgstr ""
 
-#: src/ui/history.rs:600
+#: src/ui/history.rs:611
 msgid ""
 "These free cached downloads, build artefacts and old logs. Nothing you "
 "created is touched, and nothing installed is removed."
 msgstr ""
 
-#: src/ui/history.rs:602
+#: src/ui/history.rs:613
 msgid "Reclaim"
 msgstr ""
 
@@ -291,112 +295,112 @@ msgstr ""
 msgid "Duplicate software installed"
 msgstr ""
 
-#: src/ui/packages.rs:923
+#: src/ui/packages.rs:950
 msgid "Version"
 msgstr ""
 
-#: src/ui/packages.rs:924 src/ui/packages.rs:1045 src/ui/store.rs:296
+#: src/ui/packages.rs:951 src/ui/packages.rs:1072 src/ui/store.rs:296
 #: src/ui/store.rs:707 src/ui/store.rs:820
 msgid "Installed"
 msgstr ""
 
-#: src/ui/packages.rs:926
+#: src/ui/packages.rs:953
 msgid "Available"
 msgstr ""
 
-#: src/ui/packages.rs:929
+#: src/ui/packages.rs:956
 msgid "Released"
 msgstr ""
 
-#: src/ui/packages.rs:932
+#: src/ui/packages.rs:959
 msgid "Latest upstream commit"
 msgstr ""
 
-#: src/ui/packages.rs:935
+#: src/ui/packages.rs:962
 msgid "State"
 msgstr ""
 
-#: src/ui/packages.rs:939
+#: src/ui/packages.rs:966
 msgid "Switched"
 msgstr ""
 
-#: src/ui/packages.rs:940 src/ui/store.rs:820
+#: src/ui/packages.rs:967 src/ui/store.rs:820
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages.rs:940 src/ui/store_actions.rs:1369
+#: src/ui/packages.rs:967 src/ui/store_actions.rs:1373
 msgid "On"
 msgstr ""
 
-#: src/ui/packages.rs:949
+#: src/ui/packages.rs:976
 msgid "Known vulnerabilities"
 msgstr ""
 
-#: src/ui/packages.rs:950
+#: src/ui/packages.rs:977
 msgid "From the Arch Security Tracker, for the installed version."
 msgstr ""
 
-#: src/ui/packages.rs:1004
+#: src/ui/packages.rs:1031
 msgid "Open the advisory"
 msgstr ""
 
-#: src/ui/packages.rs:1023
+#: src/ui/packages.rs:1050
 msgid "Origin"
 msgstr ""
 
-#: src/ui/packages.rs:1024
+#: src/ui/packages.rs:1051
 msgid "Source"
 msgstr ""
 
-#: src/ui/packages.rs:1048
+#: src/ui/packages.rs:1075
 msgid "Built"
 msgstr ""
 
-#: src/ui/packages.rs:1051
+#: src/ui/packages.rs:1078
 msgid "Files"
 msgstr ""
 
-#: src/ui/packages.rs:1059
+#: src/ui/packages.rs:1087
 msgid "Project page"
 msgstr ""
 
-#: src/ui/packages.rs:1079
+#: src/ui/packages.rs:1107
 msgid "Dependencies"
 msgstr ""
 
-#: src/ui/packages.rs:1589 src/ui/store.rs:1110
+#: src/ui/packages.rs:1638 src/ui/store.rs:1110
 msgid "Loading the plugin marketplace…"
 msgstr ""
 
-#: src/ui/packages.rs:1898 src/ui/shell.rs:1199
+#: src/ui/packages.rs:1947 src/ui/shell.rs:1203
 msgid "Show categories"
 msgstr ""
 
-#: src/ui/packages.rs:1900
+#: src/ui/packages.rs:1949
 msgid "Hide categories"
 msgstr ""
 
-#: src/ui/packages.rs:1940
+#: src/ui/packages.rs:1989
 msgid "Filter and sort the marketplace"
 msgstr ""
 
-#: src/ui/packages.rs:1940 src/ui/shell.rs:1264 src/ui/store.rs:242
+#: src/ui/packages.rs:1989 src/ui/shell.rs:1268 src/ui/store.rs:242
 msgid "Sort by"
 msgstr ""
 
-#: src/ui/packages.rs:2037
+#: src/ui/packages.rs:2086
 msgid "Themes"
 msgstr ""
 
-#: src/ui/packages.rs:2040
+#: src/ui/packages.rs:2089
 msgid "App Store"
 msgstr ""
 
-#: src/ui/packages.rs:2123
+#: src/ui/packages.rs:2172
 msgid "Plugins current"
 msgstr ""
 
-#: src/ui/packages.rs:2127
+#: src/ui/packages.rs:2176
 msgid ""
 "Update every plugin with a clean update waiting, within the scope set in "
 "Preferences"
@@ -426,7 +430,7 @@ msgid ""
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins.rs:853 src/ui/store_actions.rs:1433
+#: src/ui/plugins.rs:853 src/ui/store_actions.rs:1437
 msgid "Built in"
 msgstr ""
 
@@ -462,8 +466,8 @@ msgstr ""
 
 #: src/ui/plugins.rs:1203 src/ui/plugins.rs:1712 src/ui/plugins.rs:1912
 #: src/ui/store.rs:927 src/ui/store_actions.rs:543 src/ui/store_actions.rs:613
-#: src/ui/store_actions.rs:1086 src/ui/store_actions.rs:1341
-#: src/ui/store_actions.rs:1354
+#: src/ui/store_actions.rs:1090 src/ui/store_actions.rs:1345
+#: src/ui/store_actions.rs:1358
 msgid "Remove"
 msgstr ""
 
@@ -803,127 +807,127 @@ msgstr ""
 msgid "Recently added"
 msgstr ""
 
-#: src/ui/shell.rs:911 src/ui/shell.rs:961 src/ui/shell.rs:1167
+#: src/ui/shell.rs:914 src/ui/shell.rs:964 src/ui/shell.rs:1171
 #: src/ui/switchboard.rs:308
 msgid "Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:945
+#: src/ui/shell.rs:948
 msgid "Back to the App Store"
 msgstr ""
 
-#: src/ui/shell.rs:951
+#: src/ui/shell.rs:954
 msgid "Nothing here"
 msgstr ""
 
-#: src/ui/shell.rs:964
+#: src/ui/shell.rs:967
 msgid "Search installed software"
 msgstr ""
 
-#: src/ui/shell.rs:1175 src/ui/shell.rs:1259
+#: src/ui/shell.rs:1179 src/ui/shell.rs:1263
 msgid "About Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:1242
+#: src/ui/shell.rs:1246
 msgid "Install what’s in the search box…"
 msgstr ""
 
-#: src/ui/shell.rs:1243
+#: src/ui/shell.rs:1247
 msgid "Install from a link…"
 msgstr ""
 
-#: src/ui/shell.rs:1244
+#: src/ui/shell.rs:1248
 msgid "Track an AppImage file…"
 msgstr ""
 
-#: src/ui/shell.rs:1247
+#: src/ui/shell.rs:1251
 msgid "Review orphaned packages…"
 msgstr ""
 
-#: src/ui/shell.rs:1248
+#: src/ui/shell.rs:1252
 msgid "Update plugins…"
 msgstr ""
 
-#: src/ui/shell.rs:1250
+#: src/ui/shell.rs:1254
 msgid "Restart the shell…"
 msgstr ""
 
-#: src/ui/shell.rs:1252
+#: src/ui/shell.rs:1256
 msgid "Refresh this page"
 msgstr ""
 
-#: src/ui/shell.rs:1255
+#: src/ui/shell.rs:1259
 msgid "Preferences…"
 msgstr ""
 
-#: src/ui/shell.rs:1258
+#: src/ui/shell.rs:1262
 msgid "Update Almanac…"
 msgstr ""
 
-#: src/ui/shell.rs:1287
+#: src/ui/shell.rs:1291
 msgid "More actions"
 msgstr ""
 
-#: src/ui/shell.rs:1328
+#: src/ui/shell.rs:1332
 msgid "Return to the plugin marketplace"
 msgstr ""
 
-#: src/ui/shell.rs:1654
+#: src/ui/shell.rs:1666
 msgid ""
 "This checkout has uncommitted changes. Pulling upstream would overwrite them "
 "— commit or stash first."
 msgstr ""
 
-#: src/ui/shell.rs:1662
+#: src/ui/shell.rs:1674
 msgid ""
 "Omarchy itself — update with the whole system (Update all), never on its own"
 msgstr ""
 
-#: src/ui/shell.rs:1670
+#: src/ui/shell.rs:1682
 msgid "Build tooling or a debug package — the next AUR build will want it back"
 msgstr ""
 
-#: src/ui/shell.rs:1672
+#: src/ui/shell.rs:1684
 msgid "Nothing requires this any more"
 msgstr ""
 
-#: src/ui/shell.rs:1706
+#: src/ui/shell.rs:1718
 msgid "Network-facing or credential-handling: a stale version is exposure"
 msgstr ""
 
-#: src/ui/shell.rs:1713
+#: src/ui/shell.rs:1725
 msgid "Touches boot or needs a reboot — update with the full system, not alone"
 msgstr ""
 
-#: src/ui/shell.rs:1823
+#: src/ui/shell.rs:1835
 msgid "No upstream URL recorded"
 msgstr ""
 
-#: src/ui/shell.rs:1891
+#: src/ui/shell.rs:1903
 msgid " (Omarchy plugin)"
 msgstr ""
 
-#: src/ui/shell.rs:2043
+#: src/ui/shell.rs:2055
 msgid "Turn off"
 msgstr ""
 
-#: src/ui/shell.rs:2043
+#: src/ui/shell.rs:2055
 msgid "Turn on"
 msgstr ""
 
-#: src/ui/shell.rs:2060
+#: src/ui/shell.rs:2072
 msgid "Keyboard shortcut…"
 msgstr ""
 
-#: src/ui/shell.rs:2370
+#: src/ui/shell.rs:2382
 msgid "Your settings were reset"
 msgstr ""
 
-#: src/ui/shell.rs:2372
+#: src/ui/shell.rs:2384
 msgid "Settings reset to defaults — see Health check"
 msgstr ""
 
-#: src/ui/shell.rs:2399
+#: src/ui/shell.rs:2411
 msgid "Packages changed — rescanning…"
 msgstr ""
 
@@ -931,7 +935,7 @@ msgstr ""
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:264 src/ui/store_actions.rs:1222
+#: src/ui/store.rs:264 src/ui/store_actions.rs:1226
 msgid "Marketplace"
 msgstr ""
 
@@ -992,7 +996,7 @@ msgstr ""
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:917 src/ui/store_actions.rs:922 src/ui/store_actions.rs:1329
+#: src/ui/store.rs:917 src/ui/store_actions.rs:926 src/ui/store_actions.rs:1333
 msgid "Apply"
 msgstr ""
 
@@ -1078,75 +1082,75 @@ msgstr ""
 msgid "Installing what it needs"
 msgstr ""
 
-#: src/ui/store_actions.rs:919
+#: src/ui/store_actions.rs:923
 msgid ""
 "Applies the theme to the whole desktop — bar, terminal, editor and this "
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1083
+#: src/ui/store_actions.rs:1087
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
 msgstr ""
 
-#: src/ui/store_actions.rs:1218
+#: src/ui/store_actions.rs:1222
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1219
+#: src/ui/store_actions.rs:1223
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1223
+#: src/ui/store_actions.rs:1227
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1224
+#: src/ui/store_actions.rs:1228
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1225
+#: src/ui/store_actions.rs:1229
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1227
+#: src/ui/store_actions.rs:1231
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1229
+#: src/ui/store_actions.rs:1233
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1235
+#: src/ui/store_actions.rs:1239
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1236
+#: src/ui/store_actions.rs:1240
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1246
+#: src/ui/store_actions.rs:1250
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1260
+#: src/ui/store_actions.rs:1264
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1261
+#: src/ui/store_actions.rs:1265
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1264
+#: src/ui/store_actions.rs:1268
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1408
+#: src/ui/store_actions.rs:1412
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1421
+#: src/ui/store_actions.rs:1425
 msgid "Finish setup"
 msgstr ""
 

@@ -982,7 +982,7 @@ impl Win {
             }),
             list_stack: gtk::Stack::new(),
             list_empty,
-            update_notes: gtk::ListBox::new(),
+            update_notes: Win::note_list(),
             content_stack: gtk::Stack::new(),
             toasts: adw::ToastOverlay::new(),
             split: adw::OverlaySplitView::new(),
@@ -1379,8 +1379,6 @@ impl Win {
 
         // A boxed list on the same 12px margins as the table's card, shown
         // only on the Updates page and only when it has something to say.
-        self.update_notes.add_css_class("boxed-list");
-        self.update_notes.set_selection_mode(gtk::SelectionMode::None);
         self.update_notes.set_margin_start(12);
         self.update_notes.set_margin_end(12);
         self.update_notes.set_margin_bottom(12);

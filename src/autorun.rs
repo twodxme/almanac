@@ -52,6 +52,8 @@ type RunFake = Box<dyn FnMut(&[Value], u64) -> bool>;
 type SectionFake = Box<dyn FnMut(&str) -> usize>;
 
 thread_local! {
+    /// What this run updated ("wordcraft 0.7.0 → 0.8.0"), for History.
+    static UPDATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Where `log` writes while a test or parity case captures it.
     static LOG_SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
     /// Stand-in for `_run` (the Python tests' `mock.patch.object(autorun, "_run")`).
@@ -61,6 +63,38 @@ thread_local! {
     /// What the child reads on stdin, when a parity case stands in for the
     /// stdin the process would otherwise pass on (the Python case swaps fd 0).
     static STDIN_FAKE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Remember one thing this run updated, for the History entry `main` writes.
+fn updated(what: String) {
+    UPDATED.with(|u| u.borrow_mut().push(what));
+}
+
+/// What this run has updated so far, emptying the list.
+pub fn take_updated() -> Vec<String> {
+    UPDATED.with(|u| std::mem::take(&mut *u.borrow_mut()))
+}
+
+/// The History title for a scheduled run that updated `items`
+/// ("wordcraft 0.7.0 → 0.8.0", ...); None when it updated nothing.
+pub fn run_title(items: &[String]) -> Option<String> {
+    let names: Vec<&str> = items.iter().map(|i| i.split(' ').next().unwrap_or(i)).collect();
+    let what = match names.as_slice() {
+        [] => return None,
+        [one] => (*one).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        _ => format!("{} items", names.len()),
+    };
+    Some(format!("Scheduled update: updated {what}"))
+}
+
+/// The History entry for a scheduled run: one line, the details as items.
+pub fn record_run(items: &[String]) -> Result<(), String> {
+    match run_title(items) {
+        Some(title) => crate::history::record_checked(crate::history::AUTOUPDATE, &title, "", "", items),
+        None => Ok(()),
+    }
 }
 
 /// `print(msg, flush=True)`.
@@ -1460,6 +1494,7 @@ pub fn update_agents_from(apps: Vec<inventory::App>) -> Result<usize, String> {
         log(&format!("{}: {} → {}", a.name, a.version, a.update));
         if run_values(&py_list(cmd)?, 1800)? {
             done += 1;
+            updated(format!("{} {} → {}", a.name, a.version, a.update));
         }
     }
     if done == 0 {
@@ -1721,6 +1756,7 @@ pub fn update_appimages_with(
             Ok(()) => {
                 done += 1;
                 log(&format!("  installed {}", py_str(&version)));
+                updated(format!("{} {} → {}", key_s, render(&have), py_str(&version)));
             }
             Err(exc) => {
                 // download() swaps atomically, so a failure here leaves the
@@ -1910,6 +1946,7 @@ pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, Stri
             .collect();
         if run_py(&argv, 300)? {
             done += 1;
+            updated(format!("{} ({} commits)", render(&id), st.behind));
         }
     }
     if done == 0 {
@@ -2603,7 +2640,13 @@ fn main_with(args: &[PyStr]) -> i32 {
             return 1;
         }
     };
-    let (code, out, err) = match run_main(&cfg, args, PROG, columns(), can_colorize()) {
+    take_updated();
+    let result = run_main(&cfg, args, PROG, columns(), can_colorize());
+    // What did update goes on the timeline even when a later section failed.
+    if let Err(e) = record_run(&take_updated()) {
+        eprintln!("almanac-autorun: history: {e}");
+    }
+    let (code, out, err) = match result {
         Ok(r) => r,
         Err(exc) => {
             eprintln!("Traceback (most recent call last):\n{exc}");
@@ -2640,6 +2683,37 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scheduled_run_is_titled_by_what_it_updated() {
+        let items = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(run_title(&[]), None);
+        assert_eq!(
+            run_title(&items(&["wordcraft 0.7.0 → 0.8.0"])).as_deref(),
+            Some("Scheduled update: updated wordcraft")
+        );
+        assert_eq!(
+            run_title(&items(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"])).as_deref(),
+            Some("Scheduled update: updated vectorcraft and wordcraft")
+        );
+        assert_eq!(
+            run_title(&items(&["a 1 → 2", "b 1 → 2", "c 1 → 2", "d (3 commits)"])).as_deref(),
+            Some("Scheduled update: updated 4 items")
+        );
+    }
+
+    #[test]
+    fn successful_updates_are_remembered_for_history() {
+        take_updated();
+        let mut no_check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
+        let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+        let (r, _) = capture_log(|| {
+            update_appimages_with(reg, &mut no_check, &mut |_, _| Ok(()), &mut |_, _| Ok(()), &mut |_| Ok(()))
+        });
+        assert_eq!(r, Ok(1));
+        assert_eq!(take_updated(), vec!["wordcraft 0.7.0 → 0.8.0".to_string()]);
+        assert!(take_updated().is_empty(), "taking empties the list");
+    }
     use std::rc::Rc;
 
     #[test]

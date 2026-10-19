@@ -31,6 +31,7 @@ pub const HISTORY_ICONS: &[(&str, &str)] = &[
     (history::SNAPSHOT, "camera-photo-symbolic"),
     (history::RESET, "edit-undo-symbolic"),
     (history::ALMANAC, "object-select-symbolic"),
+    (history::AUTOUPDATE, "software-update-available-symbolic"),
 ];
 
 /// `_HISTORY_ICONS.get(kind, "object-select-symbolic")`.
@@ -286,6 +287,16 @@ impl Win {
             self.summarize(&tr("Nothing in the last 30 days"), Some("history"));
             return;
         }
+        // The last 24 hours in one line, above the timeline: the same boxed
+        // list and icon size as the notes above the Updates table.
+        let recent = Win::note_list();
+        recent.append(&Win::note_row(
+            "document-open-recent-symbolic",
+            &tr("In the last 24 hours"),
+            &history::last_day(&days, crate::util::now()),
+        ));
+        history_body.append(&recent);
+
         for day in &days {
             let note = if day.snapshot {
                 "A snapshot was taken this day — changes after it can be undone from the boot menu."

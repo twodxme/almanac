@@ -35,6 +35,8 @@ pub const PACKAGES: &str = "packages";
 pub const SNAPSHOT: &str = "snapshot";
 pub const RESET: &str = "reset";
 pub const ALMANAC: &str = "almanac";
+/// What a scheduled run of almanac-autorun updated.
+pub const AUTOUPDATE: &str = "autoupdate";
 
 /// One entry of the timeline.
 ///
@@ -1247,6 +1249,81 @@ pub fn _summarise(changes: &[String]) -> String {
     }
 }
 
+/// "a", "a and b", "a, b and c", or "{n} {noun}" past three.
+fn few(names: &[String], noun: &str) -> String {
+    match names {
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        _ => format!("{} {noun}", names.len()),
+    }
+}
+
+/// One line for the top of History: everything that changed in the 24 hours
+/// before `now`, so "did something install last night?" has an answer
+/// without reading the timeline. "Nothing changed." when nothing did.
+pub fn last_day(days: &[Day], now: f64) -> String {
+    let since = now - 86_400.0;
+    let mut verbs: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let (mut scheduled, mut snapshots, mut resets, mut other) = (Vec::<String>::new(), 0, 0, 0);
+    let push = |list: &mut Vec<String>, name: &str| {
+        if !list.iter().any(|n| n == name) {
+            list.push(name.to_string());
+        }
+    };
+    for e in days.iter().flat_map(|d| &d.events).filter(|e| e.ts >= since && e.ts <= now) {
+        match e.kind.as_str() {
+            PACKAGES => {
+                for c in &e.items {
+                    let Some(m) = _CHANGE.captures(c) else { continue };
+                    let verb = match &m[1] {
+                        "upgraded" => "upgraded",
+                        "installed" => "installed",
+                        "removed" => "removed",
+                        "downgraded" => "downgraded",
+                        _ => continue, // reinstalled: nothing changed
+                    };
+                    push(verbs.entry(verb).or_default(), &m[2]);
+                }
+            }
+            AUTOUPDATE => {
+                for item in &e.items {
+                    push(&mut scheduled, item.split(' ').next().unwrap_or(item));
+                }
+            }
+            SNAPSHOT => snapshots += 1,
+            RESET => resets += 1,
+            _ => other += 1,
+        }
+    }
+    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut parts: Vec<String> = Vec::new();
+    for (verb, label) in [("upgraded", "updated"), ("installed", "installed"),
+                          ("removed", "removed"), ("downgraded", "downgraded")] {
+        if let Some(names) = verbs.get(verb) {
+            parts.push(format!("{label} {}", few(names, "packages")));
+        }
+    }
+    if !scheduled.is_empty() {
+        parts.push(format!("the scheduled update updated {}", few(&scheduled, "items")));
+    }
+    if snapshots > 0 {
+        parts.push(format!("{} taken", plural(snapshots, "snapshot", "snapshots")));
+    }
+    if resets > 0 {
+        parts.push(format!("{} reset to defaults", plural(resets, "settings file", "settings files")));
+    }
+    if other > 0 {
+        parts.push(format!("{} made in Almanac", plural(other, "other change", "other changes")));
+    }
+    let Some(first) = parts.first_mut() else { return "Nothing changed.".to_string() };
+    let mut chars = first.chars();
+    if let Some(c) = chars.next() {
+        *first = c.to_uppercase().chain(chars).collect();
+    }
+    parts.join(" · ")
+}
+
 /// `re.search(r"COMMAND=\S*snapper\b.*\bcreate\b", msg)`, with Python's
 /// `\S`, `\w` (for `\b`) and `.` (anything but a newline).
 fn snapper_create(msg: &[u32]) -> bool {
@@ -1598,6 +1675,59 @@ fn group(mut events: Vec<Event>) -> Result<Vec<Day>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn day_of(events: Vec<Event>) -> Vec<Day> {
+        vec![Day { day: NaiveDate::from_ymd_opt(2026, 10, 18).unwrap(), events, snapshot: false }]
+    }
+
+    fn changes(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn last_day_answers_what_changed_overnight() {
+        let now = 1_792_400_000.0;
+        // 2026-10-17: rust by hand at 18:18; 2026-10-18: the timer's AppImages.
+        let days = day_of(vec![
+            Event::new(now - 3600.0, AUTOUPDATE, "Scheduled update: updated vectorcraft and wordcraft", "",
+                       changes(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"]), ""),
+            Event::new(now - 20.0 * 3600.0, PACKAGES, "Installed 2 packages", "",
+                       changes(&["installed lld (22.1.8-1)", "installed rust (1:1.98.1-1)"]), ""),
+            Event::new(now - 30.0 * 3600.0, PACKAGES, "Updated hermes-desktop", "",
+                       changes(&["upgraded hermes-desktop (1 -> 2)"]), ""),
+        ]);
+        assert_eq!(
+            last_day(&days, now),
+            "Installed lld and rust · the scheduled update updated vectorcraft and wordcraft"
+        );
+    }
+
+    #[test]
+    fn last_day_counts_past_three_and_skips_reinstalls() {
+        let now = 1_792_400_000.0;
+        let days = day_of(vec![
+            Event::new(now - 60.0, PACKAGES, "", "", changes(&[
+                "upgraded a (1 -> 2)", "upgraded b (1 -> 2)", "upgraded c (1 -> 2)", "upgraded d (1 -> 2)",
+                "upgraded a (2 -> 3)", "reinstalled archlinux-keyring (1)", "removed e (1)",
+            ]), ""),
+            Event::new(now - 120.0, SNAPSHOT, "Snapshot", "", vec![], ""),
+            Event::new(now - 180.0, RESET, "x reset", "", vec![], ""),
+            Event::new(now - 240.0, RESET, "y reset", "", vec![], ""),
+            Event::new(now - 300.0, ALMANAC, "Shell restarted", "", vec![], ""),
+        ]);
+        assert_eq!(
+            last_day(&days, now),
+            "Updated 4 packages · removed e · 1 snapshot taken · 2 settings files reset to defaults \
+             · 1 other change made in Almanac"
+        );
+        assert_eq!(last_day(&day_of(vec![]), now), "Nothing changed.");
+        // Older than a day, or in the future (a clock that jumped): not counted.
+        let stale = day_of(vec![
+            Event::new(now - 90_000.0, SNAPSHOT, "", "", vec![], ""),
+            Event::new(now + 600.0, SNAPSHOT, "", "", vec![], ""),
+        ]);
+        assert_eq!(last_day(&stale, now), "Nothing changed.");
+    }
 
     const LOG: &str = concat!(
         "[2026-10-16T23:02:32-0700] [ALPM] transaction started\n",

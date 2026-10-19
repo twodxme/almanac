@@ -878,12 +878,7 @@ impl Win {
             Vec::new()
         };
         for note in &notes {
-            let row: adw::ActionRow = Win::plain(&note.title, &note.body);
-            row.set_subtitle_lines(0);
-            let icon = gtk::Image::builder().icon_name(note.icon).pixel_size(24).valign(gtk::Align::Center).build();
-            icon.add_css_class("dim-label");
-            row.add_prefix(&icon);
-            self.update_notes.append(&row);
+            self.update_notes.append(&Win::note_row(note.icon, &note.title, &note.body));
         }
         self.update_notes.set_visible(!notes.is_empty());
     }
@@ -1184,6 +1179,27 @@ impl Win {
     /// has to be switched off before the title and subtitle go in, not after.
     pub fn plain<R: PlainRow>(title: &str, subtitle: &str) -> R {
         Win::plain_with(title, subtitle, |_row: &R| {})
+    }
+
+    /// A note above a page's content (the Updates page's, History's last
+    /// 24 hours): plain text, wrapped in full, behind a dim 24px icon. One
+    /// helper so the pages' notes cannot drift apart.
+    pub fn note_row(icon: &str, title: &str, body: &str) -> adw::ActionRow {
+        let row: adw::ActionRow = Win::plain(title, body);
+        row.set_subtitle_lines(0);
+        let image = gtk::Image::builder().icon_name(icon).pixel_size(24).valign(gtk::Align::Center).build();
+        image.add_css_class("dim-label");
+        image.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&image);
+        row
+    }
+
+    /// A boxed list for `note_row`s.
+    pub fn note_list() -> gtk::ListBox {
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list
     }
 
     /// `_plain(cls, title, subtitle, **kwargs)`: `kwargs` stands in for the
