@@ -171,8 +171,8 @@ fn name_list(names: &[&str]) -> String {
 }
 
 /// What to say above the pending updates. `repo_pending` names the pending
-/// updates from the Arch and Omarchy repositories, the ones a mirror batch
-/// brings; `all_pending` counts every pending update the page lists.
+/// repository packages, the ones a mirror batch brings; `all_pending` counts
+/// every pending update the page lists.
 pub fn notes(state: &State, repo_pending: &[String], all_pending: usize) -> Vec<Note> {
     let mut out = Vec::new();
     if let (Some(local), Some(upstream)) = (state.local, state.upstream) {

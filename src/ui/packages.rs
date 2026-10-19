@@ -864,12 +864,14 @@ impl Win {
             self.update_notes.remove(&child);
         }
         let notes = if filter_key == "updates" && query.is_empty() {
-            // The repositories' pending updates: what a mirror batch brings.
+            // Pending repository packages: what a mirror batch brings.
+            // Omarchy's own packages (System) come from its own repository,
+            // not the Arch batch.
             let pending: Vec<String> = self
                 .store_objects()
                 .iter()
                 .filter_map(|o| AppItem::of(o).map(|i| i.clone()))
-                .filter(|i| i.has_update && (i.source == inventory::REPO || i.source == inventory::SYSTEM))
+                .filter(|i| i.has_update && i.source == inventory::REPO)
                 .map(|i| i.app.name)
                 .collect();
             let all = Win::count_items(&self.store_objects(), |i| i.has_update);
