@@ -676,7 +676,6 @@ pub fn describe(p: &SetupPlan) -> String {
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

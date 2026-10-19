@@ -1612,23 +1612,6 @@ fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
     Ok("weekly".to_owned())
 }
 
-/// How to trigger a run immediately, for the task runner.
-///
-/// OsStrings, as the str Python builds carries a home that is not UTF-8 in
-/// surrogateescape form and subprocess turns it back into the same bytes.
-/// Err where `Path.home()` raises RuntimeError.
-pub fn run_now_argv() -> Result<Vec<OsString>, String> {
-    imported()?;
-    let home = py_home().ok_or_else(|| NO_HOME.to_owned())?;
-    let script = py_norm(&py_join(&py_norm(&home), b".local/bin/omarchy-auto-update"));
-    let mut argv: Vec<OsString> = ["systemd-run", "--user", "--wait", "--pipe", "--collect", "--unit=almanac-update"]
-        .iter()
-        .map(OsString::from)
-        .collect();
-    argv.push(OsString::from_vec(script));
-    Ok(argv)
-}
-
 
 /// Code points `str.isprintable()` rejects (Python 3.14, Unicode 16.0.0),
 /// as inclusive ranges, generated from `unicodedata`.

@@ -2450,10 +2450,6 @@ pub fn github_avatar(owner: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------- parity
-
-
-
 #[cfg(test)]
 /// Replace the number after `"<key>": ` with `T`.
 fn stamp_out(text: &str, key: &str) -> String {
@@ -2467,7 +2463,6 @@ fn stamp_out(text: &str, key: &str) -> String {
         .map_or(text.len(), |n| start + n);
     format!("{}T{}", &text[..start], &text[end..])
 }
-
 
 
 #[cfg(test)]

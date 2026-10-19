@@ -1601,15 +1601,6 @@ fn aur_records(data: &Py, homes: &[Py]) -> Result<Vec<Option>, String> {
     Ok(out)
 }
 
-/// `_sums`: {file name: sha256} from any checksum file in the release.
-///
-/// `assets` are the GitHub release's `assets` objects, as returned. Raises
-/// (here: `Err`) on assets that are not GitHub's shape.
-pub fn sums(assets: &[Value]) -> Result<BTreeMap<String, String>, String> {
-    let assets: Vec<Py> = assets.iter().map(Py::from_value).collect();
-    sums_with(&assets, &|u: &str| get(u, 20))
-}
-
 /// `x < 65536` for a JSON value.
 fn lt_65536(v: &Py) -> Result<bool, String> {
     match v {
@@ -2049,14 +2040,6 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
     .map_err(|e| exc_str(&e))?;
     Ok(dest)
 }
-
-// ---- parity ------------------------------------------------------------------
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {

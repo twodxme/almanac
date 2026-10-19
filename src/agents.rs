@@ -1830,8 +1830,6 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
 }
 
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

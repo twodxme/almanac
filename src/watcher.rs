@@ -485,9 +485,6 @@ pub struct Seen {
 }
 
 impl Seen {
-    pub fn from_strs<I: IntoIterator<Item = S>, S: AsRef<str>>(items: I) -> Seen {
-        Seen { strs: items.into_iter().map(|s| pystr(s.as_ref())).collect(), ..Seen::default() }
-    }
 
     pub fn len(&self) -> usize {
         self.strs.len() + self.nums.len() + usize::from(self.none)
@@ -1242,7 +1239,6 @@ pub fn main() -> i32 {
     let _ = std::fs::remove_file(pid_path());
     0
 }
-
 
 
 #[cfg(test)]

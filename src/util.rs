@@ -3,7 +3,6 @@
 //! command with a timeout, Python's rounding and title-casing, ISO dates, and
 //! the atomic JSON write every state file uses.
 
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -398,13 +397,6 @@ pub fn py_float_repr(f: f64) -> String {
     s
 }
 
-/// A `dict[str, str]`-shaped helper for parity args.
-pub fn str_map(v: &serde_json::Value) -> HashMap<String, String> {
-    v.as_object()
-        .map(|m| m.iter().map(|(k, x)| (k.clone(), x.as_str().unwrap_or_default().to_string())).collect())
-        .unwrap_or_default()
-}
-
 /// Argument helpers for `parity()` hooks: `arg_str(args, "name")`.
 pub fn arg_str<'a>(args: &'a serde_json::Value, key: &str) -> &'a str {
     args.get(key).and_then(|v| v.as_str()).unwrap_or_default()
@@ -420,13 +412,6 @@ pub fn arg_i64(args: &serde_json::Value, key: &str) -> i64 {
 
 pub fn arg_bool(args: &serde_json::Value, key: &str) -> bool {
     args.get(key).and_then(|v| v.as_bool()).unwrap_or_default()
-}
-
-pub fn arg_strs(args: &serde_json::Value, key: &str) -> Vec<String> {
-    args.get(key)
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect())
-        .unwrap_or_default()
 }
 
 /// Walking a value as nested as Python's json allows (52000 levels on the

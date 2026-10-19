@@ -2221,11 +2221,6 @@ fn find_paths(domain: &str, localedir: Option<&str>, languages: Option<Vec<Strin
     result
 }
 
-/// `gettext._expand_lang`.
-pub fn expand_lang(loc: &str) -> Vec<String> {
-    expand_lang_py(&py_from_str(loc)).iter().map(|s| py_lossy(s)).collect()
-}
-
 /// `_expand_lang` on a pystr.
 fn expand_lang_py(loc: &str) -> Vec<String> {
     let loc = normalize_py(loc);

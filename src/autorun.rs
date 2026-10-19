@@ -2665,8 +2665,6 @@ fn main_with(args: &[PyStr]) -> i32 {
     code
 }
 
-// ----------------------------------------------------------------- parity --
-
 #[cfg(test)]
 /// A `_run` stand-in that records `[argv, timeout]` and answers `ok`.
 fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
@@ -2675,9 +2673,6 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
         ok
     })
 }
-
-
-
 
 
 #[cfg(test)]

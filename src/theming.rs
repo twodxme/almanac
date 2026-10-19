@@ -292,11 +292,6 @@ fn char_slice(s: &[char], i: usize, j: usize) -> String {
 
 // --- Reading the theme -------------------------------------------------------
 
-/// The active theme's directory, or None when Omarchy is not in use.
-pub fn theme_dir() -> Option<PathBuf> {
-    theme_dir_at(&current())
-}
-
 fn theme_dir_at(current: &Path) -> Option<PathBuf> {
     if current.exists() {
         return current.canonicalize().ok();
@@ -320,10 +315,6 @@ fn background_at(current: &Path) -> Option<PathBuf> {
         return if target.is_file() { Some(target) } else { None };
     }
     None
-}
-
-pub fn colors_path() -> Option<PathBuf> {
-    colors_path_at(&current())
 }
 
 fn colors_path_at(current: &Path) -> Option<PathBuf> {

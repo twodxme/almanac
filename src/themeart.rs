@@ -1716,9 +1716,6 @@ pub fn thumbnail(repo: &str) -> Option<PathBuf> {
 }
 
 
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

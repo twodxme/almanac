@@ -884,10 +884,6 @@ impl Win {
     }
 
     // ---- store entries that are themes ----
-    /// Themes install and apply as two steps, so they are offered as two.
-    pub fn install_theme(&self, p: &Plugin) {
-        theme_install(&self.downgrade(), &self.live(p));
-    }
 
     pub fn theme_installed(&self, ok: bool, p: &Plugin) {
         if !ok {
@@ -955,10 +951,6 @@ impl Win {
             }
             self.say(&format!("Now wearing {}", p.name), 5);
         }
-    }
-
-    pub fn remove_theme(&self, p: &Plugin) {
-        theme_remove(&self.downgrade(), &self.live(p));
     }
 
     // ---- store entries that are AppImages, not plugins ----

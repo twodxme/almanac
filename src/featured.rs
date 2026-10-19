@@ -516,10 +516,6 @@ pub fn build(apps: &[App], findings: &[Finding], plugins: &[Plugin]) -> Vec<Shel
 }
 
 
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

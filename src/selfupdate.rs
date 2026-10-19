@@ -226,11 +226,6 @@ pub fn install_kind_in(root: &Path) -> Result<&'static str, String> {
     Ok(PLAIN)
 }
 
-/// The pacman package that owns this copy, or "".
-pub fn owning_package() -> Result<String, String> {
-    owning_package_in(&ROOT)
-}
-
 pub fn owning_package_in(root: &Path) -> Result<String, String> {
     match pacman_owner(root)? {
         Ok(out) => {
@@ -255,11 +250,6 @@ pub fn version_in(root: &Path) -> Result<String, String> {
         }
     }
     Ok(VERSION.to_string())
-}
-
-/// URL of the `origin` remote, or "".
-pub fn remote_url() -> Result<String, String> {
-    remote_url_in(&ROOT)
 }
 
 pub fn remote_url_in(root: &Path) -> Result<String, String> {
@@ -606,12 +596,6 @@ pub fn as_app(check_updates: bool) -> crate::inventory::App {
 /// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {
     compiled_as_app_in(&ROOT, &running_exe(), check_updates)
-}
-
-/// `as_app` as the Python does it, against `root`.
-pub fn as_app_in(root: &Path, check_updates: bool) -> Result<crate::inventory::App, String> {
-    let info = check_in(root, check_updates)?;
-    app_with_home(root, info)
 }
 
 /// `as_app` for a compiled build: the same row, from `compiled_check_in`. It

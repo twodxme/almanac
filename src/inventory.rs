@@ -2895,12 +2895,6 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
     Ok(found)
 }
 
-/// `try_search_available` for callers that need a plain list: where the
-/// Python raises, this answers `[]`.
-pub fn search_available(query: &str, limit: usize) -> Vec<App> {
-    try_search_available(query, limit).unwrap_or_default()
-}
-
 // ------------------------------------------------- omarchy plugin registry --
 pub const PLUGIN: &str = "plugin";
 pub const REGISTRY_URL: &str =
@@ -3138,19 +3132,6 @@ pub fn try_search_plugins(query: &str, limit: usize) -> Result<Vec<App>, String>
     out.truncate(limit);
     Ok(out)
 }
-
-/// `try_search_plugins` for callers that need a plain list: where the
-/// Python raises, this answers `[]`.
-pub fn search_plugins(query: &str, limit: usize) -> Vec<App> {
-    try_search_plugins(query, limit).unwrap_or_default()
-}
-
-// ------------------------------------------------------------------ parity --
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {

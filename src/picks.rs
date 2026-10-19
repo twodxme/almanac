@@ -31,11 +31,10 @@
 //! heavyweight every day, and no marketplace gets both places while another has
 //! a contender.
 
-#![allow(dead_code)]
 
 use num_bigint::{BigInt, BigUint, Sign};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -2616,29 +2615,6 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
     Ok(picked)
 }
 
-// ---- parity ------------------------------------------------------------------
-
-
-/// `{"env": {"XDG_STATE_HOME": "/tmp/..."}}` in the args: set for the call,
-/// put back after (the Python case does the same around its call).
-fn _with_env<T>(args: &Value, f: impl FnOnce() -> T) -> T {
-    let mut old: Vec<(String, Option<std::ffi::OsString>)> = Vec::new();
-    if let Some(Value::Object(env)) = args.get("env") {
-        for (k, v) in env {
-            old.push((k.clone(), std::env::var_os(k)));
-            std::env::set_var(k, v.as_str().unwrap_or(""));
-        }
-    }
-    let out = f();
-    for (k, v) in old {
-        match v {
-            Some(v) => std::env::set_var(&k, v),
-            None => std::env::remove_var(&k),
-        }
-    }
-    out
-}
-
 fn _arg<T: serde::de::DeserializeOwned + Default>(args: &Value, key: &str) -> T {
     args.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
 }
@@ -2675,97 +2651,6 @@ fn _picks_json(picks: &[Pick]) -> Value {
             })
             .collect(),
     )
-}
-
-fn _parity(func: &str, args: &Value) -> Option<Value> {
-    use crate::util::{arg_bool, arg_f64, arg_str};
-    let plugins: Vec<Plugin> = _arg(args, "plugins");
-    let plugin: Plugin = _arg(args, "plugin");
-    let signals: Vec<Signals> = _arg(args, "signals");
-    let now = arg_f64(args, "now");
-    // A canned GitHub: `"feed": {url: body}` (a missing url is None), as the
-    // Python case puts in place of ghcache.get_json. Without it, the real one.
-    let feed: Option<Map<String, Value>> = args.get("feed").and_then(|v| v.as_object().cloned());
-    let canned = |url: &str, _ttl: u64| Ok(feed.as_ref().and_then(|f| f.get(url)).filter(|v| !v.is_null()).map(PyJson::from_serde));
-    let get: GetJson = if feed.is_some() { &canned } else { &_real_get };
-    let tok = args.get("token").and_then(Value::as_bool);
-    let token = move || tok.map_or_else(_real_token, Ok);
-    let elig: &(dyn Fn(&Plugin) -> bool + Sync) = if arg_bool(args, "eligible_stub") { &_stub_eligible } else { &eligible };
-    let err = |e: String| serde_json::json!({ "error": e });
-    let v = match func {
-        "_github" => Value::from(_github(arg_str(args, "repo_url"))),
-        "_compact" => Value::from(_compact(crate::util::arg_i64(args, "n"))),
-        "_ts" => Value::from(_ts(arg_str(args, "value"))),
-        "_scaled" => serde_json::to_value(_scaled(&_arg::<Vec<f64>>(args, "values"))).unwrap_or(Value::Null),
-        "eligible" => Value::from(elig(&plugin)),
-        "shortlist" => {
-            let size = args.get("size").and_then(Value::as_u64).unwrap_or(SHORTLIST as u64) as usize;
-            serde_json::to_value(_shortlist(&plugins, size, _now(Some(now)), elig)).unwrap_or(Value::Null)
-        }
-        "activity_today" => {
-            let pages = args.get("pages").and_then(Value::as_u64).unwrap_or(EVENT_PAGES as u64) as u32;
-            match _activity_today(arg_str(args, "full"), now, pages, get) {
-                Ok(r) => serde_json::json!(r),
-                Err(e) => err(e),
-            }
-        }
-        "comments_this_week" => match _comments_this_week(arg_str(args, "full"), now, get) {
-            Ok(r) => serde_json::json!(r),
-            Err(e) => err(e),
-        },
-        "release_downloads" => match _release_downloads(arg_str(args, "full"), get) {
-            Ok((total, tag)) => serde_json::json!([big_json(&total), tag.to_serde()]),
-            Err(e) => err(e),
-        },
-        "measure" => {
-            let history = PyJson::from_serde(args.get("history").unwrap_or(&Value::Null));
-            match token().and_then(|t| _measure(&plugin, now, &history, t, get)) {
-                Ok(s) => _signals_json(&s),
-                Err(e) => err(e),
-            }
-        }
-        "rank" => {
-            let recent: HashSet<String> = _arg::<Vec<String>>(args, "recent_picks").into_iter().collect();
-            match rank(&plugins, &signals, now, &recent) {
-                Ok(r) => _picks_json(&r),
-                Err(e) => err(e),
-            }
-        }
-        "reasons" => serde_json::to_value(reasons(&plugin, &_arg::<Signals>(args, "s"))).unwrap_or(Value::Null),
-        "choose" => {
-            let ranked: Vec<Pick> = _arg(args, "ranked");
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(2) as usize;
-            _picks_json(&choose(&ranked, limit))
-        }
-        "today" => {
-            let now = _now(Some(now));
-            let picked = if crate::demo::active() {
-                // demo.picks reads picks.eligible, which the Python case may
-                // have swapped: demo's own hook takes the same switch.
-                let demo_args = serde_json::json!({
-                    "plugins": args.get("plugins").cloned().unwrap_or(Value::Array(vec![])),
-                    "eligible_stub": arg_bool(args, "eligible_stub"),
-                });
-                { let _ = demo_args; Value::Null }
-            } else {
-                let deps = Deps {
-                    get,
-                    token: &token,
-                    eligible: elig,
-                    enabled: &|| crate::settings::get_bool("net_daily_picks"),
-                };
-                match _today(&plugins, now, &deps) {
-                    Ok(p) => _picks_json(&p),
-                    Err(e) => return Some(err(e)),
-                }
-            };
-            // and what it left on disk, byte for byte
-            let state = std::fs::read_to_string(_state_path()).map(Value::String).unwrap_or(Value::Null);
-            serde_json::json!({"picks": picked, "state": state})
-        }
-        _ => return None,
-    };
-    Some(v)
 }
 
 #[cfg(test)]

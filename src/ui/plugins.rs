@@ -19,7 +19,6 @@ use crate::ui::actions::Judge;
 use crate::ui::shell::{name, source_label, spawn_bg, AppItem, WeakWin, Win};
 use crate::util;
 use crate::verify::{self, Outcome, ProbeValue, TryProbe};
-use crate::xdg;
 
 /// State only the Plugins section reads and writes.
 /// What `plugin_logo` shows beside a plugin (see `plugin_logo_choice`).
@@ -1654,30 +1653,6 @@ impl Win {
     pub fn on_launch(&self, app: &inventory::App) {
         if let Err(e) = popen_detached(std::slice::from_ref(&app.exec_path)) {
             self.say(&format!("Could not launch {}: {}", app.name, py_oserror(&e, &app.exec_path)), 5);
-        }
-    }
-
-    /// The one remaining escape to a terminal: see on_update_all.
-    pub fn in_terminal(&self, script: &str, note: &str) -> bool {
-        let Some(argv) = xdg::terminal_argv(&[
-            "bash".to_string(),
-            "-lc".to_string(),
-            script.to_string() + "; echo; read -n1 -r -p 'Done — press any key to close'",
-        ])
-        .filter(|a| !a.is_empty()) else {
-            self.say(&tr("No terminal found to run that in"), 5);
-            return false;
-        };
-        match popen_detached(&argv) {
-            Ok(()) => {
-                self.say(note, 5);
-                true
-            }
-            Err(e) => {
-                let prog = argv.first().cloned().unwrap_or_default();
-                self.say(&format!("Could not start a terminal: {}", py_oserror(&e, &prog)), 5);
-                false
-            }
         }
     }
 

@@ -612,32 +612,6 @@ impl Plugin {
         Ok(py_str(&self.try_page()?))
     }
 
-    fn try_asset_v(&self, rel: &Value) -> Result<String, String> {
-        match self.py_market()? {
-            Some(m) if truthy(Some(rel)) => match rel {
-                Value::String(r) => Ok(format!("{}{r}", m.site)),
-                other => Err(format!("TypeError: can only concatenate str (not \"{}\") to str", py_type(other))),
-            },
-            _ => Ok(String::new()),
-        }
-    }
-
-    pub fn try_thumb_url(&self) -> Result<String, String> {
-        self.try_asset_v(&self.pv("thumb"))
-    }
-
-    pub fn try_preview_url(&self) -> Result<String, String> {
-        self.try_asset_v(&self.pv("preview"))
-    }
-
-    pub fn try_colors(&self) -> Result<(&'static str, &'static str), String> {
-        match self.pv("accent") {
-            Value::String(s) => Ok(accent(&s).unwrap_or(DEFAULT_ACCENT)),
-            v @ (Value::Array(_) | Value::Object(_)) => Err(unhashable(&v)),
-            _ => Ok(DEFAULT_ACCENT),
-        }
-    }
-
     fn try_repo_parts(&self) -> Result<Vec<String>, String> {
         let repo = self.ps("repo", "split")?;
         Ok(repo.split('/').filter(|x| !x.is_empty()).map(str::to_string).collect())
@@ -3007,17 +2981,6 @@ pub fn removable_themes() -> BTreeSet<String> {
 pub fn installed_themes() -> BTreeSet<String> {
     omarchy_lines(&["omarchy", "theme", "list"])
 }
-
-// ---- parity --------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {

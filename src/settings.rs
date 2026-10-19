@@ -630,14 +630,6 @@ impl Setting {
         self.doc.to_value(self.root)
     }
 
-    /// The str, when the value is one; lone surrogates as U+FFFD.
-    pub fn as_str_lossy(&self) -> Option<String> {
-        match &self.doc.nodes[self.root] {
-            Node::Str(s) => Some(lossy(s)),
-            _ => None,
-        }
-    }
-
     fn leaf(node: Node) -> Setting {
         Setting { doc: Doc { nodes: vec![node] }, root: 0 }
     }
@@ -720,7 +712,6 @@ pub fn set(key: &str, value: impl Into<Setting>) -> Result<(), String> {
     };
     write().map_err(|e| format!("OSError: {e}"))
 }
-
 
 
 #[cfg(test)]

@@ -1956,13 +1956,6 @@ impl Win {
         }
     }
 
-    pub fn select_category_and_close(&self, key: &str) {
-        self.select_category(key);
-        if self.shared.borrow().narrow {
-            self.split.set_show_sidebar(false);
-        }
-    }
-
     pub fn page_title(&self, key: &str, fallback: &str) -> String {
         let row = self.shared.borrow().sidebar_row(key).map(|r| r.row.clone());
         match row {

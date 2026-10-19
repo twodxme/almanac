@@ -2986,8 +2986,6 @@ fn _describe() -> Result<String, String> {
 }
 
 
-
-
 #[cfg(test)]
 fn restore(cache_home: Option<std::ffi::OsString>, state_home: Option<std::ffi::OsString>) {
     for (k, v) in [("XDG_CACHE_HOME", cache_home), ("XDG_STATE_HOME", state_home)] {

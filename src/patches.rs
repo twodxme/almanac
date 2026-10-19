@@ -420,7 +420,6 @@ pub fn explain(state: &PatchState, name: &str) -> (String, String, String) {
 }
 
 
-
 #[cfg(test)]
 mod tests {
     //! A patched checkout, weighed against the update without touching it.

@@ -1676,13 +1676,6 @@ pub fn needs_attention(groups: &[Group]) -> usize {
     groups.iter().flat_map(|(_t, _d, entries)| entries).filter(|e| e.severity == "warn").count()
 }
 
-// ---- parity ------------------------------------------------------------------
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1126,7 +1126,6 @@ fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -89,7 +89,6 @@ pub fn snapshot() -> Option<BTreeMap<String, String>> {
 }
 
 
-
 /// `subprocess.run(argv, capture_output=True, timeout=secs)` keeping the raw
 /// bytes: (returncode, stdout, stderr), or None on OSError / TimeoutExpired.
 ///
@@ -706,8 +705,6 @@ fn guess_extension(type_: &str, strict: bool) -> Result<Option<String>, String> 
     Ok(extensions.into_iter().next()
         .map(|e| e.chars().map(|c| if is_escaped_byte(c) { '\u{fffd}' } else { c }).collect()))
 }
-
-
 
 
 #[cfg(test)]

@@ -1666,12 +1666,6 @@ fn group(mut events: Vec<Event>) -> Result<Vec<Day>, String> {
         .collect())
 }
 
-// ---- parity ------------------------------------------------------------------
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

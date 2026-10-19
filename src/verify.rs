@@ -828,8 +828,6 @@ impl Py {
     }
 
 
-
-
     fn number(&self) -> Option<Result<i128, f64>> {
         match self {
             Py::Bool(b) => Some(Ok(*b as i128)),

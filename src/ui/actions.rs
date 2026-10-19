@@ -1459,10 +1459,6 @@ impl Win {
         self.confirm_agent_cmd(app, cmd, "");
     }
 
-    pub fn confirm_agent(&self, app: &App, cmd: &[String], notes: &str) {
-        self.confirm_agent_cmd(app, Ok(cmd.to_vec()), notes);
-    }
-
     /// `_confirm_agent` with `cmd` as `update_cmd` reads it.
     fn confirm_agent_cmd(&self, app: &App, cmd: Result<Vec<String>, String>, notes: &str) {
         let manager = match app.extra.get("manager") {

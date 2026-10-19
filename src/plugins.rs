@@ -1790,7 +1790,6 @@ pub fn set_scope(value: &str) -> Result<(), String> {
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

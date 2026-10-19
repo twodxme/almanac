@@ -17,7 +17,6 @@
 //! screenshot can show a security update, a routine update, something several
 //! majors behind, and something perfectly current.
 
-#![allow(dead_code)]
 
 use serde_json::{json, Map, Value};
 
@@ -1351,70 +1350,6 @@ fn _picks(
         })
         .collect()
 }
-
-// ---- parity --------------------------------------------------------------
-
-fn to_json<T: serde::Serialize>(v: T) -> Value {
-    serde_json::to_value(v).unwrap_or(Value::Null)
-}
-
-fn parity_call(func: &str, args: &Value) -> Option<Value> {
-    Some(match func {
-        "active" => json!(active()),
-        "HOME" => json!(HOME),
-        "INSTALLED_PLUGIN_IDS" => {
-            let mut v: Vec<&str> = INSTALLED_PLUGIN_IDS.to_vec();
-            v.sort();
-            json!(v)
-        }
-        "INSTALLED_THEMES" => {
-            let mut v: Vec<&str> = INSTALLED_THEMES.to_vec();
-            v.sort();
-            json!(v)
-        }
-        "packages" => to_json(packages()),
-        "appimages" => to_json(appimages()),
-        "flatpaks" => to_json(flatpaks()),
-        "local_builds" => to_json(local_builds()),
-        "agents" => to_json(agents()),
-        "collect" => to_json(collect()),
-        "findings" => to_json(findings()),
-        "ai_groups" => to_json(ai_groups()),
-        "history" => {
-            let days = match args.get("now").and_then(Value::as_f64) {
-                Some(now) => history_at(now),
-                None => history_result(),
-            };
-            // Day.day as ISO text, like the Python case's conversion.
-            match days {
-                Ok(days) => to_json(days),
-                Err(e) => json!({ "error": e }),
-            }
-        }
-        "plugins" => to_json(plugins()),
-        "startup_apps" => to_json(startup_apps()),
-        "user_services" => to_json(user_services()),
-        "picks" => {
-            let ps: Vec<crate::store::Plugin> = args
-                .get("plugins")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|p| serde_json::from_value(p.clone()).ok()).collect())
-                .unwrap_or_default();
-            if crate::util::arg_bool(args, "eligible_stub") {
-                // The tests' stand-in: not installed and on GitHub.
-                let stub = |p: &crate::store::Plugin| {
-                    !p.installed
-                        && false
-                };
-                to_json(_picks(&ps, &stub))
-            } else {
-                to_json(picks(&ps))
-            }
-        }
-        _ => return None,
-    })
-}
-
 
 #[cfg(test)]
 mod tests {

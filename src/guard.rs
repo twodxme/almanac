@@ -1393,8 +1393,6 @@ pub fn try_finding_at(at: PyStack) -> Result<crate::maintenance::Finding, String
     })
 }
 
-// ---- parity -------------------------------------------------------------------
-
 #[cfg(test)]
 /// The parsed document as serde JSON, for the parity hook. Built without
 /// recursion, as deep as the document is (Python's limit, which follows
@@ -1441,12 +1439,6 @@ fn doc_json(d: &Doc, n: usize) -> serde_json::Value {
     }
     done[n].take().unwrap_or(Value::Null)
 }
-
-
-
-
-
-
 
 
 #[cfg(test)]

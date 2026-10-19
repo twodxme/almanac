@@ -16,7 +16,6 @@
 //! * Reading is free, acting is not. Every check here is read-only; the fixes run
 //!   only when asked, through the same confirm-then-run path as everything else.
 
-#![allow(dead_code)]
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -854,11 +853,6 @@ static SAVED_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(_SA
 static JOURNAL_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"([\d.]+)([KMGT])").unwrap());
 static TOTAL_FILES_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(\d+) total files").unwrap());
 
-/// Megabytes a paccache run with `flags` would free, from its dry run.
-fn _paccache_reclaimable(flags: &[&str]) -> f64 {
-    _raise(_paccache_reclaimable_with(flags, &_run))
-}
-
 fn _paccache_reclaimable_with(flags: &[&str], run: RunFn<'_>) -> Result<f64, String> {
     let mut cmd = vec!["paccache", "-d"];
     cmd.extend_from_slice(flags);
@@ -970,10 +964,6 @@ fn _yay_cache_at(cache: &Path) -> Finding {
     }
 }
 
-fn _clear_yay_cache(log: LogFn<'_>) -> Result<(), String> {
-    _clear_yay_cache_at(&YAY_CACHE, log)
-}
-
 fn _clear_yay_cache_at(cache: &Path, log: LogFn<'_>) -> Result<(), String> {
     if !cache.exists() {
         log("nothing to clear");
@@ -1051,10 +1041,6 @@ fn _trash_at(trash: &Path) -> Finding {
     }
 }
 
-fn _empty_trash(log: LogFn<'_>) -> Result<(), String> {
-    _empty_trash_at(&TRASH, log)
-}
-
 fn _empty_trash_at(trash: &Path, log: LogFn<'_>) -> Result<(), String> {
     for sub in ["files", "info"] {
         let d = trash.join(sub);
@@ -1116,10 +1102,6 @@ fn _rollbacks_in(apps: &Path) -> Result<Finding, String> {
             .into(),
         ..Default::default()
     })
-}
-
-fn _delete_rollbacks(log: LogFn<'_>) -> Result<(), String> {
-    _delete_rollbacks_in(&_appimage_store(), log)
 }
 
 fn _delete_rollbacks_in(apps: &Path, log: LogFn<'_>) -> Result<(), String> {
@@ -1292,10 +1274,6 @@ fn _dangling_rows(data_home: &Path) -> Result<Vec<Vec<u8>>, String> {
     Ok(bad)
 }
 
-fn _remove_dangling(log: LogFn<'_>) -> Result<(), String> {
-    _remove_dangling_in(&crate::xdg::data_home(), log)
-}
-
 fn _remove_dangling_in(data_home: &Path, log: LogFn<'_>) -> Result<(), String> {
     use std::os::unix::ffi::OsStrExt;
     let found = _dangling_rows(data_home)?;
@@ -1354,10 +1332,6 @@ fn _broken_symlinks_in(home: &Path) -> Result<Finding, String> {
         fix_note: "Deletes only the dangling symlinks listed above.".into(),
         ..Default::default()
     })
-}
-
-fn _remove_broken_links(log: LogFn<'_>) -> Result<(), String> {
-    _remove_broken_links_in(&HOME, log)
 }
 
 fn _remove_broken_links_in(home: &Path, log: LogFn<'_>) -> Result<(), String> {
@@ -2275,62 +2249,6 @@ impl _PySum {
     fn total(self) -> f64 {
         if self.c != 0.0 && self.c.is_finite() { self.f + self.c } else { self.f }
     }
-}
-
-/// A finding as the parity runner sees it, with the `actionable` property
-/// the UI reads alongside the fields.
-fn _finding_json(f: &Finding) -> serde_json::Value {
-    let mut v = serde_json::to_value(f).unwrap_or_default();
-    if let Some(o) = v.as_object_mut() {
-        o.insert("actionable".into(), serde_json::Value::Bool(f.actionable()));
-    }
-    v
-}
-
-/// A finding built from parity args: its fields, with `"fix": "callable"`
-/// standing for a function.
-fn _finding_arg(v: &serde_json::Value) -> Finding {
-    let mut f: Finding = serde_json::from_value(v.clone()).unwrap_or_default();
-    if v.get("fix").and_then(|x| x.as_str()) == Some("callable") {
-        f.fix = Some(Fix::func(|_log| Ok(())));
-    }
-    f
-}
-
-/// Run a fix against a fixture directory and report what it logged (with the
-/// fixture path replaced by `<root>`) and what is left on disk.
-fn _fix_report(root: &Path, run: impl FnOnce(LogFn<'_>) -> Result<(), String>) -> serde_json::Value {
-    let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let root_s = root.to_string_lossy().into_owned();
-    let log = |s: &str| {
-        if let Ok(mut l) = lines.lock() {
-            l.push(s.replace(&root_s, "<root>"));
-        }
-    };
-    let res = run(&log);
-    // sorted(str(p) ...): by code points, names that are not UTF-8 included.
-    let mut left: Vec<Vec<u8>> = Vec::new();
-    fn walk(base: &Path, d: &Path, out: &mut Vec<Vec<u8>>) {
-        use std::os::unix::ffi::OsStrExt;
-        let Ok(entries) = std::fs::read_dir(d) else { return };
-        for e in entries.flatten() {
-            let p = e.path();
-            if let Ok(rel) = p.strip_prefix(base) {
-                out.push(rel.as_os_str().as_bytes().to_vec());
-            }
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                walk(base, &p, out);
-            }
-        }
-    }
-    walk(root, root, &mut left);
-    left.sort_by_key(|b| _py_codepoints(b));
-    let left: Vec<String> = left.iter().map(|b| _pystr(b)).collect();
-    serde_json::json!({
-        "log": lines.into_inner().unwrap_or_default(),
-        "left": left,
-        "error": res.err(),
-    })
 }
 
 
