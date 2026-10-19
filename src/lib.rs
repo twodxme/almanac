@@ -19,6 +19,7 @@ pub mod i18n;
 pub mod icons;
 pub mod inventory;
 pub mod maintenance;
+pub mod mirror;
 pub mod mimeguard;
 pub mod patches;
 pub mod picks;

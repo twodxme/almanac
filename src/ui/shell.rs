@@ -864,6 +864,9 @@ pub struct Inner {
     pub priority_sorter: gtk::CustomSorter,
     pub list_stack: gtk::Stack,
     pub list_empty: adw::StatusPage,
+    /// Above the Updates table: why the count is what it is, and whether the
+    /// batch needs a restart (`mirror::notes`).
+    pub update_notes: gtk::ListBox,
     pub content_stack: gtk::Stack,
     pub toasts: adw::ToastOverlay,
     pub split: adw::OverlaySplitView,
@@ -979,6 +982,7 @@ impl Win {
             }),
             list_stack: gtk::Stack::new(),
             list_empty,
+            update_notes: gtk::ListBox::new(),
             content_stack: gtk::Stack::new(),
             toasts: adw::ToastOverlay::new(),
             split: adw::OverlaySplitView::new(),
@@ -1372,6 +1376,16 @@ impl Win {
         scroller.set_margin_start(12);
         scroller.set_margin_end(12);
         scroller.set_margin_bottom(12);
+
+        // A boxed list on the same 12px margins as the table's card, shown
+        // only on the Updates page and only when it has something to say.
+        self.update_notes.add_css_class("boxed-list");
+        self.update_notes.set_selection_mode(gtk::SelectionMode::None);
+        self.update_notes.set_margin_start(12);
+        self.update_notes.set_margin_end(12);
+        self.update_notes.set_margin_bottom(12);
+        self.update_notes.set_visible(false);
+        content.append(&self.update_notes);
 
         self.list_stack.set_vexpand(true);
         self.list_stack.add_named(&scroller, Some("list"));

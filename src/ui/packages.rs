@@ -839,6 +839,7 @@ impl Win {
             self.list_stack.set_visible_child_name("list");
         }
 
+        self.refresh_update_notes(&filter_key, &query);
         self.summarize(&text, Some("packages"));
         self.sync_primary();
         self.update_sidebar_counts();
@@ -854,6 +855,37 @@ impl Win {
             tr("Update all")
         });
         Ok(())
+    }
+
+    /// The notes above the Updates table: on that page only, not while a
+    /// search narrows it, and only when `mirror::notes` has something to say.
+    pub fn refresh_update_notes(&self, filter_key: &str, query: &str) {
+        while let Some(child) = self.update_notes.first_child() {
+            self.update_notes.remove(&child);
+        }
+        let notes = if filter_key == "updates" && query.is_empty() {
+            // The repositories' pending updates: what a mirror batch brings.
+            let pending: Vec<String> = self
+                .store_objects()
+                .iter()
+                .filter_map(|o| AppItem::of(o).map(|i| i.clone()))
+                .filter(|i| i.has_update && (i.source == inventory::REPO || i.source == inventory::SYSTEM))
+                .map(|i| i.app.name)
+                .collect();
+            let all = Win::count_items(&self.store_objects(), |i| i.has_update);
+            crate::mirror::notes(&crate::mirror::read(), &pending, all)
+        } else {
+            Vec::new()
+        };
+        for note in &notes {
+            let row: adw::ActionRow = Win::plain(&note.title, &note.body);
+            row.set_subtitle_lines(0);
+            let icon = gtk::Image::builder().icon_name(note.icon).pixel_size(24).valign(gtk::Align::Center).build();
+            icon.add_css_class("dim-label");
+            row.add_prefix(&icon);
+            self.update_notes.append(&row);
+        }
+        self.update_notes.set_visible(!notes.is_empty());
     }
 
     pub fn on_row_activated(&self, _view: &gtk::ColumnView, position: u32) {
