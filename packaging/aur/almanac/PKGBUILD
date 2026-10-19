@@ -1,9 +1,9 @@
 # Maintainer: twodxme <tim@wraplabs.com>
-# The release package of the Rust port: built from a tagged release, from
-# the crate in rust/. It replaces the Python release package of the same
-# name (packaging/aur/almanac), so the two are never installed together.
+# The release package: built from a tagged release. Since 2.0 Almanac is a
+# Rust app; it replaced the Python release package of the same name, so the
+# two are never installed together.
 pkgname=almanac
-pkgver=2.0.0
+pkgver=2.1.1
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('x86_64' 'aarch64')
@@ -34,27 +34,27 @@ checkdepends=('git')
 options=('!lto')
 conflicts=('almanac-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('7fcbbf6ae7c24c64e597cd567621b21b3c0b9c99a77a1899b87a9342f935bde4')
+sha256sums=('40d48f0c10383cf446415aa83c92caa1d92a1bfd44918d5eeb4c9e6d20511fb0')
 
 prepare() {
-  cd "$srcdir/$pkgname-$pkgver/rust"
+  cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "$srcdir/$pkgname-$pkgver/rust"
+  cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --release --locked
 }
 
 check() {
-  cd "$srcdir/$pkgname-$pkgver/rust"
+  cd "$srcdir/$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  # Some tests build GTK widgets and need a display; CI runs this under
-  # Broadway (GDK_BACKEND=broadway), as it runs the Python tests.
+  # Some tests build GTK widgets and need a display; CI runs them under
+  # Broadway (GDK_BACKEND=broadway). Without one they skip themselves.
   cargo test --locked
 }
 
@@ -65,13 +65,12 @@ package() {
   # io.github.twodxme.Almanac application id the desktop file names.
   # Installed this way, Almanac sees that pacman owns the binary and defers
   # its own updates to the package manager.
-  install -Dm755 rust/target/release/almanac-rs "$pkgdir/usr/bin/$pkgname"
-  # The scheduled update's non-pacman half (autorun.py in the Python package).
-  install -Dm755 rust/target/release/almanac-autorun \
+  install -Dm755 target/release/almanac "$pkgdir/usr/bin/$pkgname"
+  # The scheduled update's non-pacman half, which omarchy-auto-update calls.
+  install -Dm755 target/release/almanac-autorun \
     "$pkgdir/usr/lib/$pkgname/almanac-autorun"
 
-  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them
-  # (the Python package keeps them beside app.py).
+  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them.
   install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"
 
   # Translations, compiled into the system locale directory.
