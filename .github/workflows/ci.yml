@@ -55,6 +55,12 @@ jobs:
             GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 cargo test --locked
             rc=$?; kill $b; exit $rc'
 
+      - name: Tests without a display
+        run: |
+          # What a clean-chroot package build sees: no display at all. Tests
+          # that build widgets must skip themselves there, not crash.
+          as-user cargo test --locked
+
       - name: Metadata
         run: |
           appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml

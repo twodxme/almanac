@@ -2481,7 +2481,9 @@ mod tests {
         let say = code().split("pub fn say(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
         assert!(say.contains(".use_markup(false)"));
 
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) {
+        // A package build's check() has no display: adw::init can still
+        // answer Ok there, and building a row then crashes the test binary.
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gtk::gdk::Display::default().is_none() {
             return; // no display, or GTK already belongs to another test thread
         }
         let text = "glibc>=2.40 lib<foo> a&b";

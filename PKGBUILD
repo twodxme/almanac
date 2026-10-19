@@ -3,7 +3,7 @@
 # is packaging/aur/almanac.
 pkgname=almanac-git
 _pkgname=almanac
-pkgver=2.1.0.r0
+pkgver=2.1.1.r0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('x86_64' 'aarch64')
@@ -61,8 +61,8 @@ check() {
   cd "$srcdir/$_pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  # Some tests build GTK widgets and need a display; CI runs this under
-  # Broadway (GDK_BACKEND=broadway), as it runs the Python tests.
+  # Some tests build GTK widgets and need a display; CI runs them under
+  # Broadway (GDK_BACKEND=broadway). Without one they skip themselves.
   cargo test --locked
 }
 
@@ -74,12 +74,11 @@ package() {
   # Installed this way, Almanac sees that pacman owns the binary and defers
   # its own updates to the package manager.
   install -Dm755 target/release/almanac "$pkgdir/usr/bin/$_pkgname"
-  # The scheduled update's non-pacman half (autorun.py in the Python package).
+  # The scheduled update's non-pacman half, which omarchy-auto-update calls.
   install -Dm755 target/release/almanac-autorun \
     "$pkgdir/usr/lib/$_pkgname/almanac-autorun"
 
-  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them
-  # (the Python package keeps them beside app.py).
+  # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them.
   install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"
 
   # Translations, compiled into the system locale directory.

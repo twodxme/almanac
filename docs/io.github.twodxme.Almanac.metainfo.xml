@@ -96,6 +96,12 @@
   </requires>
 
   <releases>
+    <release version="2.1.1" date="2026-10-18">
+      <description>
+        <p>Fixed: building the package without a display (a clean chroot)
+        crashed in its tests. CI now runs the tests that way too.</p>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-10-18">
       <description>
         <p>Updates and History explain themselves.</p>
