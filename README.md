@@ -20,11 +20,9 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 </div>
 
 > **Almanac 2.0 is written in Rust.** Same app, same look, same files on
-> disk: it was ported line for line from the Python original, every page
-> compared screenshot-for-screenshot, and the two are held together by a
-> parity check that runs both on the same inputs (some 29,000 cases) and
-> fails on any difference. Settings, history and caches from 1.x carry over
-> untouched. The Python sources stay in this repository as the reference.
+> disk: it was ported line for line from the 1.x Python app and held to it
+> case by case until the two matched. Settings, history and caches from 1.x
+> carry over untouched.
 
 ---
 
@@ -345,25 +343,19 @@ makepkg -si
 
 ```bash
 git clone https://github.com/twodxme/almanac ~/.local/share/almanac
-cd ~/.local/share/almanac/rust
+cd ~/.local/share/almanac
 cargo build --release
-install -Dm755 target/release/almanac-rs ~/.local/bin/almanac
-install -Dm644 ../docs/almanac.desktop ~/.local/share/applications/almanac.desktop
-install -Dm644 ../docs/io.github.twodxme.Almanac.svg \
+install -Dm755 target/release/almanac ~/.local/bin/almanac
+install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
+install -Dm644 docs/io.github.twodxme.Almanac.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
 ```
 
 Then run `almanac`, or launch it from your application menu.
 
-**Beside a 1.x install:** `rust/packaging/almanac-rs` runs the release build
-from a checkout under its own application id (`io.github.twodxme.Almanac.Rs`),
-so the Python and Rust versions can be open at the same time while you
-compare them.
-
 Runtime data lives in `~/.local/state/almanac/`, never inside the checkout, so
-Almanac can update itself with a fast-forward pull without fighting its own
-state.
+a checkout can be pulled and rebuilt without fighting its own state.
 
 ### Updating
 
@@ -490,13 +482,10 @@ checks, packaging for other distributions, or a theme that makes it look
 better than I can.
 
 ```bash
-cd rust
-cargo test                       # 509 tests
-python3 parity/run.py --demo     # the Rust against the Python, case by case
+cargo test
 ```
 
-The Rust tests are the Python's 184 (`python3 test_app.py`) ported one for
-one, plus the port's own, weighted toward the destructive paths — removal, orphan cleanup,
+518 tests, weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.
@@ -518,9 +507,8 @@ menus, dialogs and Health check headings are translatable today; sentences
 built around a value (versions, counts, names) are still being converted, and
 pull requests that rewrite them as whole translatable sentences are welcome.
 
-There is a measured [UI/UX audit and gap analysis](docs/audit.md) covering the
-conventions the interface follows and the gaps still open. New UI should match
-what is already there: one primary action in the header, toasts for events, the
+How the code is laid out, and the conventions it follows, are in
+[ARCHITECTURE.md](ARCHITECTURE.md). New UI should match what is already there: one primary action in the header, toasts for events, the
 header subtitle for standing state, full-width boxed lists on secondary pages.
 
 ---
@@ -551,7 +539,7 @@ system action here; this is a window onto it.
 ## Screenshots
 
 Every screenshot in this README is generated with `ALMANAC_DEMO=1`, which
-replaces the local inventory with the fixtures in `demo.py`. The marketplace
+replaces the local inventory with the fixtures in `src/demo.rs`. The marketplace
 catalogues stay real — those are public listings — but nothing in an image
 comes from the machine that took it.
 

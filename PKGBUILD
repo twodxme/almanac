@@ -1,5 +1,5 @@
 # Maintainer: twodxme <tim@wraplabs.com>
-# Almanac from the latest commit: the Rust app in rust/. The tagged release
+# Almanac from the latest commit. The tagged release
 # is packaging/aur/almanac.
 pkgname=almanac-git
 _pkgname=almanac
@@ -40,25 +40,25 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd "$srcdir/$_pkgname"
-  printf "%s.r%s.%s" "$(sed -n 's/^version = "\(.*\)"/\1/p' rust/Cargo.toml | head -1)" \
+  printf "%s.r%s.%s" "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" \
     "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd "$srcdir/$_pkgname/rust"
+  cd "$srcdir/$_pkgname"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "$srcdir/$_pkgname/rust"
+  cd "$srcdir/$_pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --release --locked
 }
 
 check() {
-  cd "$srcdir/$_pkgname/rust"
+  cd "$srcdir/$_pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   # Some tests build GTK widgets and need a display; CI runs this under
@@ -73,9 +73,9 @@ package() {
   # io.github.twodxme.Almanac application id the desktop file names.
   # Installed this way, Almanac sees that pacman owns the binary and defers
   # its own updates to the package manager.
-  install -Dm755 rust/target/release/almanac-rs "$pkgdir/usr/bin/$_pkgname"
+  install -Dm755 target/release/almanac "$pkgdir/usr/bin/$_pkgname"
   # The scheduled update's non-pacman half (autorun.py in the Python package).
-  install -Dm755 rust/target/release/almanac-autorun \
+  install -Dm755 target/release/almanac-autorun \
     "$pkgdir/usr/lib/$_pkgname/almanac-autorun"
 
   # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them

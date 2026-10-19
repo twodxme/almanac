@@ -10,6 +10,7 @@
 # Needs: gtk4 (gtk4-broadwayd), chromium, imagemagick, dbus.
 set -eu
 cd "$(dirname "$0")/.."
+cargo build --release --locked --bin almanac
 out=docs/screenshots
 tmp=$(mktemp -d)
 broadway=
@@ -38,7 +39,7 @@ shoot_once() {
   ALMANAC_DEMO=1 ADW_DEBUG_COLOR_SCHEME=prefer-dark \
     XDG_STATE_HOME="$tmp/state" GDK_BACKEND=broadway \
     BROADWAY_DISPLAY="$display" timeout $((settle + 20)) \
-    dbus-run-session -- python3 app.py --page "$page" >/dev/null 2>&1 &
+    dbus-run-session -- target/release/almanac --page "$page" >/dev/null 2>&1 &
   app=$!
   sleep "$settle"
   # Broadway can hand a new viewer an empty first frame; looking again at

@@ -1,0 +1,105 @@
+# How Almanac is built
+
+Almanac is a GTK 4 / libadwaita app in Rust. Up to 1.7 it was Python; 2.0 is
+a line-for-line port of that app, held to it case by case until the port was
+complete, and the Python was then retired (it is in the git history up to
+v2.0.0). The comments carried over from it are the design record: where a
+comment explains *why*, keep it when you change the code beside it.
+
+## Layout
+
+| | |
+|---|---|
+| `src/<module>.rs` | the logic: `inventory`, `store`, `maintenance`, `agents`, `plugins`, `theming`, … one module per concern |
+| `src/ui/*.rs` | the window, one file per section (see UI below) |
+| `src/util.rs` | subprocess with timeout, rounding and title-casing that match what users saw in 1.x, ISO dates, atomic JSON — **use it, do not re-implement** |
+| `src/main.rs` | the `almanac` binary |
+| `src/bin/almanac-autorun.rs` | the non-pacman half of the scheduled update, and `--core-holds` for omarchy-auto-update |
+| `data/style.css` | the stylesheet, loaded with `include_str!` |
+| `tests/ported.rs` | cross-module checks (translation template, icons, sources) |
+
+## Conventions
+
+- **Errors**: a function whose failure the caller must see returns
+  `Result<T, String>`; one that has a sensible fallback stays infallible and
+  falls back. No panics in non-test code on anything that can fail at run
+  time (I/O, parsing, subprocesses, network). Several modules keep a lenient
+  function beside a `try_` / `_checked` one; UI code uses the fallible one.
+- **No `unsafe`**, with one documented exception: `icons.rs` turns on TLS
+  post-handshake authentication through `openssl-sys`, because some vendors'
+  sites (openai.com, gnome.org) refuse a TLS hello without it.
+- **Files on disk**: `~/.local/state/almanac`, `~/.cache/almanac`,
+  `~/.config/almanac`, written through `util::write_json` (atomic, with the
+  same formatting 1.x used), so users keep their settings and history across
+  versions. Change a format only with a migration.
+- **Subprocesses** go through `util::run` / `util::run_with` (timeouts,
+  never panic). GitHub goes through `ghcache` (token, ETags, budget guard).
+- **Demo mode** (`ALMANAC_DEMO=1`) swaps every machine reader for fixtures in
+  `demo.rs`; screenshots depend on it, and it must never show anything from
+  the real machine.
+- **i18n**: user-facing strings go through `crate::i18n::tr("text")`;
+  `po/update.sh` refreshes the template.
+- **Never change the machine from a test.** No package installs or removals,
+  no `systemctl enable/disable`, no `git pull` in real checkouts, no writes to
+  the real `~/.config`, `~/.local/state`, `~/.cache`: point `XDG_*` / `HOME`
+  at a temp dir, and test the parts that decide (the argv, the plan, the
+  parse) rather than running them.
+
+## Deep input
+
+The app reads caches and state files a user (or a bug) could have nested tens
+of thousands of levels deep. Code must never recurse once per level of such
+input on a stack it does not size: a stack overflow aborts the whole process,
+on any thread.
+
+- Value types that mirror JSON (`PyVal`, `PyValue`, ...) get `Clone`,
+  `PartialEq` and `Drop` without recursion: `util::tree_clone_eq!` and a
+  hand-written `Drop` that takes children out flat. Conversions use
+  `util::tree::fold` / `fold_ids` (arenas); a deep `serde_json::Value` is
+  cloned, compared and dropped with `util::tree::{clone_value, eq_value, drop_value}`.
+- Where recursion is simpler and bounded, run it on
+  `util::with_stack(util::DEEP_STACK, ...)`; walks that may go very deep
+  through serde use `util::JSON_STACK`.
+- `ui::shell::spawn_bg` runs background work on a `JSON_STACK` thread.
+
+## UI (`src/ui/`)
+
+| file | what |
+|---|---|
+| `shell.rs` | helpers, CSS and theme providers, list items, the window, sidebar, header, columns, persisted state, change detection, the application and its command line |
+| `packages.rs` | data loading and filtering: Updates, Applications, Everything, Orphans tables, the details sheet |
+| `store.rs` | App Store and Themes pages: grid, cards, marketplace data |
+| `store_actions.rs` | install/remove from the store, setup after install, themes, AppImages |
+| `plugins.rs` | Plugins page; on/off, shortcuts, bulk updates, the shell |
+| `switchboard.rs` | Switchboard |
+| `history.rs` | Health check glue and History |
+| `ai.rs` | AI page |
+| `preferences.rs` | Preferences dialog |
+| `today.rs` | Today page, hero, picks |
+| `actions.rs` | row actions, verification, file takeovers, install from a link, update one/all, AppImage add |
+
+- **The window** is `ui::shell::Win`: `#[derive(Clone)] pub struct Win(Rc<Inner>)`
+  with `Deref<Target = Inner>`. `Inner` holds the `adw::ApplicationWindow`,
+  the widgets shared across sections, `shared: RefCell<shell::Shared>` (state
+  read by more than one section, e.g. the plugin list), and one
+  `RefCell<<section>::State>` per section. Each section file defines
+  `#[derive(Default)] pub struct State` holding its own widgets and data.
+- **Methods** live in `impl Win { … }` blocks in their section's file.
+- **Callbacks** hold a weak handle: `let w = self.downgrade();
+  btn.connect_clicked(move |_| if let Some(w) = w.upgrade() { w.on_x(); });`
+- **Background work** → `shell::spawn_bg(move || work(), move |result| on_main_thread(result))`.
+- **Never hold a `RefCell` borrow across a call into GTK** — a signal handler
+  firing synchronously will borrow again and panic. Clone what you need, drop
+  the borrow, then call.
+- **List models**: rows are `glib::BoxedAnyObject` wrapping the Rust value
+  (`AppItem`, `PluginItem`).
+- **One visual system**: every page uses the same CSS classes, spacing scale,
+  pills and boxed lists. After any visual change, regenerate the screenshots
+  (`tools/screenshots.sh`) and compare every page, not just the one changed.
+
+## Command line
+
+`almanac [--page NAME] [--guard]`: `--page` opens a page (`today`, `store`,
+`updates`, `ai`, `health`, `history`, `plugins`, `switchboard`, … — an
+unknown name lists them), `--guard` runs the background settings watcher with
+no window. The application id is `io.github.twodxme.Almanac`.

@@ -1,7 +1,11 @@
-# Every push and pull request, on a clean Arch Linux: the tests, a lint for
-# names that do not exist (two shipped crashes were exactly that), a type
-# check, the desktop and AppStream metadata, and a real package build of
-# this commit.
+# Every push and pull request, on a clean Arch Linux: the build, the tests,
+# the desktop and AppStream metadata, and a real package build of this
+# commit.
+#
+# Everything runs as an ordinary user with what an Arch desktop gives one:
+# an 8 MiB stack, an English UTF-8 locale, the packages' translations. Root
+# reads files whose mode forbids it, and some tests pin how deep nested input
+# gets before the stack would run out.
 name: CI
 
 on:
@@ -18,76 +22,13 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm --needed \
-            base-devel git python gtk4 libadwaita python-gobject python-cairo \
-            pacman-contrib polkit xdg-utils ruff mypy appstream desktop-file-utils \
-            rust gettext
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0          # pkgver counts commits
-
-      - name: Tests
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          # GTK needs a display to import; Broadway is one with no screen.
-          gtk4-broadwayd :5 &
-          sleep 1
-          GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 python3 test_app.py
-
-      - name: Lint
-        run: ruff check --select F821,F811,F823 --output-format github *.py
-
-      - name: Type check
-        # Settings in mypy.ini. The system interpreter, so pycairo's own
-        # type information is found.
-        run: mypy
-
-      - name: Metadata
-        run: |
-          appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
-          desktop-file-validate docs/almanac.desktop
-
-      - name: Package builds
-        run: |
-          useradd -m builder
-          chown -R builder "$GITHUB_WORKSPACE"
-          mkdir /tmp/pkg && cp PKGBUILD /tmp/pkg/ && chown -R builder /tmp/pkg
-          # Build this commit, not whatever main is on GitHub right now.
-          sed -i "s|^source=.*|source=(\"git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA\")|" /tmp/pkg/PKGBUILD
-          cd /tmp/pkg
-          sudo -u builder git config --global --add safe.directory '*'
-          # check() runs the Rust tests, some of which build GTK widgets: a
-          # Broadway display of the builder's own, with a desktop's 8 MiB stack.
-          sudo -u builder -H sh -c 'ulimit -Ss 8192
-            gtk4-broadwayd :7 & b=$!; sleep 1
-            GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 makepkg --nodeps --noconfirm
-            rc=$?; kill $b; exit $rc'
-          # (makepkg also makes an almanac-git-debug package here)
-          tar -tf almanac-git-[0-9]*.pkg.tar.zst | grep -q usr/bin/almanac
-
-  # The Rust port (rust/): its tests, then the parity runner, which runs the
-  # Python and the Rust on the same inputs (demo mode) and fails on any
-  # difference.
-  #
-  # Both run as an ordinary user with what an Arch desktop gives one: an
-  # 8 MiB stack, an English UTF-8 locale, the packages' translations. Root
-  # reads files whose mode forbids it; CPython 3.14's json nests as deep as
-  # the C stack allows, so a larger `ulimit -s` moves every RecursionError
-  # the cases pin; the archlinux image leaves locale data out.
-  rust:
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-    steps:
-      - name: Install dependencies
-        run: |
           # The image keeps no translations or locale data (NoExtract), and
-          # the i18n cases read the system's catalogs: keep them, and put
+          # the i18n tests read the system's catalogs: keep them, and put
           # back what the image stripped from the packages already there.
           sed -i '/^NoExtract/d' /etc/pacman.conf
           pacman -Syu --noconfirm --needed \
-            base-devel git rust gtk4 libadwaita openssl python python-gobject \
-            python-cairo pacman-contrib polkit xdg-utils
+            base-devel git rust gtk4 libadwaita openssl pacman-contrib polkit \
+            xdg-utils appstream desktop-file-utils gettext
           pacman -Qqn | pacman -S --noconfirm -
           echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
           locale-gen
@@ -99,38 +40,36 @@ jobs:
           chmod +x /usr/local/bin/as-user
 
       - uses: actions/checkout@v4
-
-      - name: Environment
-        run: |
-          chown -R user "$GITHUB_WORKSPACE"
-          echo "root: stack $(ulimit -s) kB"
-          as-user sh -c 'echo "user: $(id -un), stack $(ulimit -s) kB, LANG=$LANG"; locale -a; python3 --version; rustc --version'
+        with:
+          fetch-depth: 0          # pkgver counts commits
 
       - name: Build
-        working-directory: rust
-        run: as-user cargo build --release --locked
-
-      - name: Environment for parity
-        # For the record: the json nesting CPython reaches here (it follows
-        # the C stack) and whether the live AUR case gets an answer.
-        continue-on-error: true
-        run: as-user env ALMANAC_PARITY_BIN=rust/target/release/almanac-parity python3 rust/parity/environment.py
+        run: |
+          chown -R user "$GITHUB_WORKSPACE"
+          as-user cargo build --release --locked
 
       - name: Tests
-        working-directory: rust
         run: |
           # GTK needs a display; Broadway is one with no screen.
           as-user sh -c 'gtk4-broadwayd :5 & b=$!; sleep 1
             GDK_BACKEND=broadway BROADWAY_DISPLAY=:5 cargo test --locked
             rc=$?; kill $b; exit $rc'
 
-      - name: Parity
+      - name: Metadata
         run: |
-          # The release build from the Build step; each module in a process
-          # of its own (a crash names its module and the rest still run),
-          # unbuffered so progress shows live. Fails if any module fails.
-          as-user sh -c 'gtk4-broadwayd :6 & b=$!; sleep 1
-            GDK_BACKEND=broadway BROADWAY_DISPLAY=:6 \
-              ALMANAC_PARITY_BIN=rust/target/release/almanac-parity \
-              python3 -u rust/parity/run.py --each --demo
+          appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
+          desktop-file-validate docs/almanac.desktop
+
+      - name: Package builds
+        run: |
+          mkdir /tmp/pkg && cp PKGBUILD /tmp/pkg/ && chown -R user /tmp/pkg
+          # Build this commit, not whatever main is on GitHub right now.
+          sed -i "s|^source=.*|source=(\"git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA\")|" /tmp/pkg/PKGBUILD
+          cd /tmp/pkg
+          as-user git config --global --add safe.directory '*'
+          # check() runs the tests again, inside the package build.
+          as-user sh -c 'gtk4-broadwayd :7 & b=$!; sleep 1
+            GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 makepkg --nodeps --noconfirm
             rc=$?; kill $b; exit $rc'
+          # (makepkg also makes an almanac-git-debug package here)
+          tar -tf almanac-git-[0-9]*.pkg.tar.zst | grep -q usr/bin/almanac
