@@ -150,6 +150,18 @@ copy has not heard of yet; installing one of those on its own would mean
 For those rows, **Update** says so and offers **Update all** instead of running
 a command that would skip the package and report success.
 
+**A jump in the count is explained, not just shown.** Omarchy takes the Arch
+repositories from a stable mirror that holds packages back and releases them
+in tested batches, so the count can go from 5 to 370 overnight with nothing
+wrong. When it does, a note above the list says so — *Omarchy released a new
+batch of Arch packages on 17 Oct … this machine's last batch is from 8 Sep, so
+these 370 updates are 6 weeks of Arch arriving together.* Both dates come from
+disk, not the network: pacman's sync database and `checkupdates`' private copy
+each carry the mirror's Last-Modified time. On an ordinary mirror the note says
+when the package lists were last synced instead; under a week's gap it says
+nothing. When the batch includes the kernel, systemd, glibc, graphics drivers
+or firmware, a second note says to restart afterwards and names them.
+
 Versions-behind counts from the first component that actually differs, and
 calendar versions are not counted at all: `20181225 → 20261002` is a date, not
 79,777 releases.
@@ -211,6 +223,11 @@ days on one timeline: every package transaction, every snapshot, every config
 file a tool replaced, and everything Almanac itself did — including updates
 that ran but changed nothing. Days with a snapshot say so, since what came
 after can be undone from the boot menu.
+
+The page opens with one line for the last 24 hours — *Installed lld and rust ·
+the scheduled update updated vectorcraft and wordcraft* — so "did something
+install last night?" is answered before you read the timeline. The weekly
+scheduled update records what it updated there too.
 
 ### Every action is checked, not assumed
 
@@ -346,6 +363,7 @@ git clone https://github.com/twodxme/almanac ~/.local/share/almanac
 cd ~/.local/share/almanac
 cargo build --release
 install -Dm755 target/release/almanac ~/.local/bin/almanac
+install -Dm755 target/release/almanac-autorun ~/.local/lib/almanac/almanac-autorun
 install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
 install -Dm644 docs/io.github.twodxme.Almanac.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg

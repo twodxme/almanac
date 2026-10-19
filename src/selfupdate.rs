@@ -74,9 +74,11 @@ fn py_resolve(p: &Path) -> PathBuf {
 }
 
 pub const NAME: &str = "Almanac";
-/// Bumped by hand at release. git describe supersedes it in a checkout, so this
-/// is only what a tarball install reports.
-pub const VERSION: &str = "2.0.0";
+/// The release version, from Cargo.toml. git describe supersedes it in a
+/// checkout, so this is what a package or tarball install reports. The
+/// shipped metainfo's newest release must match it (a test checks), so the
+/// "What's New" window always describes the version that is running.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const GIT: &str = "git";
 pub const PACKAGE: &str = "package";
@@ -403,9 +405,8 @@ fn check_as(
 // stale makepkg checkout -- which is why git only counts when the binary
 // lives inside ROOT).
 
-/// The version of this build (Cargo.toml). A compiled build reports it where
-/// the Python reports `VERSION`: the constant is the Python release's.
-pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version of this build: [`VERSION`].
+pub const BUILD_VERSION: &str = VERSION;
 
 /// What the note says, after the Python's "N commit(s) behind", in a
 /// checkout that would otherwise offer to pull.

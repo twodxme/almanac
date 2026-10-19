@@ -96,6 +96,24 @@
   </requires>
 
   <releases>
+    <release version="2.1.0" date="2026-10-18">
+      <description>
+        <p>Updates and History explain themselves.</p>
+        <ul>
+          <li>When the update count jumps, the Updates page says why: on
+          Omarchy, a new batch of Arch packages from the stable mirror, with
+          the dates of the batch you have and the batch on offer</li>
+          <li>The Updates page says when the pending batch needs a restart,
+          and names the packages that do (the kernel, systemd, glibc,
+          graphics drivers, firmware)</li>
+          <li>History opens with one line for the last 24 hours, and the
+          weekly scheduled update now records what it updated</li>
+          <li>Fixed: dependencies with version constraints, links with query
+          strings and names with an ampersand blanked their row or
+          notification</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.0" date="2026-10-18">
       <description>
         <p>Almanac is now written in Rust.</p>
