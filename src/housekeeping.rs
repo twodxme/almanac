@@ -143,7 +143,7 @@ pub fn prune_orphans(apps: &Path, cutoff: SystemTime) -> Swept {
     let Ok(_lock) = crate::inventory::lock_registry() else { return swept };
     let Some(registered) = registered_stems(apps) else { return swept };
     for (path, stem) in candidates {
-        if !registered.iter().any(|r| *r == stem) {
+        if !registered.contains(&stem) {
             swept.add(remove(&path));
         }
     }
