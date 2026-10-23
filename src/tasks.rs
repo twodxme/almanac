@@ -18,7 +18,7 @@
 //!   `sudo` is not usable here: it wants a TTY, and there is deliberately none.
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -138,7 +138,68 @@ pub struct TaskDialog {
     pulse: Rc<RefCell<Option<glib::SourceId>>>,
 }
 
+/// A `TaskDialog` held weakly, for what the dialog itself owns: its
+/// buttons' handlers and its pulse. A strong handle there is a cycle (the
+/// dialog owns the button, the button's handler owns the dialog), and every
+/// task dialog, with its whole log, stayed alive after it was closed.
+struct WeakTaskDialog {
+    dialog: glib::WeakRef<adw::Dialog>,
+    step_label: glib::WeakRef<gtk::Label>,
+    progress: glib::WeakRef<gtk::ProgressBar>,
+    buffer: glib::WeakRef<gtk::TextBuffer>,
+    text: glib::WeakRef<gtk::TextView>,
+    scroll: glib::WeakRef<gtk::ScrolledWindow>,
+    cancel_btn: glib::WeakRef<gtk::Button>,
+    close_btn: glib::WeakRef<gtk::Button>,
+    steps: std::sync::Weak<Mutex<Vec<Step>>>,
+    on_done: Weak<RefCell<Option<OnDone>>>,
+    proc: std::sync::Weak<Mutex<Option<Arc<Proc>>>>,
+    cancelled: std::sync::Weak<AtomicBool>,
+    failed: std::sync::Weak<AtomicBool>,
+    pulse: Weak<RefCell<Option<glib::SourceId>>>,
+}
+
+impl WeakTaskDialog {
+    fn upgrade(&self) -> Option<TaskDialog> {
+        Some(TaskDialog {
+            dialog: self.dialog.upgrade()?,
+            step_label: self.step_label.upgrade()?,
+            progress: self.progress.upgrade()?,
+            buffer: self.buffer.upgrade()?,
+            text: self.text.upgrade()?,
+            scroll: self.scroll.upgrade()?,
+            cancel_btn: self.cancel_btn.upgrade()?,
+            close_btn: self.close_btn.upgrade()?,
+            steps: self.steps.upgrade()?,
+            on_done: self.on_done.upgrade()?,
+            proc: self.proc.upgrade()?,
+            cancelled: self.cancelled.upgrade()?,
+            failed: self.failed.upgrade()?,
+            pulse: self.pulse.upgrade()?,
+        })
+    }
+}
+
 impl TaskDialog {
+    fn downgrade(&self) -> WeakTaskDialog {
+        WeakTaskDialog {
+            dialog: self.dialog.downgrade(),
+            step_label: self.step_label.downgrade(),
+            progress: self.progress.downgrade(),
+            buffer: self.buffer.downgrade(),
+            text: self.text.downgrade(),
+            scroll: self.scroll.downgrade(),
+            cancel_btn: self.cancel_btn.downgrade(),
+            close_btn: self.close_btn.downgrade(),
+            steps: Arc::downgrade(&self.steps),
+            on_done: Rc::downgrade(&self.on_done),
+            proc: Arc::downgrade(&self.proc),
+            cancelled: Arc::downgrade(&self.cancelled),
+            failed: Arc::downgrade(&self.failed),
+            pulse: Rc::downgrade(&self.pulse),
+        }
+    }
+
     /// Builds the dialog, presents it on `parent` and starts the work.
     pub fn new(
         parent: &impl gtk::glib::object::IsA<gtk::Widget>,
@@ -244,15 +305,27 @@ impl TaskDialog {
         };
         let _ = &this.failed;
 
+        // The handlers and the pulse hold the dialog weakly: it owns them.
         {
-            let t = this.clone();
-            this.cancel_btn.connect_clicked(move |_b| t.cancel());
-            let t = this.clone();
-            this.close_btn.connect_clicked(move |_b| t.force_close());
+            let t = this.downgrade();
+            this.cancel_btn.connect_clicked(move |_b| {
+                if let Some(t) = t.upgrade() {
+                    t.cancel();
+                }
+            });
+            let t = this.downgrade();
+            this.close_btn.connect_clicked(move |_b| {
+                if let Some(t) = t.upgrade() {
+                    t.force_close();
+                }
+            });
         }
 
-        let t = this.clone();
-        let id = glib::timeout_add_local(Duration::from_millis(90), move || t.tick());
+        let t = this.downgrade();
+        let id = glib::timeout_add_local(Duration::from_millis(90), move || match t.upgrade() {
+            Some(t) => t.tick(),
+            None => glib::ControlFlow::Break,
+        });
         *this.pulse.borrow_mut() = Some(id);
         this.dialog.present(Some(parent));
 
@@ -1383,6 +1456,70 @@ mod tests {
         assert_eq!(decode_chunk_as("EUC-JP", &mut p, b"a\xa4", false).unwrap(), b"a");
         assert_eq!(decode_chunk_as("EUC-JP", &mut p, b"\xa2", true).unwrap(), "あ".as_bytes());
         assert!(decode_chunk_as("EUC-JP", &mut p, b"\xa4", true).is_err());
+    }
+
+    /// GTK for a widget test, or None to skip: a package build's check()
+    /// has no display, and GTK belongs to whichever test thread took it
+    /// first (as in `ui::packages`' widget test).
+    fn gtk_here() -> Option<()> {
+        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
+        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
+            return None;
+        }
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gtk::gdk::Display::default().is_none() {
+            return None;
+        }
+        Some(())
+    }
+
+    /// Spin the main loop until `done` says so, for at most `secs`.
+    fn spin(secs: u64, done: impl Fn() -> bool) -> bool {
+        let ctx = glib::MainContext::default();
+        let end = std::time::Instant::now() + Duration::from_secs(secs);
+        while !done() {
+            if std::time::Instant::now() > end {
+                return false;
+            }
+            while ctx.iteration(false) {}
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// A closed task dialog is freed, log and all: its buttons' handlers
+    /// used to hold it strongly, a cycle that kept every one forever. A
+    /// task whose worker ends in an error still finishes (it used to pulse
+    /// on, unable to close).
+    #[test]
+    fn a_closed_task_dialog_is_freed() {
+        if gtk_here().is_none() {
+            return;
+        }
+        let parent = adw::Window::new();
+        parent.present();
+        // An argv with a NUL byte: the worker ends in an error.
+        for steps in [
+            vec![Step::call("ok", Arc::new(|log: LogFn<'_>| {
+                log("working");
+                Ok(())
+            }))],
+            vec![Step::argv("nul", v(&["true", "a\0b"]))],
+        ] {
+            let result = Rc::new(std::cell::Cell::new(None));
+            let r = result.clone();
+            let t = run(&parent, "Test", steps, Some(Box::new(move |ok| r.set(Some(ok)))));
+            assert!(spin(10, || result.get().is_some()), "the task never finished");
+            let (dialog, on_done, pulse) = (t.dialog.downgrade(), Rc::downgrade(&t.on_done), Rc::downgrade(&t.pulse));
+            assert!(t.close_btn.is_visible());
+            t.close_btn.emit_clicked();
+            drop(t);
+            assert!(
+                spin(10, || dialog.upgrade().is_none() && on_done.upgrade().is_none() && pulse.upgrade().is_none()),
+                "the closed dialog is still alive"
+            );
+        }
+        parent.destroy();
     }
 
     #[test]
