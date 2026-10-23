@@ -5,6 +5,7 @@
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gtk::gdk_pixbuf;
@@ -46,6 +47,31 @@ pub struct CardSlot {
     pub token: u64,
 }
 
+/// The store's result set: positions in the catalogue it was drawn from,
+/// which it holds on to, so a refresh copies no entry (clearing the search
+/// lists all 5,900) and only the page being shown is cloned into the model.
+#[derive(Default)]
+pub struct Results {
+    plugins: Arc<Vec<Plugin>>,
+    idx: Vec<usize>,
+}
+
+impl Results {
+    pub fn len(&self) -> usize {
+        self.idx.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.idx.is_empty()
+    }
+
+    /// Results `from..to` (clamped), as copies for the model.
+    fn page(&self, from: usize, to: usize) -> Vec<Plugin> {
+        let to = to.min(self.idx.len());
+        self.idx.get(from..to).unwrap_or_default().iter().map(|&i| self.plugins[i].clone()).collect()
+    }
+}
+
 /// State used only by the store section.
 #[derive(Default)]
 pub struct State {
@@ -64,7 +90,7 @@ pub struct State {
     // ---- data ------------------------------------------------------------
     /// The full, filtered and sorted result set; the model holds a prefix of
     /// it, a page at a time.
-    pub store_results: Vec<Plugin>,
+    pub store_results: Results,
     /// Trust keys parallel to the provenance dropdown ("" = any).
     pub store_trusts: Vec<String>,
 
@@ -497,8 +523,7 @@ impl Win {
             if have >= results.len() {
                 return false;
             }
-            let end = (have + Win::STORE_PAGE as usize).min(results.len());
-            results[have..end].to_vec()
+            results.page(have, have + Win::STORE_PAGE as usize)
         };
         for p in next {
             model.append(&PluginItem::new(p).boxed());
@@ -1147,7 +1172,7 @@ impl Win {
         self.busy(false);
         {
             let mut sh = self.shared.borrow_mut();
-            sh.plugins = plugins;
+            sh.plugins = Arc::new(plugins);
             sh.plugins_none = false;
         }
         self.store_filters();
@@ -1196,10 +1221,20 @@ impl Win {
         let market = pick_key(&self.shared.borrow().store_markets, store_market.selected());
         let (installed_only, verified_only) = (store_installed.is_active(), store_verified.is_active());
         let results = {
-            let plugins = self.store_plugins();
-            let pool = pool_refs(&plugins, &page);
-            store_mod::try_browse_refs(&pool, &query, &category, sort, installed_only, verified_only, &market, &trust)
-                .map(|idx| idx.into_iter().map(|i| pool[i].clone()).collect::<Vec<Plugin>>())
+            let plugins = {
+                let sh = self.shared.borrow();
+                if sh.plugins_none { Arc::default() } else { sh.plugins.clone() }
+            };
+            // The pool by position in the catalogue, so the results can
+            // name entries rather than copy them.
+            let themes = page == "themes";
+            let at: Vec<usize> =
+                (0..plugins.len()).filter(|&i| (plugins[i].install_kind == "theme") == themes).collect();
+            let pool: Vec<&Plugin> = at.iter().map(|&i| &plugins[i]).collect();
+            let idx = store_mod::try_browse_refs(&pool, &query, &category, sort, installed_only, verified_only, &market, &trust)
+                .map(|idx| idx.into_iter().map(|i| at[i]).collect::<Vec<usize>>());
+            drop(pool);
+            idx.map(|idx| Results { plugins, idx })
         };
         let results = match results {
             Ok(results) => results,
@@ -1307,6 +1342,19 @@ impl Win {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn results_name_catalogue_entries_and_copy_only_a_page() {
+        let plugins: Vec<Plugin> = (0..5).map(|i| Plugin { id: format!("p{i}"), ..Plugin::default() }).collect();
+        let plugins = Arc::new(plugins);
+        let r = Results { plugins: plugins.clone(), idx: vec![4, 0, 2] };
+        assert_eq!(Arc::strong_count(&plugins), 2, "shared, not copied");
+        let ids = |v: Vec<Plugin>| v.into_iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(r.page(0, 2)), ["p4", "p0"]);
+        assert_eq!(ids(r.page(2, 99)), ["p2"]);
+        assert!(r.page(3, 9).is_empty() && r.page(7, 9).is_empty());
+        assert_eq!((r.len(), Results::default().is_empty()), (3, true));
+    }
 
     /// This file's own source, without the tests below.
     fn source() -> String {

@@ -1224,7 +1224,7 @@ impl Win {
             return false;
         }
         let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
-        let r = store_mod::try_annotate(&mut plugins);
+        let r = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut plugins));
         self.shared.borrow_mut().plugins = plugins;
         if let Err(e) = r {
             eprintln!("almanac: {e}");

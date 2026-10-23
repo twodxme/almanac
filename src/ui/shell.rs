@@ -758,7 +758,11 @@ pub struct Shared {
     // Marketplace state. Images are fetched on a small pool -- 5,600 cards
     // would otherwise open 5,600 connections on the first scroll -- and
     // decoded textures are kept so scrolling back is free.
-    pub plugins: Vec<crate::store::Plugin>,
+    //
+    // Shared, not copied: the store page's results and the workers that
+    // read the catalogue hold the same list. A change in place
+    // (`annotate`) goes through `Arc::make_mut`.
+    pub plugins: std::sync::Arc<Vec<crate::store::Plugin>>,
     pub store_cats: Vec<String>,
     pub store_cat_key: String,
     pub store_timer: Option<glib::SourceId>,
@@ -833,7 +837,7 @@ impl Default for Shared {
             row_actions: HashMap::new(),
             discovering: false,
             discover_timer: None,
-            plugins: Vec::new(),
+            plugins: Default::default(),
             store_cats: vec![String::new()],
             store_cat_key: String::new(),
             store_timer: None,

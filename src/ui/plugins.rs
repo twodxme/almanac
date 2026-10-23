@@ -513,7 +513,7 @@ fn plugin_switch_shared(
             // what annotate raises ends this idle callback, logged.
             let mut shared = w.shared.borrow_mut();
             if !shared.plugins_none && !shared.plugins.is_empty() {
-                if let Err(e) = store_mod::try_annotate(&mut shared.plugins) {
+                if let Err(e) = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut shared.plugins)) {
                     eprintln!("almanac: {e}");
                 }
             }
@@ -851,7 +851,7 @@ impl Win {
                     }
                 };
                 // `except Exception: trust = {}`
-                let catalog = if have.is_empty() { store_mod::try_catalog(false) } else { Ok(have) };
+                let catalog = if have.is_empty() { store_mod::try_catalog(false) } else { Ok(std::sync::Arc::unwrap_or_clone(have)) };
                 let trust: BTreeMap<String, store_mod::Plugin> = match catalog {
                     Ok(catalog) => catalog.into_iter().map(|c| (c.id.clone(), c)).collect(),
                     Err(_) => BTreeMap::new(),
@@ -1476,7 +1476,7 @@ impl Win {
     pub fn on_update_plugins(&self) {
         let have = self.shared.borrow().plugins.clone();
         // What raises in here ends the Python's worker: nothing is asked.
-        let work = move || plugin_update_states(have);
+        let work = move || plugin_update_states(std::sync::Arc::unwrap_or_clone(have));
         self.say(&tr("Checking plugins…"), 5);
         let w = self.downgrade();
         spawn_bg(work, move |res| match res {

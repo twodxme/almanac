@@ -299,7 +299,7 @@ impl Win {
                     // `setattr(self, "_plugins", None)`
                     let mut sh = w.shared.borrow_mut();
                     sh.plugins_none = true;
-                    sh.plugins.clear();
+                    sh.plugins = Default::default();
                 }
             })
         };

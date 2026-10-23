@@ -488,7 +488,7 @@ impl Win {
                         Err(_) => (Vec::new(), false),
                     }
                 } else {
-                    (plugins, false)
+                    (std::sync::Arc::unwrap_or_clone(plugins), false)
                 };
                 let shelves = featured::build(&apps, &found, &plugins);
                 (plugins, fresh, shelves)
@@ -497,7 +497,7 @@ impl Win {
                 let Some(w) = w.upgrade() else { return };
                 if fresh {
                     let mut sh = w.shared.borrow_mut();
-                    sh.plugins = plugins.clone();
+                    sh.plugins = std::sync::Arc::new(plugins.clone());
                     sh.plugins_none = false;
                 }
                 w.feat_show(shelves);

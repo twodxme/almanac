@@ -296,7 +296,7 @@ impl Win {
         self.say(&tr("Checking what else needs updating…"), 5);
         let w = self.downgrade();
         spawn_bg(
-            move || plan(rest, have),
+            move || plan(rest, std::sync::Arc::unwrap_or_clone(have)),
             move |batch| {
                 let Some(win) = w.upgrade() else { return };
                 match batch {
