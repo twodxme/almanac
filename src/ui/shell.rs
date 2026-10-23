@@ -636,6 +636,91 @@ pub struct GroupHeader {
 /// since `_primary_actions` builds it.
 pub use crate::ui::packages::PrimaryAction;
 
+/// How much decoded image data `TexCache` keeps: about a hundred 640px
+/// screenshots, or every icon on a page many times over.
+pub const TEX_BUDGET: usize = 48 << 20;
+
+/// Decoded textures by "path@width", so scrolling back is free.
+///
+/// Bounded by the bytes the pixels take (`tex_bytes`), not by a count: a
+/// 72px icon is 20 KB, a 1200px hero image several MB. When it is full the
+/// least recently used go first, one at a time, so what is on screen stays.
+pub struct TexCache<T = gdk::Texture> {
+    /// value, its size, and when it was last used
+    entries: HashMap<String, (T, usize, u64)>,
+    /// last use -> key, oldest first
+    order: BTreeMap<u64, String>,
+    tick: u64,
+    bytes: usize,
+    budget: usize,
+}
+
+impl<T: Clone> TexCache<T> {
+    pub fn new(budget: usize) -> Self {
+        TexCache { entries: HashMap::new(), order: BTreeMap::new(), tick: 0, bytes: 0, budget }
+    }
+
+    fn touch(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+
+    /// The value for `key`, now the most recently used.
+    pub fn get(&mut self, key: &str) -> Option<T> {
+        let tick = self.touch();
+        let (value, _, used) = self.entries.get_mut(key)?;
+        self.order.remove(used);
+        *used = tick;
+        let value = value.clone();
+        self.order.insert(tick, key.to_string());
+        Some(value)
+    }
+
+    /// Keep `value` (`bytes` big) under `key`, dropping the least recently
+    /// used until it fits. One bigger than the whole budget is not kept.
+    pub fn insert(&mut self, key: String, value: T, bytes: usize) {
+        self.remove(&key);
+        if bytes > self.budget {
+            return;
+        }
+        while self.bytes + bytes > self.budget {
+            let Some((_, oldest)) = self.order.pop_first() else { break };
+            if let Some((_, size, _)) = self.entries.remove(&oldest) {
+                self.bytes -= size;
+            }
+        }
+        let tick = self.touch();
+        self.order.insert(tick, key.clone());
+        self.entries.insert(key, (value, bytes, tick));
+        self.bytes += bytes;
+    }
+
+    fn remove(&mut self, key: &str) {
+        if let Some((_, size, used)) = self.entries.remove(key) {
+            self.order.remove(&used);
+            self.bytes -= size;
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The bytes held.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+/// What a texture holds decoded: four bytes a pixel.
+pub fn tex_bytes(tex: &gdk::Texture) -> usize {
+    tex.width().max(0) as usize * tex.height().max(0) as usize * 4
+}
+
 /// State read and written by more than one section.
 pub struct Shared {
     pub filter_key: String,
@@ -653,8 +738,8 @@ pub struct Shared {
     pub filter: gtk::CustomFilter,
     /// `self.sorted`
     pub sorted: gtk::SortListModel,
-    /// Decoded textures, so scrolling back is free. Keyed "path@width".
-    pub tex_cache: HashMap<String, gdk::Texture>,
+    /// Decoded textures, so scrolling back is free (see `TexCache`).
+    pub tex_cache: TexCache,
     /// `self.sidebar_rows`, in sidebar order.
     pub sidebar_rows: Vec<SidebarRow>,
     /// `self.group_rows`: None for the ungrouped primary group.
@@ -737,7 +822,7 @@ impl Default for Shared {
             store,
             filter,
             sorted,
-            tex_cache: HashMap::new(),
+            tex_cache: TexCache::new(TEX_BUDGET),
             sidebar_rows: Vec::new(),
             group_rows: Vec::new(),
             group_members: BTreeMap::new(),
@@ -2736,6 +2821,32 @@ pub fn run() -> glib::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_texture_cache_drops_the_least_recently_used_by_size() {
+        let mut c: TexCache<u32> = TexCache::new(100);
+        c.insert("a".into(), 1, 40);
+        c.insert("b".into(), 2, 40);
+        assert_eq!(c.get("a"), Some(1)); // a is now newer than b
+        c.insert("c".into(), 3, 40); // over budget: b goes, not a
+        assert_eq!((c.get("b"), c.get("a"), c.get("c")), (None, Some(1), Some(3)));
+        assert_eq!((c.len(), c.bytes()), (2, 80));
+        // replacing a key does not count it twice
+        c.insert("c".into(), 4, 50);
+        assert_eq!((c.len(), c.bytes()), (2, 90));
+        // one big entry evicts as many as it needs
+        c.insert("big".into(), 5, 100);
+        assert_eq!((c.len(), c.bytes(), c.get("big")), (1, 100, Some(5)));
+        // and one bigger than the whole budget is not kept at all
+        c.insert("huge".into(), 6, 101);
+        assert_eq!((c.get("huge"), c.get("big")), (None, Some(5)));
+        // many small ones stay within the budget
+        for i in 0..1000 {
+            c.insert(format!("i{i}"), i, 7);
+        }
+        assert!(c.bytes() <= 100 && c.len() == 14);
+        assert_eq!(c.get("i999"), Some(999));
+    }
 
     #[test]
     fn lower_cmp_orders_as_lowering_first_does() {

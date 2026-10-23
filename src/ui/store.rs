@@ -15,7 +15,7 @@ use gtk::{gdk, glib};
 use crate::i18n::tr;
 use crate::store as store_mod;
 use crate::store::Plugin;
-use crate::ui::shell::{compact, exc_str, page_spec, sorts_discover, spawn_bg, PluginItem, Win, INSTALL_ICON};
+use crate::ui::shell::{compact, exc_str, page_spec, sorts_discover, spawn_bg, tex_bytes, PluginItem, Win, INSTALL_ICON};
 
 use gtk::gio;
 
@@ -1055,18 +1055,14 @@ impl Win {
 
     /// What `texture` decoded before for this file and width, if anything.
     pub fn texture_cached(&self, path: &Path, max_width: i32) -> Option<gdk::Texture> {
-        self.shared.borrow().tex_cache.get(&format!("{}@{}", path.display(), max_width)).cloned()
+        self.shared.borrow_mut().tex_cache.get(&format!("{}@{}", path.display(), max_width))
     }
 
     /// Keep a texture decoded elsewhere (see `decode_texture`) for `texture`.
     pub fn texture_keep(&self, path: &Path, max_width: i32, tex: &gdk::Texture) {
-        let mut sh = self.shared.borrow_mut();
-        // A soft cap: scrolling the whole catalogue would otherwise hold every
-        // decoded screenshot at once.
-        if sh.tex_cache.len() > 160 {
-            sh.tex_cache.clear();
-        }
-        sh.tex_cache.insert(format!("{}@{}", path.display(), max_width), tex.clone());
+        let bytes = tex_bytes(tex);
+        let key = format!("{}@{}", path.display(), max_width);
+        self.shared.borrow_mut().tex_cache.insert(key, tex.clone(), bytes);
     }
 
     /// A centred square crop, scaled -- so a 1600px-wide screenshot makes
@@ -1075,7 +1071,7 @@ impl Win {
     /// The Python's default `side` is `Win::SQUARE_SIDE` (72).
     pub fn square(&self, path: &Path, side: i32) -> Option<gdk::Texture> {
         let key = format!("{}@square{}", path.display(), side);
-        let hit = self.shared.borrow().tex_cache.get(&key).cloned();
+        let hit = self.shared.borrow_mut().tex_cache.get(&key);
         if let Some(tex) = hit {
             return Some(tex);
         }
@@ -1089,7 +1085,8 @@ impl Win {
         let pb = pb.new_subpixbuf((pb.width() - edge) / 2, (pb.height() - edge) / 2, edge, edge);
         let pb = pb.scale_simple(side, side, gdk_pixbuf::InterpType::Bilinear)?;
         let tex = memory_texture(&pb, side, side)?;
-        self.shared.borrow_mut().tex_cache.insert(key, tex.clone());
+        let bytes = tex_bytes(&tex);
+        self.shared.borrow_mut().tex_cache.insert(key, tex.clone(), bytes);
         Some(tex)
     }
 
