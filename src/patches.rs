@@ -216,7 +216,7 @@ fn git(repo: &str, args: &[&str], env: &[(String, String)], input_text: Option<&
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().map_err(|_| GitError::Caught)?;
+    let mut child = crate::util::spawn_group(&mut cmd).map_err(|_| GitError::Caught)?;
     if let (Some(text), Some(mut stdin)) = (input_text, child.stdin.take()) {
         let text = text.to_owned();
         std::thread::spawn(move || {
@@ -244,8 +244,7 @@ fn git(repo: &str, args: &[&str], env: &[(String, String)], input_text: Option<&
             Ok(None) => {
                 if start.elapsed() >= limit {
                     // TimeoutExpired, a SubprocessError.
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::util::kill_group(&mut child);
                     return Err(GitError::Caught);
                 }
                 std::thread::sleep(Duration::from_millis(10));

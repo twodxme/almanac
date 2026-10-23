@@ -31,6 +31,8 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::util::pyjson;
+
 /// One catalogue row: the `Plugin` fields as a JSON object, exactly what the
 /// Python keeps as a `dict` and turns into a plugin with `Plugin(**row)`.
 /// This is also the shape of the `rows` list in `catalog-<market>.json`.
@@ -1027,68 +1029,62 @@ fn py_title(s: &str) -> String {
 
 /// `json.loads(text)`. Python reads two things serde_json rejects: the
 /// constants `NaN`, `Infinity` and `-Infinity`, and a `\uXXXX` escape of a
-/// lone surrogate. A `Value` can hold neither, so the constants load as
-/// null and a lone surrogate as U+FFFD -- the file still loads, as it does
-/// there, instead of counting as broken.
+/// lone surrogate. A `Value` can hold neither, so the constants (and a
+/// float too big for one) load as null and a lone surrogate as U+FFFD --
+/// the file still loads, as it does there, instead of counting as broken.
+/// Numbers are otherwise what serde_json makes of them, and nesting stops
+/// where serde's does.
 fn py_json_loads(text: &str) -> Result<Value, String> {
-    let cs: Vec<char> = text.chars().collect();
-    let hex4 = |at: usize| -> Option<u32> {
-        let s: String = cs.get(at..at + 4)?.iter().collect();
-        if s.chars().all(|c| c.is_ascii_hexdigit()) { u32::from_str_radix(&s, 16).ok() } else { None }
-    };
-    let surrogate = |u: u32| (0xD800..0xE000).contains(&u);
-    let mut out = String::with_capacity(text.len());
-    let mut in_str = false;
-    let mut i = 0;
-    'scan: while i < cs.len() {
-        let c = cs[i];
-        if in_str {
-            if c == '\\' && i + 1 < cs.len() {
-                if cs[i + 1] == 'u' {
-                    if let Some(u) = hex4(i + 2).filter(|u| surrogate(*u)) {
-                        // A high surrogate followed by a low one is a pair.
-                        let low = (u < 0xDC00 && cs.get(i + 6) == Some(&'\\') && cs.get(i + 7) == Some(&'u'))
-                            .then(|| hex4(i + 8))
-                            .flatten()
-                            .filter(|l| (0xDC00..0xE000).contains(l));
-                        if low.is_some() {
-                            out.extend(&cs[i..i + 12]);
-                            i += 12;
-                        } else {
-                            out.push_str("\\ufffd");
-                            i += 6;
-                        }
-                        continue;
-                    }
-                }
-                out.push(c);
-                out.push(cs[i + 1]);
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                in_str = false;
-            }
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        if c == '"' {
-            in_str = true;
-        } else {
-            for tok in ["NaN", "Infinity", "-Infinity"] {
-                let n = tok.chars().count();
-                if cs.get(i..i + n).is_some_and(|w| w.iter().copied().eq(tok.chars())) {
-                    out.push_str("null");
-                    i += n;
-                    continue 'scan;
-                }
-            }
-        }
-        out.push(c);
-        i += 1;
+    match pyjson::loads::<Loaded>(text, pyjson::Limit::containers(pyjson::SERDE_DEPTH)) {
+        Ok(v) => Ok(v.0),
+        Err(pyjson::Error::Value(e)) => Err(format!("JSONDecodeError: {e}")),
+        Err(pyjson::Error::Recursion(_)) => Err("JSONDecodeError: recursion limit exceeded".into()),
     }
-    serde_json::from_str(&out).map_err(|e| format!("JSONDecodeError: {e}"))
+}
+
+/// What [`py_json_loads`] builds.
+struct Loaded(Value);
+
+impl pyjson::Build for Loaded {
+    type Key = String;
+    const EXACT_INTS: bool = false;
+    fn null() -> Self {
+        Loaded(Value::Null)
+    }
+    fn bool(b: bool) -> Self {
+        Loaded(Value::Bool(b))
+    }
+    fn num(n: pyjson::Num<'_>) -> Self {
+        Loaded(match n {
+            pyjson::Num::Int(i) => Value::from(i),
+            pyjson::Num::UInt(u) => Value::from(u),
+            // Not made with EXACT_INTS off: a long int is a float.
+            pyjson::Num::Big(_) => Value::Null,
+            pyjson::Num::Float(f) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
+        })
+    }
+    fn str(s: String) -> Self {
+        Loaded(Value::String(s))
+    }
+    fn wstr(units: Vec<u32>) -> Self {
+        Loaded(Value::String(Self::wkey(units)))
+    }
+    fn key(s: String) -> String {
+        s
+    }
+    fn wkey(units: Vec<u32>) -> String {
+        units.into_iter().map(|u| char::from_u32(u).unwrap_or('\u{fffd}')).collect()
+    }
+    fn list(items: Vec<Self>) -> Self {
+        Loaded(Value::Array(items.into_iter().map(|x| x.0).collect()))
+    }
+    fn dict(pairs: Vec<(String, Self)>) -> Self {
+        let mut m = Row::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            m.insert(k, v.0);
+        }
+        Loaded(Value::Object(m))
+    }
 }
 
 /// `str.splitlines()`.
@@ -1115,24 +1111,6 @@ fn py_splitlines(s: &str) -> Vec<&str> {
         out.push(&s[start..]);
     }
     out
-}
-
-/// The zero of every run of ten Unicode decimal digits (category Nd), which
-/// is what Python's `int()` accepts as a digit.
-const ND_ZEROS: &[u32] = &[
-    0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
-    0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
-    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
-    0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450,
-    0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50,
-    0x11D50, 0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE,
-    0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
-];
-
-/// `unicodedata.decimal(c)`.
-fn py_decimal(c: char) -> Option<u32> {
-    let u = c as u32;
-    ND_ZEROS.iter().find(|z| (**z..**z + 10).contains(&u)).map(|z| u - z)
 }
 
 /// A Python int as JSON: exact while it fits 64 bits, the nearest float
@@ -1184,7 +1162,7 @@ fn py_int(v: &Value) -> Result<Value, String> {
                 if c == '_' {
                     continue;
                 }
-                let d = py_decimal(c).ok_or_else(bad)?;
+                let d = crate::util::decimal_value(c).ok_or_else(bad)?;
                 ascii.push(char::from(b'0' + d as u8));
             }
             let n = BigInt::parse_bytes(ascii.as_bytes(), 10).ok_or_else(bad)?;
@@ -3186,6 +3164,10 @@ mod tests {
         assert_eq!(py_json_loads(r#"{"NaN": "NaN"}"#).expect("loads"), json!({"NaN": "NaN"}));
         assert!(py_json_loads("{nope").is_err());
         assert!(py_json_loads("-NaN").is_err());
+        // A float too big for a Value is null too; numbers are serde's otherwise.
+        assert_eq!(py_json_loads("[1e400, -0, 100000000000000000000]").expect("loads"), json!([null, -0.0, 1e20]));
+        assert!(py_json_loads(&format!("{}1{}", "[".repeat(127), "]".repeat(127))).is_ok());
+        assert!(py_json_loads(&format!("{}1{}", "[".repeat(128), "]".repeat(128))).is_err());
     }
 
     #[test]

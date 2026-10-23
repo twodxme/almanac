@@ -535,9 +535,9 @@ fn py_main_thread() -> bool {
     PY_MAIN.with(|c| c.get()).unwrap_or_else(|| std::thread::current().name() == Some("main"))
 }
 
-/// Stack for the threads that hold the caches' values: enough to parse,
-/// drop, clone and write one nested as deep as Python's json allows.
-const DEEP_STACK: usize = 512 << 20;
+/// Stack for the threads that hold the caches' values: enough to drop,
+/// clone and write one nested as deep as Python's json allows.
+const DEEP_STACK: usize = crate::util::JSON_STACK;
 
 /// `f()` on a thread with a [`DEEP_STACK`] stack (reserved, not used, until
 /// a deep value needs it), standing in for the calling Python thread; at once
@@ -550,293 +550,91 @@ fn deep<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 }
 
 /// [`deep`] for a thread that stands in for the given kind of Python thread.
+/// The thread is unnamed whatever the caller's, as other modules' "main
+/// thread?" checks go by the name.
 fn deep_as<R: Send>(main: bool, f: impl FnOnce() -> R + Send) -> R {
-    let mut job = Some(f);
-    let out = std::thread::scope(|s| {
-        let job = &mut job;
-        let spawned = std::thread::Builder::new().stack_size(DEEP_STACK).spawn_scoped(s, move || {
-            PY_MAIN.with(|c| c.set(Some(main)));
-            job.take().map(|f| f())
-        });
-        match spawned {
-            Ok(h) => Some(h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))),
-            Err(_) => None,
-        }
-    });
-    if let Some(Some(r)) = out {
-        return r;
-    }
-    // The thread could not be started, so the job never ran: here, then.
-    match job.take() {
-        Some(f) => f(),
-        None => unreachable!("a job that ran returned its result"),
-    }
+    crate::util::with_stack_named(DEEP_STACK, None, move || {
+        // Restored after: when no thread could be started this runs on the
+        // caller's.
+        let was = PY_MAIN.with(|c| c.replace(Some(main)));
+        let out = f();
+        PY_MAIN.with(|c| c.set(was));
+        out
+    })
 }
 
 /// `json.loads(text)`: NaN, Infinity and -Infinity accepted, integers of any
 /// size up to Python's 4300-digit `int()` limit, duplicate keys keep their
 /// first place and last value, a lone `\uD8xx` escape kept (as Python keeps
-/// it), and nesting as deep as Python's goes. Recursive: call it on a
-/// [`deep`] thread.
+/// it), and nesting as deep as Python's goes. The value it builds drops
+/// recursively: call it on a [`deep`] thread.
 fn json_loads(text: &str) -> Result<Py, JsonError> {
+    use crate::util::pyjson;
     let limit = if py_main_thread() { MAX_DEPTH_MAIN } else { MAX_DEPTH_THREAD };
-    let mut p = JsonParser { s: text, b: text.as_bytes(), i: 0, limit };
-    p.ws();
-    let v = p.value(0)?;
-    p.ws();
-    if p.i != p.b.len() {
-        return Err(JsonError::Value(format!("JSONDecodeError: Extra data: char {}", p.i)));
-    }
-    Ok(v)
-}
-
-struct JsonParser<'a> {
-    s: &'a str,
-    b: &'a [u8],
-    i: usize,
-    limit: usize,
-}
-
-impl JsonParser<'_> {
-    fn err<T>(&self, what: &str) -> Result<T, JsonError> {
-        Err(JsonError::Value(format!("JSONDecodeError: {what}: char {}", self.i)))
-    }
-
-    /// Opening the container at `depth` (0 for the top level).
-    fn enter(&self, depth: usize, what: &str) -> Result<(), JsonError> {
-        if depth + 1 > self.limit {
+    pyjson::loads(text, pyjson::Limit::containers(limit)).map_err(|e| match e {
+        pyjson::Error::Value(m) => JsonError::Value(format!("JSONDecodeError: {m}")),
+        pyjson::Error::Recursion(is_obj) => {
             let used = if py_main_thread() { 8144 } else { 8156 };
-            return Err(JsonError::Recursion(format!(
+            let what = if is_obj { "object" } else { "array" };
+            JsonError::Recursion(format!(
                 "RecursionError: Stack overflow (used {used} kB) while decoding a JSON {what} from a unicode string"
-            )));
+            ))
         }
-        Ok(())
-    }
+    })
+}
 
-    fn peek(&self) -> Option<u8> {
-        self.b.get(self.i).copied()
+impl crate::util::pyjson::Build for Py {
+    type Key = Py;
+    fn null() -> Self {
+        Py::None
     }
-
-    fn ws(&mut self) {
-        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
-            self.i += 1;
-        }
+    fn bool(b: bool) -> Self {
+        Py::Bool(b)
     }
-
-    fn lit(&mut self, word: &str, v: Py) -> Result<Py, JsonError> {
-        if self.s[self.i..].starts_with(word) {
-            self.i += word.len();
-            Ok(v)
-        } else {
-            self.err("Expecting value")
-        }
-    }
-
-    fn value(&mut self, depth: usize) -> Result<Py, JsonError> {
-        match self.peek() {
-            Some(b'{') => self.object(depth),
-            Some(b'[') => self.array(depth),
-            Some(b'"') => self.string(),
-            Some(b'n') => self.lit("null", Py::None),
-            Some(b't') => self.lit("true", Py::Bool(true)),
-            Some(b'f') => self.lit("false", Py::Bool(false)),
-            Some(b'N') => self.lit("NaN", Py::Float(f64::NAN)),
-            Some(b'I') => self.lit("Infinity", Py::Float(f64::INFINITY)),
-            Some(b'-') if self.s[self.i..].starts_with("-Infinity") => self.lit("-Infinity", Py::Float(f64::NEG_INFINITY)),
-            Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => self.err("Expecting value"),
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => Py::Int(i.to_string()),
+            Num::UInt(u) => Py::Int(u.to_string()),
+            Num::Big(digits) => Py::Int(digits.to_string()),
+            Num::Float(f) => Py::Float(f),
         }
     }
-
-    fn digits(&mut self) {
-        while matches!(self.peek(), Some(b'0'..=b'9')) {
-            self.i += 1;
-        }
+    fn str(s: String) -> Self {
+        Py::Str(s)
     }
-
-    fn number(&mut self) -> Result<Py, JsonError> {
-        let start = self.i;
-        if self.peek() == Some(b'-') {
-            self.i += 1;
-        }
-        match self.peek() {
-            Some(b'0') => self.i += 1,
-            Some(b'1'..=b'9') => self.digits(),
-            _ => {
-                self.i = start;
-                return self.err("Expecting value");
-            }
-        }
-        let int_end = self.i;
-        let mut is_float = false;
-        if self.peek() == Some(b'.') && matches!(self.b.get(self.i + 1), Some(b'0'..=b'9')) {
-            self.i += 1;
-            self.digits();
-            is_float = true;
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            let mut j = self.i + 1;
-            if matches!(self.b.get(j), Some(b'+' | b'-')) {
-                j += 1;
-            }
-            if matches!(self.b.get(j), Some(b'0'..=b'9')) {
-                self.i = j;
-                self.digits();
-                is_float = true;
-            }
-        }
-        let text = &self.s[start..self.i];
-        if is_float {
-            return Ok(Py::Float(text.parse().unwrap_or(f64::NAN)));
-        }
-        let digits = &self.s[start..int_end].trim_start_matches('-');
-        if digits.len() > 4300 {
-            return Err(JsonError::Value(format!(
-                "ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has {} digits",
-                digits.len()
-            )));
-        }
-        Ok(Py::Int(if text == "-0" { "0".into() } else { text.to_string() }))
+    fn wstr(units: Vec<u32>) -> Self {
+        Py::WStr(units)
     }
-
-    fn hex4(&self, at: usize) -> Option<u32> {
-        let h = self.s.get(at..at + 4)?;
-        if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        u32::from_str_radix(h, 16).ok()
+    fn key(s: String) -> Py {
+        Py::Str(s)
     }
-
-    /// A string, `Str` unless it keeps a lone surrogate (`WStr`).
-    fn string(&mut self) -> Result<Py, JsonError> {
-        self.i += 1;
-        let mut out = String::new();
-        // Code points, once a lone surrogate turns up.
-        let mut wide: Option<Vec<u32>> = None;
-        let push = |out: &mut String, wide: &mut Option<Vec<u32>>, cp: u32| match (wide.as_mut(), char::from_u32(cp)) {
-            (Some(w), _) => w.push(cp),
-            (None, Some(c)) => out.push(c),
-            (None, None) => {
-                let mut w: Vec<u32> = out.chars().map(|c| c as u32).collect();
-                w.push(cp);
-                *wide = Some(w);
-            }
+    fn wkey(units: Vec<u32>) -> Py {
+        Py::WStr(units)
+    }
+    fn list(items: Vec<Self>) -> Self {
+        Py::List(items)
+    }
+    fn dict(pairs: Vec<(Py, Self)>) -> Self {
+        // Keys from JSON are a Str or a WStr, and most dicts repeat none.
+        let unique = {
+            let mut seen = std::collections::HashSet::with_capacity(pairs.len());
+            pairs.iter().all(|(k, _)| {
+                seen.insert(match k {
+                    Py::WStr(w) => Err(w.as_slice()),
+                    Py::Str(s) => Ok(s.as_str()),
+                    _ => Ok(""),
+                })
+            })
         };
-        loop {
-            let chunk = self.i;
-            while matches!(self.peek(), Some(c) if c != b'"' && c != b'\\' && c >= 0x20) {
-                self.i += 1;
-            }
-            for c in self.s[chunk..self.i].chars() {
-                push(&mut out, &mut wide, c as u32);
-            }
-            match self.peek() {
-                None => return self.err("Unterminated string starting at"),
-                Some(b'"') => {
-                    self.i += 1;
-                    return Ok(match wide {
-                        Some(w) => Py::WStr(w),
-                        None => Py::Str(out),
-                    });
-                }
-                Some(b'\\') => {
-                    let esc = self.b.get(self.i + 1).copied();
-                    self.i += 2;
-                    let c = match esc {
-                        Some(b'"') => '"' as u32,
-                        Some(b'\\') => '\\' as u32,
-                        Some(b'/') => '/' as u32,
-                        Some(b'b') => 0x8,
-                        Some(b'f') => 0xc,
-                        Some(b'n') => '\n' as u32,
-                        Some(b'r') => '\r' as u32,
-                        Some(b't') => '\t' as u32,
-                        Some(b'u') => {
-                            let Some(mut c) = self.hex4(self.i) else {
-                                return self.err("Invalid \\uXXXX escape");
-                            };
-                            self.i += 4;
-                            if (0xd800..=0xdbff).contains(&c) && self.s[self.i..].starts_with("\\u") {
-                                if let Some(lo) = self.hex4(self.i + 2).filter(|lo| (0xdc00..=0xdfff).contains(lo)) {
-                                    c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
-                                    self.i += 6;
-                                }
-                            }
-                            c
-                        }
-                        _ => {
-                            self.i -= 1;
-                            return self.err("Invalid \\escape");
-                        }
-                    };
-                    push(&mut out, &mut wide, c);
-                }
-                Some(_) => return self.err("Invalid control character at"),
-            }
+        if unique {
+            return Py::Dict(pairs);
         }
-    }
-
-    fn object(&mut self, depth: usize) -> Result<Py, JsonError> {
-        self.enter(depth, "object")?;
-        self.i += 1;
-        let mut items = Vec::new();
-        self.ws();
-        if self.peek() == Some(b'}') {
-            self.i += 1;
-            return Ok(Py::Dict(items));
+        let mut items = Vec::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            dict_set(&mut items, k, v);
         }
-        loop {
-            if self.peek() != Some(b'"') {
-                return self.err("Expecting property name enclosed in double quotes");
-            }
-            let key = self.string()?;
-            self.ws();
-            if self.peek() != Some(b':') {
-                return self.err("Expecting ':' delimiter");
-            }
-            self.i += 1;
-            self.ws();
-            let v = self.value(depth + 1)?;
-            dict_set(&mut items, key, v);
-            self.ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b'}') => {
-                    self.i += 1;
-                    return Ok(Py::Dict(items));
-                }
-                _ => return self.err("Expecting ',' delimiter"),
-            }
-        }
-    }
-
-    fn array(&mut self, depth: usize) -> Result<Py, JsonError> {
-        self.enter(depth, "array")?;
-        self.i += 1;
-        let mut items = Vec::new();
-        self.ws();
-        if self.peek() == Some(b']') {
-            self.i += 1;
-            return Ok(Py::List(items));
-        }
-        loop {
-            items.push(self.value(depth + 1)?);
-            self.ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b']') => {
-                    self.i += 1;
-                    return Ok(Py::List(items));
-                }
-                _ => return self.err("Expecting ',' delimiter"),
-            }
-        }
+        Py::Dict(items)
     }
 }
 
@@ -978,12 +776,11 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     let (prog, args) = argv.split_first()?;
-    let mut child = Command::new(prog)
+    let mut child = crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
         .ok()?;
     let reader = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -1011,8 +808,7 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
             break;
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             return None;
         }
         std::thread::sleep(Duration::from_millis(10));

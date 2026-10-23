@@ -445,400 +445,62 @@ impl From<String> for LoadErr {
 /// `json.loads(s)` with Python's grammar and error text
 /// (`Expecting value: line 1 column 1 (char 0)`).
 fn py_json_loads(text: &str) -> Result<PyVal, LoadErr> {
-    let s: Vec<char> = text.chars().collect();
-    let p = PyJson { s: &s };
-    if s.first() == Some(&'\u{feff}') {
-        return Err(p.err("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0).into());
-    }
-    let idx = p.ws(0);
-    let (v, end) = p.scan_once(idx)?;
-    let end = p.ws(end);
-    if end != s.len() {
-        return Err(p.err("Extra data", end).into());
-    }
-    Ok(v)
+    use crate::util::pyjson;
+    pyjson::loads(text, pyjson::Limit::containers(JSON_MAX_DEPTH)).map_err(|e| match e {
+        pyjson::Error::Value(msg) => LoadErr { msg, recursion: false },
+        pyjson::Error::Recursion(is_obj) => LoadErr {
+            msg: format!(
+                "Stack overflow (used 8144 kB) while decoding a JSON {} from a unicode string",
+                if is_obj { "object" } else { "array" }
+            ),
+            recursion: true,
+        },
+    })
 }
 
-/// json.decoder / json.scanner, over the document's characters (Python's
-/// error positions count characters).
-struct PyJson<'a> {
-    s: &'a [char],
-}
-
-/// A failed scan of a scalar: StopIteration(idx) ("Expecting value" there),
-/// or a finished error message.
-enum ScanErr {
-    Stop(usize),
-    Msg(String),
-}
-
-/// An array or object being filled, with (for an object) the key whose
-/// value is being scanned.
-enum Frame {
-    Arr(Vec<PyVal>),
-    Obj(Vec<(PyVal, PyVal)>, PyVal),
-}
-
-impl PyJson<'_> {
-    /// `JSONDecodeError(msg, doc, pos)`'s text.
-    fn err(&self, msg: &str, pos: usize) -> String {
-        let before = &self.s[..pos.min(self.s.len())];
-        let lineno = before.iter().filter(|c| **c == '\n').count() + 1;
-        let colno = match before.iter().rposition(|c| *c == '\n') {
-            Some(nl) => pos - nl,
-            None => pos + 1,
-        };
-        format!("{msg}: line {lineno} column {colno} (char {pos})")
+impl crate::util::pyjson::Build for PyVal {
+    type Key = PyVal;
+    fn null() -> Self {
+        PyVal::None
     }
-
-    fn fail(&self, msg: &str, pos: usize) -> LoadErr {
-        self.err(msg, pos).into()
+    fn bool(b: bool) -> Self {
+        PyVal::Bool(b)
     }
-
-    fn at(&self, i: usize) -> Option<char> {
-        self.s.get(i).copied()
-    }
-
-    fn is_ws(c: Option<char>) -> bool {
-        matches!(c, Some(' ' | '\t' | '\n' | '\r'))
-    }
-
-    /// `WHITESPACE.match(s, i).end()` (a start past the end is the end).
-    fn ws(&self, i: usize) -> usize {
-        let mut i = i.min(self.s.len());
-        while Self::is_ws(self.at(i)) {
-            i += 1;
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => PyVal::Int(i128::from(i)),
+            Num::UInt(u) => PyVal::Int(i128::from(u)),
+            Num::Big(digits) => int_from_digits(digits),
+            Num::Float(f) => PyVal::Float(f),
         }
-        i
     }
-
-    fn starts(&self, i: usize, lit: &str) -> bool {
-        let n = lit.chars().count();
-        i + n <= self.s.len() && self.s[i..i + n].iter().copied().eq(lit.chars())
+    fn str(s: String) -> Self {
+        PyVal::Str(s)
     }
-
-    /// `Py_EnterRecursiveCall` before opening the `depth`-th container.
-    fn enter(&self, depth: usize, what: &str) -> Result<(), LoadErr> {
-        if depth > JSON_MAX_DEPTH {
-            return Err(LoadErr {
-                msg: format!("Stack overflow (used 8144 kB) while decoding a JSON {what} from a unicode string"),
-                recursion: true,
-            });
-        }
-        Ok(())
+    fn wstr(units: Vec<u32>) -> Self {
+        PyVal::SurStr(units)
     }
-
-    /// `scan_once(s, idx)`: one value, with arrays and objects (JSONArray /
-    /// JSONObject) kept on an explicit stack instead of recursing.
-    fn scan_once(&self, idx: usize) -> Result<(PyVal, usize), LoadErr> {
-        let mut stack: Vec<Frame> = Vec::new();
-        let mut pos = idx;
-        'value: loop {
-            // A value starts at `pos`: a scalar, an empty container, or a
-            // container to fill.
-            let (mut v, mut end) = match self.at(pos) {
-                Some('[') => {
-                    self.enter(stack.len() + 1, "array")?;
-                    let mut end = pos + 1;
-                    let mut next = self.at(end);
-                    // `'' in ' \t\n\r'` is True in Python: the end of input counts.
-                    if next.is_none() || Self::is_ws(next) {
-                        end = self.ws(end + 1);
-                        next = self.at(end);
-                    }
-                    if next != Some(']') {
-                        stack.push(Frame::Arr(Vec::new()));
-                        pos = end;
-                        continue 'value;
-                    }
-                    (PyVal::List(Vec::new()), end + 1)
-                }
-                Some('{') => {
-                    self.enter(stack.len() + 1, "object")?;
-                    let mut end = pos + 1;
-                    let mut next = self.at(end);
-                    let mut empty = false;
-                    if next != Some('"') {
-                        if next.is_none() || Self::is_ws(next) {
-                            end = self.ws(end);
-                            next = self.at(end);
-                        }
-                        if next == Some('}') {
-                            empty = true;
-                        } else if next != Some('"') {
-                            return Err(self.fail("Expecting property name enclosed in double quotes", end));
-                        }
-                    }
-                    if !empty {
-                        let (key, e) = self.key(end + 1)?;
-                        stack.push(Frame::Obj(Vec::new(), key));
-                        pos = e;
-                        continue 'value;
-                    }
-                    (PyVal::Dict(Vec::new()), end + 1)
-                }
-                _ => self.scalar(pos).map_err(|e| match e {
-                    ScanErr::Stop(i) => self.fail("Expecting value", i),
-                    ScanErr::Msg(m) => m.into(),
-                })?,
-            };
-            // Hand the finished value to the containers it closes.
-            loop {
-                match stack.pop() {
-                    None => return Ok((v, end)),
-                    Some(Frame::Arr(mut values)) => {
-                        values.push(v);
-                        let mut next = self.at(end);
-                        if next.is_none() || Self::is_ws(next) {
-                            end = self.ws(end + 1);
-                            next = self.at(end);
-                        }
-                        end += 1;
-                        if next == Some(']') {
-                            v = PyVal::List(values);
-                            continue;
-                        } else if next != Some(',') {
-                            return Err(self.fail("Expecting ',' delimiter", end - 1));
-                        }
-                        let comma = end - 1;
-                        if Self::is_ws(self.at(end)) {
-                            end += 1;
-                            if Self::is_ws(self.at(end)) {
-                                end = self.ws(end + 1);
-                            }
-                        }
-                        if self.at(end) == Some(']') {
-                            return Err(self.fail("Illegal trailing comma before end of array", comma));
-                        }
-                        stack.push(Frame::Arr(values));
-                        pos = end;
-                        continue 'value;
-                    }
-                    Some(Frame::Obj(mut pairs, key)) => {
-                        // dict(pairs): a repeated key keeps its first place, last value.
-                        match pairs.iter_mut().find(|(k, _)| *k == key) {
-                            Some(slot) => slot.1 = v,
-                            None => pairs.push((key, v)),
-                        }
-                        let mut next = self.at(end);
-                        if Self::is_ws(next) {
-                            end = self.ws(end + 1);
-                            next = self.at(end);
-                        }
-                        end += 1;
-                        if next == Some('}') {
-                            v = PyVal::Dict(pairs);
-                            continue;
-                        } else if next != Some(',') {
-                            return Err(self.fail("Expecting ',' delimiter", end - 1));
-                        }
-                        let comma = end - 1;
-                        end = self.ws(end);
-                        let next = self.at(end);
-                        end += 1;
-                        if next != Some('"') {
-                            if next == Some('}') {
-                                return Err(self.fail("Illegal trailing comma before end of object", comma));
-                            }
-                            return Err(self.fail("Expecting property name enclosed in double quotes", end - 1));
-                        }
-                        let (key, e) = self.key(end)?;
-                        stack.push(Frame::Obj(pairs, key));
-                        pos = e;
-                        continue 'value;
-                    }
-                }
+    fn key(s: String) -> PyVal {
+        PyVal::Str(s)
+    }
+    fn wkey(units: Vec<u32>) -> PyVal {
+        PyVal::SurStr(units)
+    }
+    fn list(items: Vec<Self>) -> Self {
+        PyVal::List(items)
+    }
+    fn dict(pairs: Vec<(PyVal, Self)>) -> Self {
+        // dict(pairs): a repeated key keeps its first place, last value.
+        let mut out: Vec<(PyVal, PyVal)> = Vec::with_capacity(pairs.len());
+        for (key, v) in pairs {
+            match out.iter_mut().find(|(k, _)| *k == key) {
+                Some(slot) => slot.1 = v,
+                None => out.push((key, v)),
             }
         }
+        PyVal::Dict(out)
     }
-
-    /// An object's key and its `:` (`end` is just after the opening quote);
-    /// returns the key and where its value starts.
-    fn key(&self, end: usize) -> Result<(PyVal, usize), LoadErr> {
-        let (key, mut end) = self.scanstring(end).map_err(|e| match e {
-            ScanErr::Stop(i) => self.fail("Expecting value", i),
-            ScanErr::Msg(m) => m.into(),
-        })?;
-        if self.at(end) != Some(':') {
-            end = self.ws(end);
-            if self.at(end) != Some(':') {
-                return Err(self.fail("Expecting ':' delimiter", end));
-            }
-        }
-        end += 1;
-        if Self::is_ws(self.at(end)) {
-            end += 1;
-            if Self::is_ws(self.at(end)) {
-                end = self.ws(end + 1);
-            }
-        }
-        Ok((key, end))
-    }
-
-    /// `scan_once` for anything but an array or object.
-    fn scalar(&self, idx: usize) -> Result<(PyVal, usize), ScanErr> {
-        let Some(c) = self.at(idx) else {
-            return Err(ScanErr::Stop(idx));
-        };
-        match c {
-            '"' => return self.scanstring(idx + 1),
-            'n' if self.starts(idx, "null") => return Ok((PyVal::None, idx + 4)),
-            't' if self.starts(idx, "true") => return Ok((PyVal::Bool(true), idx + 4)),
-            'f' if self.starts(idx, "false") => return Ok((PyVal::Bool(false), idx + 5)),
-            _ => {}
-        }
-        if let Some(r) = self.number(idx)? {
-            return Ok(r);
-        }
-        if c == 'N' && self.starts(idx, "NaN") {
-            Ok((PyVal::Float(f64::NAN), idx + 3))
-        } else if c == 'I' && self.starts(idx, "Infinity") {
-            Ok((PyVal::Float(f64::INFINITY), idx + 8))
-        } else if c == '-' && self.starts(idx, "-Infinity") {
-            Ok((PyVal::Float(f64::NEG_INFINITY), idx + 9))
-        } else {
-            Err(ScanErr::Stop(idx))
-        }
-    }
-
-    /// NUMBER_RE: `(-?(?:0|[1-9][0-9]*))(\.[0-9]+)?([eE][-+]?[0-9]+)?`.
-    fn number(&self, idx: usize) -> Result<Option<(PyVal, usize)>, ScanErr> {
-        let digit = |i: usize| self.at(i).is_some_and(|c| c.is_ascii_digit());
-        let mut i = idx;
-        if self.at(i) == Some('-') {
-            i += 1;
-        }
-        match self.at(i) {
-            Some('0') => i += 1,
-            Some('1'..='9') => {
-                while digit(i) {
-                    i += 1;
-                }
-            }
-            _ => return Ok(None),
-        }
-        let int_end = i;
-        let mut is_float = false;
-        if self.at(i) == Some('.') && digit(i + 1) {
-            i += 1;
-            while digit(i) {
-                i += 1;
-            }
-            is_float = true;
-        }
-        if matches!(self.at(i), Some('e' | 'E')) {
-            let mut j = i + 1;
-            if matches!(self.at(j), Some('+' | '-')) {
-                j += 1;
-            }
-            if digit(j) {
-                while digit(j) {
-                    j += 1;
-                }
-                i = j;
-                is_float = true;
-            }
-        }
-        let text: String = self.s[idx..i].iter().collect();
-        if is_float {
-            return Ok(Some((PyVal::Float(text.parse().unwrap_or(f64::NAN)), i)));
-        }
-        let digits = int_end - idx - usize::from(self.at(idx) == Some('-'));
-        if digits > INT_MAX_STR_DIGITS {
-            return Err(ScanErr::Msg(int_limit_error(digits)));
-        }
-        Ok(Some((int_from_digits(&text), i)))
-    }
-
-    /// `_decode_uXXXX(s, pos)`: `pos` is the `u`.
-    fn hex4(&self, pos: usize) -> Result<u32, ScanErr> {
-        let ok = pos + 5 <= self.s.len() && self.s[pos + 1..pos + 5].iter().all(|c| c.is_ascii_hexdigit());
-        if !ok {
-            return Err(ScanErr::Msg(self.err("Invalid \\uXXXX escape", pos)));
-        }
-        let h: String = self.s[pos + 1..pos + 5].iter().collect();
-        Ok(u32::from_str_radix(&h, 16).unwrap_or(0))
-    }
-
-    /// `scanstring(s, end)`: `end` is just after the opening quote. A lone
-    /// surrogate escape stays in the str, as in Python.
-    fn scanstring(&self, mut end: usize) -> Result<(PyVal, usize), ScanErr> {
-        let begin = end - 1;
-        let mut out: Vec<u32> = Vec::new();
-        loop {
-            // STRINGCHUNK: up to the next quote, backslash or control char.
-            let Some(off) = self.s[end.min(self.s.len())..]
-                .iter()
-                .position(|c| *c == '"' || *c == '\\' || (*c as u32) < 0x20)
-            else {
-                return Err(ScanErr::Msg(self.err("Unterminated string starting at", begin)));
-            };
-            out.extend(self.s[end..end + off].iter().map(|c| *c as u32));
-            let term = self.s[end + off];
-            end += off + 1;
-            if term == '"' {
-                break;
-            }
-            if term != '\\' {
-                return Err(ScanErr::Msg(self.err("Invalid control character at", end - 1)));
-            }
-            let Some(esc) = self.at(end) else {
-                return Err(ScanErr::Msg(self.err("Unterminated string starting at", begin)));
-            };
-            if esc != 'u' {
-                let ch = match esc {
-                    '"' => '"',
-                    '\\' => '\\',
-                    '/' => '/',
-                    'b' => '\u{8}',
-                    'f' => '\u{c}',
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    _ => return Err(ScanErr::Msg(self.err("Invalid \\escape", end - 1))),
-                };
-                out.push(ch as u32);
-                end += 1;
-                continue;
-            }
-            let mut uni = self.hex4(end)?;
-            end += 5;
-            if (0xd800..=0xdbff).contains(&uni) && self.at(end) == Some('\\') && self.at(end + 1) == Some('u') {
-                let uni2 = self.hex4(end + 1)?;
-                if (0xdc00..=0xdfff).contains(&uni2) {
-                    uni = 0x10000 + (((uni - 0xd800) << 10) | (uni2 - 0xdc00));
-                    end += 6;
-                }
-            }
-            out.push(uni);
-        }
-        Ok((str_from_units(out), end))
-    }
-}
-
-/// The decimal value of a Unicode digit (category Nd), as `int()` reads it.
-/// Nd digits come in contiguous runs of ten, zero first (a Unicode
-/// stability guarantee), so the value is the place in the run.
-fn nd_value(c: char) -> Option<u32> {
-    if c.is_ascii_digit() {
-        return Some(c as u32 - '0' as u32);
-    }
-    static ND: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"^\p{Nd}$").ok());
-    let re = ND.as_ref()?;
-    let is_nd = |c: char| re.is_match(c.encode_utf8(&mut [0u8; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    let mut k = 0;
-    let mut cp = c as u32;
-    while let Some(prev) = cp.checked_sub(1).and_then(char::from_u32) {
-        if !is_nd(prev) {
-            break;
-        }
-        k += 1;
-        cp -= 1;
-    }
-    Some(k % 10)
 }
 
 /// Python `int()` of a JSON value; Err (ValueError / TypeError) otherwise.
@@ -870,7 +532,7 @@ fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
                 if c == '_' {
                     continue;
                 }
-                let d = nd_value(c).ok_or_else(bad)?;
+                let d = crate::util::decimal_value(c).ok_or_else(bad)?;
                 digits.push(char::from_digit(d, 10).unwrap_or('0'));
             }
             if digits.len() > INT_MAX_STR_DIGITS {
@@ -1152,11 +814,10 @@ fn _write(raw: &str, mode: u32) -> Result<(), String> {
 fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String), String> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
-    let mut child = Command::new(argv[0])
+    let mut child = crate::util::spawn_group(Command::new(argv[0])
         .args(&argv[1..])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
         .map_err(|e| os_error(&e, Some(Path::new(argv[0])), None))?;
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();
@@ -1195,8 +856,7 @@ fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String)
             // without decoding what was read and without waiting for the
             // pipes, which a grandchild may still hold open. The reader
             // threads end on their own when it lets go.
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
             return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
         }

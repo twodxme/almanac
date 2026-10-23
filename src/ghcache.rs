@@ -62,9 +62,6 @@ const LOADS_DEPTH: usize = 52_100;
 const DUMPS_BUDGET: u64 = 52_090 * 28_939;
 const DUMPS_LIST: u64 = 28_939;
 const DUMPS_DICT: u64 = 52_090;
-/// The stack the JSON work runs on (see [`deep`]): enough for the
-/// recursive parser, printer and conversions at Python's depth.
-const DEEP_STACK: usize = 512 << 20;
 /// Python's `sys.get_int_max_str_digits()` default.
 const INT_MAX_STR_DIGITS: usize = 4300;
 /// urllib's `timeout=25`: every socket operation, not the whole request.
@@ -291,20 +288,13 @@ impl Drop for PyValue {
 impl PyValue {
 }
 
-/// Runs `f` on a thread with a [`DEEP_STACK`] stack: the JSON code is
-/// recursive, and Python's json goes about 52 000 levels deep before it
-/// gives up. (Only reserved address space; the pages are touched as used.)
-// `&run`, not `run`: the fallback below calls it again.
-#[allow(clippy::needless_borrows_for_generic_args)]
+/// Runs `f` on a thread with a [`crate::util::JSON_STACK`] stack: the
+/// printer and conversions are recursive, and Python's json goes about
+/// 52 000 levels deep before it gives up. (Only reserved address space; the
+/// pages are touched as used.) The thread is unnamed, a worker wherever
+/// this is called from.
 fn deep<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
-    let slot = Mutex::new(Some(f));
-    let run = || slot.lock().unwrap_or_else(|e| e.into_inner()).take().map(|f| f());
-    let out = std::thread::scope(|s| match std::thread::Builder::new().stack_size(DEEP_STACK).spawn_scoped(s, &run) {
-        Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
-        // No thread to be had: run here, as deep as this stack allows.
-        Err(_) => None,
-    });
-    out.or_else(run).expect("deep(): the closure is still there when the thread could not start")
+    crate::util::with_stack_named(crate::util::JSON_STACK, None, f)
 }
 
 /// `repr(float)`: like `json.dumps` except for the non-finite ones.
@@ -521,241 +511,48 @@ const RECURSION: &str = "RecursionError: maximum recursion depth exceeded";
 /// ints of any size (up to 4300 digits), floats that overflow to inf, and
 /// unpaired surrogate escapes.
 fn loads(text: &str) -> Result<PyValue, JsonError> {
-    let cs: Vec<char> = text.chars().collect();
-    let mut p = Parser { cs: &cs, pos: 0 };
-    p.ws();
-    let v = p.value(0)?;
-    p.ws();
-    if p.pos != cs.len() {
-        return Err(JsonError::Value);
-    }
-    Ok(v)
+    use crate::util::pyjson;
+    pyjson::loads(text, pyjson::Limit::containers(LOADS_DEPTH)).map_err(|e| match e {
+        pyjson::Error::Value(_) => JsonError::Value,
+        pyjson::Error::Recursion(_) => JsonError::Recursion,
+    })
 }
 
-struct Parser<'a> {
-    cs: &'a [char],
-    pos: usize,
-}
-
-impl Parser<'_> {
-    fn peek(&self) -> Option<char> {
-        self.cs.get(self.pos).copied()
+impl crate::util::pyjson::Build for PyValue {
+    type Key = PyStr;
+    fn null() -> Self {
+        PyValue::None
     }
-
-    fn ws(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
-            self.pos += 1;
-        }
+    fn bool(b: bool) -> Self {
+        PyValue::Bool(b)
     }
-
-    fn lit(&mut self, word: &str) -> bool {
-        let n = word.chars().count();
-        if self.cs.len() >= self.pos + n && self.cs[self.pos..self.pos + n].iter().copied().eq(word.chars()) {
-            self.pos += n;
-            true
-        } else {
-            false
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => PyValue::Int(BigInt::from(i)),
+            Num::UInt(u) => PyValue::Int(BigInt::from(u)),
+            Num::Big(digits) => PyValue::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Float(f) => PyValue::Float(f),
         }
     }
-
-    fn value(&mut self, depth: usize) -> Result<PyValue, JsonError> {
-        match self.peek().ok_or(JsonError::Value)? {
-            '"' => {
-                self.pos += 1;
-                Ok(PyValue::Str(self.string()?))
-            }
-            '[' => {
-                if depth + 1 > LOADS_DEPTH {
-                    return Err(JsonError::Recursion);
-                }
-                self.pos += 1;
-                self.ws();
-                let mut items = Vec::new();
-                if self.peek() == Some(']') {
-                    self.pos += 1;
-                    return Ok(PyValue::List(items));
-                }
-                loop {
-                    items.push(self.value(depth + 1)?);
-                    self.ws();
-                    match self.peek() {
-                        Some(',') => {
-                            self.pos += 1;
-                            self.ws();
-                        }
-                        Some(']') => {
-                            self.pos += 1;
-                            return Ok(PyValue::List(items));
-                        }
-                        _ => return Err(JsonError::Value),
-                    }
-                }
-            }
-            '{' => {
-                if depth + 1 > LOADS_DEPTH {
-                    return Err(JsonError::Recursion);
-                }
-                self.pos += 1;
-                self.ws();
-                let mut items: Vec<(PyStr, PyValue)> = Vec::new();
-                let mut index: std::collections::HashMap<PyStr, usize> = std::collections::HashMap::new();
-                if self.peek() == Some('}') {
-                    self.pos += 1;
-                    return Ok(PyValue::Dict(items));
-                }
-                loop {
-                    if self.peek() != Some('"') {
-                        return Err(JsonError::Value);
-                    }
-                    self.pos += 1;
-                    let key = self.string()?;
-                    self.ws();
-                    if self.peek() != Some(':') {
-                        return Err(JsonError::Value);
-                    }
-                    self.pos += 1;
-                    self.ws();
-                    let v = self.value(depth + 1)?;
-                    // dict(pairs): a repeated key keeps its first place, last value.
-                    match index.get(&key) {
-                        Some(&i) => items[i].1 = v,
-                        None => {
-                            index.insert(key.clone(), items.len());
-                            items.push((key, v));
-                        }
-                    }
-                    self.ws();
-                    match self.peek() {
-                        Some(',') => {
-                            self.pos += 1;
-                            self.ws();
-                        }
-                        Some('}') => {
-                            self.pos += 1;
-                            return Ok(PyValue::Dict(items));
-                        }
-                        _ => return Err(JsonError::Value),
-                    }
-                }
-            }
-            'n' if self.lit("null") => Ok(PyValue::None),
-            't' if self.lit("true") => Ok(PyValue::Bool(true)),
-            'f' if self.lit("false") => Ok(PyValue::Bool(false)),
-            'N' if self.lit("NaN") => Ok(PyValue::Float(f64::NAN)),
-            'I' if self.lit("Infinity") => Ok(PyValue::Float(f64::INFINITY)),
-            '-' | '0'..='9' => self.number(),
-            _ => Err(JsonError::Value),
-        }
+    fn str(s: String) -> Self {
+        PyValue::Str(ps(&s))
     }
-
-    /// `(-?(?:0|[1-9]\d*))(\.\d+)?([eE][-+]?\d+)?`, or `-Infinity`.
-    fn number(&mut self) -> Result<PyValue, JsonError> {
-        let start = self.pos;
-        let digit = |c: Option<char>| matches!(c, Some('0'..='9'));
-        if self.peek() == Some('-') {
-            self.pos += 1;
-            if self.lit("Infinity") {
-                return Ok(PyValue::Float(f64::NEG_INFINITY));
-            }
-        }
-        match self.peek() {
-            Some('0') => self.pos += 1,
-            Some('1'..='9') => {
-                while digit(self.peek()) {
-                    self.pos += 1;
-                }
-            }
-            _ => return Err(JsonError::Value),
-        }
-        let mut is_float = false;
-        if self.peek() == Some('.') && digit(self.cs.get(self.pos + 1).copied()) {
-            self.pos += 1;
-            while digit(self.peek()) {
-                self.pos += 1;
-            }
-            is_float = true;
-        }
-        if matches!(self.peek(), Some('e' | 'E')) {
-            let mut q = self.pos + 1;
-            if matches!(self.cs.get(q), Some('+' | '-')) {
-                q += 1;
-            }
-            if digit(self.cs.get(q).copied()) {
-                while digit(self.cs.get(q).copied()) {
-                    q += 1;
-                }
-                self.pos = q;
-                is_float = true;
-            }
-        }
-        let text: String = self.cs[start..self.pos].iter().collect();
-        if is_float {
-            // float(): correctly rounded, overflowing to inf.
-            text.parse::<f64>().map(PyValue::Float).map_err(|_| JsonError::Value)
-        } else {
-            if text.trim_start_matches('-').len() > INT_MAX_STR_DIGITS {
-                return Err(JsonError::Value);
-            }
-            BigInt::parse_bytes(text.as_bytes(), 10).map(PyValue::Int).ok_or(JsonError::Value)
-        }
+    fn wstr(units: Vec<u32>) -> Self {
+        PyValue::Str(units)
     }
-
-    fn hex4(&mut self) -> Result<u32, JsonError> {
-        let mut n = 0u32;
-        for _ in 0..4 {
-            let d = self.peek().and_then(|c| c.to_digit(16)).ok_or(JsonError::Value)?;
-            n = n * 16 + d;
-            self.pos += 1;
-        }
-        Ok(n)
+    fn key(s: String) -> PyStr {
+        ps(&s)
     }
-
-    /// The rest of a string after its opening quote (strict: no raw controls).
-    fn string(&mut self) -> Result<PyStr, JsonError> {
-        let mut out = PyStr::new();
-        loop {
-            let c = self.peek().ok_or(JsonError::Value)?;
-            self.pos += 1;
-            match c {
-                '"' => return Ok(out),
-                '\\' => {
-                    let e = self.peek().ok_or(JsonError::Value)?;
-                    self.pos += 1;
-                    let v = match e {
-                        '"' => '"' as u32,
-                        '\\' => '\\' as u32,
-                        '/' => '/' as u32,
-                        'b' => 8,
-                        'f' => 12,
-                        'n' => 10,
-                        'r' => 13,
-                        't' => 9,
-                        'u' => {
-                            let mut v = self.hex4()?;
-                            // A surrogate pair joins; anything else stays as it is.
-                            if (0xd800..=0xdbff).contains(&v)
-                                && self.peek() == Some('\\')
-                                && self.cs.get(self.pos + 1) == Some(&'u')
-                            {
-                                let save = self.pos;
-                                self.pos += 2;
-                                let lo = self.hex4()?;
-                                if (0xdc00..=0xdfff).contains(&lo) {
-                                    v = 0x10000 + ((v - 0xd800) << 10) + (lo - 0xdc00);
-                                } else {
-                                    self.pos = save;
-                                }
-                            }
-                            v
-                        }
-                        _ => return Err(JsonError::Value),
-                    };
-                    out.push(v);
-                }
-                c if (c as u32) < 0x20 => return Err(JsonError::Value),
-                c => out.push(c as u32),
-            }
-        }
+    fn wkey(units: Vec<u32>) -> PyStr {
+        units
+    }
+    fn list(items: Vec<Self>) -> Self {
+        PyValue::List(items)
+    }
+    fn dict(pairs: Vec<(PyStr, Self)>) -> Self {
+        // dict(pairs): a repeated key keeps its first place, last value.
+        PyValue::Dict(crate::util::pyjson::dict_pairs(pairs))
     }
 }
 
@@ -908,18 +705,6 @@ fn py_strip(s: &[u32]) -> &[u32] {
     &s[start..end]
 }
 
-/// The first code point of every run of ten Unicode decimal digits (Nd,
-/// Unicode 16), which `int()` reads as 0-9.
-const DECIMAL_ZEROS: [u32; 76] = [
-    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50,
-    0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40,
-    0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x10d40,
-    0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x116d0, 0x116da,
-    0x11730, 0x118e0, 0x11950, 0x11bf0, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16130, 0x16a60, 0x16ac0,
-    0x16b50, 0x16d70, 0x1ccf0, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0,
-    0x1e5f1, 0x1e950, 0x1fbf0,
-];
-
 /// `int(s)` for a str: surrounding whitespace, a sign, `_` between digits,
 /// any Unicode decimal digits, any size up to 4300 digits. None is ValueError.
 fn py_int(s: &[u32]) -> Option<BigInt> {
@@ -932,8 +717,8 @@ fn py_int(s: &[u32]) -> Option<BigInt> {
                 c as u8
             } else if py_isspace(c) {
                 b' '
-            } else if let Some(z) = DECIMAL_ZEROS.iter().find(|&&z| c >= z && c < z + 10) {
-                b'0' + (c - z) as u8
+            } else if let Some(d) = char::from_u32(c).and_then(crate::util::decimal_value) {
+                b'0' + d as u8
             } else {
                 b'?'
             }
@@ -1008,12 +793,11 @@ pub fn try_token() -> Result<String, String> {
 fn _gh_auth_token() -> Result<Option<(bool, PyStr)>, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let mut child = match Command::new("gh")
+    let mut child = match crate::util::spawn_group(Command::new("gh")
         .args(["auth", "token"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
     {
         Ok(c) => c,
         Err(_) => return Ok(None),
@@ -1034,8 +818,7 @@ fn _gh_auth_token() -> Result<Option<(bool, PyStr)>, String> {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) if start.elapsed() >= std::time::Duration::from_secs(15) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 return Ok(None); // TimeoutExpired
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),

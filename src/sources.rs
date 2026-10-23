@@ -529,24 +529,6 @@ fn or<'a>(v: std::option::Option<&'a Py>, default: &'a Py) -> &'a Py {
     }
 }
 
-/// The first code point of every run of ten Unicode decimal digits (category
-/// Nd, Unicode 16.0 as in Python 3.14): `int()` reads any of them.
-const ND_ZEROS: [u32; 76] = [
-    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50,
-    0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40,
-    0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x10d40,
-    0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x116d0, 0x116da,
-    0x11730, 0x118e0, 0x11950, 0x11bf0, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16130, 0x16a60, 0x16ac0,
-    0x16b50, 0x16d70, 0x1ccf0, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0,
-    0x1e5f1, 0x1e950, 0x1fbf0,
-];
-
-/// `unicodedata.decimal(c)`.
-fn py_decimal(c: char) -> std::option::Option<u32> {
-    let n = c as u32;
-    ND_ZEROS.iter().find(|&&z| (z..z + 10).contains(&n)).map(|z| n - z)
-}
-
 /// `int(x)`; raises (here: `Err`) as Python does.
 fn py_int(v: &Py) -> Result<BigInt, String> {
     match v {
@@ -572,7 +554,7 @@ fn py_int(v: &Py) -> Result<BigInt, String> {
                 if c == '_' {
                     continue;
                 }
-                match py_decimal(c) {
+                match crate::util::decimal_value(c) {
                     Some(d) => digits.push(char::from(b'0' + d as u8)),
                     None => return Err(bad()),
                 }
@@ -680,24 +662,63 @@ fn b64decode(data: &[u8]) -> Result<Vec<u8>, String> {
 /// `json.loads(bytes)`: the encoding found the way `json.detect_encoding`
 /// does (a UTF-8 BOM is dropped; UTF-16 and UTF-32 are read too), then
 /// Python's JSON, which also takes `NaN`, `Infinity` and `-Infinity`, and
-/// integers of any size.
-///
-/// The parser recurses once per level, up to the 2000 it allows: on a
-/// thread with room for that, whatever the caller's stack.
+/// integers of any size. A value nested more than 2000 deep is a
+/// RecursionError, as before; the parse itself does not recurse.
 fn loads(raw: &[u8]) -> Result<Py, String> {
-    crate::util::with_stack(crate::util::DEEP_STACK, || loads_here(raw))
+    use crate::util::pyjson;
+    let text = decode_json_bytes(raw)?;
+    pyjson::loads(&text, pyjson::Limit::values(2001)).map_err(|e| match e {
+        pyjson::Error::Value(m) if m.starts_with("Exceeds the limit") => format!("ValueError: {m}"),
+        pyjson::Error::Value(m) => format!("JSONDecodeError: {m}"),
+        pyjson::Error::Recursion(_) => "RecursionError: maximum recursion depth exceeded while decoding a JSON document".into(),
+    })
 }
 
-fn loads_here(raw: &[u8]) -> Result<Py, String> {
-    let text = decode_json_bytes(raw)?;
-    let mut p = JsonParser { s: &text, b: text.as_bytes(), i: 0, depth: 0 };
-    p.ws();
-    let v = p.value()?;
-    p.ws();
-    if p.i != p.b.len() {
-        return Err(format!("JSONDecodeError: Extra data: char {}", p.i));
+impl crate::util::pyjson::Build for Py {
+    type Key = String;
+    fn null() -> Py {
+        Py::None
     }
-    Ok(v)
+    fn bool(b: bool) -> Py {
+        Py::Bool(b)
+    }
+    fn num(n: crate::util::pyjson::Num<'_>) -> Py {
+        use crate::util::pyjson::Num;
+        let big = |text: &str| {
+            let (neg, digits) = match text.strip_prefix('-') {
+                Some(d) => (true, d),
+                None => (false, text),
+            };
+            // The scanner has already refused an int past the digit limit.
+            BigInt::from_digits(neg, digits).unwrap_or_else(|_| BigInt::from_i64(0))
+        };
+        match n {
+            Num::Int(i) => Py::Int(BigInt::from_i64(i)),
+            Num::UInt(u) => Py::Int(big(&u.to_string())),
+            Num::Big(text) => Py::Int(big(text)),
+            Num::Float(f) => Py::Float(f),
+        }
+    }
+    fn str(s: String) -> Py {
+        Py::Str(s)
+    }
+    /// A lone surrogate is a str to Python; a Rust String cannot hold one.
+    fn wstr(units: Vec<u32>) -> Py {
+        Py::Str(units.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect())
+    }
+    fn key(s: String) -> String {
+        s
+    }
+    fn wkey(units: Vec<u32>) -> String {
+        units.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    }
+    fn list(items: Vec<Py>) -> Py {
+        Py::List(items)
+    }
+    fn dict(pairs: Vec<(String, Py)>) -> Py {
+        // A repeated key keeps its place and takes the last value.
+        Py::Dict(crate::util::pyjson::dict_pairs(pairs))
+    }
 }
 
 fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
@@ -752,256 +773,6 @@ fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
         }
     }
     utf8(b)
-}
-
-struct JsonParser<'a> {
-    s: &'a str,
-    b: &'a [u8],
-    i: usize,
-    depth: usize,
-}
-
-impl JsonParser<'_> {
-    fn err(&self, what: &str) -> String {
-        format!("JSONDecodeError: {what}: char {}", self.i)
-    }
-
-    fn ws(&mut self) {
-        while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') {
-            self.i += 1;
-        }
-    }
-
-    fn eat(&mut self, word: &str) -> bool {
-        if self.b[self.i..].starts_with(word.as_bytes()) {
-            self.i += word.len();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn value(&mut self) -> Result<Py, String> {
-        // Python's scanner recurses in C; it gives up (RecursionError) on very
-        // deep nesting, and so does this, before the stack does.
-        if self.depth > 2000 {
-            return Err("RecursionError: maximum recursion depth exceeded while decoding a JSON document".into());
-        }
-        match self.b.get(self.i) {
-            Some(b'"') => {
-                self.i += 1;
-                self.string().map(Py::Str)
-            }
-            Some(b'{') => {
-                self.i += 1;
-                self.depth += 1;
-                let r = self.object();
-                self.depth -= 1;
-                r
-            }
-            Some(b'[') => {
-                self.i += 1;
-                self.depth += 1;
-                let r = self.array();
-                self.depth -= 1;
-                r
-            }
-            Some(b'n') if self.eat("null") => Ok(Py::None),
-            Some(b't') if self.eat("true") => Ok(Py::Bool(true)),
-            Some(b'f') if self.eat("false") => Ok(Py::Bool(false)),
-            _ => {
-                if let Some(n) = self.number()? {
-                    return Ok(n);
-                }
-                if self.eat("NaN") {
-                    Ok(Py::Float(f64::NAN))
-                } else if self.eat("Infinity") {
-                    Ok(Py::Float(f64::INFINITY))
-                } else if self.eat("-Infinity") {
-                    Ok(Py::Float(f64::NEG_INFINITY))
-                } else {
-                    Err(self.err("Expecting value"))
-                }
-            }
-        }
-    }
-
-    /// `-?(?:0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?`, ASCII digits.
-    fn number(&mut self) -> Result<std::option::Option<Py>, String> {
-        let b = self.b;
-        let start = self.i;
-        let mut j = start;
-        let digit = |j: usize| b.get(j).is_some_and(u8::is_ascii_digit);
-        if b.get(j) == Some(&b'-') {
-            j += 1;
-        }
-        if b.get(j) == Some(&b'0') {
-            j += 1;
-        } else if b.get(j).is_some_and(|c| (b'1'..=b'9').contains(c)) {
-            while digit(j) {
-                j += 1;
-            }
-        } else {
-            return Ok(None);
-        }
-        let int_end = j;
-        if b.get(j) == Some(&b'.') && digit(j + 1) {
-            j += 1;
-            while digit(j) {
-                j += 1;
-            }
-        }
-        if matches!(b.get(j), Some(b'e' | b'E')) {
-            let mut k = j + 1;
-            if matches!(b.get(k), Some(b'+' | b'-')) {
-                k += 1;
-            }
-            if digit(k) {
-                while digit(k) {
-                    k += 1;
-                }
-                j = k;
-            }
-        }
-        self.i = j;
-        let text = &self.s[start..j];
-        if j == int_end {
-            let (neg, digits) = match text.strip_prefix('-') {
-                Some(d) => (true, d),
-                None => (false, text),
-            };
-            BigInt::from_digits(neg, digits).map(|i| Some(Py::Int(i)))
-        } else {
-            Ok(Some(Py::Float(text.parse().unwrap_or(f64::NAN))))
-        }
-    }
-
-    fn hex4(&self, at: usize) -> std::option::Option<u32> {
-        let h = self.b.get(at..at + 4)?;
-        if !h.iter().all(u8::is_ascii_hexdigit) {
-            return None;
-        }
-        u32::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok()
-    }
-
-    /// The rest of a string after its opening quote.
-    fn string(&mut self) -> Result<String, String> {
-        let mut out = String::new();
-        loop {
-            let Some(c) = self.s[self.i..].chars().next() else {
-                return Err(self.err("Unterminated string starting at"));
-            };
-            match c {
-                '"' => {
-                    self.i += 1;
-                    return Ok(out);
-                }
-                '\\' => {
-                    let Some(&e) = self.b.get(self.i + 1) else {
-                        return Err(self.err("Unterminated string starting at"));
-                    };
-                    self.i += 2;
-                    match e {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\x08'),
-                        b'f' => out.push('\x0c'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
-                        b'u' => {
-                            let Some(u) = self.hex4(self.i) else {
-                                return Err(self.err("Invalid \\uXXXX escape"));
-                            };
-                            self.i += 4;
-                            let mut cp = u;
-                            if (0xd800..0xdc00).contains(&u) && self.b[self.i..].starts_with(b"\\u") {
-                                if let Some(lo) = self.hex4(self.i + 2) {
-                                    if (0xdc00..0xe000).contains(&lo) {
-                                        cp = 0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00);
-                                        self.i += 6;
-                                    }
-                                }
-                            }
-                            // A lone surrogate is a str to Python; a Rust
-                            // String cannot hold one.
-                            out.push(char::from_u32(cp).unwrap_or('\u{fffd}'));
-                        }
-                        _ => return Err(self.err("Invalid \\escape")),
-                    }
-                }
-                c if (c as u32) < 0x20 => return Err(self.err("Invalid control character at")),
-                c => {
-                    out.push(c);
-                    self.i += c.len_utf8();
-                }
-            }
-        }
-    }
-
-    fn object(&mut self) -> Result<Py, String> {
-        let mut d: Vec<(String, Py)> = Vec::new();
-        self.ws();
-        if self.b.get(self.i) == Some(&b'}') {
-            self.i += 1;
-            return Ok(Py::Dict(d));
-        }
-        loop {
-            if self.b.get(self.i) != Some(&b'"') {
-                return Err(self.err("Expecting property name enclosed in double quotes"));
-            }
-            self.i += 1;
-            let k = self.string()?;
-            self.ws();
-            if self.b.get(self.i) != Some(&b':') {
-                return Err(self.err("Expecting ':' delimiter"));
-            }
-            self.i += 1;
-            self.ws();
-            let v = self.value()?;
-            match d.iter_mut().find(|(dk, _)| *dk == k) {
-                Some(e) => e.1 = v,
-                None => d.push((k, v)),
-            }
-            self.ws();
-            match self.b.get(self.i) {
-                Some(b'}') => {
-                    self.i += 1;
-                    return Ok(Py::Dict(d));
-                }
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                _ => return Err(self.err("Expecting ',' delimiter")),
-            }
-        }
-    }
-
-    fn array(&mut self) -> Result<Py, String> {
-        let mut l = Vec::new();
-        self.ws();
-        if self.b.get(self.i) == Some(&b']') {
-            self.i += 1;
-            return Ok(Py::List(l));
-        }
-        loop {
-            l.push(self.value()?);
-            self.ws();
-            match self.b.get(self.i) {
-                Some(b']') => {
-                    self.i += 1;
-                    return Ok(Py::List(l));
-                }
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                _ => return Err(self.err("Expecting ',' delimiter")),
-            }
-        }
-    }
 }
 
 fn gh() -> &'static Regex {

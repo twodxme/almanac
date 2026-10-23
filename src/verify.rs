@@ -134,12 +134,11 @@ fn py_subprocess(cmd: &[&str], timeout: f64) -> Result<Option<(Option<i32>, Stri
     if cmd.iter().any(|a| a.contains('\0')) {
         return Err("ValueError: embedded null byte".into());
     }
-    let mut child = match Command::new(prog)
+    let mut child = match crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
     {
         Ok(c) => c,
         Err(_) => return Ok(None),
@@ -169,8 +168,7 @@ fn py_subprocess(cmd: &[&str], timeout: f64) -> Result<Option<(Option<i32>, Stri
     drop(tx);
     let timed_out = |child: &mut std::process::Child| {
         // run(): on TimeoutExpired, kill the child and wait for it.
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(child);
         Ok(None)
     };
     let mut got: [Vec<u8>; 2] = [Vec::new(), Vec::new()];

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::util;
+use crate::util::pyjson::{self, Build, Num};
 
 // Runtime data, deliberately not where the code lives.
 //
@@ -406,8 +407,34 @@ fn units_json(units: &[u32]) -> Value {
 
 /// The code points of a `WStr`'s JSON text.
 fn wstr_units(text: &str) -> Vec<u32> {
-    let mut p = PyJson { b: text.as_bytes(), s: text, i: 0 };
-    p.string_units().unwrap_or_default()
+    struct Units(Vec<u32>);
+    impl Build for Units {
+        type Key = ();
+        fn null() -> Self {
+            Units(Vec::new())
+        }
+        fn bool(_: bool) -> Self {
+            Units::null()
+        }
+        fn num(_: Num<'_>) -> Self {
+            Units::null()
+        }
+        fn str(s: String) -> Self {
+            Units(s.chars().map(u32::from).collect())
+        }
+        fn wstr(units: Vec<u32>) -> Self {
+            Units(units)
+        }
+        fn key(_: String) {}
+        fn wkey(_: Vec<u32>) {}
+        fn list(_: Vec<Self>) -> Self {
+            Units::null()
+        }
+        fn dict(_: Vec<((), Self)>) -> Self {
+            Units::null()
+        }
+    }
+    pyjson::loads::<Units>(text, pyjson::Limit::values(1)).map(|u| u.0).unwrap_or_default()
 }
 
 /// A `WStr` as Rust text, each lone surrogate U+FFFD.
@@ -445,14 +472,12 @@ fn path_json(p: &Path) -> Value {
 
 /// `json.loads(text)` into a Value (see above); Err is the ValueError.
 fn py_loads(text: &str) -> Result<Value, String> {
-    let mut p = PyJson { b: text.as_bytes(), s: text, i: 0 };
-    p.ws();
-    let v = p.value(0)?;
-    p.ws();
-    if p.i != p.b.len() {
-        return Err(format!("Extra data: char {}", p.i));
+    // Python gives up on deep nesting too (RecursionError).
+    match pyjson::loads::<PyLoaded>(text, pyjson::Limit::values(901)) {
+        Ok(v) => Ok(v.0),
+        Err(pyjson::Error::Value(e)) => Err(e),
+        Err(pyjson::Error::Recursion(_)) => Err("maximum recursion depth exceeded".into()),
     }
-    Ok(v)
 }
 
 /// `json.loads(path.read_text())`, None where the Python's
@@ -461,236 +486,51 @@ fn py_read_json(path: &Path) -> Option<Value> {
     py_loads(&std::fs::read_to_string(path).ok()?).ok()
 }
 
-struct PyJson<'a> {
-    b: &'a [u8],
-    s: &'a str,
-    i: usize,
-}
+/// What [`py_loads`] builds: a Value, with what it cannot hold marked.
+struct PyLoaded(Value);
 
-impl PyJson<'_> {
-    fn err<T>(&self, what: &str) -> Result<T, String> {
-        Err(format!("{what}: char {}", self.i))
+impl Build for PyLoaded {
+    type Key = String;
+    fn null() -> Self {
+        PyLoaded(Value::Null)
     }
-
-    fn peek(&self) -> Option<u8> {
-        self.b.get(self.i).copied()
+    fn bool(b: bool) -> Self {
+        PyLoaded(Value::Bool(b))
     }
-
-    fn ws(&mut self) {
-        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
-            self.i += 1;
-        }
+    fn num(n: Num<'_>) -> Self {
+        PyLoaded(match n {
+            Num::Int(i) => json!(i),
+            Num::UInt(u) => json!(u),
+            Num::Big(digits) => int_json(digits),
+            Num::Float(f) => float_json(f),
+        })
     }
-
-    fn lit(&mut self, word: &str, v: Value) -> Result<Value, String> {
-        if self.s[self.i..].starts_with(word) {
-            self.i += word.len();
-            Ok(v)
-        } else {
-            self.err("Expecting value")
-        }
+    fn str(s: String) -> Self {
+        PyLoaded(Value::String(s))
     }
-
-    fn value(&mut self, depth: usize) -> Result<Value, String> {
-        // Python gives up on deep nesting too (RecursionError).
-        if depth > 900 {
-            return self.err("maximum recursion depth exceeded");
-        }
-        match self.peek() {
-            Some(b'{') => self.object(depth),
-            Some(b'[') => self.array(depth),
-            Some(b'"') => Ok(units_json(&self.string_units()?)),
-            Some(b'n') => self.lit("null", Value::Null),
-            Some(b't') => self.lit("true", json!(true)),
-            Some(b'f') => self.lit("false", json!(false)),
-            Some(b'N') => self.lit("NaN", float_json(f64::NAN)),
-            Some(b'I') => self.lit("Infinity", float_json(f64::INFINITY)),
-            Some(b'-') if self.s[self.i..].starts_with("-Infinity") => {
-                self.lit("-Infinity", float_json(f64::NEG_INFINITY))
-            }
-            Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => self.err("Expecting value"),
+    fn wstr(units: Vec<u32>) -> Self {
+        PyLoaded(units_json(&units))
+    }
+    fn key(s: String) -> String {
+        s
+    }
+    fn wkey(units: Vec<u32>) -> String {
+        match units_json(&units) {
+            Value::String(k) => k,
+            _ => String::new(),
         }
     }
-
-    fn digits(&mut self) {
-        while matches!(self.peek(), Some(b'0'..=b'9')) {
-            self.i += 1;
-        }
+    fn list(items: Vec<Self>) -> Self {
+        PyLoaded(Value::Array(items.into_iter().map(|x| x.0).collect()))
     }
-
-    fn number(&mut self) -> Result<Value, String> {
-        let start = self.i;
-        if self.peek() == Some(b'-') {
-            self.i += 1;
+    fn dict(pairs: Vec<(String, Self)>) -> Self {
+        // A repeated key keeps its first place and takes the last value, as
+        // a dict does.
+        let mut items = Map::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            items.insert(k, v.0);
         }
-        match self.peek() {
-            Some(b'0') => self.i += 1,
-            Some(b'1'..=b'9') => self.digits(),
-            _ => {
-                self.i = start;
-                return self.err("Expecting value");
-            }
-        }
-        let int_end = self.i;
-        let mut is_float = false;
-        if self.peek() == Some(b'.') && matches!(self.b.get(self.i + 1), Some(b'0'..=b'9')) {
-            self.i += 1;
-            self.digits();
-            is_float = true;
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            let mut j = self.i + 1;
-            if matches!(self.b.get(j), Some(b'+' | b'-')) {
-                j += 1;
-            }
-            if matches!(self.b.get(j), Some(b'0'..=b'9')) {
-                self.i = j;
-                self.digits();
-                is_float = true;
-            }
-        }
-        let text = &self.s[start..self.i];
-        if is_float {
-            return Ok(float_json(text.parse().unwrap_or(f64::NAN)));
-        }
-        let digits = self.s[start..int_end].trim_start_matches('-');
-        if digits.len() > 4300 {
-            return Err(format!(
-                "Exceeds the limit (4300 digits) for integer string conversion: value has {} digits",
-                digits.len()
-            ));
-        }
-        Ok(int_json(if text == "-0" { "0" } else { text }))
-    }
-
-    fn hex4(&self, at: usize) -> Option<u32> {
-        let h = self.s.get(at..at + 4)?;
-        if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        u32::from_str_radix(h, 16).ok()
-    }
-
-    /// A JSON string's code points; a lone surrogate escape stays one.
-    fn string_units(&mut self) -> Result<Vec<u32>, String> {
-        self.i += 1;
-        let mut out: Vec<u32> = Vec::new();
-        loop {
-            let chunk = self.i;
-            while matches!(self.peek(), Some(c) if c != b'"' && c != b'\\' && c >= 0x20) {
-                self.i += 1;
-            }
-            out.extend(self.s[chunk..self.i].chars().map(|c| c as u32));
-            match self.peek() {
-                None => return self.err("Unterminated string starting at"),
-                Some(b'"') => {
-                    self.i += 1;
-                    return Ok(out);
-                }
-                Some(b'\\') => {
-                    let esc = self.b.get(self.i + 1).copied();
-                    self.i += 2;
-                    let c = match esc {
-                        Some(b'"') => '"' as u32,
-                        Some(b'\\') => '\\' as u32,
-                        Some(b'/') => '/' as u32,
-                        Some(b'b') => 8,
-                        Some(b'f') => 12,
-                        Some(b'n') => 10,
-                        Some(b'r') => 13,
-                        Some(b't') => 9,
-                        Some(b'u') => {
-                            let Some(mut c) = self.hex4(self.i) else {
-                                return self.err("Invalid \\uXXXX escape");
-                            };
-                            self.i += 4;
-                            if (0xd800..=0xdbff).contains(&c) && self.s[self.i..].starts_with("\\u") {
-                                if let Some(lo) =
-                                    self.hex4(self.i + 2).filter(|lo| (0xdc00..=0xdfff).contains(lo))
-                                {
-                                    c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
-                                    self.i += 6;
-                                }
-                            }
-                            c
-                        }
-                        _ => {
-                            self.i -= 1;
-                            return self.err("Invalid \\escape");
-                        }
-                    };
-                    out.push(c);
-                }
-                Some(_) => return self.err("Invalid control character at"),
-            }
-        }
-    }
-
-    fn object(&mut self, depth: usize) -> Result<Value, String> {
-        self.i += 1;
-        let mut items = Map::new();
-        self.ws();
-        if self.peek() == Some(b'}') {
-            self.i += 1;
-            return Ok(Value::Object(items));
-        }
-        loop {
-            if self.peek() != Some(b'"') {
-                return self.err("Expecting property name enclosed in double quotes");
-            }
-            let key = match units_json(&self.string_units()?) {
-                Value::String(k) => k,
-                _ => String::new(),
-            };
-            self.ws();
-            if self.peek() != Some(b':') {
-                return self.err("Expecting ':' delimiter");
-            }
-            self.i += 1;
-            self.ws();
-            let v = self.value(depth + 1)?;
-            // A repeated key keeps its first place and takes the last value,
-            // as a dict does.
-            items.insert(key, v);
-            self.ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b'}') => {
-                    self.i += 1;
-                    return Ok(Value::Object(items));
-                }
-                _ => return self.err("Expecting ',' delimiter"),
-            }
-        }
-    }
-
-    fn array(&mut self, depth: usize) -> Result<Value, String> {
-        self.i += 1;
-        let mut items = Vec::new();
-        self.ws();
-        if self.peek() == Some(b']') {
-            self.i += 1;
-            return Ok(Value::Array(items));
-        }
-        loop {
-            items.push(self.value(depth + 1)?);
-            self.ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b']') => {
-                    self.i += 1;
-                    return Ok(Value::Array(items));
-                }
-                _ => return self.err("Expecting ',' delimiter"),
-            }
-        }
+        PyLoaded(Value::Object(items))
     }
 }
 
@@ -753,27 +593,12 @@ fn dump_into(out: &mut String, v: &Value, indent: Option<usize>, level: usize) {
 }
 
 
-/// The zero of every run of Unicode decimal digits (category Nd): Python's
-/// `\d`, `int()` and `float()` take any of them, not only ASCII.
-const ND_ZEROS: &[u32] = &[
-    0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
-    0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
-    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
-    0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450,
-    0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50,
-    0x11D50, 0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE,
-    0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
-];
-
 /// Every Unicode decimal digit as its ASCII digit; nothing else changes.
 fn ascii_digits(s: &str) -> String {
     s.chars()
-        .map(|c| {
-            let u = c as u32;
-            match ND_ZEROS.iter().find(|z| u >= **z && u < **z + 10) {
-                Some(z) => char::from(b'0' + (u - z) as u8),
-                None => c,
-            }
+        .map(|c| match crate::util::decimal_value(c) {
+            Some(d) => char::from(b'0' + d as u8),
+            None => c,
         })
         .collect()
 }

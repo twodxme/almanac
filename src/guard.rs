@@ -977,34 +977,6 @@ fn walk_into(root: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-static DIGIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d$").unwrap());
-
-/// `float()` of the digits `\d` matched -- which, as in Python, may be any
-/// Unicode decimal digits. Unicode keeps each script's 0-9 contiguous, so a
-/// digit's value is its distance from the start of its run, mod 10.
-fn py_digits_value(ts: &str) -> Option<f64> {
-    let mut text = String::new();
-    for c in ts.chars() {
-        if c.is_ascii_digit() {
-            text.push(c);
-            continue;
-        }
-        let mut n = 0u32;
-        let mut cp = c as u32;
-        while cp > 0 {
-            match char::from_u32(cp - 1) {
-                Some(p) if DIGIT.is_match(p.encode_utf8(&mut [0; 4])) => {
-                    n += 1;
-                    cp -= 1;
-                }
-                _ => break,
-            }
-        }
-        text.push(char::from_digit(n % 10, 10)?);
-    }
-    text.parse().ok()
-}
-
 /// How pathlib orders paths: `str(path).split("/")`, each part compared by
 /// code point -- an undecodable byte (U+DCxx) sorts below `豈` although its
 /// byte 0xff sorts above that character's UTF-8.
@@ -1051,7 +1023,7 @@ fn resets_exact(now: Option<f64>, at: PyStack) -> Result<Vec<(Reset, Vec<PyStr>)
         let Some(m) = BAK_BYTES.captures(raw) else {
             continue;
         };
-        let Some(ts) = std::str::from_utf8(&m["ts"]).ok().and_then(py_digits_value) else {
+        let Some(ts) = std::str::from_utf8(&m["ts"]).ok().and_then(crate::util::py_digits_value) else {
             continue;
         };
         if ts < cutoff {

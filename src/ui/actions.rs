@@ -666,19 +666,17 @@ fn version_output(dest: &Path) -> Result<Option<String>, String> {
         Some(rx)
     }
 
-    let Ok(mut child) = Command::new(dest)
+    let Ok(mut child) = crate::util::spawn_group(Command::new(dest)
         .arg("--version")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
     else {
         return Ok(None);
     };
     let deadline = Instant::now() + Duration::from_secs(12);
     let left = || deadline.saturating_duration_since(Instant::now());
     let timeout = |child: &mut std::process::Child| {
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(child);
         Ok(None)
     };
     let (Some(out_rx), Some(err_rx)) = (drain(child.stdout.take()), drain(child.stderr.take())) else {
