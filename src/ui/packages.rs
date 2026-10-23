@@ -852,12 +852,25 @@ impl Win {
         }
     }
 
-    pub fn apply(&self, apps: Vec<inventory::App>) {
+    /// Replace every row of `self.store` with `apps`.
+    ///
+    /// Row-menu actions find their app by name in `row_actions`, which rows
+    /// fill as they are bound. Names no longer in the table are forgotten
+    /// here, so it holds what the table holds rather than every row ever
+    /// shown (each AUR search added its results); a row still listed keeps
+    /// its entry, and gets a fresh one when it is bound again.
+    fn set_rows(&self, apps: &[inventory::App]) {
         let store = self.shared.borrow().store.clone();
         store.remove_all();
-        for a in &apps {
+        for a in apps {
             store.append(&AppItem::new(a.clone()).boxed());
         }
+        let names: std::collections::HashSet<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+        self.shared.borrow_mut().row_actions.retain(|name, _| names.contains(name.as_str()));
+    }
+
+    pub fn apply(&self, apps: Vec<inventory::App>) {
+        self.set_rows(&apps);
         if let Some(act) = self.win_action("rescan") {
             act.set_enabled(true);
         }
@@ -1777,17 +1790,11 @@ impl Win {
     /// `total`: how many plugins the registry lists, counted by the worker
     /// (`discover_total`) when the query is empty.
     pub fn show_discover(&self, query: &str, results: Vec<inventory::App>, total: Option<Result<usize, String>>) {
-        let (discovering, store) = {
-            let sh = self.shared.borrow();
-            (sh.discovering, sh.store.clone())
-        };
+        let discovering = self.shared.borrow().discovering;
         if !discovering {
             return; // user navigated away mid-search
         }
-        store.remove_all();
-        for a in &results {
-            store.append(&AppItem::new(a.clone()).boxed());
-        }
+        self.set_rows(&results);
         self.filter_changed();
         if query.is_empty() {
             let total = match total {
