@@ -141,6 +141,8 @@ pub struct Plugin {
     pub download_url: String,
     pub asset_name: String,
     pub size_mb: f64,
+    /// The asset's published sha256 (hex), "" when its release has none.
+    pub sha256: String,
 
     // Provenance: which marketplace listed it, who publishes it, what was
     // reviewed, and whether what you would install today is still what was
@@ -235,6 +237,7 @@ impl Default for Plugin {
             download_url: String::new(),
             asset_name: String::new(),
             size_mb: 0.0,
+            sha256: String::new(),
             market: "omarchy".into(),
             source_type: String::new(),
             source_url: String::new(),
@@ -1687,6 +1690,7 @@ pub fn _artcraft_rows_with(
         let label = names.iter().find(|(s, _)| s == slug).map(|(_, l)| l.clone()).unwrap_or_default();
         let repo = repos.get(slug).unwrap_or(&empty);
         let (mut tag, mut published, mut url, mut asset) = (json!(""), json!(""), json!(""), json!(""));
+        let mut sha256 = json!("");
         let mut size = json!(0);
         let rel = releases[i].clone().filter(|r| truthy(Some(r))).unwrap_or_else(|| json!({}));
         // A release with no tag is a lookup that failed (rate limit, network),
@@ -1705,6 +1709,7 @@ pub fn _artcraft_rows_with(
                 if as_str(&nm, "endswith")?.ends_with("-linux-x86_64.AppImage") {
                     url = a.get("browser_download_url").cloned().unwrap_or_else(|| json!(""));
                     asset = nm;
+                    sha256 = json!(crate::appimage::sha256_of_digest(a.get("digest")));
                     let bytes = or_(a, "size", json!(0));
                     // True / 1048576 is a number in Python, as bools are ints.
                     let bytes = match bytes {
@@ -1731,6 +1736,7 @@ pub fn _artcraft_rows_with(
             url = get("download_url", json!(""));
             asset = get("asset_name", json!(""));
             size = get("size_mb", json!(0));
+            sha256 = get("sha256", json!(""));
             published = or_v(published, get("added", json!("")));
         }
         let has_url = truthy(Some(&url));
@@ -1773,6 +1779,7 @@ pub fn _artcraft_rows_with(
         r.insert("download_url".into(), url);
         r.insert("asset_name".into(), asset);
         r.insert("size_mb".into(), size);
+        r.insert("sha256".into(), sha256);
         r.insert("source_type".into(), json!("vendor"));
         r.insert("source_url".into(), json!(format!("{ARTCRAFT_SITE}apps/{slug}")));
         r.insert("upstream_status".into(), json!(if has_url { "passed" } else { "" }));
@@ -2991,6 +2998,7 @@ mod tests {
         let html = r#"<a href="/apps/wordcraft">WordCraft</a><a href="/apps/gridcraft">GridCraft</a>"#;
         let asset = json!({"name": "gridcraft-0.7.0-linux-x86_64.AppImage",
                            "browser_download_url": "https://example.invalid/g.AppImage",
+                           "digest": format!("sha256:{}", "c".repeat(64)),
                            "size": 1048576});
         let found = json!({"tag_name": "v0.7.0", "assets": [asset]});
         let rows = _artcraft_rows_with(None, &|| Ok(html.to_string()), &|_| Ok(Some(json!([]))),
@@ -3007,6 +3015,9 @@ mod tests {
     fn test_a_failed_lookup_says_not_checked() {
         let rows = artcraft_rows(&|r, found| r.contains("gridcraft").then(|| found.clone()));
         assert_eq!(rows["gridcraft"]["status"], "Available");
+        // The asset's published digest is kept, so the install can check it.
+        assert_eq!(rows["gridcraft"]["sha256"], json!("c".repeat(64)));
+        assert_eq!(rows["wordcraft"]["sha256"], json!(""));
         assert_eq!(rows["wordcraft"]["status"], "Not checked");
         assert_eq!(rows["wordcraft"]["unchecked"], true);
     }

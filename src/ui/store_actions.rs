@@ -1044,7 +1044,11 @@ impl Win {
             }
         };
 
-        crate::appimage::download(&p.download_url, dest, Some(&progress))?;
+        // Checked against the asset's published sha256 when it has one.
+        crate::appimage::download_verified(&p.download_url, dest, Some(&progress), &p.sha256)?;
+        if !p.sha256.is_empty() {
+            log("checksum verified");
+        }
         log("downloaded, registering");
 
         let reg = registry_with(p, dest)?;

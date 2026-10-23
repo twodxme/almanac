@@ -1985,6 +1985,8 @@ pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
         extra.insert("url".into(), url);
         extra.insert("key".into(), json!(key));
         extra.insert("download".into(), cget("url"));
+        // The asset's published sha256, "" when the release has none.
+        extra.insert("sha256".into(), cget("sha256"));
         extra.insert("published".into(), cget("published"));
         extra.insert(
             "installed_ts".into(),

@@ -430,13 +430,15 @@ pub(super) fn update_cmd(app: &App) -> Result<Vec<String>, String> {
     }
 }
 
-/// Download `app`'s newer AppImage over the current one and record it.
-/// `Err`: network, disk, permissions.
+/// Download `app`'s newer AppImage over the current one and record it,
+/// checked against the release's published sha256 when it has one.
+/// `Err`: network, disk, permissions, a download that is not whole.
 pub(super) fn appimage_update_work(app: &App) -> Result<(), String> {
     let url = app.extra.get("download").cloned().unwrap_or_default();
+    let sha256 = app.extra.get("sha256").and_then(Value::as_str).unwrap_or_default();
     let dest = py_path(&app.exec_path);
     // urllib's Request takes str(url).
-    appimage::download(&py_str(&url), &dest, None)?;
+    appimage::download_verified(&py_str(&url), &dest, None, sha256)?;
     let mut reg = inventory::load_registry();
     let key = registry_key(app);
     let update = app.update.clone();

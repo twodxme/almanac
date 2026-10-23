@@ -73,6 +73,11 @@ pub struct UpdateSpec {
 /// kept in `raw` under the same key (its string field is then "") and is what
 /// serialises, so the stored record is the Python's. `value(key)` gives the
 /// real value either way.
+///
+/// `sha256` is the asset's own digest as GitHub publishes it (`"digest":
+/// "sha256:<hex>"`), the hex part, or "" when the release has none; the
+/// update is checked against it before it is swapped in. (Not in the
+/// Python; a dict stored before it existed reads as "".)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LatestRelease {
     pub version: String,
@@ -81,6 +86,7 @@ pub struct LatestRelease {
     pub asset: String,
     pub published: String,
     pub page: String,
+    pub sha256: String,
     pub spec: Option<Value>,
     pub raw: std::collections::BTreeMap<String, Value>,
     /// A dict read back from the registry keeps its own keys, in its own
@@ -91,7 +97,7 @@ pub struct LatestRelease {
 }
 
 /// The keys of the Python dict, in its order (`spec` comes last).
-const RELEASE_KEYS: [&str; 6] = ["version", "tag", "url", "asset", "published", "page"];
+const RELEASE_KEYS: [&str; 7] = ["version", "tag", "url", "asset", "published", "page", "sha256"];
 
 impl LatestRelease {
     fn field_mut(&mut self, key: &str) -> Option<&mut String> {
@@ -102,6 +108,7 @@ impl LatestRelease {
             "asset" => &mut self.asset,
             "published" => &mut self.published,
             "page" => &mut self.page,
+            "sha256" => &mut self.sha256,
             _ => return None,
         })
     }
@@ -114,6 +121,7 @@ impl LatestRelease {
             "asset" => &self.asset,
             "published" => &self.published,
             "page" => &self.page,
+            "sha256" => &self.sha256,
             _ => return None,
         })
     }
@@ -738,6 +746,15 @@ pub fn vkey(v: &str) -> Result<Vec<BigInt>, String> {
     v.split('.').map(py_int).collect()
 }
 
+/// The hex sha256 of a GitHub release asset's `digest` (`"sha256:<hex>"`),
+/// lowercased; "" when there is none, or it is not a sha256 digest.
+pub fn sha256_of_digest(digest: Option<&Value>) -> String {
+    match digest.and_then(Value::as_str).and_then(|d| d.strip_prefix("sha256:")) {
+        Some(hex) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => hex.to_ascii_lowercase(),
+        _ => String::new(),
+    }
+}
+
 fn release_url(owner: &str, repo: &str, release: &Value) -> String {
     let latest = matches!(release.as_str(), Some("latest") | Some(""));
     let tag = if latest { "releases/latest".to_string() } else { format!("releases/tags/{}", py_str(release)) };
@@ -763,6 +780,7 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
     let want = pattern.strip_suffix(".zsync").unwrap_or(pattern);
     let mut asset_url = Value::String(String::new());
     let mut asset_name = String::new();
+    let mut asset_sha = String::new();
     let empty = Value::Array(Vec::new());
     let assets = data.get("assets").unwrap_or(&empty);
     let items: Vec<&Value> = match assets {
@@ -792,6 +810,7 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
             // Passed through as it is: None or a number survives into "url".
             asset_url = a.get("browser_download_url").cloned().unwrap_or_else(|| Value::String(String::new()));
             asset_name = name.to_string();
+            asset_sha = sha256_of_digest(a.get("digest"));
             break;
         }
     }
@@ -819,6 +838,7 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
     out.set("asset", Value::String(asset_name));
     out.set("published", published);
     out.set("page", page);
+    out.set("sha256", Value::String(asset_sha));
     Ok(Some(out))
 }
 
@@ -3744,7 +3764,7 @@ mod tests {
         let r = latest_from(Some(data), None).unwrap().unwrap();
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v, json!({"version": null, "tag": null, "url": null, "asset": "a.AppImage",
-                             "published": "", "page": 7}));
+                             "published": "", "page": 7, "sha256": ""}));
         let back: LatestRelease = serde_json::from_value(v.clone()).unwrap();
         assert_eq!(serde_json::to_value(&back).unwrap(), v);
         // A stored dict comes back as it was: odd keys, order, a null spec.
@@ -3757,6 +3777,25 @@ mod tests {
     }
 
     // Review round 3.
+
+    /// The asset's published digest travels with the release, so the
+    /// update can be checked against it.
+    #[test]
+    fn test_the_asset_digest_is_kept() {
+        let hex = "AB".repeat(32);
+        let data = json!({"tag_name": "v2.0.0", "assets": [
+            {"name": "x.AppImage.zsync", "digest": "sha256:00"},
+            {"name": "x-2.0.0.AppImage", "browser_download_url": "u", "digest": format!("sha256:{hex}")}]});
+        let r = latest_from(Some(data), Some(&json!("x-*.AppImage"))).unwrap().unwrap();
+        assert_eq!(r.sha256, hex.to_lowercase());
+        assert_eq!(serde_json::to_value(&r).unwrap()["sha256"], json!(hex.to_lowercase()));
+        assert_eq!(sha256_of_digest(Some(&json!("sha512:abcd"))), "");
+        assert_eq!(sha256_of_digest(Some(&json!("sha256:xyz"))), "");
+        assert_eq!(sha256_of_digest(None), "");
+        // A dict stored before the key existed reads as "no digest".
+        let old: LatestRelease = serde_json::from_value(json!({"url": "u", "version": "2"})).unwrap();
+        assert_eq!(old.sha256, "");
+    }
 
     #[test]
     fn test_fnmatch_negation_after_dropped_range() {
