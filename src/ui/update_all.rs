@@ -70,6 +70,30 @@ pub fn system_command(routes: &[Route], command: &str) -> Option<String> {
     }
 }
 
+/// What follows the terminal closing.
+#[derive(Debug, PartialEq)]
+pub enum AfterTerminal {
+    /// it ran to the end: the rest of the batch next
+    Rest,
+    /// nothing else is waiting
+    Done,
+    /// it returned at once, so the update may still be running
+    Say(&'static str),
+}
+
+/// A launcher that hands the window to a terminal server (ghostty, kitty's
+/// single instance, footclient) returns at once, so there is no "finished"
+/// to wait for. Starting the batch then would run it beside the system
+/// update -- both upgrading the same mise tool, say.
+pub fn after_terminal(elapsed: Duration, rest_waiting: bool) -> AfterTerminal {
+    match (elapsed < Duration::from_secs(5), rest_waiting) {
+        (true, true) => AfterTerminal::Say("When the system update finishes, press Update all again for the rest"),
+        (true, false) => AfterTerminal::Say("Rescan when the update finishes"),
+        (false, true) => AfterTerminal::Rest,
+        (false, false) => AfterTerminal::Done,
+    }
+}
+
 /// The batch after the terminal: what will run, and what is held back with
 /// the reason.
 #[derive(Default)]
@@ -233,17 +257,17 @@ impl Win {
             let p = probe.clone();
             let Ok(before) = gio::spawn_blocking(move || p()).await else { return };
             let _ = proc.wait_future().await;
+            let next = after_terminal(started.elapsed(), !rest.is_empty());
             if let Some(win) = w.upgrade() {
                 win.after_pacman(true);
-                win.update_rest(rest);
-            }
-            if started.elapsed() < Duration::from_secs(5) {
-                // The launcher handed the window to a terminal server and
-                // returned at once, so there is no "finished" to wait for.
-                if let Some(win) = w.upgrade() {
-                    win.say("Rescan when the update finishes", 8);
+                match next {
+                    AfterTerminal::Rest => win.update_rest(rest),
+                    AfterTerminal::Say(msg) => {
+                        win.say(&tr(msg), 10);
+                        return;
+                    }
+                    AfterTerminal::Done => {}
                 }
-                return;
             }
             if !judge {
                 return;
@@ -369,6 +393,17 @@ mod tests {
             Some("omarchy update; flatpak update -y")
         );
         assert_eq!(system_command(&[], c), None);
+    }
+
+    /// A terminal that returns at once may still be updating: the batch
+    /// must not start beside it.
+    #[test]
+    fn the_batch_waits_for_the_terminal_to_finish() {
+        let (quick, slow) = (Duration::from_secs(1), Duration::from_secs(90));
+        assert!(matches!(after_terminal(quick, true), AfterTerminal::Say(m) if m.contains("Update all again")));
+        assert_eq!(after_terminal(quick, false), AfterTerminal::Say("Rescan when the update finishes"));
+        assert_eq!(after_terminal(slow, true), AfterTerminal::Rest);
+        assert_eq!(after_terminal(slow, false), AfterTerminal::Done);
     }
 
     #[test]

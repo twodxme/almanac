@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-19 15:02-0700\n"
+"POT-Creation-Date: 2026-10-23 12:50-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -34,7 +34,7 @@ msgstr[1] ""
 
 #: src/ui/actions.rs:833 src/ui/actions.rs:1517 src/ui/ai.rs:812
 #: src/ui/packages.rs:1146 src/ui/plugins.rs:1542 src/ui/shell.rs:2087
-#: src/ui/update_all.rs:307
+#: src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
@@ -1244,22 +1244,22 @@ msgstr ""
 msgid "Nothing needs you right now"
 msgstr ""
 
-#: src/ui/update_all.rs:209 src/ui/update_all.rs:213
+#: src/ui/update_all.rs:233 src/ui/update_all.rs:237
 msgid "No terminal found to run the update in"
 msgstr ""
 
-#: src/ui/update_all.rs:224
+#: src/ui/update_all.rs:248
 msgid "Update running in a terminal — the list refreshes when it closes"
 msgstr ""
 
-#: src/ui/update_all.rs:272
+#: src/ui/update_all.rs:296
 msgid "Checking what else needs updating…"
 msgstr ""
 
-#: src/ui/update_all.rs:319
+#: src/ui/update_all.rs:343
 msgid "Everything updated"
 msgstr ""
 
-#: src/ui/update_all.rs:319
+#: src/ui/update_all.rs:343
 msgid "Some updates failed — see the log"
 msgstr ""
