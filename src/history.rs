@@ -801,270 +801,51 @@ fn recursion(what: &str) -> String {
 /// about 52090 and 52110 levels.
 const MAX_DEPTH: usize = 52105;
 
-/// `json.loads(text)` for a str, following CPython's C scanner. Iterative,
-/// so a deeply nested line cannot overflow the stack.
+/// `json.loads(text)` for a str, following CPython's C scanner (without
+/// recursion, so a deeply nested line cannot overflow the stack).
 fn py_loads(text: &str) -> Result<PyVal, LoadErr> {
-    enum Frame {
-        List(Vec<PyVal>),
-        Dict(Vec<(PyStr, PyVal)>, PyStr),
-    }
-    let s: Vec<char> = text.chars().collect();
-    let n = s.len();
-    let ws = |mut i: usize| {
-        while i < n && matches!(s[i], ' ' | '\t' | '\n' | '\r') {
-            i += 1;
-        }
-        i
-    };
-    let starts = |i: usize, lit: &str| {
-        let lit: Vec<char> = lit.chars().collect();
-        i + lit.len() <= n && s[i..i + lit.len()] == lit[..]
-    };
-    let hex4 = |i: usize| -> Option<u32> {
-        if i + 4 > n {
-            return None;
-        }
-        let mut v = 0;
-        for c in &s[i..i + 4] {
-            v = v * 16 + c.to_digit(16)?;
-        }
-        Some(v)
-    };
-    // A string starting at the quote at `i`; returns it and the index after.
-    let string = |mut i: usize| -> Result<(PyStr, usize), LoadErr> {
-        i += 1;
-        let mut out = Vec::new();
-        loop {
-            let c = *s.get(i).ok_or(LoadErr::Value)?;
-            match c {
-                '"' => return Ok((out, i + 1)),
-                '\\' => {
-                    let e = *s.get(i + 1).ok_or(LoadErr::Value)?;
-                    i += 2;
-                    let simple = match e {
-                        '"' => Some('"'),
-                        '\\' => Some('\\'),
-                        '/' => Some('/'),
-                        'b' => Some('\x08'),
-                        'f' => Some('\x0c'),
-                        'n' => Some('\n'),
-                        'r' => Some('\r'),
-                        't' => Some('\t'),
-                        'u' => None,
-                        _ => return Err(LoadErr::Value),
-                    };
-                    if let Some(ch) = simple {
-                        out.push(u32::from(ch));
-                        continue;
-                    }
-                    let mut u = hex4(i).ok_or(LoadErr::Value)?;
-                    i += 4;
-                    if (0xd800..=0xdbff).contains(&u) && i + 1 < n && s[i] == '\\' && s[i + 1] == 'u' {
-                        if let Some(lo) = hex4(i + 2).filter(|lo| (0xdc00..=0xdfff).contains(lo)) {
-                            u = 0x10000 + (((u - 0xd800) << 10) | (lo - 0xdc00));
-                            i += 6;
-                        }
-                    }
-                    out.push(u);
-                }
-                c if (c as u32) < 0x20 => return Err(LoadErr::Value),
-                c => {
-                    out.push(u32::from(c));
-                    i += 1;
-                }
-            }
-        }
-    };
-    // A number at `i` (`-?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?`), or None.
-    let number = |i: usize| -> Option<Result<(PyVal, usize), LoadErr>> {
-        let digit = |j: usize| j < n && s[j].is_ascii_digit();
-        let mut j = i;
-        if j < n && s[j] == '-' {
-            j += 1;
-        }
-        if j < n && ('1'..='9').contains(&s[j]) {
-            while digit(j) {
-                j += 1;
-            }
-        } else if j < n && s[j] == '0' {
-            j += 1;
-        } else {
-            return None;
-        }
-        let int_end = j;
-        let mut is_float = false;
-        if j + 1 < n && s[j] == '.' && s[j + 1].is_ascii_digit() {
-            j += 2;
-            while digit(j) {
-                j += 1;
-            }
-            is_float = true;
-        }
-        if j < n && (s[j] == 'e' || s[j] == 'E') {
-            let mut k = j + 1;
-            if k < n && (s[k] == '+' || s[k] == '-') {
-                k += 1;
-            }
-            if digit(k) {
-                while digit(k) {
-                    k += 1;
-                }
-                j = k;
-                is_float = true;
-            }
-        }
-        let text: String = s[i..j].iter().collect();
-        if is_float {
-            return Some(text.parse::<f64>().map(|f| (PyVal::Float(f), j)).map_err(|_| LoadErr::Value));
-        }
-        let digits = int_end - i - usize::from(s[i] == '-');
-        if digits > INT_MAX_STR_DIGITS {
-            return Some(Err(LoadErr::Value));
-        }
-        Some(text.parse::<BigInt>().map(|v| (PyVal::Int(v), j)).map_err(|_| LoadErr::Value))
-    };
+    use crate::util::pyjson;
+    pyjson::loads(text, pyjson::Limit::containers(MAX_DEPTH)).map_err(|e| match e {
+        pyjson::Error::Value(_) => LoadErr::Value,
+        pyjson::Error::Recursion(is_obj) => LoadErr::Recursion(if is_obj { "object" } else { "array" }),
+    })
+}
 
-    if s.first() == Some(&'\u{feff}') {
-        return Err(LoadErr::Value);
+impl crate::util::pyjson::Build for PyVal {
+    type Key = PyStr;
+    fn null() -> Self {
+        PyVal::None
     }
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut i = ws(0);
-    loop {
-        // One value at `i`, or the opening of a container.
-        let mut v = match s.get(i) {
-            Some('"') => {
-                let (st, j) = string(i)?;
-                i = j;
-                PyVal::Str(st)
-            }
-            Some('{') => {
-                // CPython enters its recursion check for every object, empty or not.
-                if stack.len() >= MAX_DEPTH {
-                    return Err(LoadErr::Recursion("object"));
-                }
-                i = ws(i + 1);
-                if s.get(i) == Some(&'}') {
-                    i += 1;
-                    PyVal::Dict(Vec::new())
-                } else {
-                    if s.get(i) != Some(&'"') {
-                        return Err(LoadErr::Value);
-                    }
-                    let (key, j) = string(i)?;
-                    i = ws(j);
-                    if s.get(i) != Some(&':') {
-                        return Err(LoadErr::Value);
-                    }
-                    i = ws(i + 1);
-                    stack.push(Frame::Dict(Vec::new(), key));
-                    continue;
-                }
-            }
-            Some('[') => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(LoadErr::Recursion("array"));
-                }
-                i = ws(i + 1);
-                if s.get(i) == Some(&']') {
-                    i += 1;
-                    PyVal::List(Vec::new())
-                } else {
-                    stack.push(Frame::List(Vec::new()));
-                    continue;
-                }
-            }
-            Some('n') if starts(i, "null") => {
-                i += 4;
-                PyVal::None
-            }
-            Some('t') if starts(i, "true") => {
-                i += 4;
-                PyVal::Bool(true)
-            }
-            Some('f') if starts(i, "false") => {
-                i += 5;
-                PyVal::Bool(false)
-            }
-            Some('N') if starts(i, "NaN") => {
-                i += 3;
-                PyVal::Float(f64::NAN)
-            }
-            Some('I') if starts(i, "Infinity") => {
-                i += 8;
-                PyVal::Float(f64::INFINITY)
-            }
-            Some('-') if starts(i, "-Infinity") => {
-                i += 9;
-                PyVal::Float(f64::NEG_INFINITY)
-            }
-            Some(_) => match number(i) {
-                Some(r) => {
-                    let (x, j) = r?;
-                    i = j;
-                    x
-                }
-                None => return Err(LoadErr::Value),
-            },
-            None => return Err(LoadErr::Value),
-        };
-        // Hand the finished value to the open container, closing as many as
-        // end here.
-        loop {
-            match stack.last_mut() {
-                None => {
-                    return if ws(i) == n { Ok(v) } else { Err(LoadErr::Value) };
-                }
-                Some(Frame::List(items)) => {
-                    items.push(v);
-                    i = ws(i);
-                    match s.get(i) {
-                        Some(',') => {
-                            i = ws(i + 1);
-                            break;
-                        }
-                        Some(']') => {
-                            i += 1;
-                            let Some(Frame::List(items)) = stack.pop() else { return Err(LoadErr::Value) };
-                            v = PyVal::List(items);
-                        }
-                        _ => return Err(LoadErr::Value),
-                    }
-                }
-                Some(Frame::Dict(entries, key)) => {
-                    let key = std::mem::take(key);
-                    // A repeated key keeps its first place and takes the new value.
-                    match entries.iter_mut().find(|(k, _)| *k == key) {
-                        Some(entry) => entry.1 = v,
-                        None => entries.push((key, v)),
-                    }
-                    i = ws(i);
-                    match s.get(i) {
-                        Some(',') => {
-                            i = ws(i + 1);
-                            if s.get(i) != Some(&'"') {
-                                return Err(LoadErr::Value);
-                            }
-                            let (k, j) = string(i)?;
-                            i = ws(j);
-                            if s.get(i) != Some(&':') {
-                                return Err(LoadErr::Value);
-                            }
-                            i = ws(i + 1);
-                            if let Some(Frame::Dict(_, slot)) = stack.last_mut() {
-                                *slot = k;
-                            }
-                            break;
-                        }
-                        Some('}') => {
-                            i += 1;
-                            let Some(Frame::Dict(entries, _)) = stack.pop() else { return Err(LoadErr::Value) };
-                            v = PyVal::Dict(entries);
-                        }
-                        _ => return Err(LoadErr::Value),
-                    }
-                }
-            }
+    fn bool(b: bool) -> Self {
+        PyVal::Bool(b)
+    }
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => PyVal::Int(BigInt::from(i)),
+            Num::UInt(u) => PyVal::Int(BigInt::from(u)),
+            Num::Big(digits) => PyVal::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Float(f) => PyVal::Float(f),
         }
+    }
+    fn str(s: String) -> Self {
+        PyVal::Str(s.chars().map(u32::from).collect())
+    }
+    fn wstr(units: Vec<u32>) -> Self {
+        PyVal::Str(units)
+    }
+    fn key(s: String) -> PyStr {
+        s.chars().map(u32::from).collect()
+    }
+    fn wkey(units: Vec<u32>) -> PyStr {
+        units
+    }
+    fn list(items: Vec<Self>) -> Self {
+        PyVal::List(items)
+    }
+    fn dict(pairs: Vec<(PyStr, Self)>) -> Self {
+        // A repeated key keeps its first place and takes the new value.
+        PyVal::Dict(crate::util::pyjson::dict_pairs(pairs))
     }
 }
 

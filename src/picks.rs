@@ -722,245 +722,51 @@ enum LoadErr {
     Recursion,
 }
 
-struct JsonParser<'a> {
-    text: &'a str,
-    b: &'a [u8],
-    i: usize,
-}
-
-impl JsonParser<'_> {
-    fn ws(&mut self) {
-        while matches!(self.b.get(self.i), Some(b' ' | b'\t' | b'\n' | b'\r')) {
-            self.i += 1;
-        }
-    }
-
-    fn lit(&mut self, s: &str) -> bool {
-        if self.b[self.i..].starts_with(s.as_bytes()) {
-            self.i += s.len();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn value(&mut self, depth: usize) -> Result<PyJson, LoadErr> {
-        match self.b.get(self.i) {
-            Some(b'"') => self.string().map(PyJson::Str),
-            Some(b'{') => {
-                if depth >= MAX_DEPTH {
-                    return Err(LoadErr::Recursion);
-                }
-                self.object(depth + 1)
-            }
-            Some(b'[') => {
-                if depth >= MAX_DEPTH {
-                    return Err(LoadErr::Recursion);
-                }
-                self.array(depth + 1)
-            }
-            Some(b'n') if self.lit("null") => Ok(PyJson::None),
-            Some(b't') if self.lit("true") => Ok(PyJson::Bool(true)),
-            Some(b'f') if self.lit("false") => Ok(PyJson::Bool(false)),
-            Some(b'N') if self.lit("NaN") => Ok(PyJson::Float(f64::NAN)),
-            Some(b'I') if self.lit("Infinity") => Ok(PyJson::Float(f64::INFINITY)),
-            Some(b'-') if self.lit("-Infinity") => Ok(PyJson::Float(f64::NEG_INFINITY)),
-            Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => Err(LoadErr::Value),
-        }
-    }
-
-    fn number(&mut self) -> Result<PyJson, LoadErr> {
-        let b = self.b;
-        let digit = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
-        let start = self.i;
-        let mut i = self.i;
-        if b.get(i) == Some(&b'-') {
-            i += 1;
-        }
-        match b.get(i) {
-            Some(b'1'..=b'9') => {
-                i += 1;
-                while digit(i) {
-                    i += 1;
-                }
-            }
-            Some(b'0') => i += 1,
-            _ => return Err(LoadErr::Value),
-        }
-        let int_end = i;
-        // The 4,300-digit limit of int() counts digits, not the sign.
-        let digits = int_end - start - usize::from(b[start] == b'-');
-        let mut is_float = false;
-        if b.get(i) == Some(&b'.') && digit(i + 1) {
-            is_float = true;
-            i += 2;
-            while digit(i) {
-                i += 1;
-            }
-        }
-        if matches!(b.get(i), Some(b'e' | b'E')) {
-            let e = i;
-            i += 1;
-            if matches!(b.get(i), Some(b'+' | b'-')) {
-                i += 1;
-            }
-            let ds = i;
-            while digit(i) {
-                i += 1;
-            }
-            if i > ds {
-                is_float = true;
-            } else {
-                i = e;
-            }
-        }
-        self.i = i;
-        let text = &self.text[start..i];
-        if is_float {
-            text.parse::<f64>().map(PyJson::Float).map_err(|_| LoadErr::Value)
-        } else {
-            if digits > 4300 {
-                return Err(LoadErr::Value);
-            }
-            text.parse::<BigInt>().map(PyJson::Int).map_err(|_| LoadErr::Value)
-        }
-    }
-
-    fn hex4(&self, at: usize) -> Option<u32> {
-        let s = self.text.get(at..at + 4)?;
-        if !s.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        u32::from_str_radix(s, 16).ok()
-    }
-
-    fn string(&mut self) -> Result<PStr, LoadErr> {
-        let b = self.b;
-        self.i += 1;
-        let mut out = PStr::new();
-        loop {
-            let start = self.i;
-            while let Some(&c) = b.get(self.i) {
-                if c == b'"' || c == b'\\' {
-                    break;
-                }
-                if c < 0x20 {
-                    return Err(LoadErr::Value);
-                }
-                self.i += 1;
-            }
-            out.extend(self.text[start..self.i].chars().map(|c| c as u32));
-            match b.get(self.i) {
-                None => return Err(LoadErr::Value),
-                Some(b'"') => {
-                    self.i += 1;
-                    return Ok(out);
-                }
-                _ => {}
-            }
-            self.i += 1;
-            let c = match b.get(self.i) {
-                Some(b'"') => '"' as u32,
-                Some(b'\\') => '\\' as u32,
-                Some(b'/') => '/' as u32,
-                Some(b'b') => 0x08,
-                Some(b'f') => 0x0c,
-                Some(b'n') => '\n' as u32,
-                Some(b'r') => '\r' as u32,
-                Some(b't') => '\t' as u32,
-                Some(b'u') => {
-                    let mut u = self.hex4(self.i + 1).ok_or(LoadErr::Value)?;
-                    self.i += 4;
-                    if (0xd800..0xdc00).contains(&u) && b.get(self.i + 1) == Some(&b'\\') && b.get(self.i + 2) == Some(&b'u') {
-                        let lo = self.hex4(self.i + 3).ok_or(LoadErr::Value)?;
-                        if (0xdc00..0xe000).contains(&lo) {
-                            u = 0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00);
-                            self.i += 6;
-                        }
-                    }
-                    // A lone surrogate stays as it is, as in Python.
-                    u
-                }
-                _ => return Err(LoadErr::Value),
-            };
-            out.push(c);
-            self.i += 1;
-        }
-    }
-
-    fn array(&mut self, depth: usize) -> Result<PyJson, LoadErr> {
-        self.i += 1;
-        let mut out = Vec::new();
-        self.ws();
-        if self.b.get(self.i) == Some(&b']') {
-            self.i += 1;
-            return Ok(PyJson::List(out));
-        }
-        loop {
-            out.push(self.value(depth)?);
-            self.ws();
-            match self.b.get(self.i) {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b']') => {
-                    self.i += 1;
-                    return Ok(PyJson::List(out));
-                }
-                _ => return Err(LoadErr::Value),
-            }
-        }
-    }
-
-    fn object(&mut self, depth: usize) -> Result<PyJson, LoadErr> {
-        self.i += 1;
-        let mut out = PyDict::default();
-        self.ws();
-        if self.b.get(self.i) == Some(&b'}') {
-            self.i += 1;
-            return Ok(PyJson::Dict(out));
-        }
-        loop {
-            if self.b.get(self.i) != Some(&b'"') {
-                return Err(LoadErr::Value);
-            }
-            let k = self.string()?;
-            self.ws();
-            if self.b.get(self.i) != Some(&b':') {
-                return Err(LoadErr::Value);
-            }
-            self.i += 1;
-            self.ws();
-            let v = self.value(depth)?;
-            out.insert(k, v);
-            self.ws();
-            match self.b.get(self.i) {
-                Some(b',') => {
-                    self.i += 1;
-                    self.ws();
-                }
-                Some(b'}') => {
-                    self.i += 1;
-                    return Ok(PyJson::Dict(out));
-                }
-                _ => return Err(LoadErr::Value),
-            }
-        }
-    }
-}
-
 /// `json.loads(text)`
 fn json_loads(text: &str) -> Result<PyJson, LoadErr> {
-    let mut p = JsonParser { text, b: text.as_bytes(), i: 0 };
-    p.ws();
-    let v = p.value(0)?;
-    p.ws();
-    if p.i != p.b.len() {
-        return Err(LoadErr::Value);
+    use crate::util::pyjson;
+    pyjson::loads(text, pyjson::Limit::containers(MAX_DEPTH)).map_err(|e| match e {
+        pyjson::Error::Value(_) => LoadErr::Value,
+        pyjson::Error::Recursion(_) => LoadErr::Recursion,
+    })
+}
+
+impl crate::util::pyjson::Build for PyJson {
+    type Key = PStr;
+    fn null() -> Self {
+        PyJson::None
     }
-    Ok(v)
+    fn bool(b: bool) -> Self {
+        PyJson::Bool(b)
+    }
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => PyJson::Int(BigInt::from(i)),
+            Num::UInt(u) => PyJson::Int(BigInt::from(u)),
+            Num::Big(digits) => PyJson::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Float(f) => PyJson::Float(f),
+        }
+    }
+    fn str(s: String) -> Self {
+        PyJson::Str(ps(&s))
+    }
+    fn wstr(units: Vec<u32>) -> Self {
+        PyJson::Str(units)
+    }
+    fn key(s: String) -> PStr {
+        ps(&s)
+    }
+    fn wkey(units: Vec<u32>) -> PStr {
+        units
+    }
+    fn list(items: Vec<Self>) -> Self {
+        PyJson::List(items)
+    }
+    fn dict(pairs: Vec<(PStr, Self)>) -> Self {
+        // `d[k] = v`: a repeated key keeps its place and takes the last value.
+        PyJson::Dict(PyDict(crate::util::pyjson::dict_pairs(pairs)))
+    }
 }
 
 /// A str the way `json.dumps` writes it (`ensure_ascii=True`): a lone

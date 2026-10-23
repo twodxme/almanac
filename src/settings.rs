@@ -134,10 +134,6 @@ fn recursion_message(is_obj: bool) -> String {
     format!("RecursionError: Stack overflow (used {used} kB) while decoding a JSON {what} from a unicode string")
 }
 
-/// `int(str)` refuses more digits than this (`sys.get_int_max_str_digits()`),
-/// with a ValueError that `_load` catches.
-const INT_MAX_STR_DIGITS: usize = 4300;
-
 enum JsonError {
     /// A ValueError (JSONDecodeError): `_load` falls back to `{}`.
     Value,
@@ -347,242 +343,72 @@ fn push_json_str(out: &mut String, s: &[u32]) {
 
 /// `json.loads(text)`, following CPython's C scanner.
 fn parse(text: &str) -> Result<Doc, JsonError> {
-    let s: Vec<char> = text.chars().collect();
-    // json.loads refuses a str that starts with a BOM.
-    if s.first() == Some(&'\u{feff}') {
-        return Err(JsonError::Value);
-    }
-    let ws = |mut i: usize| {
-        while matches!(s.get(i), Some(' ' | '\t' | '\n' | '\r')) {
-            i += 1;
+    use crate::util::pyjson;
+    // [0]: the top level, moved there at the end.
+    let mut sink = Nodes(vec![Node::Null]);
+    match pyjson::loads_into(text, pyjson::Limit::containers(max_depth()), &mut sink) {
+        Ok(root) => {
+            // No container refers to the top level, nor to the slot it
+            // swaps with.
+            let mut nodes = sink.0;
+            nodes.swap(0, root);
+            Ok(Doc { nodes })
         }
-        i
-    };
-    let mut nodes: Vec<Node> = vec![Node::Null]; // [0]: the top level, set at the end
-    // Open containers: index, and for a dict the key awaiting its value and
-    // where each key already is (a repeated key keeps its place, last value).
-    struct Open {
-        id: usize,
-        key: Option<PyStr>,
-        seen: std::collections::HashMap<PyStr, usize>,
-    }
-    let mut stack: Vec<Open> = Vec::new();
-    let limit = max_depth();
-    let mut i = ws(0);
-    // A dict key and its colon, from `"` on; returns the key.
-    let key_at = |i: &mut usize| -> Result<PyStr, JsonError> {
-        if s.get(*i) != Some(&'"') {
-            return Err(JsonError::Value);
-        }
-        let key = parse_string(&s, i)?;
-        *i = ws(*i);
-        if s.get(*i) != Some(&':') {
-            return Err(JsonError::Value);
-        }
-        *i = ws(*i + 1);
-        Ok(key)
-    };
-    'value: loop {
-        let mut node = match s.get(i) {
-            Some(c @ ('{' | '[')) => {
-                let is_obj = *c == '{';
-                if stack.len() + 1 > limit {
-                    return Err(JsonError::Recursion(is_obj));
-                }
-                nodes.push(if is_obj { Node::Obj(Vec::new()) } else { Node::Arr(Vec::new()) });
-                let id = nodes.len() - 1;
-                i = ws(i + 1);
-                if s.get(i) == Some(if is_obj { &'}' } else { &']' }) {
-                    i += 1;
-                    id
-                } else {
-                    let key = if is_obj { Some(key_at(&mut i)?) } else { None };
-                    stack.push(Open { id, key, seen: Default::default() });
-                    continue 'value;
-                }
-            }
-            Some('"') => {
-                let v = parse_string(&s, &mut i)?;
-                nodes.push(Node::Str(v));
-                nodes.len() - 1
-            }
-            Some(_) => {
-                let v = parse_scalar(&s, &mut i)?;
-                nodes.push(v);
-                nodes.len() - 1
-            }
-            None => return Err(JsonError::Value),
-        };
-        // A value is complete: hand it to its container, and close every
-        // container that ends here.
-        loop {
-            let Some(top) = stack.last_mut() else {
-                // The top level: nothing but whitespace may follow.
-                if ws(i) != s.len() {
-                    return Err(JsonError::Value);
-                }
-                // Move it into slot 0; no container refers to it.
-                nodes.swap(0, node);
-                return Ok(Doc { nodes });
-            };
-            let is_obj = top.key.is_some();
-            match top.key.take() {
-                Some(key) => {
-                    let Node::Obj(entries) = &mut nodes[top.id] else { unreachable!() };
-                    match top.seen.get(&key) {
-                        Some(&at) => entries[at].1 = node,
-                        None => {
-                            top.seen.insert(key.clone(), entries.len());
-                            entries.push((key, node));
-                        }
-                    }
-                }
-                None => {
-                    let Node::Arr(items) = &mut nodes[top.id] else { unreachable!() };
-                    items.push(node);
-                }
-            }
-            i = ws(i);
-            match s.get(i) {
-                Some(',') => {
-                    i = ws(i + 1);
-                    if is_obj {
-                        top.key = Some(key_at(&mut i)?);
-                    }
-                    continue 'value;
-                }
-                Some('}') if is_obj => {}
-                Some(']') if !is_obj => {}
-                _ => return Err(JsonError::Value),
-            }
-            i += 1;
-            node = top.id;
-            stack.pop();
-        }
+        Err(pyjson::Error::Value(_)) => Err(JsonError::Value),
+        Err(pyjson::Error::Recursion(is_obj)) => Err(JsonError::Recursion(is_obj)),
     }
 }
 
-/// A string from its opening quote; `i` ends past the closing one.
-fn parse_string(s: &[char], i: &mut usize) -> Result<PyStr, JsonError> {
-    let hex4 = |at: usize| -> Result<u32, JsonError> {
-        let mut v = 0;
-        for k in 0..4 {
-            let d = s.get(at + k).and_then(|c| c.to_digit(16).filter(|_| c.is_ascii()));
-            v = v * 16 + d.ok_or(JsonError::Value)?;
-        }
-        Ok(v)
-    };
-    let mut out = Vec::new();
-    let mut j = *i + 1;
-    loop {
-        let c = *s.get(j).ok_or(JsonError::Value)?;
-        j += 1;
-        match c {
-            '"' => break,
-            '\\' => {
-                let e = *s.get(j).ok_or(JsonError::Value)?;
-                j += 1;
-                out.push(match e {
-                    '"' => 0x22,
-                    '\\' => 0x5c,
-                    '/' => 0x2f,
-                    'b' => 0x08,
-                    'f' => 0x0c,
-                    'n' => 0x0a,
-                    'r' => 0x0d,
-                    't' => 0x09,
-                    'u' => {
-                        let mut v = hex4(j)?;
-                        j += 4;
-                        // A high surrogate followed by an escaped low one is
-                        // one character; anything else stays as it is.
-                        if (0xd800..0xdc00).contains(&v) && s.get(j) == Some(&'\\') && s.get(j + 1) == Some(&'u') {
-                            let low = hex4(j + 2)?;
-                            if (0xdc00..0xe000).contains(&low) {
-                                v = 0x10000 + ((v - 0xd800) << 10) + (low - 0xdc00);
-                                j += 6;
-                            }
-                        }
-                        v
-                    }
-                    _ => return Err(JsonError::Value),
-                });
-            }
-            // strict=True: no raw control characters.
-            c if (c as u32) < 0x20 => return Err(JsonError::Value),
-            c => out.push(c as u32),
-        }
+/// A parse as the nodes of a [`Doc`]: each value is its index.
+struct Nodes(Vec<Node>);
+
+impl Nodes {
+    fn add(&mut self, node: Node) -> usize {
+        self.0.push(node);
+        self.0.len() - 1
     }
-    *i = j;
-    Ok(out)
 }
 
-/// null / true / false / NaN / Infinity / -Infinity, or a number.
-fn parse_scalar(s: &[char], i: &mut usize) -> Result<Node, JsonError> {
-    let starts = |word: &str| word.chars().enumerate().all(|(k, c)| s.get(*i + k) == Some(&c));
-    for (word, node) in [
-        ("null", Node::Null),
-        ("true", Node::Bool(true)),
-        ("false", Node::Bool(false)),
-        ("NaN", Node::Float(f64::NAN)),
-        ("Infinity", Node::Float(f64::INFINITY)),
-        ("-Infinity", Node::Float(f64::NEG_INFINITY)),
-    ] {
-        if starts(word) {
-            *i += word.chars().count();
-            return Ok(node);
-        }
+impl crate::util::pyjson::Sink for Nodes {
+    type Value = usize;
+    type Key = PyStr;
+    fn reset(&mut self) {
+        self.0.truncate(1);
     }
-    // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?
-    let digit = |k: usize| s.get(k).is_some_and(char::is_ascii_digit);
-    let start = *i;
-    let mut j = start;
-    if s.get(j) == Some(&'-') {
-        j += 1;
+    fn null(&mut self) -> usize {
+        self.add(Node::Null)
     }
-    match s.get(j) {
-        Some('0') => j += 1,
-        Some('1'..='9') => {
-            while digit(j) {
-                j += 1;
-            }
-        }
-        _ => return Err(JsonError::Value),
+    fn bool(&mut self, b: bool) -> usize {
+        self.add(Node::Bool(b))
     }
-    let mut is_float = false;
-    if s.get(j) == Some(&'.') && digit(j + 1) {
-        j += 1;
-        while digit(j) {
-            j += 1;
-        }
-        is_float = true;
+    fn num(&mut self, n: crate::util::pyjson::Num<'_>) -> usize {
+        use crate::util::pyjson::Num;
+        self.add(match n {
+            Num::Int(i) => Node::Int(i.to_string()),
+            Num::UInt(u) => Node::Int(u.to_string()),
+            Num::Big(digits) => Node::Int(digits.to_owned()),
+            Num::Float(f) => Node::Float(f),
+        })
     }
-    if matches!(s.get(j), Some('e' | 'E')) {
-        let mut k = j + 1;
-        if matches!(s.get(k), Some('+' | '-')) {
-            k += 1;
-        }
-        if digit(k) {
-            while digit(k) {
-                k += 1;
-            }
-            j = k;
-            is_float = true;
-        }
+    fn str(&mut self, s: String) -> usize {
+        self.add(Node::Str(py_str(&s)))
     }
-    let lit: String = s[start..j].iter().collect();
-    *i = j;
-    if is_float {
-        // float(): correctly rounded, and inf past the largest double --
-        // as Rust's parser is.
-        return lit.parse::<f64>().map(Node::Float).map_err(|_| JsonError::Value);
+    fn wstr(&mut self, units: Vec<u32>) -> usize {
+        self.add(Node::Str(units))
     }
-    let digits = lit.trim_start_matches('-');
-    if digits.len() > INT_MAX_STR_DIGITS {
-        return Err(JsonError::Value);
+    fn key(&mut self, s: String) -> PyStr {
+        py_str(&s)
     }
-    // int("-0") is 0.
-    Ok(Node::Int(if digits == "0" { "0".to_owned() } else { lit }))
+    fn wkey(&mut self, units: Vec<u32>) -> PyStr {
+        units
+    }
+    fn list(&mut self, items: Vec<usize>) -> usize {
+        self.add(Node::Arr(items))
+    }
+    fn dict(&mut self, pairs: Vec<(PyStr, usize)>) -> usize {
+        // A repeated key keeps its place and takes the last value.
+        self.add(Node::Obj(crate::util::pyjson::dict_pairs(pairs)))
+    }
 }
 
 /// `_load()`: the file as a dict; anything unreadable or not a dict is `{}`.

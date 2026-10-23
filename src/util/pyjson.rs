@@ -6,16 +6,17 @@
 //! size (`-0` is the int 0), a `\uXXXX` escape that leaves a lone surrogate
 //! in a str, and nesting far deeper than serde's 128 levels. Real files hold
 //! none of that, so every document is first read by serde_json, straight
-//! into the caller's value type ([`Build`]); only a document serde refuses,
-//! or holds a number serde would read differently, is read again by the
-//! scanner below, which follows CPython's C scanner. One parse for the
-//! common case, and Python's answer for the rest.
+//! into the caller's value type ([`Build`], or a [`Sink`] that keeps state,
+//! such as an arena); only a document serde refuses, or holds a number serde
+//! would read differently, is read again by the scanner below, which follows
+//! CPython's C scanner. One parse for the common case, and Python's answer
+//! for the rest.
 //!
 //! The scanner is iterative, so a document nested tens of thousands deep
 //! (Python's own limit is its C stack) needs no big stack; the serde pass
 //! recurses at most 128 levels before it gives up.
 
-use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::marker::PhantomData;
 
 /// A JSON number as `json.loads` reads it.
@@ -34,7 +35,7 @@ pub enum Num<'a> {
 /// A caller's value type, built from the parse. Containers come with their
 /// children already built; a dict's pairs come in file order, a repeated key
 /// included -- deduplicating (Python's dict keeps a key's first place and its
-/// last value) is the builder's to do.
+/// last value) is the builder's to do ([`dict_pairs`]).
 pub trait Build: Sized {
     type Key;
     /// Ints as Python reads them: `-0` is the int 0, and an int past 64
@@ -53,6 +54,62 @@ pub trait Build: Sized {
     fn wkey(units: Vec<u32>) -> Self::Key;
     fn list(items: Vec<Self>) -> Self;
     fn dict(pairs: Vec<(Self::Key, Self)>) -> Self;
+}
+
+/// [`Build`] with state: what [`loads_into`] fills, e.g. an arena whose
+/// values are indices. Children come before their container, as there.
+pub trait Sink {
+    type Value;
+    type Key;
+    /// As [`Build::EXACT_INTS`].
+    const EXACT_INTS: bool = true;
+    /// Forget what a failed serde pass built, before the scanner starts.
+    fn reset(&mut self) {}
+    fn null(&mut self) -> Self::Value;
+    fn bool(&mut self, b: bool) -> Self::Value;
+    fn num(&mut self, n: Num<'_>) -> Self::Value;
+    fn str(&mut self, s: String) -> Self::Value;
+    fn wstr(&mut self, units: Vec<u32>) -> Self::Value;
+    fn key(&mut self, s: String) -> Self::Key;
+    fn wkey(&mut self, units: Vec<u32>) -> Self::Key;
+    fn list(&mut self, items: Vec<Self::Value>) -> Self::Value;
+    fn dict(&mut self, pairs: Vec<(Self::Key, Self::Value)>) -> Self::Value;
+}
+
+/// A [`Build`] type as a [`Sink`].
+struct Tree<T>(PhantomData<T>);
+
+impl<T: Build> Sink for Tree<T> {
+    type Value = T;
+    type Key = T::Key;
+    const EXACT_INTS: bool = T::EXACT_INTS;
+    fn null(&mut self) -> T {
+        T::null()
+    }
+    fn bool(&mut self, b: bool) -> T {
+        T::bool(b)
+    }
+    fn num(&mut self, n: Num<'_>) -> T {
+        T::num(n)
+    }
+    fn str(&mut self, s: String) -> T {
+        T::str(s)
+    }
+    fn wstr(&mut self, units: Vec<u32>) -> T {
+        T::wstr(units)
+    }
+    fn key(&mut self, s: String) -> T::Key {
+        T::key(s)
+    }
+    fn wkey(&mut self, units: Vec<u32>) -> T::Key {
+        T::wkey(units)
+    }
+    fn list(&mut self, items: Vec<T>) -> T {
+        T::list(items)
+    }
+    fn dict(&mut self, pairs: Vec<(T::Key, T)>) -> T {
+        T::dict(pairs)
+    }
 }
 
 /// How deep a document may nest. A value at level `n` (the top-level value
@@ -90,13 +147,20 @@ pub enum Error {
 
 /// `json.loads(text)` into `T`, nesting no deeper than `limit`.
 pub fn loads<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
+    loads_into(text, limit, &mut Tree(PhantomData))
+}
+
+/// `json.loads(text)` into `sink`, nesting no deeper than `limit`.
+pub fn loads_into<S: Sink>(text: &str, limit: Limit, sink: &mut S) -> Result<S::Value, Error> {
     // serde nests 127 containers at most, so it takes nothing a limit at
     // least that deep refuses.
-    let serde_fits = limit.depth >= SERDE_DEPTH + usize::from(limit.scalars);
-    match serde_fits.then(|| fast(text)).flatten() {
-        Some(v) => Ok(v),
-        None => scan(text, limit),
+    if limit.depth >= SERDE_DEPTH + usize::from(limit.scalars) {
+        if let Some(v) = fast(text, sink) {
+            return Ok(v);
+        }
+        sink.reset();
     }
+    scan(text, limit, sink)
 }
 
 /// `dict(pairs)`, for a [`Build::dict`] that keeps pairs: a repeated key
@@ -130,86 +194,88 @@ pub fn dict_pairs<K: Eq + std::hash::Hash + Clone, V>(pairs: Vec<(K, V)>) -> Vec
 pub const SERDE_DEPTH: usize = 127;
 
 /// serde_json's parse, or None where it fails or would differ from Python's.
-fn fast<T: Build>(text: &str) -> Option<T> {
+fn fast<S: Sink>(text: &str, sink: &mut S) -> Option<S::Value> {
     let mut de = serde_json::Deserializer::from_str(text);
-    let Fast(v) = Fast::<T>::deserialize(&mut de).ok()?;
+    let v = Fast(sink).deserialize(&mut de).ok()?;
     de.end().ok()?;
     Some(v)
 }
 
-struct Fast<T>(T);
+/// One value of the serde pass, built into the sink.
+struct Fast<'s, S>(&'s mut S);
 
-impl<'de, T: Build> Deserialize<'de> for Fast<T> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(FastVisitor(PhantomData))
+impl<'de, S: Sink> DeserializeSeed<'de> for Fast<'_, S> {
+    type Value = S::Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<S::Value, D::Error> {
+        d.deserialize_any(self)
     }
 }
-
-struct FastVisitor<T>(PhantomData<T>);
 
 /// 2**63: serde_json reads an int at least this far from zero that does not
 /// fit its integer types as a float.
 const TWO_63: f64 = 9_223_372_036_854_775_808.0;
 
-impl<'de, T: Build> Visitor<'de> for FastVisitor<T> {
-    type Value = Fast<T>;
+impl<'de, S: Sink> Visitor<'de> for Fast<'_, S> {
+    type Value = S::Value;
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("a JSON value")
     }
 
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(Fast(T::null()))
+    fn visit_unit<E>(self) -> Result<S::Value, E> {
+        Ok(self.0.null())
     }
 
-    fn visit_bool<E>(self, b: bool) -> Result<Self::Value, E> {
-        Ok(Fast(T::bool(b)))
+    fn visit_bool<E>(self, b: bool) -> Result<S::Value, E> {
+        Ok(self.0.bool(b))
     }
 
-    fn visit_i64<E>(self, n: i64) -> Result<Self::Value, E> {
-        Ok(Fast(T::num(Num::Int(n))))
+    fn visit_i64<E>(self, n: i64) -> Result<S::Value, E> {
+        Ok(self.0.num(Num::Int(n)))
     }
 
-    fn visit_u64<E>(self, n: u64) -> Result<Self::Value, E> {
-        Ok(Fast(T::num(match i64::try_from(n) {
+    fn visit_u64<E>(self, n: u64) -> Result<S::Value, E> {
+        Ok(self.0.num(match i64::try_from(n) {
             Ok(i) => Num::Int(i),
             Err(_) => Num::UInt(n),
-        })))
+        }))
     }
 
-    fn visit_f64<E: serde::de::Error>(self, f: f64) -> Result<Self::Value, E> {
+    fn visit_f64<E: serde::de::Error>(self, f: f64) -> Result<S::Value, E> {
         // serde_json reads `-0`, and an int too long for 64 bits, as a
         // float; so is `-0.0` or `1e19`, and only the text tells them
         // apart. Python's int is no float: the scanner decides.
-        if T::EXACT_INTS && f.fract() == 0.0 && (f.abs() >= TWO_63 || (f == 0.0 && f.is_sign_negative())) {
+        if S::EXACT_INTS && f.fract() == 0.0 && (f.abs() >= TWO_63 || (f == 0.0 && f.is_sign_negative())) {
             return Err(E::custom("an integral float: maybe an int"));
         }
-        Ok(Fast(T::num(Num::Float(f))))
+        Ok(self.0.num(Num::Float(f)))
     }
 
-    fn visit_str<E>(self, s: &str) -> Result<Self::Value, E> {
-        Ok(Fast(T::str(s.to_owned())))
+    fn visit_str<E>(self, s: &str) -> Result<S::Value, E> {
+        Ok(self.0.str(s.to_owned()))
     }
 
-    fn visit_string<E>(self, s: String) -> Result<Self::Value, E> {
-        Ok(Fast(T::str(s)))
+    fn visit_string<E>(self, s: String) -> Result<S::Value, E> {
+        Ok(self.0.str(s))
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<S::Value, A::Error> {
         let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-        while let Some(Fast(x)) = seq.next_element()? {
+        while let Some(x) = seq.next_element_seed(Fast(&mut *self.0))? {
             items.push(x);
         }
-        Ok(Fast(T::list(items)))
+        Ok(self.0.list(items))
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<S::Value, A::Error> {
         let mut pairs = Vec::with_capacity(map.size_hint().unwrap_or(0));
         while let Some(k) = map.next_key::<String>()? {
-            let Fast(v) = map.next_value()?;
-            pairs.push((T::key(k), v));
+            let k = self.0.key(k);
+            let v = map.next_value_seed(Fast(&mut *self.0))?;
+            pairs.push((k, v));
         }
-        Ok(Fast(T::dict(pairs)))
+        Ok(self.0.dict(pairs))
     }
 }
 
@@ -347,18 +413,18 @@ impl Scan<'_> {
     }
 
     /// A number or a constant at `*i`.
-    fn scalar<T: Build>(&self, i: &mut usize) -> Result<T, Error> {
+    fn scalar<S: Sink>(&self, i: &mut usize, sink: &mut S) -> Result<S::Value, Error> {
         let at = *i;
         for (word, v) in [("null", 0), ("true", 1), ("false", 2), ("NaN", 3), ("Infinity", 4), ("-Infinity", 5)] {
             if self.at(at, word) {
                 *i = at + word.len();
                 return Ok(match v {
-                    0 => T::null(),
-                    1 => T::bool(true),
-                    2 => T::bool(false),
-                    3 => T::num(Num::Float(f64::NAN)),
-                    4 => T::num(Num::Float(f64::INFINITY)),
-                    _ => T::num(Num::Float(f64::NEG_INFINITY)),
+                    0 => sink.null(),
+                    1 => sink.bool(true),
+                    2 => sink.bool(false),
+                    3 => sink.num(Num::Float(f64::NAN)),
+                    4 => sink.num(Num::Float(f64::INFINITY)),
+                    _ => sink.num(Num::Float(f64::NEG_INFINITY)),
                 });
             }
         }
@@ -403,7 +469,7 @@ impl Scan<'_> {
         let tok = &self.text[at..k];
         if is_float {
             // float(): correctly rounded, overflowing to inf.
-            return Ok(T::num(Num::Float(tok.parse().unwrap_or(f64::NAN))));
+            return Ok(sink.num(Num::Float(tok.parse().unwrap_or(f64::NAN))));
         }
         let digits = tok.trim_start_matches('-').len();
         if digits > INT_MAX_STR_DIGITS {
@@ -411,30 +477,24 @@ impl Scan<'_> {
                 "Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
             )));
         }
-        if !T::EXACT_INTS {
-            // As serde_json reads it.
-            if tok == "-0" {
-                return Ok(T::num(Num::Float(-0.0)));
-            }
-            if let Ok(n) = tok.parse::<i64>() {
-                return Ok(T::num(Num::Int(n)));
-            }
-            if let Ok(n) = tok.parse::<u64>() {
-                return Ok(T::num(Num::UInt(n)));
-            }
-            return Ok(T::num(Num::Float(tok.parse().unwrap_or(f64::NAN))));
-        }
-        Ok(T::num(if let Ok(n) = tok.parse::<i64>() {
+        let n = if let Ok(n) = tok.parse::<i64>() {
             Num::Int(n)
         } else if let Ok(n) = tok.parse::<u64>() {
             Num::UInt(n)
-        } else {
+        } else if S::EXACT_INTS {
             Num::Big(tok)
-        }))
+        } else {
+            // As serde_json reads it.
+            Num::Float(tok.parse().unwrap_or(f64::NAN))
+        };
+        if !S::EXACT_INTS && tok == "-0" {
+            return Ok(sink.num(Num::Float(-0.0)));
+        }
+        Ok(sink.num(n))
     }
 
     /// `"key"` and its `:` from `*i`; leaves `*i` at the value.
-    fn key<T: Build>(&self, i: &mut usize) -> Result<T::Key, Error> {
+    fn key<S: Sink>(&self, i: &mut usize, sink: &mut S) -> Result<S::Key, Error> {
         if self.b.get(*i) != Some(&b'"') {
             return self.err("Expecting property name enclosed in double quotes", *i);
         }
@@ -445,27 +505,27 @@ impl Scan<'_> {
         }
         *i = self.ws(at + 1);
         Ok(match k {
-            Text::Plain(s) => T::key(s),
-            Text::Wide(w) => T::wkey(w),
+            Text::Plain(s) => sink.key(s),
+            Text::Wide(w) => sink.wkey(w),
         })
     }
 }
 
 /// A container being filled.
-enum Frame<T: Build> {
-    List(Vec<T>),
+enum Frame<S: Sink> {
+    List(Vec<S::Value>),
     /// The pairs so far, and the key whose value is being read.
-    Dict(Vec<(T::Key, T)>, Option<T::Key>),
+    Dict(Vec<(S::Key, S::Value)>, Option<S::Key>),
 }
 
 /// CPython's C scanner, without recursion.
-fn scan<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
+fn scan<S: Sink>(text: &str, limit: Limit, sink: &mut S) -> Result<S::Value, Error> {
     let p = Scan { text, b: text.as_bytes() };
     if text.starts_with('\u{feff}') {
         return p.err("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
     }
     let n = p.b.len();
-    let mut stack: Vec<Frame<T>> = Vec::new();
+    let mut stack: Vec<Frame<S>> = Vec::new();
     let mut i = p.ws(0);
     loop {
         // One value at i, or a container opened and its first item next.
@@ -474,21 +534,21 @@ fn scan<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
         if stack.len() + 1 > limit.depth && (is_open || limit.scalars) {
             return Err(Error::Recursion(c == Some(b'{')));
         }
-        let mut v: T = match c {
+        let mut v = match c {
             None => return p.err("Expecting value", i),
             Some(b'"') => {
                 let (s, end) = p.string(i)?;
                 i = end;
                 match s {
-                    Text::Plain(s) => T::str(s),
-                    Text::Wide(w) => T::wstr(w),
+                    Text::Plain(s) => sink.str(s),
+                    Text::Wide(w) => sink.wstr(w),
                 }
             }
             Some(b'[') => {
                 i = p.ws(i + 1);
                 if p.b.get(i) == Some(&b']') {
                     i += 1;
-                    T::list(Vec::new())
+                    sink.list(Vec::new())
                 } else {
                     stack.push(Frame::List(Vec::new()));
                     continue;
@@ -498,14 +558,14 @@ fn scan<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
                 i = p.ws(i + 1);
                 if p.b.get(i) == Some(&b'}') {
                     i += 1;
-                    T::dict(Vec::new())
+                    sink.dict(Vec::new())
                 } else {
-                    let k = p.key::<T>(&mut i)?;
+                    let k = p.key(&mut i, sink)?;
                     stack.push(Frame::Dict(Vec::new(), Some(k)));
                     continue;
                 }
             }
-            Some(_) => p.scalar(&mut i)?,
+            Some(_) => p.scalar(&mut i, sink)?,
         };
         // Hand the value to its container, closing every container that
         // ends here.
@@ -525,12 +585,13 @@ fn scan<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
                         Some(b']') => {
                             i += 1;
                             let Some(Frame::List(items)) = stack.pop() else { unreachable!("the top frame is a list") };
-                            v = T::list(items);
+                            v = sink.list(items);
                         }
                         Some(b',') => {
+                            let comma = i;
                             i = p.ws(i + 1);
                             if p.b.get(i) == Some(&b']') {
-                                return p.err("Illegal trailing comma before end of array", i);
+                                return p.err("Illegal trailing comma before end of array", comma);
                             }
                             break;
                         }
@@ -546,14 +607,15 @@ fn scan<T: Build>(text: &str, limit: Limit) -> Result<T, Error> {
                         Some(b'}') => {
                             i += 1;
                             let Some(Frame::Dict(pairs, _)) = stack.pop() else { unreachable!("the top frame is a dict") };
-                            v = T::dict(pairs);
+                            v = sink.dict(pairs);
                         }
                         Some(b',') => {
+                            let comma = i;
                             i = p.ws(i + 1);
                             if p.b.get(i) == Some(&b'}') {
-                                return p.err("Illegal trailing comma before end of object", i);
+                                return p.err("Illegal trailing comma before end of object", comma);
                             }
-                            *key = Some(p.key::<T>(&mut i)?);
+                            *key = Some(p.key(&mut i, sink)?);
                             break;
                         }
                         _ => return p.err("Expecting ',' delimiter", i),
@@ -658,9 +720,17 @@ mod tests {
 
     const BIG: Limit = Limit::containers(100_000);
 
+    fn fast_v(text: &str) -> Option<V> {
+        fast(text, &mut Tree(PhantomData))
+    }
+
+    fn scan_v(text: &str, limit: Limit) -> Result<V, Error> {
+        scan(text, limit, &mut Tree(PhantomData))
+    }
+
     fn both(text: &str) -> V {
-        let slow = scan::<V>(text, BIG).unwrap();
-        if let Some(f) = fast::<V>(text) {
+        let slow = scan_v(text, BIG).unwrap();
+        if let Some(f) = fast_v(text) {
             assert_eq!(f, slow, "{text}");
         }
         slow
@@ -675,7 +745,7 @@ mod tests {
             "\"top\"",
             "123",
         ] {
-            assert!(fast::<V>(t).is_some(), "{t}");
+            assert!(fast_v(t).is_some(), "{t}");
             both(t);
         }
     }
@@ -692,7 +762,7 @@ mod tests {
         assert_eq!(both(r#""\ud83d\ude00\ud83d""#), V::WStr(vec![0x1f600, 0xd83d]));
         assert_eq!(both(r#"{"\ud800": 1, "k": 2, "k": 3}"#), V::Dict(vec![(Err(vec![0xd800]), V::Int(1)), (Ok("k".into()), V::Int(2)), (Ok("k".into()), V::Int(3))]));
         assert_eq!(both(&format!("-{}", "1".repeat(4300))), V::Big(format!("-{}", "1".repeat(4300))));
-        assert!(matches!(scan::<V>(&"1".repeat(4301), BIG), Err(Error::Value(m)) if m.contains("4301 digits")));
+        assert!(matches!(scan_v(&"1".repeat(4301), BIG), Err(Error::Value(m)) if m.contains("4301 digits")));
     }
 
     #[test]
@@ -708,13 +778,13 @@ mod tests {
 
     #[test]
     fn refuses_what_python_refuses() {
-        let err = |t: &str| match scan::<V>(t, BIG) {
+        let err = |t: &str| match scan_v(t, BIG) {
             Err(Error::Value(m)) => m,
             other => panic!("{t}: {other:?}"),
         };
         assert_eq!(err(""), "Expecting value: line 1 column 1 (char 0)");
-        assert_eq!(err("[1,]"), "Illegal trailing comma before end of array: line 1 column 4 (char 3)");
-        assert_eq!(err("{\"a\": 1,}"), "Illegal trailing comma before end of object: line 1 column 9 (char 8)");
+        assert_eq!(err("[1,]"), "Illegal trailing comma before end of array: line 1 column 3 (char 2)");
+        assert_eq!(err("{\"a\": 1,}"), "Illegal trailing comma before end of object: line 1 column 8 (char 7)");
         assert_eq!(err("{\"a\" 1}"), "Expecting ':' delimiter: line 1 column 6 (char 5)");
         assert_eq!(err("{1: 1}"), "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)");
         assert_eq!(err("[1 2]"), "Expecting ',' delimiter: line 1 column 4 (char 3)");
@@ -743,8 +813,8 @@ mod tests {
                 .stack_size(256 << 10)
                 .spawn_scoped(s, || {
                     let lim = Limit::containers(60_000);
-                    assert!(fast::<V>(&deep(SERDE_DEPTH, "1")).is_some());
-                    assert!(fast::<V>(&deep(SERDE_DEPTH + 1, "1")).is_none());
+                    assert!(fast_v(&deep(SERDE_DEPTH, "1")).is_some());
+                    assert!(fast_v(&deep(SERDE_DEPTH + 1, "1")).is_none());
                     assert_eq!(ok(loads(&deep(60_000, ""), lim)), Ok(()));
                     assert_eq!(ok(loads(&deep(60_001, ""), lim)), Err(Error::Recursion(false)));
                     let mixed = format!("[{}]", deep(5, "{\"a\": {}}"));
