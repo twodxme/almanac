@@ -1965,16 +1965,14 @@ fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let (prog, args) = argv.split_first()?;
-    let mut child = Command::new(prog)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::util::spawn_group(
+        Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()),
+    )
+    .ok()?;
     // The pipes are read on their own threads, and the deadline covers the
     // reading too, as `communicate(timeout=...)` does: a grandchild that
     // keeps stdout open past it means a timeout, not a wait for it to close.
+    // A timeout kills the child's whole process group, so the readers end.
     let read = |pipe: Option<Box<dyn Read + Send>>| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1994,8 +1992,7 @@ fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 return None;
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
@@ -2003,8 +2000,10 @@ fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
         }
     }
     let left = || deadline.saturating_duration_since(std::time::Instant::now());
-    let out = out_rx.recv_timeout(left()).ok()?;
-    let err = err_rx.recv_timeout(left()).ok()?;
+    let (Ok(out), Ok(err)) = (out_rx.recv_timeout(left()), err_rx.recv_timeout(left())) else {
+        crate::util::kill_group(&mut child);
+        return None;
+    };
     let out = String::from_utf8(out).ok()?;
     String::from_utf8(err).ok()?;
     Some(out.replace("\r\n", "\n").replace('\r', "\n"))

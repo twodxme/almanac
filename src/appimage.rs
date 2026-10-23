@@ -632,8 +632,8 @@ fn fnmatch_translate(pat: &str) -> String {
 ///
 /// `communicate(timeout=...)` bounds the whole exchange: the child's exit
 /// *and* the end of its output. A helper the child leaves running that
-/// keeps the pipes open runs the clock out too; the child is then killed
-/// and reaped, and the readers are left to finish on their own.
+/// keeps the pipes open runs the clock out too; the child's whole process
+/// group is then killed and the child reaped, so the readers end.
 fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -> Option<Vec<u8>> {
     use std::process::{Command, Stdio};
     let (prog, args) = argv.split_first()?;
@@ -642,7 +642,7 @@ fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let mut child = cmd.spawn().ok()?;
+    let mut child = crate::util::spawn_group(&mut cmd).ok()?;
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();
     let out_t = std::thread::spawn(move || {
@@ -672,8 +672,7 @@ fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -
             break;
         }
         if start.elapsed() >= Duration::from_secs(timeout_secs) {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             return None;
         }
         std::thread::sleep(Duration::from_millis(10));

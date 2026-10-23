@@ -328,15 +328,12 @@ fn run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     use std::sync::mpsc;
     let (prog, args) = cmd.split_first()?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let mut child = Command::new(prog)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child =
+        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
     // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it. A thread still reading when the
-    // time is up is left to finish on its own (when the last writer exits).
+    // blocks forever while we wait on it. When the time is up the child's
+    // whole process group is killed, so a reader blocked on a pipe that a
+    // grandchild held open ends too.
     let drain = |p: Option<Box<dyn Read + Send>>| {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -354,8 +351,7 @@ fn run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 return None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
@@ -363,8 +359,10 @@ fn run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
         }
     }
     let left = || deadline.saturating_duration_since(Instant::now());
-    let stdout = out_rx.recv_timeout(left()).ok()?;
-    let stderr = err_rx.recv_timeout(left()).ok()?;
+    let (Ok(stdout), Ok(stderr)) = (out_rx.recv_timeout(left()), err_rx.recv_timeout(left())) else {
+        crate::util::kill_group(&mut child);
+        return None;
+    };
     Some((stdout, stderr))
 }
 

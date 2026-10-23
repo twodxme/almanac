@@ -1447,10 +1447,11 @@ fn py_decode(bytes: &[u8]) -> Result<String, RunError> {
 ///
 /// Built here rather than on `util::run`, which decodes lossily and keeps
 /// "\r": text mode raises on bytes that are not UTF-8 and translates
-/// newlines. The timeout behaves as Python's does: on expiry the child is
-/// killed and reaped and the call gives up at once, without waiting for a
-/// grandchild that still holds the pipes open. stdin is inherited, as
-/// subprocess.run leaves it.
+/// newlines. The timeout behaves as Python's does: on expiry the call gives
+/// up at once, without waiting for a grandchild that still holds the pipes
+/// open; the child's whole process group is killed (Python kills only the
+/// child) and the child reaped, so that grandchild and the reader threads
+/// end too. stdin is inherited, as subprocess.run leaves it.
 fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64) -> Result<RunResult, RunError> {
     use std::io::Read;
     use std::os::unix::ffi::OsStrExt;
@@ -1461,11 +1462,7 @@ fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64) -> Result<
         return Err(RunError::Nul);
     }
     let Some((prog, args)) = cmd.split_first() else { return Err(RunError::Os) };
-    let mut child = Command::new(prog)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut child = crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()))
         .map_err(|_| RunError::Os)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
@@ -1485,8 +1482,7 @@ fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64) -> Result<
     }
     drop(tx);
     let give_up = |child: &mut std::process::Child| {
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(child);
         RunError::Timeout
     };
     let (mut out, mut err) = (None, None);

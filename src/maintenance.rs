@@ -744,12 +744,8 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     use std::process::{Command, Stdio};
     let (prog, args) = cmd.split_first()?;
     // stdin is inherited, as subprocess.run leaves it.
-    let mut child = Command::new(prog)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child =
+        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
     // Each pipe is read to its end on a thread that reports when done.
     let drain = |p: Option<Box<dyn Read + Send>>| {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -766,8 +762,9 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     // communicate(timeout=...): the limit covers reading the output too, so a
     // grandchild that keeps a pipe open after the child exits does not hold
-    // this up past it. On timeout the child is killed and waited for (not
-    // the grandchild), and the reader threads are left to finish on their own.
+    // this up past it. On timeout the child's whole process group is killed
+    // and the child reaped, so a grandchild holding a pipe dies with it and
+    // the reader threads end.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
     let (mut out, mut err): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
     let mut exited = false;
@@ -789,8 +786,7 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
             break;
         }
         if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));

@@ -1757,20 +1757,21 @@ fn py_access_check(name: &Path) -> bool {
 /// `communicate(timeout=10)` does: a child that exits but leaves something
 /// holding its stdout (a background job) times out too.
 fn omarchy_theme_current() -> Result<Option<(Option<i32>, String)>, String> {
-    let mut child = match Command::new("omarchy")
-        .args(["theme", "current"])
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let mut child = match crate::util::spawn_group(
+        Command::new("omarchy")
+            .args(["theme", "current"])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    ) {
         Ok(c) => c,
         Err(_) => return Ok(None),
     };
     let deadline = Instant::now() + Duration::from_secs(10);
     // Both pipes drained on their own threads, so a chatty child cannot fill
-    // one and block while it is waited on. A reader still blocked when time
-    // runs out is left behind; it ends when the pipe closes.
+    // one and block while it is waited on. When time runs out the child's
+    // whole process group is killed, so a reader blocked on a pipe something
+    // it started still held ends too.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1784,10 +1785,10 @@ fn omarchy_theme_current() -> Result<Option<(Option<i32>, String)>, String> {
     };
     let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    // TimeoutExpired: subprocess.run kills the child and waits for it.
+    // TimeoutExpired: subprocess.run kills the child and waits for it; the
+    // whole group goes here.
     let timed_out = |child: &mut std::process::Child| {
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(child);
         Ok(None)
     };
     let left = || deadline.saturating_duration_since(Instant::now());

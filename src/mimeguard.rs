@@ -94,17 +94,14 @@ pub fn snapshot() -> Option<BTreeMap<String, String>> {
 ///
 /// Like `communicate()`, the timeout covers reading both pipes to EOF, not
 /// just the child's exit: a descendant that keeps a pipe open past it is a
-/// timeout. On a timeout the direct child is killed and reaped, as
-/// `subprocess.run` does; what is still draining is left behind. stdin is
-/// inherited (no `stdin=` argument in the Python).
+/// timeout. On a timeout the child's whole process group is killed (not
+/// only the child, as `subprocess.run` does), so a descendant holding a
+/// pipe dies and its reader ends; the child is reaped. stdin is inherited
+/// (no `stdin=` argument in the Python).
 fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
     let (prog, args) = argv.split_first()?;
-    let mut child = Command::new(prog)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child =
+        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     // Drain both pipes on their own threads, or a chatty child fills one and
     // blocks forever while we wait on it. Each hands its bytes back at EOF.
@@ -121,10 +118,9 @@ fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, 
     };
     let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let timed_out = |child: &mut std::process::Child| {
-        let _ = child.kill();
-        let _ = child.wait();
-    };
+    // The child's whole process group, so whatever still holds a pipe dies
+    // and its reader ends.
+    let timed_out = crate::util::kill_group;
     let recv = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| {
         let left = deadline.saturating_duration_since(Instant::now());
         rx.recv_timeout(left).ok()

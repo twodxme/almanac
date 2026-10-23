@@ -59,7 +59,7 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     if let Some(dir) = opts.cwd {
         cmd.current_dir(dir);
     }
-    let mut child = match cmd.spawn() {
+    let mut child = match spawn_group(&mut cmd) {
         Ok(c) => c,
         Err(_) => return Output { failed_to_start: true, ..Default::default() },
     };
@@ -71,44 +71,79 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     }
     // Drain both pipes on their own threads, or a chatty child fills one and
     // blocks forever while we wait on it.
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-        s
-    });
-    let err_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-        s
-    });
-    let start = Instant::now();
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut s);
+            }
+            let _ = tx.send(s);
+        });
+        rx
+    };
+    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = opts.timeout.map(|t| Instant::now() + t);
     let mut timed_out = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
-                if let Some(t) = opts.timeout {
-                    if start.elapsed() >= t {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        timed_out = true;
-                        break None;
-                    }
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    kill_group(&mut child);
+                    timed_out = true;
+                    break None;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(_) => break None,
         }
     };
-    let stdout = String::from_utf8_lossy(&out_t.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&err_t.join().unwrap_or_default()).into_owned();
-    Output { code: status.and_then(|s| s.code()), stdout, stderr, timed_out, failed_to_start: false }
+    // The deadline covers the output too: something the child left running
+    // that still holds a pipe is a timeout, and its group goes with it.
+    // Past the deadline the readers get a moment to finish after the kill,
+    // then are left behind (a descendant that escaped the group, by setsid,
+    // may hold the pipe for as long as it lives).
+    let mut recv = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| -> Vec<u8> {
+        let left = match deadline {
+            None => return rx.recv().unwrap_or_default(),
+            Some(d) => d.saturating_duration_since(Instant::now()),
+        };
+        if let Ok(v) = rx.recv_timeout(left) {
+            return v;
+        }
+        if !timed_out {
+            kill_group(&mut child);
+            timed_out = true;
+        }
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default()
+    };
+    let stdout = String::from_utf8_lossy(&recv(&out_rx)).into_owned();
+    let stderr = String::from_utf8_lossy(&recv(&err_rx)).into_owned();
+    let code = if timed_out { None } else { status.and_then(|s| s.code()) };
+    Output { code, stdout, stderr, timed_out, failed_to_start: false }
+}
+
+/// Start `cmd` as the leader of a process group of its own, so that a
+/// timeout can stop everything it started ([`kill_group`]), not only the
+/// direct child: a grandchild left holding the output pipe would otherwise
+/// keep the reader waiting, and itself running, after the child is gone.
+pub fn spawn_group(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0).spawn()
+}
+
+/// Kill the whole process group of a child started with [`spawn_group`],
+/// then reap the child. Safe on a child that has already exited: the group
+/// lives on for as long as anything in it does, and is gone (ESRCH,
+/// ignored) once nothing is.
+pub fn kill_group(child: &mut std::process::Child) {
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// `shutil.which(name)`.
@@ -774,6 +809,27 @@ mod tests {
         let slow = run(&["sleep", "5"], 1);
         assert!(slow.timed_out);
         assert!(run(&["/nonexistent-binary"], 1).failed_to_start);
+    }
+
+    /// A timeout stops what the child started too: a grandchild holding the
+    /// pipe used to keep `run` (and itself) going long past the deadline.
+    #[test]
+    fn a_timeout_kills_the_whole_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("survived");
+        let script = format!("(sleep 3; touch '{}') & sleep 30", mark.display());
+        let started = Instant::now();
+        let out = run(&["sh", "-c", &script], 1);
+        assert!(out.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        std::thread::sleep(Duration::from_millis(3500));
+        assert!(!mark.exists(), "the grandchild outlived the timeout");
+
+        // The child exits at once; what it left behind holds stdout open.
+        let started = Instant::now();
+        let out = run(&["sh", "-c", "sleep 30 & echo hi"], 1);
+        assert!(out.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
     }
 
     #[test]
