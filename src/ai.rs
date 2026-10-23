@@ -86,9 +86,9 @@ pub fn mcp_cache() -> PathBuf {
 
 /// `claude mcp list` opens a connection to every configured server, so its cost
 /// scales with how many are set up and how far away they are -- 13 to 22
-/// seconds here. Short enough to still catch a server going down, long enough
-/// that moving between pages does not re-run it.
-pub const MCP_TTL: u64 = 300;
+/// seconds here, and it starts stdio servers (npx, uvx) to do it. It runs
+/// only when asked for; its answer counts as current for this long.
+pub const MCP_TTL: u64 = 12 * 3600;
 
 pub const HARNESS: &str = "harness";
 pub const MCP: &str = "mcp";
@@ -1080,9 +1080,10 @@ fn entry_from_row(row: &Value) -> Option<Entry> {
     Some(e)
 }
 
-/// The fresh rows of the `claude mcp list` cache. Ok(None) is a miss (Python's
-/// caught OSError/ValueError/TypeError); Err is what Python lets escape.
-fn mcp_cached() -> Result<Option<Vec<Entry>>, String> {
+/// The rows of the last `claude mcp list`, with when it ran, at any age.
+/// Ok(None) is a miss (Python's caught OSError/ValueError/TypeError); Err is
+/// what Python lets escape.
+fn mcp_cached() -> Result<Option<(f64, Vec<Entry>)>, String> {
     let Ok(text) = std::fs::read_to_string(mcp_cache()) else {
         return Ok(None);
     };
@@ -1100,31 +1101,184 @@ fn mcp_cached() -> Result<Option<Vec<Entry>>, String> {
         Some(v) if special_float(v).is_some() => special_float(v).unwrap_or(0.0),
         Some(_) => return Ok(None),
     };
-    if !(util::now() - at < MCP_TTL as f64) {
-        return Ok(None);
-    }
-    Ok(match obj.get("rows") {
+    let rows = match obj.get("rows") {
         None => Some(Vec::new()),
         Some(Value::Array(rows)) => rows.iter().map(entry_from_row).collect(),
         Some(Value::String(s)) if s.is_empty() => Some(Vec::new()),
         Some(Value::Object(o)) if o.is_empty() => Some(Vec::new()),
         Some(_) => None,
-    })
+    };
+    Ok(rows.map(|rows| (at, rows)))
 }
 
-/// What `claude mcp list` reports, including its health check.
+/// `secs` ago, the way a status line says it.
+fn ago(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    let (n, unit) = if secs < 3600.0 * 48.0 {
+        ((secs / 3600.0).floor().max(1.0) as u64, "hour")
+    } else {
+        ((secs / 86400.0).floor() as u64, "day")
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// The MCP servers, without starting any of them.
 ///
-/// Parsed from the CLI rather than from ~/.claude.json because the connectors
-/// enabled through claude.ai never appear in that file -- reading the file
-/// would report zero servers on a machine with twenty.
+/// Health comes from the last `claude mcp list` (see `mcp_check`), which
+/// starts every configured server to ask it -- npx and uvx installs
+/// included, 20 seconds and more -- so it runs only when asked for. Within
+/// `MCP_TTL` its rows are shown as they were; past it, the same rows with
+/// their status dated, since a status that old is a guess. With no check on
+/// record, the servers configured in the files `claude` reads, marked as not
+/// checked: those files hold no claude.ai connectors, which the first check
+/// adds.
 pub fn mcp_servers() -> Result<Vec<Entry>, String> {
     if which("claude").is_none() {
         return Ok(Vec::new());
     }
-    if let Some(rows) = mcp_cached()? {
-        return Ok(rows);
+    Ok(match mcp_cached()? {
+        Some((at, rows)) => mcp_as_checked(at, rows, util::now()),
+        None => mcp_configured(),
+    })
+}
+
+/// The rows of a check made at `at`, as of `now`: as they were within
+/// `MCP_TTL`, each status dated past it.
+fn mcp_as_checked(at: f64, rows: Vec<Entry>, now: f64) -> Vec<Entry> {
+    if now - at < MCP_TTL as f64 {
+        return rows;
+    }
+    let when = ago(now - at);
+    rows.into_iter()
+        .map(|mut e| {
+            e.status = if e.status.is_empty() { format!("checked {when}") } else { format!("{} · checked {when}", e.status) };
+            e
+        })
+        .collect()
+}
+
+/// The `mcpServers` object of a JSON file, or of a value within one.
+fn mcp_servers_in(v: Option<&Value>) -> Vec<(String, Map<String, Value>)> {
+    let Some(Value::Object(servers)) = v else {
+        return Vec::new();
+    };
+    servers
+        .iter()
+        .filter_map(|(name, cfg)| cfg.as_object().map(|c| (name.clone(), c.clone())))
+        .collect()
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    py_loads(&std::fs::read_to_string(path).ok()?).ok().flatten()
+}
+
+/// The servers configured in the files `claude mcp list` reads, in its
+/// order: user scope and this directory's local scope (~/.claude.json), the
+/// project's `.mcp.json`, then each enabled plugin's (`plugin:<plugin>:<name>`).
+/// A server at the same address as one already listed is left out, as the
+/// CLI leaves it out. Nothing is started; the plugin list is the CLI's own,
+/// which reads files and returns in well under a second.
+fn mcp_configured() -> Vec<Entry> {
+    let cwd = std::env::current_dir().ok();
+    let user = read_json(&home().join(".claude.json"));
+    let project = cwd.as_ref().and_then(|d| read_json(&d.join(".mcp.json")));
+    let plugins = run(&["claude", "plugin", "list", "--json"], 60).ok().and_then(|t| py_loads(&t).ok().flatten());
+    mcp_configured_from(
+        user.as_ref(),
+        cwd.as_deref().map(path_str).as_deref(),
+        project.as_ref(),
+        plugins.as_ref(),
+        &|dir| read_json(&Path::new(dir).join(".mcp.json")),
+    )
+}
+
+/// `mcp_configured` from what it read: ~/.claude.json, the working
+/// directory, its .mcp.json, `claude plugin list --json`, and a plugin
+/// directory's .mcp.json.
+fn mcp_configured_from(
+    user: Option<&Value>,
+    cwd: Option<&str>,
+    project: Option<&Value>,
+    plugins: Option<&Value>,
+    plugin_file: &dyn Fn(&str) -> Option<Value>,
+) -> Vec<Entry> {
+    let mut servers: Vec<(String, Map<String, Value>)> = Vec::new();
+    if let Some(cfg) = user {
+        servers.extend(mcp_servers_in(cfg.get("mcpServers")));
+        let local = cwd.and_then(|cwd| cfg.get("projects").and_then(|p| p.get(cwd)));
+        servers.extend(mcp_servers_in(local.and_then(|p| p.get("mcpServers"))));
+    }
+    if let Some(project) = project {
+        servers.extend(mcp_servers_in(project.get("mcpServers")));
+    }
+    for p in plugins.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+        if !p.get("enabled").map(truthy).unwrap_or(true) {
+            continue;
+        }
+        let Some(id) = p.get("id").and_then(py_s) else { continue };
+        let plugin = id.split('@').next().unwrap_or(id);
+        // Inline in plugin.json, or the plugin's own .mcp.json.
+        let mut found = mcp_servers_in(p.get("mcpServers"));
+        if found.is_empty() {
+            if let Some(file) = p.get("installPath").and_then(py_s).and_then(plugin_file) {
+                found = match file.get("mcpServers") {
+                    Some(inner) => mcp_servers_in(Some(inner)),
+                    None => mcp_servers_in(Some(&file)),
+                };
+            }
+        }
+        servers.extend(found.into_iter().map(|(name, cfg)| (format!("plugin:{plugin}:{name}"), cfg)));
     }
 
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (name, cfg) in servers {
+        let text = |k: &str| cfg.get(k).and_then(py_s).unwrap_or("").to_string();
+        let url = text("url");
+        let target = if url.is_empty() {
+            let args = cfg.get("args").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+            std::iter::once(text("command"))
+                .chain(args.iter().filter_map(py_s).map(str::to_string))
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            let kind = text("type");
+            format!("{url} ({})", if kind.is_empty() { "HTTP".to_string() } else { kind.to_uppercase() })
+        };
+        let address = if url.is_empty() { target.clone() } else { url.clone() };
+        if !address.is_empty() && !seen.insert(address) {
+            continue;
+        }
+        out.push(Entry {
+            kind: MCP.into(),
+            name,
+            detail: target,
+            status: "not checked".into(),
+            severity: "ok".into(),
+            icon_key: host(&url),
+            icon_domain: host(&url),
+            url,
+            fallback_icon: "network-server-symbolic".into(),
+            action_note: "Authentication happens inside the agent session: \
+                          run the server's authenticate tool there."
+                .into(),
+            ..Default::default()
+        });
+    }
+    out
+}
+
+/// What `claude mcp list` reports, including its health check: every
+/// server it can reach is started and asked. Only on request (the AI page's
+/// refresh); the result is kept for `mcp_servers`.
+///
+/// Parsed from the CLI rather than from ~/.claude.json because the connectors
+/// enabled through claude.ai never appear in that file -- reading the file
+/// would report zero servers on a machine with twenty.
+pub fn mcp_check() -> Result<Vec<Entry>, String> {
+    if which("claude").is_none() {
+        return Ok(Vec::new());
+    }
     let mut out = Vec::new();
     for line in py_splitlines(&run(&["claude", "mcp", "list"], 120)?) {
         let line = py_strip(line);
@@ -1581,7 +1735,16 @@ pub const GROUPS: &[(&str, &str, Loader, &str)] = &[
 
 /// (title, description, loader) for each group, in display order.
 pub fn group_specs() -> Vec<(&'static str, &'static str, Loader)> {
-    GROUPS.iter().map(|&(title, _kind, f, desc)| (title, desc, f)).collect()
+    group_specs_with(false)
+}
+
+/// `group_specs`, with the MCP group running `mcp_check` (the health check
+/// that starts every server) when `check_mcp`, instead of reading the last one.
+pub fn group_specs_with(check_mcp: bool) -> Vec<(&'static str, &'static str, Loader)> {
+    GROUPS
+        .iter()
+        .map(|&(title, kind, f, desc)| (title, desc, if check_mcp && kind == MCP { mcp_check as Loader } else { f }))
+        .collect()
 }
 
 fn error_entry(title: &str, msg: &str) -> Entry {
@@ -1701,6 +1864,60 @@ mod tests {
             cur = &a[0];
         }
         assert_eq!((d, cur.clone()), (300, Value::from(1)));
+    }
+
+    #[test]
+    fn mcp_servers_read_without_starting_them() {
+        let j = |t: &str| serde_json::from_str::<Value>(t).unwrap();
+        let user = j(r#"{"mcpServers": {"mine": {"command": "npx", "args": ["-y", "srv"]}},
+                         "projects": {"/w": {"mcpServers": {"local": {"type": "sse", "url": "https://l.example.com/sse"}}},
+                                      "/other": {"mcpServers": {"elsewhere": {"command": "x"}}}}}"#);
+        let project = j(r#"{"mcpServers": {"proj": {"type": "http", "url": "https://p.example.com/mcp"}}}"#);
+        let plugins = j(r#"[{"id": "a@m", "enabled": true, "installPath": "/plug/a"},
+                            {"id": "b@m", "enabled": true, "mcpServers": {"inline": {"command": "uvx", "args": ["b"]}}},
+                            {"id": "c@m", "enabled": false, "installPath": "/plug/c"},
+                            {"id": "d@m", "enabled": true, "installPath": "/plug/d"}]"#);
+        let files = |dir: &str| match dir {
+            // A plugin's .mcp.json, with or without the mcpServers wrapper;
+            // the second "dup" is at an address already listed.
+            "/plug/a" => Some(j(r#"{"mcpServers": {"web": {"type": "http", "url": "https://a.example.com/mcp"}}}"#)),
+            "/plug/c" => Some(j(r#"{"off": {"command": "never"}}"#)),
+            "/plug/d" => Some(j(r#"{"dup": {"type": "http", "url": "https://a.example.com/mcp"}, "own": {"url": "https://d.example.com"}}"#)),
+            _ => None,
+        };
+        let rows = mcp_configured_from(Some(&user), Some("/w"), Some(&project), Some(&plugins), &files);
+        let got: Vec<(&str, &str, &str)> = rows.iter().map(|e| (e.name.as_str(), e.detail.as_str(), e.url.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("mine", "npx -y srv", ""),
+                ("local", "https://l.example.com/sse (SSE)", "https://l.example.com/sse"),
+                ("proj", "https://p.example.com/mcp (HTTP)", "https://p.example.com/mcp"),
+                ("plugin:a:web", "https://a.example.com/mcp (HTTP)", "https://a.example.com/mcp"),
+                ("plugin:b:inline", "uvx b", ""),
+                ("plugin:d:own", "https://d.example.com (HTTP)", "https://d.example.com"),
+            ]
+        );
+        assert!(rows.iter().all(|e| e.kind == MCP && e.status == "not checked" && e.severity == "ok"));
+        assert_eq!(rows[3].icon_domain, "a.example.com");
+
+        // A check within MCP_TTL is shown as it was; past it, dated.
+        let checked = vec![Entry { kind: MCP.into(), name: "s".into(), status: "connected".into(), ..Default::default() }];
+        assert_eq!(mcp_as_checked(1000.0, checked.clone(), 1000.0 + 3600.0)[0].status, "connected");
+        let old = mcp_as_checked(1000.0, checked, 1000.0 + MCP_TTL as f64 + 3600.0);
+        assert_eq!(old[0].status, "connected · checked 13 hours ago");
+        assert_eq!(ago(3.0 * 86400.0), "3 days ago");
+        assert_eq!(ago(60.0), "1 hour ago");
+    }
+
+    #[test]
+    fn mcp_health_check_only_on_request() {
+        let mcp_loader = |check: bool| {
+            group_specs_with(check).into_iter().find(|(t, _, _)| *t == "MCP servers").map(|(_, _, f)| f as usize).unwrap()
+        };
+        assert_eq!(mcp_loader(false), mcp_servers as Loader as usize);
+        assert_eq!(mcp_loader(true), mcp_check as Loader as usize);
+        assert_eq!(group_specs().len(), group_specs_with(true).len());
     }
 
     #[test]

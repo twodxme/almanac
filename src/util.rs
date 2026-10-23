@@ -86,19 +86,13 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let deadline = opts.timeout.map(|t| Instant::now() + t);
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) => {
-                if deadline.is_some_and(|d| Instant::now() >= d) {
-                    kill_group(&mut child);
-                    timed_out = true;
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break None,
+    let status = match opts.timeout {
+        Some(t) if !exits_within(&child, t) => {
+            kill_group(&mut child);
+            timed_out = true;
+            None
         }
+        _ => child.wait().ok(),
     };
     // The deadline covers the output too: something the child left running
     // that still holds a pipe is a timeout, and its group goes with it.
@@ -144,6 +138,24 @@ pub fn kill_group(child: &mut std::process::Child) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Whether `child` exits within `timeout`, without polling: a thread blocks
+/// in `waitid` and the caller waits on a channel with `recv_timeout`.
+///
+/// The thread waits with `WNOWAIT`, so it never reaps: the child stays the
+/// caller's to kill and `wait()` for, and its pid cannot be reused while the
+/// caller still holds it. Should `waitid` itself fail, the thread reports an
+/// exit and the caller's blocking `wait()` decides.
+fn exits_within(child: &std::process::Child, timeout: Duration) -> bool {
+    use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+    let pid = Pid::from_child(child);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Err(rustix::io::Errno::INTR) = waitid(WaitId::Pid(pid), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT) {}
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(timeout).is_ok()
 }
 
 /// `shutil.which(name)`.

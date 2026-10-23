@@ -22,6 +22,13 @@ pub struct State {
     /// rebound to another app is dropped instead of painted on the wrong row.
     pub icon_claims: Vec<(glib::WeakRef<gtk::Image>, u64)>,
     pub icon_claim_seq: u64,
+    /// The page's sections, one per group, built once and refilled in
+    /// place: (title, heading, rows).
+    pub ai_sections: Vec<(String, gtk::Label, gtk::ListBox)>,
+    /// What each section shows now, (still checking, entries); None before
+    /// it is first filled. A group that lands, or a revisit, refills only
+    /// the sections whose content changed.
+    pub ai_shown: Vec<Option<(bool, Vec<Entry>)>>,
 }
 
 /// What `app_icon` shows for an app, decided without a window (the theme
@@ -41,6 +48,7 @@ pub enum IconChoice {
 #[derive(Clone)]
 pub struct Section {
     pub root: gtk::Box,
+    pub head: gtk::Label,
     pub rows: gtk::ListBox,
 }
 
@@ -179,7 +187,7 @@ impl Win {
         rows.set_selection_mode(gtk::SelectionMode::None);
         rows.add_css_class("boxed-list");
         bx.append(&rows);
-        Section { root: bx, rows }
+        Section { root: bx, head, rows }
     }
 
     /// Render each group as it arrives rather than waiting for all six.
@@ -188,7 +196,19 @@ impl Win {
     /// server, which takes ten to twenty seconds on a cold cache. The skills
     /// and hooks are read from disk in milliseconds and should not be held
     /// behind it.
+    ///
+    /// This reads the last health check; `ai_check` runs a new one.
     pub fn ai_reload(&self) {
+        self.ai_reload_with(false);
+    }
+
+    /// `ai_reload`, checking every MCP server's health (which starts each
+    /// one): the AI page's refresh, the one place it is asked for.
+    pub fn ai_check(&self) {
+        self.ai_reload_with(true);
+    }
+
+    fn ai_reload_with(&self, check_mcp: bool) {
         self.busy(true);
         self.summarize(&tr("Reading the AI setup…"), Some(inventory::AGENT));
 
@@ -199,7 +219,7 @@ impl Win {
             return;
         }
 
-        let specs = ai::group_specs();
+        let specs = ai::group_specs_with(check_mcp);
         let survey: Vec<Group> = specs
             .iter()
             .map(|(title, desc, _fn)| (title.to_string(), desc.to_string(), Vec::new()))
@@ -246,25 +266,47 @@ impl Win {
         if final_ {
             self.shared.borrow_mut().ai_survey = groups.to_vec();
         }
-        let ai_page = self.ai.borrow().ai_page.clone();
-        if let Some(ai_page) = &ai_page {
-            while let Some(child) = ai_page.first_child() {
-                ai_page.remove(&child);
+        // The sections are built once for these groups and refilled in
+        // place: a rebuild per group that landed redrew the whole page six
+        // times on the way in, and once more on every visit.
+        let titles: Vec<&String> = groups.iter().map(|(t, _d, _es)| t).collect();
+        let built = self.ai.borrow().ai_sections.iter().map(|(t, _h, _r)| t).eq(titles.iter().copied());
+        if !built {
+            let ai_page = self.ai.borrow().ai_page.clone();
+            if let Some(ai_page) = &ai_page {
+                while let Some(child) = ai_page.first_child() {
+                    ai_page.remove(&child);
+                }
             }
+            let mut sections = Vec::new();
+            for (title, desc, _entries) in groups {
+                let section = Win::section(title, desc, None);
+                if let Some(ai_page) = &ai_page {
+                    ai_page.append(&section.root);
+                }
+                sections.push((title.clone(), section.head, section.rows));
+            }
+            let mut st = self.ai.borrow_mut();
+            st.ai_shown = vec![None; sections.len()];
+            st.ai_sections = sections;
         }
 
         let loading = !final_;
-        for (title, desc, entries) in groups {
+        for (i, (title, _desc, entries)) in groups.iter().enumerate() {
             let pending = loading && entries.is_empty();
-            let section = Win::section(
-                &if pending {
-                    format!("{title} …")
-                } else {
-                    format!("{title} ({})", entries.len())
-                },
-                desc,
-                None,
-            );
+            let (head, rows) = {
+                let st = self.ai.borrow();
+                if st.ai_shown[i].as_ref().is_some_and(|(p, es)| *p == pending && es == entries) {
+                    continue;
+                }
+                (st.ai_sections[i].1.clone(), st.ai_sections[i].2.clone())
+            };
+            head.set_text(&if pending {
+                format!("{title} …")
+            } else {
+                format!("{title} ({})", entries.len())
+            });
+            rows.remove_all();
             if pending {
                 let row: adw::ActionRow = Win::plain(&tr("Checking…"), "");
                 #[allow(deprecated)]
@@ -273,11 +315,11 @@ impl Win {
                 #[allow(deprecated)]
                 spinner.start();
                 row.add_prefix(&spinner);
-                section.rows.append(&row);
+                rows.append(&row);
             } else if entries.is_empty() {
                 let row: adw::ActionRow =
                     Win::plain(&tr("None"), &tr("Nothing of this kind is set up."));
-                section.rows.append(&row);
+                rows.append(&row);
             }
             // Trouble first: a broken hook among thirty healthy skills is the
             // whole reason to open this page.
@@ -287,13 +329,11 @@ impl Win {
                 _ => 2,
             };
             let mut sorted: Vec<&Entry> = entries.iter().collect();
-            sorted.sort_by_key(|e| (order(&e.severity), e.name.to_lowercase()));
+            sorted.sort_by_cached_key(|e| (order(&e.severity), e.name.to_lowercase()));
             for e in sorted {
-                section.rows.append(&self.ai_row(e));
+                rows.append(&self.ai_row(e));
             }
-            if let Some(ai_page) = &ai_page {
-                ai_page.append(&section.root);
-            }
+            self.ai.borrow_mut().ai_shown[i] = Some((pending, entries.clone()));
         }
 
         self.sync_primary();
@@ -631,10 +671,37 @@ impl Win {
         self.thumb_submit(move || crate::icons::fetch_checked(&key, &url, &domain), done);
     }
 
+    /// Show the image at `path` in `image`, decoded at `size`.
+    ///
+    /// Decoded before: at once. Otherwise the decode runs on the image pool
+    /// and the result lands after, unless `image` was claimed for another
+    /// app meanwhile (see `icon_claim`): a page of rows decoding their vendor
+    /// marks one after another on the main thread held up its first paint.
     pub fn set_icon(&self, image: &gtk::Image, path: &Path, size: i32) {
-        if let Some(tex) = self.texture(path, size) {
+        if let Some(tex) = self.texture_cached(path, size) {
             image.set_paintable(Some(&tex));
+            return;
         }
+        let claim = self.icon_claim_of(image);
+        let w = self.clone();
+        let image = image.clone();
+        let path = path.to_path_buf();
+        let src = path.clone();
+        self.thumb_submit(
+            move || crate::ui::store::decode_texture(&src, size),
+            move |tex| {
+                let Some(tex) = tex else { return };
+                w.texture_keep(&path, size, &tex);
+                if w.icon_claim_of(&image) == claim {
+                    image.set_paintable(Some(&tex));
+                }
+            },
+        );
+    }
+
+    /// The claim `image` carries now, if it was ever claimed.
+    fn icon_claim_of(&self, image: &gtk::Image) -> Option<u64> {
+        self.ai.borrow().icon_claims.iter().find(|(w, _)| w.upgrade().as_ref() == Some(image)).map(|(_, seq)| *seq)
     }
 
     pub fn ai_act(&self, e: &Entry) {

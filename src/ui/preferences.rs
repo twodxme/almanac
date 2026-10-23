@@ -7,7 +7,7 @@ use adw::prelude::*;
 use serde_json::Value;
 
 use crate::i18n::tr;
-use crate::ui::shell::Win;
+use crate::ui::shell::{spawn_bg, Win};
 use crate::{autoupdate, plugins as plugins_mod, settings, tasks, util, watcher, xdg};
 
 /// This section keeps nothing of its own: `self._plugins is None` is
@@ -49,15 +49,27 @@ impl Win {
     ///
     /// Scheduled-update changes are applied when the dialog closes (one
     /// daemon-reload, not one per switch); everything else on change.
+    ///
+    /// The timer's state is systemctl's to tell: asked off the main thread,
+    /// and the dialog built when it answers.
     pub fn on_preferences(&self) {
-        if let Err(e) = self.build_preferences() {
-            eprintln!("almanac: {e}");
-        }
+        let w = self.downgrade();
+        spawn_bg(
+            || -> Result<_, String> { Ok((autoupdate::load()?, autoupdate::try_status()?)) },
+            move |read| match read {
+                Ok((cfg, st)) => {
+                    if let Some(w) = w.upgrade() {
+                        if let Err(e) = w.build_preferences(cfg, st) {
+                            eprintln!("almanac: {e}");
+                        }
+                    }
+                }
+                Err(e) => eprintln!("almanac: {e}"),
+            },
+        );
     }
 
-    fn build_preferences(&self) -> Result<(), String> {
-        let cfg = autoupdate::load()?;
-        let st = autoupdate::try_status()?;
+    fn build_preferences(&self, cfg: autoupdate::Config, st: autoupdate::Status) -> Result<(), String> {
         let dialog = adw::PreferencesDialog::builder().title(tr("Preferences")).build();
 
         // ---- General
@@ -396,11 +408,6 @@ impl Win {
         // The saves need no window: only the toasts and the store reload do,
         // so a window already gone still gets its settings written.
         dialog.connect_closed(move |_d| {
-            let say = |message: String| {
-                if let Some(w) = w.upgrade() {
-                    w.say(&message, 5);
-                }
-            };
             let mut new = cfg.clone();
             for (key, row) in &rows {
                 new.set(key, row.is_active());
@@ -414,32 +421,45 @@ impl Win {
                 eprintln!("almanac: {e}");
                 return;
             }
-            if want != current {
-                match autoupdate::set_schedule(want) {
-                    Ok((true, _msg)) => {}
-                    Ok((false, msg)) => say(format!("Could not change the schedule: {msg}")),
-                    Err(e) => {
-                        eprintln!("almanac: {e}");
-                        return;
+            // The timer changes are systemctl calls (a daemon-reload among
+            // them): made off the main thread, reported when they are done.
+            let schedule = (want != current).then(|| want.to_string());
+            let timer = (enabled.is_active() != st_enabled).then(|| enabled.is_active());
+            let w = w.clone();
+            spawn_bg(
+                move || -> Result<Vec<String>, String> {
+                    let mut said = Vec::new();
+                    if let Some(want) = schedule {
+                        if let (false, msg) = autoupdate::set_schedule(&want)? {
+                            said.push(format!("Could not change the schedule: {msg}"));
+                        }
                     }
-                }
-            }
-            if enabled.is_active() != st_enabled {
-                // What set_enabled raises ends the close handler, logged.
-                match autoupdate::try_set_enabled(enabled.is_active()) {
-                    Ok((true, _msg)) => {}
-                    Ok((false, msg)) => say(format!("Could not change the timer: {msg}")),
-                    Err(e) => {
-                        eprintln!("almanac: {e}");
-                        return;
+                    if let Some(on) = timer {
+                        // What set_enabled raises ends the close handler, logged.
+                        if let (false, msg) = autoupdate::try_set_enabled(on)? {
+                            said.push(format!("Could not change the timer: {msg}"));
+                        }
                     }
-                }
-            }
-            let Some(w) = w.upgrade() else { return };
-            let plugins_none = w.shared.borrow().plugins_none;
-            if plugins_none && w.content_stack.visible_child_name().as_deref() == Some("store") {
-                w.store_reload(true);
-            }
+                    Ok(said)
+                },
+                move |said| {
+                    let said = match said {
+                        Ok(said) => said,
+                        Err(e) => {
+                            eprintln!("almanac: {e}");
+                            return;
+                        }
+                    };
+                    let Some(w) = w.upgrade() else { return };
+                    for message in said {
+                        w.say(&message, 5);
+                    }
+                    let plugins_none = w.shared.borrow().plugins_none;
+                    if plugins_none && w.content_stack.visible_child_name().as_deref() == Some("store") {
+                        w.store_reload(true);
+                    }
+                },
+            );
         });
         dialog.present(Some(&self.window));
         Ok(())

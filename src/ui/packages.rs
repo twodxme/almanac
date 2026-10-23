@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::i18n::tr;
 use crate::inventory;
 use crate::ui::shell::{
-    name, page_spec, reverse_text, sorts_installed, source_label, spawn_bg, AppItem, Win,
+    lower_cmp, name, page_spec, reverse_text, sorts_installed, source_label, spawn_bg, AppItem, Win,
 };
 
 /// The header's primary action for one page: (label, enabled, tooltip,
@@ -61,6 +61,22 @@ impl PlainRow for adw::ExpanderRow {
 pub struct State {
     /// Coalesces theme-change bursts into one restyle (`_theme_timer`).
     pub theme_timer: Option<glib::SourceId>,
+    /// A scan (`reload`) is running. One runs at a time: every action, the
+    /// pacman.log watcher and page changes each asked for their own, and
+    /// they piled up.
+    pub scanning: bool,
+    /// The search box's pending filter pass: typing re-filters once it
+    /// pauses rather than on every key.
+    pub search_timer: Option<glib::SourceId>,
+    /// `reload` was called while a scan ran: that scan's answer predates
+    /// whatever prompted the call, so it is dropped and one more scan runs.
+    pub scan_again: bool,
+    /// When the running or last scan started; the pacman.log watcher has
+    /// nothing to add when the log has not changed since.
+    pub scan_started: Option<std::time::SystemTime>,
+    /// What the last scan found, to put back when the App Store hands the
+    /// list back (it shows its search results in the same list).
+    pub last_scan: Option<Vec<inventory::App>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -549,20 +565,24 @@ fn float_cmp(a: f64, b: f64) -> Ordering {
 /// that would raise in Python (an unparseable date, or "" compared with a
 /// number) makes the pair compare equal, as the failed callback did.
 pub fn sort_cmp(key: &str, a: &AppItem, b: &AppItem) -> Ordering {
-    let (an, bn) = (a.name.to_lowercase(), b.name.to_lowercase());
+    // Lowered as they are compared, not up front: this runs on every
+    // comparison, and most stop before the name.
+    let names = || lower_cmp(&a.name, &b.name);
     match key {
-        "name" => an.cmp(&bn),
-        "name_desc" => reverse_text(&an, &bn),
+        "name" => names(),
+        "name_desc" => names().reverse(),
         "size" => float_cmp(-a.size_mb, -b.size_mb),
         "installed" => float_cmp(-a.installed_ts, -b.installed_ts),
-        "category" => (a.category.is_empty(), a.category.to_lowercase())
-            .cmp(&(b.category.is_empty(), b.category.to_lowercase())),
+        "category" => (a.category.is_empty())
+            .cmp(&b.category.is_empty())
+            .then_with(|| lower_cmp(&a.category, &b.category)),
         // Negated in i128: Python ints are unbounded, so -i64::MIN is just a
         // bigger number there, not an overflow.
         "behind" => (-i128::from(a.behind)).cmp(&-i128::from(b.behind)),
         // All-time standing. Unverified plugins sink: anyone can list one.
-        "popular" => (-i128::from(a.votes), !a.verified, an)
-            .cmp(&(-i128::from(b.votes), !b.verified, bn)),
+        "popular" => (-i128::from(a.votes), !a.verified)
+            .cmp(&(-i128::from(b.votes), !b.verified))
+            .then_with(names),
         // The AUR's popularity is already decay-weighted, which is what
         // "trending" means; plugins fall back to how recently they landed.
         "trending" => {
@@ -585,12 +605,12 @@ pub fn sort_cmp(key: &str, a: &AppItem, b: &AppItem) -> Ordering {
                 (Added::Neg(x), Added::Neg(y)) => x.cmp(y),
                 _ => return Ordering::Equal, // str vs int: TypeError
             };
-            second.then_with(|| an.cmp(&bn))
+            second.then_with(names)
         }
         "newest" => (a.added.is_empty())
             .cmp(&b.added.is_empty())
             .then_with(|| reverse_text(&a.added, &b.added))
-            .then_with(|| an.cmp(&bn)),
+            .then_with(names),
         _ => Ordering::Equal,
     }
 }
@@ -604,6 +624,23 @@ fn squeeze(text: &str, limit: usize) -> String {
         .chars()
         .take(limit)
         .collect()
+}
+
+/// `len(sources or [])` of the plugin registry, for the Discover summary: a
+/// falsy value counts as the empty list; a truthy one without a len() (a
+/// number, True) is the TypeError that ended `_show_discover` before the
+/// summary.
+fn discover_total(registry: &Value) -> Result<usize, String> {
+    Ok(match registry.get("sources") {
+        Some(v) if !truthy(Some(v)) => 0,
+        None => 0,
+        Some(Value::Array(a)) => a.len(),
+        Some(Value::Object(o)) => o.len(),
+        Some(Value::String(s)) => s.chars().count(),
+        Some(other) => {
+            return Err(format!("TypeError: object of type '{}' has no len()", py_type_name(other)));
+        }
+    })
 }
 
 impl Win {
@@ -632,6 +669,16 @@ impl Win {
 
     // ---- data ------------------------------------------------------------
     pub fn reload(&self) {
+        {
+            let mut st = self.packages.borrow_mut();
+            if st.scanning {
+                st.scan_again = true;
+                return;
+            }
+            st.scanning = true;
+            st.scan_again = false;
+            st.scan_started = Some(std::time::SystemTime::now());
+        }
         if let Some(act) = self.win_action("rescan") {
             act.set_enabled(false);
         }
@@ -639,11 +686,46 @@ impl Win {
 
         // checkupdates and yay take seconds; on the UI thread that is a freeze.
         let w = self.downgrade();
-        spawn_bg(inventory::collect, move |apps| {
-            if let Some(w) = w.upgrade() {
-                w.apply(apps);
+        spawn_bg(
+            || std::panic::catch_unwind(inventory::collect).ok(),
+            move |apps| {
+                if let Some(w) = w.upgrade() {
+                    w.scan_done(apps);
+                }
+            },
+        );
+    }
+
+    /// A scan landed: shown, unless `reload` was called meanwhile, in which
+    /// case it is dropped for the one more scan that call asked for.
+    fn scan_done(&self, apps: Option<Vec<inventory::App>>) {
+        let again = {
+            let mut st = self.packages.borrow_mut();
+            st.scanning = false;
+            std::mem::take(&mut st.scan_again)
+        };
+        if again {
+            self.reload();
+            return;
+        }
+        match apps {
+            Some(apps) => {
+                self.packages.borrow_mut().last_scan = Some(apps.clone());
+                self.apply(apps);
             }
-        });
+            // The scan panicked: the list stays as it was, rescanning allowed.
+            None => {
+                if let Some(act) = self.win_action("rescan") {
+                    act.set_enabled(true);
+                }
+            }
+        }
+    }
+
+    /// Whether a scan started after `changed`: the watcher's rescan for a
+    /// change that old would find nothing new.
+    pub fn scanned_since(&self, changed: std::time::SystemTime) -> bool {
+        self.packages.borrow().scan_started.is_some_and(|started| started > changed)
     }
 
     /// Desktop notification, falling back to the status line.
@@ -898,18 +980,30 @@ impl Win {
     /// Details are fetched on open rather than during the scan -- dependency
     /// lists are a pacman call each, which would make the list slow for data
     /// nobody reads until they ask for it.
+    ///
+    /// Those pacman calls (`-Qi`, `-Qlq`) run off the main thread; the card
+    /// opens when they answer.
     pub fn show_details(&self, item: &AppItem) {
-        // An entry whose details Python could not read (a missing advisory
-        // field, a timestamp that is not a number) raised out of the click
-        // handler: the traceback went to stderr and no dialog opened.
-        if let Err(e) = self.build_details(item) {
-            eprintln!("almanac: cannot show details for {}: {e}", item.app.name);
-        }
+        let w = self.downgrade();
+        let item = item.clone();
+        let app = item.app.clone();
+        spawn_bg(
+            move || inventory::try_details(&app),
+            move |extra| {
+                let Some(w) = w.upgrade() else { return };
+                // An entry whose details Python could not read (a missing
+                // advisory field, a timestamp that is not a number) raised
+                // out of the click handler: the traceback went to stderr
+                // and no dialog opened.
+                if let Err(e) = extra.and_then(|extra| w.build_details(&item, extra)) {
+                    eprintln!("almanac: cannot show details for {}: {e}", item.app.name);
+                }
+            },
+        );
     }
 
-    fn build_details(&self, item: &AppItem) -> Result<(), String> {
+    fn build_details(&self, item: &AppItem, extra: inventory::Extra) -> Result<(), String> {
         let app = &item.app;
-        let extra: inventory::Extra = inventory::try_details(app)?;
         let has = |key: &str| truthy(extra.get(key));
 
         let page = adw::PreferencesPage::new();
@@ -1647,26 +1741,32 @@ impl Win {
         let q = query.clone();
         // What the searches raise ends the Python's worker before its
         // idle_add: the results are never shown.
-        let work = move || -> Result<Vec<inventory::App>, String> {
+        type Found = (Vec<inventory::App>, Option<Result<usize, String>>);
+        let work = move || -> Result<Found, String> {
             if browsing {
                 // Nothing typed: show the marketplace itself. Packages are
                 // excluded here -- 15,669 of them is a database dump, not a
                 // storefront, and there is no popularity signal to rank them.
-                inventory::try_search_plugins("", 200)
+                let plugins = inventory::try_search_plugins("", 200)?;
+                // The summary's total, counted here and not on the main
+                // thread: reading the registry is 8 MB of JSON, and a fetch
+                // when the cache is a day old.
+                let total = q.is_empty().then(|| discover_total(&inventory::plugin_registry_shared(false)));
+                Ok((plugins, total))
             } else {
                 let mut plugins = inventory::try_search_plugins(&q, 25)?;
                 let packages = inventory::try_search_available(&q, 60)?;
                 // Plugins lead: on an Omarchy box they are the likelier intent,
                 // and the package list is long enough to bury them otherwise.
                 plugins.extend(packages);
-                Ok(plugins)
+                Ok((plugins, None))
             }
         };
         let w = self.downgrade();
         spawn_bg(work, move |results| match results {
-            Ok(results) => {
+            Ok((results, total)) => {
                 if let Some(w) = w.upgrade() {
-                    w.show_discover(&query, results);
+                    w.show_discover(&query, results, total);
                 }
             }
             Err(e) => eprintln!("almanac: {e}"),
@@ -1674,7 +1774,9 @@ impl Win {
         glib::ControlFlow::Break
     }
 
-    pub fn show_discover(&self, query: &str, results: Vec<inventory::App>) {
+    /// `total`: how many plugins the registry lists, counted by the worker
+    /// (`discover_total`) when the query is empty.
+    pub fn show_discover(&self, query: &str, results: Vec<inventory::App>, total: Option<Result<usize, String>>) {
         let (discovering, store) = {
             let sh = self.shared.borrow();
             (sh.discovering, sh.store.clone())
@@ -1688,23 +1790,13 @@ impl Win {
         }
         self.filter_changed();
         if query.is_empty() {
-            // len(sources or []): a falsy value counts as the empty list; a
-            // truthy one without a len() (a number, True) raised TypeError
-            // out of _show_discover, before the summary.
-            let sources = inventory::plugin_registry(false).get("sources").cloned();
-            let total = match sources {
-                Some(v) if !truthy(Some(&v)) => 0,
-                None => 0,
-                Some(Value::Array(a)) => a.len(),
-                Some(Value::Object(o)) => o.len(),
-                Some(Value::String(s)) => s.chars().count(),
-                Some(other) => {
-                    eprintln!(
-                        "almanac: _show_discover: TypeError: object of type '{}' has no len()",
-                        py_type_name(&other)
-                    );
+            let total = match total {
+                Some(Ok(n)) => n,
+                Some(Err(e)) => {
+                    eprintln!("almanac: _show_discover: {e}");
                     return;
                 }
+                None => 0,
             };
             self.summarize(
                 &format!(
@@ -1747,8 +1839,36 @@ impl Win {
             }
             return;
         }
-        self.shared.borrow_mut().query = py_strip(&entry.text()).to_lowercase();
-        self.filter_changed();
+        // Debounced: each pass re-filters every row and re-sorts what is
+        // left, and typing a word asked for one per letter.
+        let query = py_strip(&entry.text()).to_lowercase();
+        if let Some(old) = self.packages.borrow_mut().search_timer.take() {
+            old.remove();
+        }
+        let w = self.downgrade();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            if let Some(w) = w.upgrade() {
+                w.packages.borrow_mut().search_timer = None;
+                w.search_now(query);
+            }
+        });
+        self.packages.borrow_mut().search_timer = Some(id);
+    }
+
+    /// The search box's filter pass. A query that only grew keeps the rows
+    /// already hidden hidden (GTK re-checks just the shown ones), and one
+    /// that only shrank re-checks just the hidden ones.
+    fn search_now(&self, query: String) {
+        let old = std::mem::replace(&mut self.shared.borrow_mut().query, query.clone());
+        let change = if query != old && query.contains(&old) {
+            gtk::FilterChange::MoreStrict
+        } else if query != old && old.contains(&query) {
+            gtk::FilterChange::LessStrict
+        } else {
+            gtk::FilterChange::Different
+        };
+        let filter = self.shared.borrow().filter.clone();
+        filter.changed(change);
         if let Err(e) = self.update_status() {
             eprintln!("almanac: on_search: {e}");
         }
@@ -2018,8 +2138,13 @@ impl Win {
             "history" => self.history_reload(),
             "plugins" => self.plugins_reload(),
             "switchboard" => self.switchboard_reload(),
-            p if p == inventory::AGENT => self.ai_reload(),
-            _ => self.reload(),
+            p if p == inventory::AGENT => self.ai_check(),
+            _ => {
+                // Asked for: look upstream again rather than reuse the
+                // pending updates the last scans shared.
+                inventory::forget_pending();
+                self.reload()
+            }
         }
     }
 
@@ -2349,7 +2474,19 @@ impl Win {
         self.rebuild_sort_menu(&sorts_installed());
         self.shared.borrow_mut().manual_sorter = None;
         self.rebuild_sorter();
-        self.reload();
+        // The store showed its search results in the list: put back what
+        // the last scan found rather than scanning again (seven ways out of
+        // the store each started a full scan). A scan still running puts
+        // its own answer there when it lands.
+        let (last, scanning) = {
+            let st = self.packages.borrow();
+            (st.last_scan.clone(), st.scanning)
+        };
+        match last {
+            _ if scanning => {}
+            Some(apps) => self.apply(apps),
+            None => self.reload(),
+        }
         true
     }
 }

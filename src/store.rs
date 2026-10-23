@@ -2698,10 +2698,27 @@ pub fn try_browse(
     Ok(idx.into_iter().map(|i| plugins[i].clone()).collect())
 }
 
+/// `try_browse` over borrowed plugins, answering with indices into
+/// `plugins`: the store page searches on every keystroke, and copying its
+/// 5,600 entries to do so cost more than the search.
+#[allow(clippy::too_many_arguments)]
+pub fn try_browse_refs(
+    plugins: &[&Plugin],
+    query: &str,
+    category: &str,
+    sort: &str,
+    installed_only: bool,
+    verified_only: bool,
+    market: &str,
+    trust: &str,
+) -> Result<Vec<usize>, String> {
+    browse_idx(plugins, query, category, sort, installed_only, verified_only, market, trust)
+}
+
 /// The body of `browse`, as indices into `plugins`.
 #[allow(clippy::too_many_arguments)]
-fn browse_idx(
-    plugins: &[Plugin],
+fn browse_idx<P: std::borrow::Borrow<Plugin>>(
+    plugins: &[P],
     query: &str,
     category: &str,
     sort: &str,
@@ -2716,7 +2733,7 @@ fn browse_idx(
     let keep = |out: Vec<usize>, f: &dyn Fn(&Plugin) -> Result<bool, String>| -> Result<Vec<usize>, String> {
         let mut kept = Vec::new();
         for i in out {
-            if f(&plugins[i])? {
+            if f(plugins[i].borrow())? {
                 kept.push(i);
             }
         }
@@ -2745,7 +2762,7 @@ fn browse_idx(
         if !known {
             return Ok(bucket);
         }
-        let items: Vec<&Plugin> = bucket.iter().map(|i| &plugins[*i]).collect();
+        let items: Vec<&Plugin> = bucket.iter().map(|i| plugins[*i].borrow()).collect();
         Ok(try_sorted(&items, sort)?.into_iter().map(|j| bucket[j]).collect())
     };
     if !q.is_empty() {
@@ -2753,7 +2770,7 @@ fn browse_idx(
         // not bury the plugin called Clock under everything that mentions one.
         let (mut exact, mut starts, mut named, mut loose) = (vec![], vec![], vec![], vec![]);
         for i in out {
-            let p = &plugins[i];
+            let p: &Plugin = plugins[i].borrow();
             let name = p.ps("name", "lower")?.to_lowercase();
             if name == q || p.ps("id", "lower")?.to_lowercase() == q {
                 exact.push(i);

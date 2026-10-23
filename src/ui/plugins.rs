@@ -1282,19 +1282,17 @@ impl Win {
                             w.after_pacman(ok);
                         }
                     });
-                    let on_done = match w.checked(Some(probe), judge, Some(then)) {
-                        Ok(on_done) => on_done,
-                        Err(e) => return uncaught_err(&e),
-                    };
-                    tasks::run(
-                        &w.window,
-                        &format!("Removing {}", i.name),
-                        vec![
-                            tasks::Step::argv(format!("Removing {}", i.name), argv.clone()),
-                            Win::forget_shortcut(&i.id),
-                        ],
-                        Some(on_done),
-                    );
+                    let wr = w.downgrade();
+                    let steps = vec![
+                        tasks::Step::argv(format!("Removing {}", i.name), argv.clone()),
+                        Win::forget_shortcut(&i.id),
+                    ];
+                    let title = format!("Removing {}", i.name);
+                    w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
+                        if let Some(w) = wr.upgrade() {
+                            tasks::run(&w.window, &title, steps, Some(on_done));
+                        }
+                    });
                 },
             );
         }
@@ -1350,21 +1348,19 @@ impl Win {
                 }
             }
         });
-        // `_checked` asks the probe at once; what it raises ends this
+        // `_checked` asks the probe first; what it raises ends this
         // before the task starts.
-        let on_done = match self.checked(Some(probe), judge, Some(then)) {
-            Ok(on_done) => on_done,
-            Err(e) => return uncaught_err(&e),
-        };
-        tasks::run(
-            &self.window,
-            &format!("{} {label}", if on { "Turning on" } else { "Turning off" }),
-            vec![tasks::Step::argv(
-                format!("omarchy plugin {} {pid}", if on { "enable" } else { "disable" }),
-                plugins_mod::toggle_argv(pid, on),
-            )],
-            Some(on_done),
-        );
+        let title = format!("{} {label}", if on { "Turning on" } else { "Turning off" });
+        let steps = vec![tasks::Step::argv(
+            format!("omarchy plugin {} {pid}", if on { "enable" } else { "disable" }),
+            plugins_mod::toggle_argv(pid, on),
+        )];
+        let w = self.downgrade();
+        self.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
+            if let Some(w) = w.upgrade() {
+                tasks::run(&w.window, &title, steps, Some(on_done));
+            }
+        });
     }
 
     pub fn row_shortcut(&self, name: &str) {
@@ -1593,16 +1589,12 @@ impl Win {
                     .iter()
                     .map(|s| tasks::Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone())))
                     .collect();
-                let on_done = match w.checked(Some(probe), judge, Some(then)) {
-                    Ok(on_done) => on_done,
-                    Err(e) => return uncaught_err(&e),
-                };
-                tasks::run(
-                    &w.window,
-                    &tr("Updating plugins"),
-                    steps,
-                    Some(on_done),
-                );
+                let wr = w.downgrade();
+                w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
+                    if let Some(w) = wr.upgrade() {
+                        tasks::run(&w.window, &tr("Updating plugins"), steps, Some(on_done));
+                    }
+                });
             },
         );
     }
@@ -1863,11 +1855,13 @@ impl Win {
             Ok(steps) => steps,
             Err(e) => return uncaught_err(&e),
         };
-        let on_done = match self.checked(Some(verify::installed_package_try(name)), judge, Some(after)) {
-            Ok(on_done) => on_done,
-            Err(e) => return uncaught_err(&e),
-        };
-        tasks::run(&self.window, &format!("Installing {name}"), steps, Some(on_done));
+        let w = self.downgrade();
+        let title = format!("Installing {name}");
+        self.checked(Some(verify::installed_package_try(name)), judge, Some(after), uncaught_err, move |on_done| {
+            if let Some(w) = w.upgrade() {
+                tasks::run(&w.window, &title, steps, Some(on_done));
+            }
+        });
     }
 
     /// Remove a package, with its orphaned dependencies.

@@ -176,6 +176,17 @@ pub fn reverse_text(a: &str, b: &str) -> Ordering {
     b.cmp(a)
 }
 
+/// `a.lower()` compared with `b.lower()`, without building either: the
+/// sorters run this on every comparison of a sort over thousands of rows.
+/// ASCII (nearly every package name) is lowered byte by byte; anything
+/// else is lowered as `str::to_lowercase` does it, final sigma included.
+pub fn lower_cmp(a: &str, b: &str) -> Ordering {
+    if a.is_ascii() && b.is_ascii() {
+        return a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
+    }
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
+
 /// `_version_text`: the Version column's text for one row.
 pub fn version_text(it: &AppItem) -> String {
     if it.git_behind != 0 {
@@ -974,9 +985,9 @@ impl Win {
             view: gtk::ColumnView::new(Some(selection)),
             priority_sorter: gtk::CustomSorter::new(|a, b| {
                 match (AppItem::of(a), AppItem::of(b)) {
-                    (Some(a), Some(b)) => (a.priority, a.name.to_lowercase())
-                        .cmp(&(b.priority, b.name.to_lowercase()))
-                        .into(),
+                    (Some(a), Some(b)) => {
+                        a.priority.cmp(&b.priority).then_with(|| lower_cmp(&a.name, &b.name)).into()
+                    }
                     _ => gtk::Ordering::Equal,
                 }
             }),
@@ -1054,11 +1065,12 @@ impl Win {
         let w = self.downgrade();
         filter.set_filter_func(move |obj| {
             let Some(w) = w.upgrade() else { return true };
-            let item = match AppItem::of(obj) {
-                Some(it) => it.clone(),
-                None => return false,
-            };
-            w.r#match(&item)
+            // Read in place: copying every row on every keystroke was most
+            // of the filter's cost.
+            match AppItem::of(obj) {
+                Some(item) => w.r#match(&item),
+                None => false,
+            }
         });
 
         // --- sidebar: categories with live counts -------------------------
@@ -1570,7 +1582,7 @@ impl Win {
                 let (Some(a), Some(b)) = (AppItem::of(a), AppItem::of(b)) else {
                     return gtk::Ordering::Equal;
                 };
-                let (x, y) = (attr(&a).to_lowercase(), attr(&b).to_lowercase());
+                let (x, y) = (attr(&a), attr(&b));
                 // Blanks last in either direction: an empty category is missing
                 // data, not a value that deserves the top of the list.
                 if x.is_empty() && !y.is_empty() {
@@ -1579,7 +1591,7 @@ impl Win {
                 if !x.is_empty() && y.is_empty() {
                     return gtk::Ordering::Smaller;
                 }
-                x.cmp(&y).into()
+                lower_cmp(x, y).into()
             })
             .upcast()
         }
@@ -2403,8 +2415,17 @@ impl Win {
     }
 
     /// `_rescan_now`: the debounced rescan. One-shot timer.
+    ///
+    /// Skipped when a scan started after pacman.log last changed: the app's
+    /// own actions rescan when they finish, and the watcher then saw the
+    /// same transaction and asked for a second full scan six seconds later.
     pub fn rescan_now(&self) -> glib::ControlFlow {
         self.shell.borrow_mut().pending_rescan = None;
+        let changed = std::fs::metadata(crate::snapshots::PACMAN_LOG).and_then(|m| m.modified());
+        if changed.is_ok_and(|changed| self.scanned_since(changed)) {
+            println!("pacman.log changed — already rescanned");
+            return glib::ControlFlow::Break;
+        }
         // Logged as well as shown, so the watch can be verified from a terminal
         // rather than only by staring at the window.
         println!("pacman.log changed — rescanning");
@@ -2715,6 +2736,19 @@ pub fn run() -> glib::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lower_cmp_orders_as_lowering_first_does() {
+        let words = [
+            "", "a", "A", "ab", "aB", "Ab", "b", "B", "_x", "[x", "Zed", "zed", "zeta", "Émile", "émile", "eMile",
+            "ΟΔΟΣ", "οδος", "οδοσ", "İstanbul", "istanbul", "ß", "SS", "ss", "Ä", "a\u{308}", "日本", "Z9", "z10",
+        ];
+        for a in words {
+            for b in words {
+                assert_eq!(lower_cmp(a, b), a.to_lowercase().cmp(&b.to_lowercase()), "{a:?} vs {b:?}");
+            }
+        }
+    }
 
     /// test_star_counts_fit_a_chip
     #[test]

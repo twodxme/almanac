@@ -431,14 +431,14 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
     if url.is_empty() {
         return Ok(State::new(pid, LOCAL, "no-origin", 0, ""));
     }
-    let head = py_strip(&_git(d, &["rev-parse", "--verify", "HEAD"], 25)?.stdout).to_string();
+    let (head, on_branch, modified) = head_state(d)?;
     if head.is_empty() {
         return Ok(State::new(pid, LOCAL, "no-commits", 0, &url));
     }
-    if !_git(d, &["symbolic-ref", "--quiet", "HEAD"], 25)?.ok() {
+    if !on_branch {
         return Ok(State::new(pid, LOCAL_CHANGES, "detached", 0, &url));
     }
-    if !py_strip(&_git(d, &["status", "--porcelain", "--untracked-files=normal"], 25)?.stdout).is_empty() {
+    if modified {
         // Still worth knowing how far behind: patches.py weighs the edit
         // against the update, and needs there to be one.
         let remote = remote_head(d, cache.as_deref_mut(), fetch)?;
@@ -463,6 +463,83 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
         return Ok(State::new(pid, LOCAL_CHANGES, "ahead", 0, &url));
     }
     Ok(State::new(pid, LOCAL_CHANGES, "diverged", 0, &url))
+}
+
+/// The checkout's HEAD: its commit ("" before the first), whether it is on
+/// a branch, and whether the working tree has edits (untracked files
+/// included). One `git status --porcelain=v2 --branch` answers all three;
+/// where it fails or says something unexpected, the three are asked one by
+/// one, as they always were (`rev-parse`, `symbolic-ref`, `status`).
+fn head_state(d: &Path) -> Result<(String, bool, bool), PyErr> {
+    let st = _git(d, &["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=normal"], 25)?;
+    if st.ok() {
+        if let Some(parsed) = parse_status_v2(&st.stdout) {
+            return Ok(parsed);
+        }
+    }
+    head_state_apart(d)
+}
+
+/// `head_state`, one question at a time. What is not asked (the branch and
+/// the edits of a checkout with no commits, the edits of a detached one)
+/// answers as the classification ignores it.
+fn head_state_apart(d: &Path) -> Result<(String, bool, bool), PyErr> {
+    let head = py_strip(&_git(d, &["rev-parse", "--verify", "HEAD"], 25)?.stdout).to_string();
+    if head.is_empty() {
+        return Ok((head, true, false));
+    }
+    if !_git(d, &["symbolic-ref", "--quiet", "HEAD"], 25)?.ok() {
+        return Ok((head, false, false));
+    }
+    let modified = !py_strip(&_git(d, &["status", "--porcelain", "--untracked-files=normal"], 25)?.stdout).is_empty();
+    Ok((head, true, modified))
+}
+
+/// (commit, on a branch, edited) from `git status --porcelain=v2 --branch`:
+/// `# branch.oid` is the commit, "(initial)" before the first; `# branch.head`
+/// is "(detached)" off a branch; any line that is not a `#` header is an
+/// edit. None without both headers.
+fn parse_status_v2(out: &str) -> Option<(String, bool, bool)> {
+    let (mut oid, mut branch, mut edited) = (None, None, false);
+    for line in out.lines() {
+        if let Some(v) = line.strip_prefix("# branch.oid ") {
+            oid = Some(if v == "(initial)" { String::new() } else { v.trim().to_string() });
+        } else if let Some(v) = line.strip_prefix("# branch.head ") {
+            branch = Some(v != "(detached)");
+        } else if !line.starts_with('#') && !line.trim().is_empty() {
+            edited = true;
+        }
+    }
+    Some((oid?, branch?, edited))
+}
+
+/// `try_classify` for each folder, side by side: each is a handful of git
+/// calls and, when due, a fetch, and one plugin after another they were
+/// most of the Plugins page's load. Results in `dirs` order. Each worker
+/// classifies against its own copy of `cache`; what it learns is merged
+/// back in `dirs` order.
+pub fn classify_all(dirs: &[PathBuf], cache: Option<&mut FetchCache>, fetch: bool) -> Vec<Result<State, String>> {
+    let seed = cache.as_deref().cloned();
+    let results = crate::agents::pool_map(dirs, 8, |d| {
+        let mut own = seed.clone();
+        let state = try_classify(d, own.as_mut(), fetch);
+        (state, own)
+    });
+    let mut out = Vec::with_capacity(results.len());
+    match cache {
+        Some(cache) => {
+            for (state, own) in results {
+                for (k, v) in own.unwrap_or_default() {
+                    if cache.get(&k) != Some(&v) {
+                        cache.insert(k, v);
+                    }
+                }
+                out.push(state);
+            }
+        }
+        None => out.extend(results.into_iter().map(|(state, _)| state)),
+    }
+    out
 }
 
 /// The value of a Unicode decimal digit (general category Nd), as
@@ -1514,6 +1591,20 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
         mine.set(key, (m, d))?;
     }
 
+    // The user's own plugins, in the order the loop below meets them,
+    // classified side by side up front. What finding them raises is left
+    // to the loop, which raises it at the same point it always did.
+    let mut own_dirs: Vec<PathBuf> = Vec::new();
+    for item in &listed {
+        if let Some(Ok(Some((_m, f)))) = item.get("id").map(|pid| mine.get(&pid)) {
+            if !own_dirs.contains(f) {
+                own_dirs.push(f.clone());
+            }
+        }
+    }
+    let classified: Vec<(PathBuf, Result<State, String>)> =
+        own_dirs.iter().cloned().zip(classify_all(&own_dirs, cache.as_deref_mut(), fetch)).collect();
+
     let mut result = Vec::new();
     for item in listed {
         let Some(pid) = item.get("id") else { continue };
@@ -1540,7 +1631,10 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
         };
         let raw_kinds = (!kinds.iter().all(Py::is_str)).then(|| kinds.clone());
         let state = match (&folder, own) {
-            (Some(f), true) => Some(try_classify(f, cache.as_deref_mut(), fetch)?),
+            (Some(f), true) => Some(match classified.iter().find(|(d, _)| d == f) {
+                Some((_d, state)) => state.clone()?,
+                None => try_classify(f, cache.as_deref_mut(), fetch)?,
+            }),
             _ => None,
         };
         let (id, raw_id) = split_str(&pid, Py::py_str);
@@ -1918,6 +2012,66 @@ mod tests {
         r.advance_upstream();
         let st = r.state(None);
         assert_eq!((st.kind.as_str(), st.detail.as_str()), (LOCAL_CHANGES, "diverged"));
+    }
+
+    #[test]
+    fn one_status_call_says_what_three_did() {
+        let r = Repos::new("headstate");
+        let both = |d: &Path| {
+            let one = head_state(d).ok().unwrap();
+            let apart = head_state_apart(d).ok().unwrap();
+            assert_eq!(one, apart, "{}", d.display());
+            one
+        };
+        let head = both(&r.plug);
+        assert_eq!((head.0.len(), head.1, head.2), (40, true, false));
+        // Untracked, then a tracked edit.
+        std::fs::write(r.plug.join("new"), "x").unwrap();
+        assert!(both(&r.plug).2);
+        std::fs::remove_file(r.plug.join("new")).unwrap();
+        std::fs::write(r.plug.join("manifest.json"), "{\"y\": 2}").unwrap();
+        assert!(both(&r.plug).2);
+        git(&r.plug, &["checkout", "-q", "manifest.json"]);
+        // Detached.
+        git(&r.plug, &["checkout", "-q", "--detach"]);
+        let detached = head_state(&r.plug).ok().unwrap();
+        assert_eq!((detached.0.as_str(), detached.1), (head.0.as_str(), false));
+        assert_eq!(head_state_apart(&r.plug).ok().unwrap(), (head.0.clone(), false, false));
+        // No commits yet.
+        let empty = r.d.join("plugins").join("empty.plugin");
+        git(&r.d, &["init", "-q", empty.to_str().unwrap()]);
+        assert_eq!(both(&empty), (String::new(), true, false));
+        let st = r.state(Some(&empty));
+        assert_eq!(st.detail, "no-origin");
+        git(&empty, &["remote", "add", "origin", r.up.to_str().unwrap()]);
+        assert_eq!(r.state(Some(&empty)).detail, "no-commits");
+        assert_eq!(parse_status_v2("# branch.oid abc\n"), None);
+        assert_eq!(
+            parse_status_v2("# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n"),
+            Some(("abc".into(), true, false))
+        );
+    }
+
+    #[test]
+    fn classified_side_by_side_in_order() {
+        let a = Repos::new("all-a");
+        let b = Repos::new("all-b");
+        b.advance_upstream();
+        let plain = a.d.join("plugins").join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let mut cache = FetchCache::new();
+        let dirs = vec![a.plug.clone(), plain, b.plug.clone()];
+        let got: Vec<(String, String)> = classify_all(&dirs, Some(&mut cache), true)
+            .into_iter()
+            .map(|s| s.map(|s| (s.kind, s.detail)).unwrap())
+            .collect();
+        assert_eq!(
+            got,
+            vec![(CURRENT.to_string(), String::new()), (LOCAL.into(), "not-git".into()), (UPDATE.into(), "behind".into())]
+        );
+        // Both fetches are kept, as one at a time kept them.
+        assert!(cache.contains_key(&path_str(&a.plug)) && cache.contains_key(&path_str(&b.plug)));
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]
