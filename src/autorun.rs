@@ -854,273 +854,69 @@ fn push_json_str(out: &mut String, s: &[u32]) {
     out.push('"');
 }
 
-/// `int(str)` refuses more digits than this (`sys.get_int_max_str_digits()`),
-/// with a ValueError.
-const INT_MAX_STR_DIGITS: usize = 4300;
-
 /// `json.loads(text)` as CPython's C scanner reads it: whitespace is
 /// ` \t\n\r`, NaN / Infinity / -Infinity are numbers, control characters
 /// in strings are errors, `\uD8xx\uDCxx` pairs combine and lone surrogate
 /// escapes stay, a repeated key keeps its first place and its last value.
 fn parse_json(text: &str) -> Result<PyJson, JsonFail> {
-    let s: Vec<char> = text.chars().collect();
-    let n = s.len();
-    let mut p = 0usize;
-    let ws = |p: &mut usize| {
-        while *p < n && matches!(s[*p], ' ' | '\t' | '\n' | '\r') {
-            *p += 1;
-        }
-    };
-    let digit = |i: usize| i < n && s[i].is_ascii_digit();
-    let lit = |p: usize, word: &str| -> bool {
-        let w: Vec<char> = word.chars().collect();
-        p + w.len() <= n && s[p..p + w.len()] == w[..]
-    };
-    // a string starting at p (which is '"'); returns it and the index after
-    let string = |mut p: usize| -> Result<(PyStr, usize), JsonFail> {
-        p += 1;
-        let mut out = PyStr::new();
-        let hex4 = |p: usize| -> Option<u32> {
-            if p + 4 > n {
-                return None;
-            }
-            let mut v = 0u32;
-            for c in &s[p..p + 4] {
-                v = v * 16 + c.to_digit(16).filter(|_| c.is_ascii_hexdigit())?;
-            }
-            Some(v)
-        };
-        loop {
-            let Some(&c) = s.get(p) else { return Err(JsonFail::Value) };
-            match c {
-                '"' => return Ok((out, p + 1)),
-                '\\' => {
-                    let Some(&e) = s.get(p + 1) else { return Err(JsonFail::Value) };
-                    p += 2;
-                    let ch = match e {
-                        '"' => '"',
-                        '\\' => '\\',
-                        '/' => '/',
-                        'b' => '\u{8}',
-                        'f' => '\u{c}',
-                        'n' => '\n',
-                        'r' => '\r',
-                        't' => '\t',
-                        'u' => {
-                            let Some(mut v) = hex4(p) else { return Err(JsonFail::Value) };
-                            p += 4;
-                            if (0xd800..0xdc00).contains(&v) && s.get(p) == Some(&'\\') && s.get(p + 1) == Some(&'u') {
-                                if let Some(lo) = hex4(p + 2).filter(|lo| (0xdc00..0xe000).contains(lo)) {
-                                    v = 0x10000 + ((v - 0xd800) << 10) + (lo - 0xdc00);
-                                    p += 6;
-                                }
-                            }
-                            out.push(v);
-                            continue;
-                        }
-                        _ => return Err(JsonFail::Value),
-                    };
-                    out.push(u32::from(ch));
-                }
-                c if (c as u32) < 0x20 => return Err(JsonFail::Value),
-                c => {
-                    out.push(u32::from(c));
-                    p += 1;
-                }
-            }
-        }
-    };
-
-    struct Open {
-        id: usize,
-        is_obj: bool,
-        keys: std::collections::HashMap<PyStr, usize>,
-        key: Option<PyStr>,
+    use crate::util::pyjson;
+    let mut sink = Nodes(Vec::new());
+    match pyjson::loads_into(text, pyjson::Limit::containers(JSON_MAX_DEPTH), &mut sink) {
+        Ok(root) => Ok(PyJson { nodes: sink.0, root }),
+        Err(pyjson::Error::Value(_)) => Err(JsonFail::Value),
+        Err(pyjson::Error::Recursion(is_obj)) => Err(JsonFail::Recursion(is_obj)),
     }
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut stack: Vec<Open> = Vec::new();
-    ws(&mut p);
-    loop {
-        // ---- a value at p
-        let Some(&c) = s.get(p) else { return Err(JsonFail::Value) };
-        let mut opened = false;
-        let node = match c {
-            '"' => {
-                let (st, q) = string(p)?;
-                p = q;
-                Node::Str(st)
-            }
-            '{' | '[' => {
-                let is_obj = c == '{';
-                if stack.len() >= JSON_MAX_DEPTH {
-                    return Err(JsonFail::Recursion(is_obj));
-                }
-                p += 1;
-                ws(&mut p);
-                let close = if is_obj { '}' } else { ']' };
-                if s.get(p) == Some(&close) {
-                    p += 1;
-                    if is_obj { Node::Obj(Vec::new()) } else { Node::Arr(Vec::new()) }
-                } else {
-                    let mut key = None;
-                    if is_obj {
-                        if s.get(p) != Some(&'"') {
-                            return Err(JsonFail::Value);
-                        }
-                        let (k, q) = string(p)?;
-                        p = q;
-                        ws(&mut p);
-                        if s.get(p) != Some(&':') {
-                            return Err(JsonFail::Value);
-                        }
-                        p += 1;
-                        ws(&mut p);
-                        key = Some(k);
-                    }
-                    nodes.push(if is_obj { Node::Obj(Vec::new()) } else { Node::Arr(Vec::new()) });
-                    stack.push(Open { id: nodes.len() - 1, is_obj, keys: Default::default(), key });
-                    opened = true;
-                    Node::Null
-                }
-            }
-            'n' if lit(p, "null") => {
-                p += 4;
-                Node::Null
-            }
-            't' if lit(p, "true") => {
-                p += 4;
-                Node::Bool(true)
-            }
-            'f' if lit(p, "false") => {
-                p += 5;
-                Node::Bool(false)
-            }
-            'N' if lit(p, "NaN") => {
-                p += 3;
-                Node::Float(f64::NAN)
-            }
-            'I' if lit(p, "Infinity") => {
-                p += 8;
-                Node::Float(f64::INFINITY)
-            }
-            '-' if lit(p, "-Infinity") => {
-                p += 9;
-                Node::Float(f64::NEG_INFINITY)
-            }
-            '-' | '0'..='9' => {
-                let start = p;
-                if s[p] == '-' {
-                    p += 1;
-                }
-                if digit(p) && s[p] != '0' {
-                    while digit(p) {
-                        p += 1;
-                    }
-                } else if digit(p) {
-                    p += 1;
-                } else {
-                    return Err(JsonFail::Value);
-                }
-                let mut is_float = false;
-                if p < n && s[p] == '.' && digit(p + 1) {
-                    is_float = true;
-                    p += 2;
-                    while digit(p) {
-                        p += 1;
-                    }
-                }
-                if p < n && (s[p] == 'e' || s[p] == 'E') {
-                    let e = p;
-                    p += 1;
-                    if p < n && (s[p] == '-' || s[p] == '+') {
-                        p += 1;
-                    }
-                    let ds = p;
-                    while digit(p) {
-                        p += 1;
-                    }
-                    if p > ds {
-                        is_float = true;
-                    } else {
-                        p = e;
-                    }
-                }
-                let t: String = s[start..p].iter().collect();
-                if is_float {
-                    Node::Float(t.parse::<f64>().map_err(|_| JsonFail::Value)?)
-                } else {
-                    let digits = t.trim_start_matches('-');
-                    if digits.len() > INT_MAX_STR_DIGITS {
-                        return Err(JsonFail::Value);
-                    }
-                    Node::Int(if digits.bytes().all(|b| b == b'0') { "0".into() } else { t })
-                }
-            }
-            _ => return Err(JsonFail::Value),
-        };
-        if opened {
-            continue;
-        }
-        nodes.push(node);
-        let mut done = nodes.len() - 1;
-        // ---- attach the finished value, then read what follows it
-        loop {
-            let Some(top) = stack.last_mut() else {
-                ws(&mut p);
-                if p != n {
-                    return Err(JsonFail::Value);
-                }
-                return Ok(PyJson { nodes, root: done });
-            };
-            let parent = top.id;
-            if top.is_obj {
-                let key = top.key.take().unwrap_or_default();
-                match top.keys.get(&key) {
-                    Some(&i) => {
-                        if let Node::Obj(e) = &mut nodes[parent] {
-                            e[i].1 = done;
-                        }
-                    }
-                    None => {
-                        if let Node::Obj(e) = &mut nodes[parent] {
-                            top.keys.insert(key.clone(), e.len());
-                            e.push((key, done));
-                        }
-                    }
-                }
-            } else if let Node::Arr(items) = &mut nodes[parent] {
-                items.push(done);
-            }
-            ws(&mut p);
-            let close = if top.is_obj { '}' } else { ']' };
-            match s.get(p) {
-                Some(',') => {
-                    p += 1;
-                    ws(&mut p);
-                    if top.is_obj {
-                        if s.get(p) != Some(&'"') {
-                            return Err(JsonFail::Value);
-                        }
-                        let (k, q) = string(p)?;
-                        p = q;
-                        ws(&mut p);
-                        if s.get(p) != Some(&':') {
-                            return Err(JsonFail::Value);
-                        }
-                        p += 1;
-                        ws(&mut p);
-                        top.key = Some(k);
-                    }
-                    break; // the next value
-                }
-                Some(&c) if c == close => {
-                    p += 1;
-                    stack.pop();
-                    done = parent;
-                }
-                _ => return Err(JsonFail::Value),
-            }
-        }
+}
+
+/// A parse as the nodes of a [`PyJson`]: each value is its index.
+struct Nodes(Vec<Node>);
+
+impl Nodes {
+    fn add(&mut self, node: Node) -> usize {
+        self.0.push(node);
+        self.0.len() - 1
+    }
+}
+
+impl crate::util::pyjson::Sink for Nodes {
+    type Value = usize;
+    type Key = PyStr;
+    fn reset(&mut self) {
+        self.0.clear();
+    }
+    fn null(&mut self) -> usize {
+        self.add(Node::Null)
+    }
+    fn bool(&mut self, b: bool) -> usize {
+        self.add(Node::Bool(b))
+    }
+    fn num(&mut self, n: crate::util::pyjson::Num<'_>) -> usize {
+        use crate::util::pyjson::Num;
+        self.add(match n {
+            Num::Int(i) => Node::Int(i.to_string()),
+            Num::UInt(u) => Node::Int(u.to_string()),
+            Num::Big(digits) => Node::Int(digits.to_owned()),
+            Num::Float(f) => Node::Float(f),
+        })
+    }
+    fn str(&mut self, s: String) -> usize {
+        self.add(Node::Str(s.chars().map(u32::from).collect()))
+    }
+    fn wstr(&mut self, units: Vec<u32>) -> usize {
+        self.add(Node::Str(units))
+    }
+    fn key(&mut self, s: String) -> PyStr {
+        s.chars().map(u32::from).collect()
+    }
+    fn wkey(&mut self, units: Vec<u32>) -> PyStr {
+        units
+    }
+    fn list(&mut self, items: Vec<usize>) -> usize {
+        self.add(Node::Arr(items))
+    }
+    fn dict(&mut self, pairs: Vec<(PyStr, usize)>) -> usize {
+        // A repeated key keeps its place and takes the last value.
+        self.add(Node::Obj(crate::util::pyjson::dict_pairs(pairs)))
     }
 }
 
