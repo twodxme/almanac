@@ -542,30 +542,6 @@ pub fn classify_all(dirs: &[PathBuf], cache: Option<&mut FetchCache>, fetch: boo
     out
 }
 
-/// The value of a Unicode decimal digit (general category Nd), as
-/// `int()` and `float()` read it; None for anything else. Every Nd run is
-/// a complete 0-9 (Unicode's stability policy), so the digit is its offset
-/// in the run of Nd characters it sits in, modulo 10.
-fn nd_value(c: char) -> Option<u32> {
-    if c.is_ascii() {
-        return c.to_digit(10);
-    }
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| regex::Regex::new(r"^\p{Nd}$").unwrap());
-    let is_nd = |c: char| re.is_match(c.encode_utf8(&mut [0; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    let mut first = c as u32;
-    while let Some(p) = first.checked_sub(1).and_then(char::from_u32) {
-        if !is_nd(p) {
-            break;
-        }
-        first -= 1;
-    }
-    Some((c as u32 - first) % 10)
-}
-
 /// Python's `float(s)` of a string: as `_PyUnicode_TransformDecimalAndSpaceToASCII`
 /// reads it -- Unicode whitespace as a space, any decimal digit (Arabic-Indic,
 /// fullwidth...) as its ASCII digit, any other non-ASCII character refused --
@@ -584,7 +560,7 @@ fn py_float_str(s: &str) -> Option<f64> {
         } else if py_isspace(c) {
             ascii.push(' ');
         } else {
-            ascii.push(nd_value(c).and_then(|v| char::from_digit(v, 10))?);
+            ascii.push(crate::util::decimal_value(c).and_then(|v| char::from_digit(v, 10))?);
         }
     }
     // Py_ISSPACE: ASCII whitespace only (not \x1c-\x1f).
@@ -663,7 +639,7 @@ fn count(d: &Path, head: &str, remote: &str) -> Result<i64, PyErr> {
     let range = format!("{head}..{remote}");
     let out = py_strip(&_git(d, &["rev-list", "--count", &range], 25)?.stdout).to_string();
     // `int(out) if out.isdigit() else 0`: any decimal digits, not only ASCII.
-    let digits: Option<String> = out.chars().map(|c| nd_value(c).and_then(|v| char::from_digit(v, 10))).collect();
+    let digits: Option<String> = out.chars().map(|c| crate::util::decimal_value(c).and_then(|v| char::from_digit(v, 10))).collect();
     Ok(match digits {
         Some(d) if !d.is_empty() => d.parse().unwrap_or(i64::MAX),
         _ => 0,
@@ -2024,7 +2000,7 @@ mod tests {
         assert_eq!(py_float_str("\u{a0}9e1\u{3000}"), Some(90.0));
         assert_eq!(py_float_str("\x1c9"), None);
         assert_eq!(py_float_str("\u{ff19}\u{ff45}\u{ff11}"), None); // fullwidth e is not a digit
-        assert_eq!(nd_value('\u{1d7d9}'), Some(1)); // double-struck 1, after the bold digits
+        assert_eq!(crate::util::decimal_value('\u{1d7d9}'), Some(1)); // double-struck 1, after the bold digits
         assert_eq!(py_decode(b"a\r\nb\rc".to_vec()).ok().unwrap(), "a\nb\nc");
         assert_eq!(py_decode("\u{fffd}".as_bytes().to_vec()).ok().unwrap(), "\u{fffd}");
         assert_eq!(py_decode(b"x\xff".to_vec()).unwrap_err(),

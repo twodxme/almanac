@@ -1950,29 +1950,6 @@ fn py_isspace(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
 
-/// The digit a Unicode decimal digit (category Nd) stands for. Unicode
-/// encodes each set of decimal digits as one contiguous run 0..9, so the
-/// value is the count of Nd characters just before it, modulo 10.
-fn nd_value(c: char) -> Option<u32> {
-    static ND: std::sync::LazyLock<Option<regex::Regex>> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^\p{Nd}$").ok());
-    let nd = ND.as_ref()?;
-    let is_nd = |c: char| nd.is_match(c.encode_utf8(&mut [0u8; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    let mut n = 0u32;
-    let mut cp = c as u32;
-    while cp > 0 {
-        cp -= 1;
-        match char::from_u32(cp) {
-            Some(p) if is_nd(p) => n += 1,
-            _ => break,
-        }
-    }
-    Some(n % 10)
-}
-
 /// `int(text)`: surrounding whitespace, a sign, `_` between digits and any
 /// Unicode decimal digits are accepted. Out-of-range values saturate.
 fn py_int(text: &str) -> Option<i64> {
@@ -1983,7 +1960,7 @@ fn py_int(text: &str) -> Option<i64> {
             ascii.push(' ');
         } else if c.is_ascii() {
             ascii.push(c);
-        } else if let Some(d) = nd_value(c) {
+        } else if let Some(d) = crate::util::decimal_value(c) {
             ascii.push(char::from_digit(d, 10)?);
         } else {
             return None;

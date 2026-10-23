@@ -666,7 +666,6 @@ fn py_isspace(c: u32) -> bool {
 }
 
 static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\p{L}\p{N}]$").unwrap());
-static ND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\p{Nd}$").unwrap());
 
 /// A word character for Python's `re` (`\w`): `str.isalnum()` or `_`.
 /// (Rust's `\w` also takes marks and connector punctuation.)
@@ -676,25 +675,6 @@ fn py_isword(c: u32) -> bool {
         return b.is_ascii_alphanumeric() || b == b'_';
     }
     char::from_u32(c).is_some_and(|ch| WORD.is_match(ch.encode_utf8(&mut [0; 4])))
-}
-
-/// The value of a Unicode decimal digit (`\d`, category Nd), as Python's
-/// `int()` and `float()` read it. Nd digits come in runs of ten from zero.
-fn nd_digit(c: u32) -> Option<u32> {
-    if (0x30..=0x39).contains(&c) {
-        return Some(c - 0x30);
-    }
-    let is_nd = |c: u32| char::from_u32(c).is_some_and(|ch| ND.is_match(ch.encode_utf8(&mut [0; 4])));
-    if c < 0x80 || !is_nd(c) {
-        return None;
-    }
-    let mut n = 0;
-    let mut cp = c;
-    while cp > 0 && is_nd(cp - 1) {
-        n += 1;
-        cp -= 1;
-    }
-    Some(n % 10)
 }
 
 /// `str.strip()` on a Python str.
@@ -735,7 +715,7 @@ fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
             prev_digit = false;
             continue;
         }
-        let Some(d) = nd_digit(c) else { return Err(bad()) };
+        let Some(d) = char::from_u32(c).and_then(crate::util::decimal_value) else { return Err(bad()) };
         text.push(char::from_digit(d, 10).unwrap_or('0'));
         digits += 1;
         prev_digit = true;
@@ -1240,15 +1220,6 @@ pub fn snapshot_events(since: f64, journal_text: Option<&str>) -> Result<Vec<Eve
     Ok(out)
 }
 
-/// `float()` of the digits `\d` matched, which may be any script's.
-fn py_digits_value(ts: &str) -> Option<f64> {
-    let mut text = String::new();
-    for c in ts.chars() {
-        text.push(char::from_digit(nd_digit(u32::from(c))?, 10)?);
-    }
-    text.parse().ok()
-}
-
 /// `os.fsdecode`: UTF-8, each undecodable byte as a surrogate escape.
 fn fs_decode(raw: &[u8]) -> PyStr {
     let mut out = Vec::new();
@@ -1270,7 +1241,7 @@ pub fn reset_events(since: f64) -> Result<Vec<Event>, String> {
         let Some(fname) = f.file_name() else { continue };
         let name = fname.to_string_lossy();
         let Some(m) = guard::BAK.captures(&name) else { continue };
-        let Some(ts) = py_digits_value(&m["ts"]) else {
+        let Some(ts) = crate::util::py_digits_value(&m["ts"]) else {
             return Err(format!("ValueError: could not convert string to float: {}", py_repr(&py_str(&m["ts"]))));
         };
         if ts < since {

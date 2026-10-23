@@ -602,31 +602,9 @@ fn _thousands(n: i128) -> String {
     }
 }
 
-static ND_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\p{Nd}$").unwrap());
-
-/// The value of a Unicode decimal digit (`\d`, category Nd), as Python's
-/// `int()` and `float()` read it. Nd digits come in runs of ten from zero.
-fn _nd_digit(c: char) -> Option<u32> {
-    if c.is_ascii_digit() {
-        return c.to_digit(10);
-    }
-    let is_nd = |c: char| ND_RE.is_match(c.encode_utf8(&mut [0; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    let mut start = c as u32;
-    while let Some(prev) = start.checked_sub(1).and_then(char::from_u32) {
-        if !is_nd(prev) {
-            break;
-        }
-        start -= 1;
-    }
-    Some((c as u32 - start) % 10)
-}
-
 /// Every Unicode decimal digit as its ASCII digit; nothing else changes.
 fn _ascii_digits(s: &str) -> String {
-    s.chars().map(|c| _nd_digit(c).and_then(|d| char::from_digit(d, 10)).unwrap_or(c)).collect()
+    s.chars().map(|c| crate::util::decimal_value(c).and_then(|d| char::from_digit(d, 10)).unwrap_or(c)).collect()
 }
 
 /// `float(text)` for what `[\d.]+` matched: Python raises on "." or "1.2.3",

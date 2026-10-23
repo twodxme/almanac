@@ -226,6 +226,41 @@ pub fn py_islower(s: &str) -> bool {
     cased
 }
 
+/// The first code point of every run of Unicode decimal digits (category
+/// Nd, Unicode 16, as the regex crate's `\p{Nd}` and Python 3.14's
+/// `unicodedata.decimal` have it). Each run is a whole 0-9 set, ten
+/// consecutive code points from its zero (a Unicode stability guarantee).
+const DECIMAL_ZEROS: [u32; 76] = [
+    0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
+    0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+    0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450,
+    0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50,
+    0x11D50, 0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE,
+    0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
+];
+
+/// The value of a Unicode decimal digit (`\d`, category Nd), as Python's
+/// `int()` and `float()` read it (`unicodedata.decimal(c, None)`); None for
+/// anything else.
+pub fn decimal_value(c: char) -> Option<u32> {
+    if c.is_ascii() {
+        return c.to_digit(10);
+    }
+    let cp = c as u32;
+    let zero = DECIMAL_ZEROS[DECIMAL_ZEROS.partition_point(|&z| z <= cp) - 1];
+    (cp - zero < 10).then_some(cp - zero)
+}
+
+/// `float()` of the digits a `\d+` group matched, which may be any script's.
+pub fn py_digits_value(digits: &str) -> Option<f64> {
+    if digits.bytes().all(|b| b.is_ascii_digit()) {
+        return digits.parse().ok();
+    }
+    let ascii: Option<String> = digits.chars().map(|c| char::from_digit(decimal_value(c)?, 10)).collect();
+    ascii?.parse().ok()
+}
+
 /// `datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()`, or 0.0
 /// when it does not parse -- the `_ts` helper several modules carry. A naive
 /// timestamp (no offset) is taken as local time, as Python does.
@@ -937,6 +972,27 @@ mod tests {
             assert_eq!(depth, n);
             tree::drop_value(v);
         });
+    }
+
+    #[test]
+    fn decimal_digits_of_every_script() {
+        // The table is exactly `\p{Nd}` (what the per-module copies it
+        // replaced matched with a regex), and each run counts 0-9 from its
+        // zero.
+        let all: String = (0..=0x10ffffu32).filter_map(char::from_u32).collect();
+        let nd: Vec<char> = regex::Regex::new(r"\p{Nd}").unwrap().find_iter(&all).filter_map(|m| m.as_str().chars().next()).collect();
+        let table: Vec<char> = (0..=0x10ffffu32).filter_map(char::from_u32).filter(|&c| decimal_value(c).is_some()).collect();
+        assert_eq!(nd, table);
+        assert_eq!(nd.len(), 760);
+        for (c, d) in [('7', 7), ('\u{663}', 3), ('\u{ff19}', 9), ('\u{1d7d9}', 1), ('\u{1e5f1}', 0), ('\u{1fbf9}', 9)] {
+            assert_eq!(decimal_value(c), Some(d), "{c:?}");
+        }
+        for c in ['a', '/', ':', '\u{b2}', '\u{2167}', '\u{1d7cd}'] {
+            assert_eq!(decimal_value(c), None, "{c:?}");
+        }
+        assert_eq!(py_digits_value("2024"), Some(2024.0));
+        assert_eq!(py_digits_value("\u{661}\u{662}3"), Some(123.0));
+        assert_eq!(py_digits_value("1a"), None);
     }
 
     #[test]

@@ -503,31 +503,6 @@ impl crate::util::pyjson::Build for PyVal {
     }
 }
 
-/// The decimal value of a Unicode digit (category Nd), as `int()` reads it.
-/// Nd digits come in contiguous runs of ten, zero first (a Unicode
-/// stability guarantee), so the value is the place in the run.
-fn nd_value(c: char) -> Option<u32> {
-    if c.is_ascii_digit() {
-        return Some(c as u32 - '0' as u32);
-    }
-    static ND: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"^\p{Nd}$").ok());
-    let re = ND.as_ref()?;
-    let is_nd = |c: char| re.is_match(c.encode_utf8(&mut [0u8; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    let mut k = 0;
-    let mut cp = c as u32;
-    while let Some(prev) = cp.checked_sub(1).and_then(char::from_u32) {
-        if !is_nd(prev) {
-            break;
-        }
-        k += 1;
-        cp -= 1;
-    }
-    Some(k % 10)
-}
-
 /// Python `int()` of a JSON value; Err (ValueError / TypeError) otherwise.
 /// Ok(None) is an int too large to be any modifier mask.
 fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
@@ -557,7 +532,7 @@ fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
                 if c == '_' {
                     continue;
                 }
-                let d = nd_value(c).ok_or_else(bad)?;
+                let d = crate::util::decimal_value(c).ok_or_else(bad)?;
                 digits.push(char::from_digit(d, 10).unwrap_or('0'));
             }
             if digits.len() > INT_MAX_STR_DIGITS {

@@ -620,28 +620,6 @@ fn py_isspace(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
 
-/// The value of a Unicode decimal digit (category Nd), as `int()` reads it.
-fn decimal_value(c: char) -> Option<u32> {
-    if c.is_ascii_digit() {
-        return Some(c as u32 - '0' as u32);
-    }
-    static ND: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-    let re = ND.get_or_init(|| regex::Regex::new(r"^\p{Nd}$").ok()).as_ref()?;
-    let is_nd = |c: char| re.is_match(c.encode_utf8(&mut [0u8; 4]));
-    if !is_nd(c) {
-        return None;
-    }
-    // Nd digits come in runs of whole 0-9 sets.
-    let mut start = c as u32;
-    while let Some(prev) = start.checked_sub(1).and_then(char::from_u32) {
-        if !is_nd(prev) {
-            break;
-        }
-        start -= 1;
-    }
-    Some((c as u32 - start) % 10)
-}
-
 /// `int(s)` for a str.
 fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
     let bad = || format!("ValueError: invalid literal for int() with base 10: {}", py_str_repr(s));
@@ -655,7 +633,7 @@ fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
             t.push(c);
         } else if py_isspace(c) {
             t.push(' ');
-        } else if let Some(d) = decimal_value(c) {
+        } else if let Some(d) = crate::util::decimal_value(c) {
             t.push(char::from(b'0' + d as u8));
         } else {
             return Err(bad());
