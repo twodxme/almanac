@@ -606,6 +606,23 @@ fn squeeze(text: &str, limit: usize) -> String {
         .collect()
 }
 
+/// `len(sources or [])` of the plugin registry, for the Discover summary: a
+/// falsy value counts as the empty list; a truthy one without a len() (a
+/// number, True) is the TypeError that ended `_show_discover` before the
+/// summary.
+fn discover_total(registry: &Value) -> Result<usize, String> {
+    Ok(match registry.get("sources") {
+        Some(v) if !truthy(Some(v)) => 0,
+        None => 0,
+        Some(Value::Array(a)) => a.len(),
+        Some(Value::Object(o)) => o.len(),
+        Some(Value::String(s)) => s.chars().count(),
+        Some(other) => {
+            return Err(format!("TypeError: object of type '{}' has no len()", py_type_name(other)));
+        }
+    })
+}
+
 impl Win {
     /// `self.lookup_action(name)`, as the SimpleAction it always is here.
     fn win_action(&self, act_name: &str) -> Option<gio::SimpleAction> {
@@ -1647,26 +1664,31 @@ impl Win {
         let q = query.clone();
         // What the searches raise ends the Python's worker before its
         // idle_add: the results are never shown.
-        let work = move || -> Result<Vec<inventory::App>, String> {
+        let work = move || -> Result<(Vec<inventory::App>, Option<Result<usize, String>>), String> {
             if browsing {
                 // Nothing typed: show the marketplace itself. Packages are
                 // excluded here -- 15,669 of them is a database dump, not a
                 // storefront, and there is no popularity signal to rank them.
-                inventory::try_search_plugins("", 200)
+                let plugins = inventory::try_search_plugins("", 200)?;
+                // The summary's total, counted here and not on the main
+                // thread: reading the registry is 8 MB of JSON, and a fetch
+                // when the cache is a day old.
+                let total = q.is_empty().then(|| discover_total(&inventory::plugin_registry_shared(false)));
+                Ok((plugins, total))
             } else {
                 let mut plugins = inventory::try_search_plugins(&q, 25)?;
                 let packages = inventory::try_search_available(&q, 60)?;
                 // Plugins lead: on an Omarchy box they are the likelier intent,
                 // and the package list is long enough to bury them otherwise.
                 plugins.extend(packages);
-                Ok(plugins)
+                Ok((plugins, None))
             }
         };
         let w = self.downgrade();
         spawn_bg(work, move |results| match results {
-            Ok(results) => {
+            Ok((results, total)) => {
                 if let Some(w) = w.upgrade() {
-                    w.show_discover(&query, results);
+                    w.show_discover(&query, results, total);
                 }
             }
             Err(e) => eprintln!("almanac: {e}"),
@@ -1674,7 +1696,9 @@ impl Win {
         glib::ControlFlow::Break
     }
 
-    pub fn show_discover(&self, query: &str, results: Vec<inventory::App>) {
+    /// `total`: how many plugins the registry lists, counted by the worker
+    /// (`discover_total`) when the query is empty.
+    pub fn show_discover(&self, query: &str, results: Vec<inventory::App>, total: Option<Result<usize, String>>) {
         let (discovering, store) = {
             let sh = self.shared.borrow();
             (sh.discovering, sh.store.clone())
@@ -1688,23 +1712,13 @@ impl Win {
         }
         self.filter_changed();
         if query.is_empty() {
-            // len(sources or []): a falsy value counts as the empty list; a
-            // truthy one without a len() (a number, True) raised TypeError
-            // out of _show_discover, before the summary.
-            let sources = inventory::plugin_registry(false).get("sources").cloned();
-            let total = match sources {
-                Some(v) if !truthy(Some(&v)) => 0,
-                None => 0,
-                Some(Value::Array(a)) => a.len(),
-                Some(Value::Object(o)) => o.len(),
-                Some(Value::String(s)) => s.chars().count(),
-                Some(other) => {
-                    eprintln!(
-                        "almanac: _show_discover: TypeError: object of type '{}' has no len()",
-                        py_type_name(&other)
-                    );
+            let total = match total {
+                Some(Ok(n)) => n,
+                Some(Err(e)) => {
+                    eprintln!("almanac: _show_discover: {e}");
                     return;
                 }
+                None => 0,
             };
             self.summarize(
                 &format!(
