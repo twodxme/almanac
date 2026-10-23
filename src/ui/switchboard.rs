@@ -198,12 +198,15 @@ impl Win {
                 let on = plugins_mod::try_enabled()?;
                 let starts = autostart::entries();
                 let units = services::try_services()?;
-                Ok((on, starts, units))
+                // systemctl, asked here rather than on the main thread;
+                // what it raises is reported where the Python raised it.
+                let scheduled = autoupdate::try_status().map(|st| st.enabled);
+                Ok((on, starts, units, scheduled))
             },
             move |res| match res {
-                Ok((on, starts, units)) => {
+                Ok((on, starts, units, scheduled)) => {
                     if let Some(w) = w.upgrade() {
-                        w.switchboard_show(on, starts, units);
+                        w.switchboard_show(on, starts, units, scheduled);
                     }
                 }
                 Err(e) => eprintln!("almanac: {e}"),
@@ -216,6 +219,7 @@ impl Win {
         on: BTreeMap<String, bool>,
         starts: Vec<autostart::Entry>,
         units: Vec<services::Service>,
+        scheduled: Result<bool, String>,
     ) -> glib::ControlFlow {
         let Some(switch_body) = self.switchboard.borrow().switch_body.clone() else {
             return glib::ControlFlow::Break;
@@ -298,7 +302,7 @@ impl Win {
                 .collect(),
         );
         // `autoupdate.status()` raising stops `_switchboard_show` here.
-        let almanac = match self.switch_almanac_rows() {
+        let almanac = match self.switch_almanac_rows(scheduled) {
             Ok(rows) => rows,
             Err(e) => {
                 eprintln!("almanac: {e}");
@@ -506,8 +510,9 @@ impl Win {
         )
     }
 
-    /// `Err` where `autoupdate.status()` raises, after the first row is made.
-    pub fn switch_almanac_rows(&self) -> Result<Vec<(adw::ActionRow, String)>, String> {
+    /// `Err` where `autoupdate.status()` raised (`scheduled`, asked by the
+    /// worker), after the first row is made.
+    pub fn switch_almanac_rows(&self, scheduled: Result<bool, String>) -> Result<Vec<(adw::ActionRow, String)>, String> {
         let icon = || -> gtk::Widget {
             gtk::Image::builder()
                 .icon_name("io.github.twodxme.Almanac")
@@ -527,7 +532,7 @@ impl Win {
                 ),
                 "settings watcher guard".to_string(),
             );
-        let enabled = autoupdate::try_status()?.enabled;
+        let enabled = scheduled?;
         Ok(vec![
             guard_row,
             (

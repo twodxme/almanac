@@ -805,11 +805,25 @@ impl Win {
     }
 
     /// Update Almanac, then offer to restart into the new code.
+    ///
+    /// The check is a `git fetch` (up to 90 s): it runs off the main thread,
+    /// and the question is asked when it answers.
     pub fn on_self_update(&self) {
-        let info = match selfupdate::try_check(true) {
-            Ok(info) => info,
-            Err(e) => return raised(&e),
-        };
+        let w = self.downgrade();
+        spawn_bg(
+            || selfupdate::try_check(true),
+            move |info| match info {
+                Ok(info) => {
+                    if let Some(w) = w.upgrade() {
+                        w.offer_self_update(info);
+                    }
+                }
+                Err(e) => raised(&e),
+            },
+        );
+    }
+
+    fn offer_self_update(&self, info: selfupdate::Info) {
         if !info.can_update {
             let note = if info.note.is_empty() { "Almanac is up to date".to_string() } else { info.note };
             self.say(&note, 8);
@@ -870,12 +884,32 @@ impl Win {
         self.reload();
     }
 
+    /// The About dialog. What it shows takes a handful of git calls and the
+    /// theme and GitHub summaries: gathered off the main thread, then shown.
     pub fn on_about(&self) {
-        // What raises in here ends on_about before the dialog is presented.
-        let info = match selfupdate::try_check(false) {
-            Ok(info) => info,
-            Err(e) => return raised(&e),
-        };
+        let w = self.downgrade();
+        spawn_bg(
+            || -> Result<_, String> {
+                // What raises in here ends on_about before the dialog is
+                // presented, in the Python's order.
+                let info = selfupdate::try_check(false)?;
+                let theme = theming::try_describe()?;
+                let github = ghcache::try_describe()?;
+                let notes = selfupdate::try_release_notes()?;
+                Ok((info, theme, github, notes))
+            },
+            move |gathered| match gathered {
+                Ok((info, theme, github, notes)) => {
+                    if let Some(w) = w.upgrade() {
+                        w.show_about(info, &theme, &github, notes);
+                    }
+                }
+                Err(e) => raised(&e),
+            },
+        );
+    }
+
+    fn show_about(&self, info: selfupdate::Info, theme: &str, github: &str, notes: Option<(String, String)>) {
         let about = adw::AboutDialog::builder()
             .application_name("Almanac")
             .application_icon("io.github.twodxme.Almanac")
@@ -897,11 +931,6 @@ impl Win {
                 "ArtCraft https://getartcraft.com",
             ],
         );
-        let described = theming::try_describe().and_then(|t| Ok((t, ghcache::try_describe()?)));
-        let (theme, github) = match described {
-            Ok(both) => both,
-            Err(e) => return raised(&e),
-        };
         about.set_debug_info(&format!(
             "Installed as: {}\n{}\n{}\n{}",
             info.kind,
@@ -909,13 +938,9 @@ impl Win {
             theme,
             github
         ));
-        match selfupdate::try_release_notes() {
-            Ok(Some((version, markup))) => {
-                about.set_release_notes_version(&version);
-                about.set_release_notes(&markup);
-            }
-            Ok(None) => {}
-            Err(e) => return raised(&e),
+        if let Some((version, markup)) = notes {
+            about.set_release_notes_version(&version);
+            about.set_release_notes(&markup);
         }
         about.present(Some(&self.window));
     }

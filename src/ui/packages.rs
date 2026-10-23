@@ -915,18 +915,30 @@ impl Win {
     /// Details are fetched on open rather than during the scan -- dependency
     /// lists are a pacman call each, which would make the list slow for data
     /// nobody reads until they ask for it.
+    ///
+    /// Those pacman calls (`-Qi`, `-Qlq`) run off the main thread; the card
+    /// opens when they answer.
     pub fn show_details(&self, item: &AppItem) {
-        // An entry whose details Python could not read (a missing advisory
-        // field, a timestamp that is not a number) raised out of the click
-        // handler: the traceback went to stderr and no dialog opened.
-        if let Err(e) = self.build_details(item) {
-            eprintln!("almanac: cannot show details for {}: {e}", item.app.name);
-        }
+        let w = self.downgrade();
+        let item = item.clone();
+        let app = item.app.clone();
+        spawn_bg(
+            move || inventory::try_details(&app),
+            move |extra| {
+                let Some(w) = w.upgrade() else { return };
+                // An entry whose details Python could not read (a missing
+                // advisory field, a timestamp that is not a number) raised
+                // out of the click handler: the traceback went to stderr
+                // and no dialog opened.
+                if let Err(e) = extra.and_then(|extra| w.build_details(&item, extra)) {
+                    eprintln!("almanac: cannot show details for {}: {e}", item.app.name);
+                }
+            },
+        );
     }
 
-    fn build_details(&self, item: &AppItem) -> Result<(), String> {
+    fn build_details(&self, item: &AppItem, extra: inventory::Extra) -> Result<(), String> {
         let app = &item.app;
-        let extra: inventory::Extra = inventory::try_details(app)?;
         let has = |key: &str| truthy(extra.get(key));
 
         let page = adw::PreferencesPage::new();
