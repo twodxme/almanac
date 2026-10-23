@@ -439,10 +439,12 @@ pub(super) fn appimage_update_work(app: &App) -> Result<(), String> {
     let dest = py_path(&app.exec_path);
     // urllib's Request takes str(url).
     appimage::download_verified(&py_str(&url), &dest, None, sha256)?;
-    let mut reg = inventory::load_registry();
     let key = registry_key(app);
     let update = app.update.clone();
-    if let Some(entry) = key_str(&key)?.and_then(|k| reg.get_mut(k)) {
+    let k = key_str(&key)?.map(str::to_string);
+    // Read afresh under the registry's lock: only this entry changes.
+    inventory::update_registry(|reg| {
+        let Some(entry) = k.and_then(|k| reg.get_mut(&k)) else { return Ok(false) };
         let Some(entry) = entry.as_object_mut() else {
             return Err(match entry {
                 Value::Array(_) => "list indices must be integers or slices, not str".to_string(),
@@ -453,8 +455,8 @@ pub(super) fn appimage_update_work(app: &App) -> Result<(), String> {
         // Force a re-check rather than trusting the stale entry.
         entry.insert("checked_at".to_string(), Value::from(0));
         entry.insert("latest".to_string(), Value::Object(Default::default()));
-        inventory::save_registry(&reg)?;
-    }
+        Ok(true)
+    })?;
     appimage::install_desktop_entry(&dest, &py_str(&key))?;
     Ok(())
 }
@@ -1361,12 +1363,12 @@ impl Win {
     /// AppImages are ours, so remove them directly -- no package manager
     /// is involved and there is nothing to confirm against.
     pub fn remove_appimage(&self, app: &App) {
-        match remove_appimage_with(
-            app,
-            inventory::load_registry,
-            inventory::save_registry,
-            appimage::remove_desktop_entry,
-        ) {
+        // Its read and its write of the registry as one, under the lock;
+        // let go before anything (the reload) reads the registry again.
+        let removed = inventory::lock_registry().and_then(|_lock| {
+            remove_appimage_with(app, inventory::load_registry, inventory::save_registry, appimage::remove_desktop_entry)
+        });
+        match removed {
             Err(e) => raised(&e),
             Ok(Removal::NotDeleted(msg)) => self.say(&msg, 5),
             Ok(Removal::Removed) => {
@@ -1719,19 +1721,19 @@ impl Win {
         }
 
         let dest_s = dest.to_string_lossy().into_owned();
-        let mut reg = inventory::load_registry();
         let src_name = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        reg.insert(
-            name.clone(),
-            serde_json::json!({
-                "name": name,
-                "path": dest_s,
-                "version": version,
-                "description": format!("AppImage · {src_name}"),
-                "source_file": src.to_string_lossy(),
-            }),
-        );
-        if let Err(e) = inventory::save_registry(&reg) {
+        let entry = serde_json::json!({
+            "name": name,
+            "path": dest_s,
+            "version": version,
+            "description": format!("AppImage · {src_name}"),
+            "source_file": src.to_string_lossy(),
+        });
+        // Read afresh under the registry's lock: what changed meanwhile stays.
+        if let Err(e) = inventory::update_registry(|reg| {
+            reg.insert(name.clone(), entry);
+            Ok(true)
+        }) {
             return raised(&e);
         }
         // A tracked AppImage should appear in the launcher like anything else,

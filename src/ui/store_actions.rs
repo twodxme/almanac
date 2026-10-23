@@ -1051,8 +1051,13 @@ impl Win {
         }
         log("downloaded, registering");
 
-        let reg = registry_with(p, dest)?;
-        inventory::save_registry(&reg)?;
+        // Read and written under the registry's lock, so an entry another
+        // writer changed meanwhile is kept as they left it.
+        {
+            let _lock = inventory::lock_registry()?;
+            let reg = registry_with(p, dest)?;
+            inventory::save_registry(&reg)?;
+        }
         if crate::appimage::install_desktop_entry(dest, &p.id)? {
             log("launcher entry added");
         }

@@ -1516,8 +1516,38 @@ pub fn update_appimages() -> Result<usize, String> {
             appimage::download_verified(&py_str(url), dest, None, sha256).map(|_| ()).map_err(|e| py_net_error(&e))
         },
         &mut |dest, key| appimage::install_desktop_entry(dest, key).map(|_| ()).map_err(|e| py_net_error(&e)),
-        &mut save_registry,
+        &mut save_updated,
     )
+}
+
+/// Record one AppImage `update_appimages` has just updated (to `version`,
+/// at `dest`). The registry was read before the downloads, which take
+/// minutes; writing that copy back dropped whatever the window had changed
+/// meanwhile. Under the registry's lock it is read again and only this
+/// entry's version, latest and checked_at change.
+///
+/// An entry removed meanwhile is not brought back, and the build just
+/// downloaded for it is deleted again: that is an error for the log.
+fn save_updated(key: &PyStr, version: &Value, dest: &Path) -> Result<(), String> {
+    let _lock = inventory::lock_registry().map_err(|e| format!("OSError: {e}"))?;
+    let mut reg = load_registry()?;
+    let rec = match reg.node(reg.root) {
+        Node::Obj(entries) => entries.iter().find(|(k, _)| k == key).map(|(_, c)| *c),
+        _ => None,
+    };
+    let Some(rec) = rec.filter(|&r| matches!(reg.node(r), Node::Obj(_))) else {
+        let _ = std::fs::remove_file(dest);
+        return Err("RuntimeError: it was removed while it downloaded, so the download was discarded".into());
+    };
+    mark_updated(&mut reg, rec, version);
+    save_registry(&reg)
+}
+
+/// `rec['version'] = version; rec['latest'] = {}; rec['checked_at'] = 0`.
+fn mark_updated(reg: &mut PyJson, rec: usize, version: &Value) {
+    reg.set_value(rec, "version", version);
+    reg.set(rec, "latest", Node::Obj(Vec::new()));
+    reg.set(rec, "checked_at", Node::Int("0".into()));
 }
 
 /// `inventory._load_registry()`: whatever JSON the registry file holds (a
@@ -1552,15 +1582,20 @@ fn save_registry(data: &PyJson) -> Result<(), String> {
     if let Some(parent) = reg.parent() {
         py_mkdir_parents(parent)?;
     }
-    let tmp = reg.with_extension("tmp");
+    // A name of its own, so no other writer writes into the same file.
+    let tmp = inventory::registry_tmp(&reg);
     let text = data.dumps_indent2(data.root) + "\n";
-    {
+    let written = (|| {
         use std::io::Write;
         let mut f = std::fs::File::create(&tmp).map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp])))?;
         f.write_all(text.as_bytes()).map_err(|e| format!("OSError: {}", py_os_error(&e, &[])))?;
+        // atomic: a crash mid-write cannot truncate it
+        std::fs::rename(&tmp, &reg).map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp, &reg])))
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    // atomic: a crash mid-write cannot truncate it
-    std::fs::rename(&tmp, &reg).map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp, &reg])))
+    written
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`, with Python's error text.
@@ -1688,15 +1723,16 @@ fn check_record(rec: &Value) -> Result<Value, String> {
 
 /// `update_appimages` with the registry and the four calls it makes passed
 /// in (`check(key, record)` giving the dict `appimage.check` returns,
-/// `download(url, dest)`, `install_desktop_entry(dest, key)`,
-/// `save_registry(reg)`). Errors are the `"Type: message"` strings the
-/// ported modules return; `Err` is an exception the Python lets out.
+/// `download(url, dest, sha256)`, `install_desktop_entry(dest, key)`, and
+/// `save(key, version, dest)`, which records one entry's update, see
+/// `save_updated`). Errors are the `"Type: message"` strings the ported
+/// modules return; `Err` is an exception the Python lets out.
 pub fn update_appimages_with(
     mut reg: PyJson,
     check: &mut dyn FnMut(&str, &Value) -> Result<Value, String>,
     download: &mut dyn FnMut(&Value, &Path, &str) -> Result<(), String>,
     install: &mut dyn FnMut(&Path, &str) -> Result<(), String>,
-    save: &mut dyn FnMut(&PyJson) -> Result<(), String>,
+    save: &mut dyn FnMut(&PyStr, &Value, &Path) -> Result<(), String>,
 ) -> Result<usize, String> {
     let entries = match reg.node(reg.root) {
         Node::Obj(e) => e.clone(),
@@ -1747,10 +1783,8 @@ pub fn update_appimages_with(
         let attempt = (|| -> Result<(), String> {
             let dest = record_path(&reg, rec)?;
             download(&url, &dest, sha256)?;
-            reg.set_value(rec, "version", &version);
-            reg.set(rec, "latest", Node::Obj(Vec::new()));
-            reg.set(rec, "checked_at", Node::Int("0".into()));
-            save(&reg)?;
+            mark_updated(&mut reg, rec, &version);
+            save(&key, &version, &dest)?;
             install(&dest, &key_s)?;
             Ok(())
         })();
@@ -2699,6 +2733,46 @@ mod tests {
         );
     }
 
+    /// The scheduled update writes back only the entry it updated, read
+    /// afresh under the registry's lock: what the window changed while it
+    /// downloaded stays, and an app removed meanwhile is not brought back.
+    #[test]
+    fn an_update_keeps_what_changed_while_it_downloaded() {
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        let reg_path = inventory::registry();
+        std::fs::create_dir_all(reg_path.parent().unwrap()).unwrap();
+        std::fs::write(&reg_path, serde_json::to_string(&json!({
+            "a": {"version": "1", "path": "/x/a.AppImage", "latest": {"version": "2"}},
+            "b": {"version": "1", "path": "/x/b.AppImage"},
+        })).unwrap()).unwrap();
+        // Meanwhile the window renamed one entry's description and added
+        // another; then the update of `a` lands.
+        let mut now = inventory::load_registry();
+        now["b"]["description"] = json!("changed in the window");
+        now.insert("c".into(), json!({"version": "3", "path": "/x/c.AppImage"}));
+        inventory::save_registry(&now).unwrap();
+        let dest = d.path().join("a.AppImage");
+        save_updated(&pystr("a"), &json!("2"), &dest).unwrap();
+        let after = inventory::load_registry();
+        assert_eq!(after["a"]["version"], json!("2"));
+        assert_eq!(after["a"]["latest"], json!({}));
+        assert_eq!(after["b"]["description"], json!("changed in the window"));
+        assert_eq!(after["c"]["version"], json!("3"));
+        // Removed while it downloaded: not brought back, its download gone.
+        std::fs::write(&dest, b"new build").unwrap();
+        let mut now = inventory::load_registry();
+        now.remove("a");
+        inventory::save_registry(&now).unwrap();
+        assert!(save_updated(&pystr("a"), &json!("3"), &dest).is_err());
+        assert!(!inventory::load_registry().contains_key("a"));
+        assert!(!dest.exists());
+        let names: Vec<_> = std::fs::read_dir(reg_path.parent().unwrap()).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+    }
+
     /// The release's published sha256 reaches the download.
     #[test]
     fn the_published_checksum_reaches_the_download() {
@@ -2713,7 +2787,7 @@ mod tests {
             update_appimages_with(reg, &mut check, &mut |_, _, sha| {
                 seen.push(sha.to_string());
                 Ok(())
-            }, &mut |_, _| Ok(()), &mut |_| Ok(()))
+            }, &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(seen, vec![hex.clone()]);
@@ -2726,7 +2800,7 @@ mod tests {
         let mut no_check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
         let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
         let (r, _) = capture_log(|| {
-            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_| Ok(()))
+            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(take_updated(), vec!["wordcraft 0.7.0 → 0.8.0".to_string()]);
@@ -2871,7 +2945,7 @@ mod tests {
     #[test]
     fn a_registry_that_is_not_a_dict_is_an_error() {
         let mut no = |_: &str, _: &Value| -> Result<Value, String> { Ok(json!({})) };
-        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_| Ok(()));
+        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
         assert_eq!(r, Err("AttributeError: 'list' object has no attribute 'items'".into()));
         assert_eq!(check_record(&json!("x")), Err("AttributeError: 'str' object has no attribute 'get'".into()));
     }

@@ -1933,12 +1933,19 @@ fn save_registry_py(data: &Py) -> Result<(), String> {
     if let Some(parent) = reg.parent() {
         std::fs::create_dir_all(parent).map_err(|e| os_error(&e, parent))?;
     }
-    let tmp = reg.with_extension("tmp");
+    // A name of its own, so no other writer writes into the same file.
+    let tmp = crate::inventory::registry_tmp(&reg);
     let mut text = String::new();
     py_dumps(data, 2, 0, &mut text);
     text.push('\n');
-    std::fs::write(&tmp, text).map_err(|e| os_error(&e, &tmp))?;
-    std::fs::rename(&tmp, &reg).map_err(|e| os_error2(&e, &tmp, &reg)) // atomic: a crash mid-write cannot truncate it
+    if let Err(e) = std::fs::write(&tmp, text) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(os_error(&e, &tmp));
+    }
+    std::fs::rename(&tmp, &reg).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        os_error2(&e, &tmp, &reg)
+    }) // atomic: a crash mid-write cannot truncate it
 }
 
 /// Download, verify, register and add a launcher. Raises on failure.
@@ -2004,6 +2011,9 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
         Py::Str(v) => opt.name.replace(v.as_str(), "*"),
         other => return Err(format!("replace() argument 1 must be str, not {}", other.type_name())),
     };
+    // Read, changed and written under the registry's lock: an entry another
+    // writer changed meanwhile is kept as they left it.
+    let _lock = crate::inventory::lock_registry()?;
     let mut reg = load_registry_py().map_err(|e| exc_str(&e))?;
     let entry = Py::Dict(vec![
         ("name".into(), Py::Str(key.clone())),
@@ -2034,6 +2044,7 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
         other => return Err(format!("'{}' object does not support item assignment", other.type_name())),
     }
     save_registry_py(&reg)?;
+    drop(_lock);
     if crate::appimage::install_desktop_entry(&dest, &key).map_err(|e| exc_str(&e))? {
         log("launcher entry added");
     }
