@@ -594,6 +594,13 @@ fn dumps(cfg: &Config) -> Result<String, String> {
     if cfg.items.is_empty() {
         return Ok("{}".into());
     }
+    // Depth counts the top-level dict, and empty containers too. Measured
+    // before anything is written: indenting a value nested that deep, only
+    // to throw it away, would write gigabytes of spaces.
+    let deepest = cfg.items.iter().map(|(_, v)| crate::util::tree::depth(&**v, PyValue::tree_shape)).max();
+    if deepest.unwrap_or(0) + 1 > ENCODE_MAX_DEPTH {
+        return Err(RECURSION.into());
+    }
     out.push('{');
     let mut stack: Vec<(Frame, bool)> = Vec::new();
     for (i, (k, v)) in cfg.items.iter().enumerate() {
@@ -610,13 +617,6 @@ fn dumps(cfg: &Config) -> Result<String, String> {
             PyKey::Int(n) => out.push_str(&format!("\"{n}\"")),
         }
         out.push_str(": ");
-        // Depth counts the top-level dict, and empty containers too.
-        let too_deep = |x: &PyValue, open_frames: usize| {
-            matches!(x, PyValue::List(_) | PyValue::Dict(_)) && open_frames + 2 > ENCODE_MAX_DEPTH
-        };
-        if too_deep(v, 0) {
-            return Err(RECURSION.into());
-        }
         if let Some(f) = open(v, &mut out) {
             stack.push((f, true));
         }
@@ -643,9 +643,6 @@ fn dumps(cfg: &Config) -> Result<String, String> {
                     if let Some(k) = key {
                         json_str(k, &mut out);
                         out.push_str(": ");
-                    }
-                    if too_deep(x, level - 1) {
-                        return Err(RECURSION.into());
                     }
                     if let Some(f) = open(x, &mut out) {
                         stack.push((f, true));
