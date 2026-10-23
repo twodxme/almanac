@@ -276,17 +276,25 @@ impl TaskDialog {
                     glib::idle_add_once(move || g.get_ref().step_label.set_text(c_str(&label)));
                 };
                 let log = |line: &str| idle_append(&guard, line);
-                work(&steps, &cancelled, &proc, &set_label, &log, keep_going)
+                // A step that panics ends the task as failed, like any other
+                // error, instead of taking the worker down without a word.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    work(&steps, &cancelled, &proc, &set_label, &log, keep_going)
+                }))
+                .unwrap_or_else(|_| Err("the task stopped unexpectedly".to_string()))
             };
             match result {
                 Ok(ok) => {
                     glib::idle_add_once(move || guard.get_ref().finish(ok));
                 }
                 Err(exc) => {
-                    // An exception the Python does not catch: the thread dies
-                    // with a traceback on stderr and `_finish` is never called.
+                    // An exception the Python does not catch: the thread died
+                    // with a traceback on stderr and `_finish` was never
+                    // called, so the dialog pulsed on and could not be
+                    // closed. It is in the log now, and the task fails.
                     eprintln!("Exception in thread Thread-{n} (_work):\nTraceback (most recent call last):\n{exc}");
-                    glib::idle_add_once(move || drop(guard));
+                    idle_append(&guard, &format!("failed: {exc}"));
+                    glib::idle_add_once(move || guard.get_ref().finish(false));
                 }
             }
         });
@@ -768,7 +776,7 @@ fn decode_chunk_as(enc: &str, pending: &mut Vec<u8>, chunk: &[u8], final_: bool)
     let mut data = std::mem::take(pending);
     data.extend_from_slice(chunk);
     if !is_utf8_codeset(enc) {
-        return decode_legacy(enc, pending, data, final_);
+        return decode_legacy(enc, pending, data, final_).map_err(|(_, msg)| msg);
     }
     match std::str::from_utf8(&data) {
         Ok(_) => Ok(data),
@@ -802,14 +810,21 @@ fn decode_chunk_as(enc: &str, pending: &mut Vec<u8>, chunk: &[u8], final_: bool)
 /// A codeset other than UTF-8: ASCII and Latin-1 exactly as Python's codecs,
 /// anything else through iconv (glib's `g_convert`), which has the same
 /// tables. Python names a single-byte table's failure the 'charmap' codec.
-fn decode_legacy(enc: &str, pending: &mut Vec<u8>, data: Vec<u8>, final_: bool) -> Result<Vec<u8>, String> {
+/// The error carries the offset in `data` of the byte that would not decode
+/// (None for an encoding iconv does not know) beside the message.
+fn decode_legacy(
+    enc: &str,
+    pending: &mut Vec<u8>,
+    data: Vec<u8>,
+    final_: bool,
+) -> Result<Vec<u8>, (Option<usize>, String)> {
     let lower = enc.to_ascii_lowercase();
     if lower == "ansi_x3.4-1968" || lower == "ascii" || lower == "us-ascii" {
         if let Some(at) = data.iter().position(|&b| b >= 0x80) {
-            return Err(format!(
+            return Err((Some(at), format!(
                 "UnicodeDecodeError: 'ascii' codec can't decode byte 0x{:02x} in position {at}: ordinal not in range(128)",
                 data[at]
-            ));
+            )));
         }
         return Ok(data);
     }
@@ -832,32 +847,95 @@ fn decode_legacy(enc: &str, pending: &mut Vec<u8>, data: Vec<u8>, final_: bool) 
     match glib::convert(&data, "UTF-8", enc) {
         Ok((out, read)) if read < data.len() => {
             if final_ {
-                return Err(format!(
+                return Err((Some(read), format!(
                     "UnicodeDecodeError: '{lower}' codec can't decode byte 0x{:02x} in position {read}: incomplete multibyte sequence",
                     data[read]
-                ));
+                )));
             }
             *pending = data[read..].to_vec();
             Ok(out.to_vec())
         }
         Ok((out, _)) => Ok(out.to_vec()),
-        Err(glib::CvtError::IllegalSequence { offset, .. }) => Err(bad(offset)),
-        Err(glib::CvtError::Convert(_)) => Err(format!("LookupError: unknown encoding: {enc}")),
+        Err(glib::CvtError::IllegalSequence { offset, .. }) => Err((Some(offset), bad(offset))),
+        Err(glib::CvtError::Convert(_)) => Err((None, format!("LookupError: unknown encoding: {enc}"))),
+    }
+}
+
+/// `decode_chunk_as`, forgiving: a byte that does not decode becomes U+FFFD
+/// and the text after it goes on, the way `errors="replace"` reads. A task's
+/// log is for reading; one stray byte from a build tool must not stop it
+/// being read (strict decoding used to end the worker there, leaving the
+/// child unreaped and the dialog unable to close). An incomplete sequence at
+/// the end of a chunk still waits for the next one.
+fn decode_chunk_lossy(enc: &str, pending: &mut Vec<u8>, chunk: &[u8], final_: bool) -> Vec<u8> {
+    const REPLACEMENT: &[u8] = "\u{FFFD}".as_bytes();
+    let mut data = std::mem::take(pending);
+    data.extend_from_slice(chunk);
+    let mut out = Vec::with_capacity(data.len());
+    if !is_utf8_codeset(enc) {
+        loop {
+            match decode_legacy(enc, pending, data.clone(), final_) {
+                Ok(text) => {
+                    out.extend(text);
+                    return out;
+                }
+                Err((Some(at), _)) if at < data.len() => {
+                    // What comes before the bad byte decodes on its own.
+                    if let Ok(text) = decode_legacy(enc, &mut Vec::new(), data[..at].to_vec(), true) {
+                        out.extend(text);
+                    }
+                    out.extend_from_slice(REPLACEMENT);
+                    data.drain(..=at);
+                }
+                // A codeset iconv does not know: read it as UTF-8.
+                Err(_) => {
+                    out.extend_from_slice(String::from_utf8_lossy(&data).as_bytes());
+                    return out;
+                }
+            }
+        }
+    }
+    let mut rest = data.as_slice();
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(_) => {
+                out.extend_from_slice(rest);
+                return out;
+            }
+            Err(e) => {
+                let at = e.valid_up_to();
+                out.extend_from_slice(&rest[..at]);
+                match e.error_len() {
+                    Some(n) => {
+                        out.extend_from_slice(REPLACEMENT);
+                        rest = &rest[at + n..];
+                    }
+                    None if !final_ => {
+                        *pending = rest[at..].to_vec();
+                        return out;
+                    }
+                    None => {
+                        out.extend_from_slice(REPLACEMENT);
+                        return out;
+                    }
+                }
+            }
+        }
     }
 }
 
 /// Reads `reader` the way Python iterates a text-mode pipe: chunks of up to
-/// 8192 bytes, decoded strictly as UTF-8 (a bad byte raises, and the lines
-/// of that chunk are never seen), universal newlines (`\r\n`, `\r` and `\n`
-/// all end a line), each line handed over without its terminator, a last
-/// unterminated line included. A read error raises too.
+/// 8192 bytes, decoded in the locale's codeset (a byte that does not decode
+/// shows as U+FFFD, see `decode_chunk_lossy`), universal newlines (`\r\n`,
+/// `\r` and `\n` all end a line), each line handed over without its
+/// terminator, a last unterminated line included. A read error is an `Err`.
 fn for_each_line(mut reader: impl std::io::Read, mut f: impl FnMut(&str)) -> Result<(), String> {
     let mut buf = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
     let mut line: Vec<u8> = Vec::new();
     let mut after_cr = false;
     let mut emit = |line: &mut Vec<u8>| {
-        // Whole lines of validated UTF-8: \r and \n never sit inside a
+        // Whole lines of decoded UTF-8: \r and \n never sit inside a
         // multi-byte sequence.
         f(&String::from_utf8_lossy(line));
         line.clear();
@@ -868,7 +946,7 @@ fn for_each_line(mut reader: impl std::io::Read, mut f: impl FnMut(&str)) -> Res
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(format!("OSError: {}", py_errno_str(e.raw_os_error().unwrap_or(0)))),
         };
-        let data = decode_chunk(&mut pending, &buf[..n], n == 0)?;
+        let data = decode_chunk_lossy(preferred_encoding(), &mut pending, &buf[..n], n == 0);
         for &b in &data {
             if after_cr {
                 after_cr = false;
@@ -950,10 +1028,22 @@ fn work(
         };
         // kept so Cancel can stop it
         *proc_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(proc.clone());
-        for_each_line(&proc.stdout, |line| log(line))?;
+        let read = for_each_line(&proc.stdout, |line| log(line));
+        if let Err(exc) = &read {
+            // Nobody reads its output any more: stop it (it leads a session
+            // of its own, so its group is its pid) rather than leave it to
+            // block on a full pipe, and still reap it below.
+            log(&format!("could not read its output: {exc}"));
+            let _ = nix::sys::signal::killpg(proc.pid, nix::sys::signal::Signal::SIGKILL);
+        }
         let code = proc.wait();
         *proc_slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        if code != 0 {
+        if read.is_err() {
+            ok = false;
+            if !keep_going {
+                break;
+            }
+        } else if code != 0 {
             log(&format!("— exited {code} —"));
             ok = false;
             if !keep_going {
@@ -1219,12 +1309,59 @@ mod tests {
         assert_eq!(py_strip("\u{3000}x\u{a0}"), "x");
     }
 
+    /// Output that is not UTF-8 is read with the bad bytes replaced; it
+    /// used to end the worker before the child was reaped or the dialog
+    /// could close.
     #[test]
-    fn bad_utf8_raises() {
+    fn bad_utf8_is_replaced_not_raised() {
         let mut got = Vec::new();
-        assert!(for_each_line(&b"ok\n\xff\xfe\n"[..], |l| got.push(l.to_string())).is_err());
-        assert!(got.is_empty());
-        assert!(for_each_line(&b"ok\n\xc3"[..], |_| {}).is_err());
+        for_each_line(&b"ok\n\xff\xfe\nnext"[..], |l| got.push(l.to_string())).unwrap();
+        assert_eq!(got, ["ok", "\u{FFFD}\u{FFFD}", "next"]);
+        got.clear();
+        for_each_line(&b"ok\n\xc3"[..], |l| got.push(l.to_string())).unwrap();
+        assert_eq!(got, ["ok", "\u{FFFD}"]);
+    }
+
+    /// A character split across two reads is still one character.
+    #[test]
+    fn a_sequence_split_between_reads_decodes() {
+        struct OneByte<'a>(&'a [u8]);
+        impl std::io::Read for OneByte<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let Some((&b, rest)) = self.0.split_first() else { return Ok(0) };
+                buf[0] = b;
+                self.0 = rest;
+                Ok(1)
+            }
+        }
+        let mut got = Vec::new();
+        for_each_line(OneByte("é日本\n".as_bytes()), |l| got.push(l.to_string())).unwrap();
+        assert_eq!(got, ["é日本"]);
+        let mut p = Vec::new();
+        assert_eq!(decode_chunk_lossy("ISO-8859-1", &mut p, b"\xe9", true), "é".as_bytes());
+        assert_eq!(decode_chunk_lossy("ANSI_X3.4-1968", &mut p, b"a\xe9b", true), "a\u{FFFD}b".as_bytes());
+        assert_eq!(decode_chunk_lossy("EUC-JP", &mut p, b"a\xa4", false), b"a");
+        assert_eq!(decode_chunk_lossy("EUC-JP", &mut p, b"\xa2\xff", true), "あ\u{FFFD}".as_bytes());
+    }
+
+    /// A command that prints bytes that are not UTF-8 runs to its end: its
+    /// output is logged, it is waited for (no zombie), and the task reports
+    /// its exit status rather than dying silently.
+    #[test]
+    fn a_command_printing_invalid_utf8_finishes() {
+        let steps = vec![
+            Step::argv("bad bytes", v(&["sh", "-c", "printf 'a\\377b\\n'; exit 3"])),
+            Step::argv("after", v(&["true"])),
+        ];
+        let lines = Mutex::new(Vec::new());
+        let log = |l: &str| lines.lock().unwrap().push(l.to_string());
+        let slot = Mutex::new(None);
+        assert_eq!(work(&steps, &AtomicBool::new(false), &slot, &|_| {}, &log, true), Ok(false));
+        let lines = lines.into_inner().unwrap();
+        assert!(lines.contains(&"a\u{FFFD}b".to_string()), "{lines:?}");
+        assert!(lines.contains(&"— exited 3 —".to_string()), "{lines:?}");
+        assert!(lines.contains(&"$ true".to_string()), "the next step still ran: {lines:?}");
+        assert!(slot.lock().unwrap().is_none());
     }
 
     #[test]
