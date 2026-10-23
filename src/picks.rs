@@ -1233,27 +1233,11 @@ struct Deps<'a> {
 }
 
 /// Run `f` on a thread with a stack deep enough for what Python's json
-/// reads (see `MAX_DEPTH`): parsing, copying, writing and dropping a
-/// nested picks.json all recurse. Inline when no such thread can be made.
+/// reads (see `MAX_DEPTH`): copying, writing and dropping a nested
+/// picks.json all recurse. Inline when no such thread can be made.
 fn _deep<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    let cell = std::sync::Mutex::new(Some(f));
-    let take = || cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-    let ran = std::thread::scope(|sc| {
-        let h = std::thread::Builder::new().name("picks".into()).stack_size(DEEP_STACK).spawn_scoped(sc, || take().map(|f| f())).ok()?;
-        h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
-    });
-    match ran {
-        Some(v) => v,
-        // the thread could not be made: the work is still here
-        None => match take() {
-            Some(f) => f(),
-            None => unreachable!("a thread that ran the work returned it"),
-        },
-    }
+    crate::util::with_stack_named(crate::util::JSON_STACK, Some("picks"), f)
 }
-
-/// Room for MAX_DEPTH levels (reserved, not used, until a file is that deep).
-const DEEP_STACK: usize = 512 << 20;
 
 fn _state_path() -> PathBuf {
     crate::xdg::state_home().join("almanac").join("picks.json")

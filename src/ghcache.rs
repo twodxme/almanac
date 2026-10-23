@@ -62,9 +62,6 @@ const LOADS_DEPTH: usize = 52_100;
 const DUMPS_BUDGET: u64 = 52_090 * 28_939;
 const DUMPS_LIST: u64 = 28_939;
 const DUMPS_DICT: u64 = 52_090;
-/// The stack the JSON work runs on (see [`deep`]): enough for the
-/// recursive parser, printer and conversions at Python's depth.
-const DEEP_STACK: usize = 512 << 20;
 /// Python's `sys.get_int_max_str_digits()` default.
 const INT_MAX_STR_DIGITS: usize = 4300;
 /// urllib's `timeout=25`: every socket operation, not the whole request.
@@ -291,20 +288,13 @@ impl Drop for PyValue {
 impl PyValue {
 }
 
-/// Runs `f` on a thread with a [`DEEP_STACK`] stack: the JSON code is
-/// recursive, and Python's json goes about 52 000 levels deep before it
-/// gives up. (Only reserved address space; the pages are touched as used.)
-// `&run`, not `run`: the fallback below calls it again.
-#[allow(clippy::needless_borrows_for_generic_args)]
+/// Runs `f` on a thread with a [`crate::util::JSON_STACK`] stack: the
+/// printer and conversions are recursive, and Python's json goes about
+/// 52 000 levels deep before it gives up. (Only reserved address space; the
+/// pages are touched as used.) The thread is unnamed, a worker wherever
+/// this is called from.
 fn deep<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
-    let slot = Mutex::new(Some(f));
-    let run = || slot.lock().unwrap_or_else(|e| e.into_inner()).take().map(|f| f());
-    let out = std::thread::scope(|s| match std::thread::Builder::new().stack_size(DEEP_STACK).spawn_scoped(s, &run) {
-        Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
-        // No thread to be had: run here, as deep as this stack allows.
-        Err(_) => None,
-    });
-    out.or_else(run).expect("deep(): the closure is still there when the thread could not start")
+    crate::util::with_stack_named(crate::util::JSON_STACK, None, f)
 }
 
 /// `repr(float)`: like `json.dumps` except for the non-finite ones.

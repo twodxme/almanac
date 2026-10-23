@@ -321,13 +321,20 @@ pub const JSON_STACK: usize = 512 << 20;
 /// code that asks whether it is on the main thread gets the same answer.
 /// Runs here when no thread can be started.
 pub fn with_stack<R: Send>(size: usize, f: impl FnOnce() -> R + Send) -> R {
-    let mut job = Some(f);
     let name = std::thread::current().name().map(str::to_owned);
+    with_stack_named(size, name.as_deref(), f)
+}
+
+/// [`with_stack`] on a thread named `name` (None: unnamed) whatever the
+/// caller's, for work that stands in for a Python worker thread wherever it
+/// is called from.
+pub fn with_stack_named<R: Send>(size: usize, name: Option<&str>, f: impl FnOnce() -> R + Send) -> R {
+    let mut job = Some(f);
     let out = std::thread::scope(|s| {
         let job = &mut job;
         let mut b = std::thread::Builder::new().stack_size(size);
         if let Some(n) = name {
-            b = b.name(n);
+            b = b.name(n.to_owned());
         }
         match b.spawn_scoped(s, move || job.take().map(|f| f())) {
             Ok(h) => Some(h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))),

@@ -535,9 +535,9 @@ fn py_main_thread() -> bool {
     PY_MAIN.with(|c| c.get()).unwrap_or_else(|| std::thread::current().name() == Some("main"))
 }
 
-/// Stack for the threads that hold the caches' values: enough to parse,
-/// drop, clone and write one nested as deep as Python's json allows.
-const DEEP_STACK: usize = 512 << 20;
+/// Stack for the threads that hold the caches' values: enough to drop,
+/// clone and write one nested as deep as Python's json allows.
+const DEEP_STACK: usize = crate::util::JSON_STACK;
 
 /// `f()` on a thread with a [`DEEP_STACK`] stack (reserved, not used, until
 /// a deep value needs it), standing in for the calling Python thread; at once
@@ -550,27 +550,17 @@ fn deep<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 }
 
 /// [`deep`] for a thread that stands in for the given kind of Python thread.
+/// The thread is unnamed whatever the caller's, as other modules' "main
+/// thread?" checks go by the name.
 fn deep_as<R: Send>(main: bool, f: impl FnOnce() -> R + Send) -> R {
-    let mut job = Some(f);
-    let out = std::thread::scope(|s| {
-        let job = &mut job;
-        let spawned = std::thread::Builder::new().stack_size(DEEP_STACK).spawn_scoped(s, move || {
-            PY_MAIN.with(|c| c.set(Some(main)));
-            job.take().map(|f| f())
-        });
-        match spawned {
-            Ok(h) => Some(h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))),
-            Err(_) => None,
-        }
-    });
-    if let Some(Some(r)) = out {
-        return r;
-    }
-    // The thread could not be started, so the job never ran: here, then.
-    match job.take() {
-        Some(f) => f(),
-        None => unreachable!("a job that ran returned its result"),
-    }
+    crate::util::with_stack_named(DEEP_STACK, None, move || {
+        // Restored after: when no thread could be started this runs on the
+        // caller's.
+        let was = PY_MAIN.with(|c| c.replace(Some(main)));
+        let out = f();
+        PY_MAIN.with(|c| c.set(was));
+        out
+    })
 }
 
 /// `json.loads(text)`: NaN, Infinity and -Infinity accepted, integers of any

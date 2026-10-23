@@ -57,10 +57,18 @@ on any thread.
   hand-written `Drop` that takes children out flat. Conversions use
   `util::tree::fold` / `fold_ids` (arenas); a deep `serde_json::Value` is
   cloned, compared and dropped with `util::tree::{clone_value, eq_value, drop_value}`.
+- Python's `json.loads` is `util::pyjson::loads` (or `loads_into` for an
+  arena): serde_json first, an iterative CPython-compatible scanner for what
+  serde refuses, straight into the module's own value type. It never
+  recurses; give it the module's depth limit (`Limit`) and error text.
 - Where recursion is simpler and bounded, run it on
   `util::with_stack(util::DEEP_STACK, ...)`; walks that may go very deep
-  through serde use `util::JSON_STACK`.
-- `ui::shell::spawn_bg` runs background work on a `JSON_STACK` thread.
+  through serde use `util::JSON_STACK` (`util::with_stack_named` when the
+  thread must not take the caller's name).
+- `ui::shell::spawn_bg` runs background work on a `JSON_STACK` thread. Still
+  needed: `ghcache::try_get_json` and its siblings hand deep
+  `serde_json::Value`s to store.rs, sources.rs, agents.rs and verify.rs,
+  which clone, convert and drop them recursively.
 
 ## UI (`src/ui/`)
 
