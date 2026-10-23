@@ -1745,25 +1745,8 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
 
         let raw = std::fs::read(desktop).map_err(io)?;
         let text = String::from_utf8_lossy(&raw).replace("\r\n", "\n").replace('\r', "\n");
-        let mut lines: Vec<String> = Vec::new();
-        let mut unencodable = false;
-        for line in py_splitlines(&text) {
-            if line.starts_with("Exec=") || line.starts_with("TryExec=") {
-                unencodable |= !app_utf8;
-            }
-            if line.starts_with("Exec=") {
-                // Preserve any field codes (%F, %U) the entry declared.
-                let tail = line.split_once('=').map(|x| x.1).unwrap_or("");
-                let codes: Vec<&str> = py_split(tail).filter(|t| t.starts_with('%')).collect();
-                lines.push(py_strip(&format!("Exec={app_str} {}", codes.join(" "))).to_string());
-            } else if line.starts_with("Icon=") {
-                lines.push(format!("Icon={icon_name}"));
-            } else if line.starts_with("TryExec=") {
-                lines.push(format!("TryExec={app_str}"));
-            } else {
-                lines.push(line.to_string());
-            }
-        }
+        let (lines, launches) = entry_lines(&text, &app_str, &icon_name);
+        let unencodable = launches && !app_utf8;
         let entry = apps_dir.join(format!("almanac-{name}.desktop"));
         if unencodable {
             // open(mode="w") has created the file before the write fails.
@@ -1788,6 +1771,76 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
         let _ = run_bytes(&cmd, 30, None);
     }
     Ok(true)
+}
+
+/// The lines of an AppImage's own .desktop entry, pointed at `app` (the
+/// stored AppImage) and the icon `icon_name`, and whether it had an Exec or
+/// TryExec line to point.
+///
+/// The path is quoted for the Exec key as the Desktop Entry spec has it
+/// ([`exec_arg`]): written bare, a name with a space launched its first
+/// word, and one with `%` became a field code.
+fn entry_lines(text: &str, app: &str, icon_name: &str) -> (Vec<String>, bool) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut launches = false;
+    for line in py_splitlines(text) {
+        if line.starts_with("Exec=") || line.starts_with("TryExec=") {
+            launches = true;
+        }
+        if line.starts_with("Exec=") {
+            // Preserve any field codes (%F, %U) the entry declared.
+            let tail = line.split_once('=').map(|x| x.1).unwrap_or("");
+            let codes: Vec<&str> = py_split(tail).filter(|t| t.starts_with('%')).collect();
+            lines.push(py_strip(&format!("Exec={} {}", exec_arg(app), codes.join(" "))).to_string());
+        } else if line.starts_with("Icon=") {
+            lines.push(format!("Icon={icon_name}"));
+        } else if line.starts_with("TryExec=") {
+            // A plain string (a path), not split into arguments: only the
+            // string escapes apply.
+            lines.push(format!("TryExec={}", desktop_string(app)));
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    (lines, launches)
+}
+
+/// One argument of a desktop entry's `Exec` key, as the Desktop Entry spec
+/// quotes it: in double quotes, with `"`, `` ` ``, `$` and `\` escaped by a
+/// backslash and `%` written `%%` (alone it starts a field code). The key's
+/// value is read as a string before it is split into arguments, so the
+/// result is escaped once more as a string ([`desktop_string`]).
+fn exec_arg(arg: &str) -> String {
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    for c in arg.chars() {
+        match c {
+            '"' | '`' | '$' | '\\' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            '%' => quoted.push_str("%%"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    desktop_string(&quoted)
+}
+
+/// A desktop entry string value: a backslash doubled, and the newline, tab
+/// and carriage return a line cannot hold as `\n`, `\t`, `\r`.
+fn desktop_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Remove the launcher entry and icons `install_desktop_entry` added.
@@ -3795,6 +3848,38 @@ mod tests {
         // A dict stored before the key existed reads as "no digest".
         let old: LatestRelease = serde_json::from_value(json!({"url": "u", "version": "2"})).unwrap();
         assert_eq!(old.sha256, "");
+    }
+
+    /// The launcher runs the stored AppImage whatever its name holds: GLib
+    /// reads the Exec line back to exactly the path, as one argument.
+    #[test]
+    fn test_exec_is_quoted_for_the_desktop_entry() {
+        let shipped = "[Desktop Entry]\nName=X\nExec=AppRun --no-sandbox %U\nTryExec=AppRun\nIcon=x\n";
+        for app in [
+            "/home/u/.local/state/almanac/apps/My App.AppImage",
+            "/a/100%.AppImage",
+            "/a/q\"uote$HOME`x`\\back.AppImage",
+            "/a/plain.AppImage",
+        ] {
+            let (lines, launches) = entry_lines(shipped, app, "almanac-x");
+            assert!(launches);
+            let exec = lines.iter().find_map(|l| l.strip_prefix("Exec=")).unwrap();
+            assert!(exec.ends_with(" %U"), "{exec}");
+            let text = format!("[Desktop Entry]\nType=Application\nName=X\n{}\n", lines[2..].join("\n"));
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("x.desktop");
+            std::fs::write(&file, text).unwrap();
+            let kf = gtk::glib::KeyFile::new();
+            kf.load_from_file(&file, gtk::glib::KeyFileFlags::NONE).unwrap();
+            // The string value, then the spec's argument quoting.
+            let value = kf.string("Desktop Entry", "Exec").unwrap();
+            let argv = gtk::glib::shell_parse_argv(value.replace("%%", "%").as_str()).unwrap();
+            assert_eq!(argv[0].to_str(), Some(app), "{exec}");
+            assert_eq!(argv[1].to_str(), Some("%U"));
+            assert_eq!(kf.string("Desktop Entry", "TryExec").unwrap().as_str(), app);
+        }
+        assert_eq!(exec_arg("/a/100%.AppImage"), "\"/a/100%%.AppImage\"");
+        assert_eq!(exec_arg("/a b"), "\"/a b\"");
     }
 
     #[test]
