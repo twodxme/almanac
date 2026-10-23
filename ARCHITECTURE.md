@@ -31,14 +31,17 @@ comment explains *why*, keep it when you change the code beside it.
 - **Files on disk**: `~/.local/state/almanac`, `~/.cache/almanac`,
   `~/.config/almanac`, written through `util::write_json` (atomic, with the
   same formatting 1.x used), so users keep their settings and history across
-  versions. Change a format only with a migration.
+  versions. Change a format only with a migration. `housekeeping` prunes
+  what only grows (month-old thumbnails and GitHub answers, rollback copies
+  of AppImages no longer registered) once a day in the background.
 - **Subprocesses** go through `util::run` / `util::run_with` (timeouts,
   never panic). GitHub goes through `ghcache` (token, ETags, budget guard).
 - **Demo mode** (`ALMANAC_DEMO=1`) swaps every machine reader for fixtures in
   `demo.rs`; screenshots depend on it, and it must never show anything from
   the real machine.
 - **i18n**: user-facing strings go through `crate::i18n::tr("text")`;
-  `po/update.sh` refreshes the template.
+  `po/update.sh` refreshes the template. Catalogs are read as UTF-8 (what
+  msgfmt writes); one in another charset is skipped, untranslated.
 - **Never change the machine from a test.** No package installs or removals,
   no `systemctl enable/disable`, no `git pull` in real checkouts, no writes to
   the real `~/.config`, `~/.local/state`, `~/.cache`: point `XDG_*` / `HOME`
