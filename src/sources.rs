@@ -1965,6 +1965,13 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
     }
     let partial = dest.with_extension("unverified");
     log(&format!("{}  ({:.0} MB)", opt.name, opt.size_mb));
+    // A file left there by an install that died would be kept as this
+    // download's "previous build", under the name of the installed app's
+    // own rollback copy (`<key>.previous`), replacing it. It is nobody's.
+    match std::fs::remove_file(&partial) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(os_error(&e, &partial)),
+        _ => {}
+    }
     crate::appimage::download(&opt.url, &partial, None).map_err(|e| exc_str(&e))?;
     if !opt.sha256.is_empty() {
         let mut h = Sha256::new();
@@ -2136,6 +2143,49 @@ mod tests {
         let _ = server.join();
         let apps = d.path().join("almanac").join("apps");
         assert_eq!(std::fs::read_dir(apps).expect("apps dir").count(), 0);
+    }
+
+    /// A `<key>.unverified` left by an install that died used to become
+    /// the next download's "previous build" -- `<key>.previous`, the
+    /// installed app's rollback copy, which it replaced.
+    #[test]
+    fn test_a_stale_partial_download_does_not_replace_the_rollback_copy() {
+        use std::io::Write;
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().expect("tempdir");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let body = b"\x7fELF new build";
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(body);
+            }
+        });
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        let apps = d.path().join("almanac").join("apps");
+        std::fs::create_dir_all(&apps).expect("apps dir");
+        std::fs::write(apps.join("app.AppImage"), b"\x7fELF installed").expect("write");
+        std::fs::write(apps.join("app.previous"), b"\x7fELF rollback").expect("write");
+        std::fs::write(apps.join("app.unverified"), b"stale").expect("write");
+        let res = Resolution { owner: "o".into(), repo: "app".into(), ..Default::default() };
+        let opt = Option {
+            kind: APPIMAGE.into(),
+            name: "app-1-x86_64.AppImage".into(),
+            version: "1".into(),
+            title: "AppImage".into(),
+            url: format!("http://127.0.0.1:{port}/app"),
+            // Wrong, so the install stops after the download, before it
+            // registers anything.
+            sha256: "0".repeat(64),
+            ..Default::default()
+        };
+        assert!(install_appimage(&res, &opt, &|_m: &str| {}).is_err());
+        let _ = server.join();
+        assert_eq!(std::fs::read(apps.join("app.previous")).expect("rollback"), b"\x7fELF rollback");
+        assert_eq!(std::fs::read(apps.join("app.AppImage")).expect("installed"), b"\x7fELF installed");
     }
 
     #[test]

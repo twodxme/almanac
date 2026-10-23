@@ -1252,42 +1252,167 @@ fn read_blocks(mut body: Box<dyn Read + Send>, mut each: impl FnMut(&[u8]) -> Re
 ///
 /// `progress` receives the fraction done when the source gives a
 /// Content-Length. Errors (network, I/O) are returned, as the Python raises.
+/// See [`download_verified`] for what the download must be before it is
+/// swapped in.
 pub fn download(url: &str, dest: &Path, progress: Option<&dyn Fn(f64)>) -> Result<PathBuf, String> {
+    download_verified(url, dest, progress, "")
+}
+
+/// What every AppImage (type 1 and type 2 alike) starts with: it is an ELF
+/// executable, the runtime, with the filesystem image appended.
+const ELF_MAGIC: &[u8] = b"\x7fELF";
+
+/// [`download`], checked before anything is replaced: the body must be as
+/// long as its Content-Length said, start with an ELF header (an HTML error
+/// page or a truncated file is not an AppImage), and, when `sha256` is not
+/// empty, hash to it (the hex digest GitHub publishes for a release asset).
+/// A download that fails any of these, or fails at all, is deleted and
+/// leaves `dest` and its `.previous` copy as they were.
+///
+/// Two downloads to the same place (the window and the scheduled update,
+/// say) would write the same temporary file: the second one finds it locked
+/// and fails at once, touching nothing.
+pub fn download_verified(
+    url: &str,
+    dest: &Path,
+    progress: Option<&dyn Fn(f64)>,
+    sha256: &str,
+) -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
     let dest = py_norm(dest);
     let tmp = py_with_suffix(&dest, ".download")?;
-    let r = urlopen(url)?;
-    // `int(r.headers.get("Content-Length") or 0)`
-    let total: f64 = match r.content_length.as_deref() {
-        None | Some("") => 0.0,
-        Some(v) => py_int(v)?.to_string().parse::<f64>().unwrap_or(0.0),
-    };
-    let mut done: u64 = 0;
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("OSError: {e}"))?;
-        read_blocks(r.body, |chunk| {
-            f.write_all(chunk).map_err(|e| format!("OSError: {e}"))?;
-            done += chunk.len() as u64;
-            if let Some(cb) = progress {
-                if total != 0.0 {
-                    cb(done as f64 / total);
+    let _lock = lock_download(&tmp)?;
+    let fetched = (|| -> Result<(), String> {
+        let r = urlopen(url)?;
+        // `int(r.headers.get("Content-Length") or 0)`
+        let total: f64 = match r.content_length.as_deref() {
+            None | Some("") => 0.0,
+            Some(v) => py_int(v)?.to_string().parse::<f64>().unwrap_or(0.0),
+        };
+        let mut done: u64 = 0;
+        let mut head: Vec<u8> = Vec::with_capacity(ELF_MAGIC.len());
+        let mut hash = Sha256::new();
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(|e| format!("OSError: {e}"))?;
+            read_blocks(r.body, |chunk| {
+                f.write_all(chunk).map_err(|e| format!("OSError: {e}"))?;
+                hash.update(chunk);
+                let want = ELF_MAGIC.len().saturating_sub(head.len());
+                head.extend_from_slice(&chunk[..want.min(chunk.len())]);
+                done += chunk.len() as u64;
+                if let Some(cb) = progress {
+                    if total != 0.0 {
+                        cb(done as f64 / total);
+                    }
                 }
-            }
-            Ok(())
-        })?;
-    }
-    // Keep the previous build: a bad update must be revertible.
-    if dest.exists() {
-        let prev = py_with_suffix(&dest, ".previous")?;
-        std::fs::rename(&dest, &prev).map_err(|e| format!("OSError: {e}"))?;
-    }
-    std::fs::rename(&tmp, &dest).map_err(|e| format!("OSError: {e}"))?;
-    {
+                Ok(())
+            })?;
+            f.sync_all().map_err(|e| format!("OSError: {e}"))?;
+        }
+        // http.client hands a short body over as if it were whole; a
+        // truncated AppImage must not replace a working one.
+        if total > 0.0 && (done as f64) < total {
+            return Err(format!("IncompleteRead: the download ended after {done} of {total} bytes"));
+        }
+        if head != ELF_MAGIC {
+            return Err("the download is not an AppImage (it does not start with an ELF header), \
+                        so it was deleted"
+                .into());
+        }
+        if !sha256.is_empty() && !hex::encode(hash.finalize()).eq_ignore_ascii_case(sha256.trim()) {
+            return Err("checksum mismatch: the download is not the file the project published, \
+                        so it was deleted"
+                .into());
+        }
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&dest).map_err(|e| format!("OSError: {e}"))?.permissions().mode();
-        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode | 0o111))
-            .map_err(|e| format!("OSError: {e}"))?;
+        let mode = std::fs::metadata(&tmp).map_err(|e| format!("OSError: {e}"))?.permissions().mode();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode | 0o111))
+            .map_err(|e| format!("OSError: {e}"))
+    })();
+    if let Err(e) = fetched {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    // Keep the previous build: a bad update must be revertible. It is linked
+    // aside first and the new one renamed over `dest`, so `dest` is never
+    // missing, and the old `.previous` is replaced only once the new build
+    // is in place.
+    let prev = py_with_suffix(&dest, ".previous")?;
+    let staged = {
+        let mut s = prev.clone().into_os_string();
+        s.push(".new");
+        PathBuf::from(s)
+    };
+    let kept = dest.exists() && {
+        let _ = std::fs::remove_file(&staged);
+        std::fs::hard_link(&dest, &staged).or_else(|_| std::fs::copy(&dest, &staged).map(|_| ())).is_ok()
+    };
+    if let Err(e) = std::fs::rename(&tmp, &dest) {
+        let _ = std::fs::remove_file(&tmp);
+        if kept {
+            let _ = std::fs::remove_file(&staged);
+        }
+        return Err(format!("OSError: {e}"));
+    }
+    if kept {
+        std::fs::rename(&staged, &prev).map_err(|e| format!("OSError: {e}"))?;
     }
     Ok(dest)
+}
+
+/// The lock on one download's temporary file (see [`lock_download`]).
+struct DownloadLock {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl Drop for DownloadLock {
+    /// The lock file goes while it is still held, so none is left beside
+    /// the AppImage; [`lock_download`] checks that the file it locked is the
+    /// one the name still points at, so a new download never shares a lock
+    /// with one that is just finishing.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Lock `<tmp>.lock` for one download to `tmp`, or fail at once when another
+/// download to it (in this process or another) holds it. The lock goes when
+/// the guard is dropped, and with the process if it dies.
+fn lock_download(tmp: &Path) -> Result<DownloadLock, String> {
+    use rustix::fs::{flock, FlockOperation};
+    use std::os::unix::fs::MetadataExt;
+    let mut name = tmp.as_os_str().to_os_string();
+    name.push(".lock");
+    let path = PathBuf::from(name);
+    let busy = || {
+        format!(
+            "busy: {} is already being downloaded (by Almanac or its scheduled update); \
+             try again when that is done",
+            tmp.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        )
+    };
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("OSError: {e}"))?;
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::WOULDBLOCK) => return Err(busy()),
+        Err(e) => return Err(format!("OSError: {e}")),
+    }
+    // Locked; but the download that held it may have removed the file since
+    // it was opened here, and another may hold a new one by the same name.
+    let same = match (file.metadata(), std::fs::metadata(&path)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    };
+    if !same {
+        return Err(busy());
+    }
+    Ok(DownloadLock { path, _file: file })
 }
 
 /// `os.path.join(dir, name)` on raw path text: no separator is added after
@@ -1666,15 +1791,19 @@ pub fn remove_desktop_entry(name: &str) -> Result<(), String> {
 /// `urllib.request.urlopen` for http and https: the request it sends (GET,
 /// HTTP/1.1, `Accept-Encoding: identity`, `Connection: close`, no
 /// decompression), `http.client`'s reading of the response (lenient
-/// Content-Length, chunked bodies, a short body returned without complaint),
-/// a timeout on every socket operation rather than on the whole transfer,
-/// HTTPErrorProcessor (anything outside 2xx is an error unless the redirect
-/// handler follows it), the redirect rules, proxies from `<scheme>_proxy`
-/// as urllib picks them, and OpenSSL's trust store (`SSL_CERT_FILE` /
-/// `SSL_CERT_DIR` included). Errors carry Python's exception name; only that
-/// there is one matters.
+/// Content-Length, chunked bodies), a timeout on every socket operation
+/// rather than on the whole transfer, HTTPErrorProcessor (anything outside
+/// 2xx is an error unless the redirect handler follows it), the redirect
+/// rules, proxies from `<scheme>_proxy` as urllib picks them, and OpenSSL's
+/// trust store (`SSL_CERT_FILE` / `SSL_CERT_DIR` included). Errors carry
+/// Python's exception name; only that there is one matters.
 ///
-/// Same code as `icons`' copy (private there).
+/// Stricter than urllib where a download's integrity depends on it: a body
+/// shorter than its Content-Length, or a TLS connection closed without
+/// close_notify, is an error rather than the end of the body, and a redirect
+/// from https to http is not followed.
+///
+/// Same code as `icons`' copy (private there), but for those three.
 mod urllib {
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -2372,9 +2501,15 @@ impl Read for Sock {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Sock::Tcp(s) => s.read(buf),
-            // suppress_ragged_eofs: a close without close_notify is an EOF.
+            // Python's suppress_ragged_eofs reads a close without
+            // close_notify as the end of the body. It is how a truncation
+            // looks, so it is an error here: a body with a length or chunks
+            // never reads that far, and one without has no other end to go by.
             Sock::Tls(s) => match s.read(buf) {
-                Err(e) if e.kind() == TLS_SUFFIX_EOF => Ok(0),
+                Err(e) if e.kind() == TLS_SUFFIX_EOF => Err(std::io::Error::new(
+                    TLS_SUFFIX_EOF,
+                    "the TLS connection closed without close_notify: the body may be truncated",
+                )),
                 r => r,
             },
         }
@@ -2932,7 +3067,8 @@ impl HttpResp {
         Ok(value)
     }
 
-    /// `read(amt)`: a body cut short by the server is returned as it is.
+    /// `read(amt)`. A body cut short of its Content-Length is an
+    /// IncompleteRead (http.client returns it as it is).
     fn read(&mut self, amt: usize) -> Result<Vec<u8>, String> {
         if self.closed {
             return Ok(Vec::new());
@@ -2947,8 +3083,9 @@ impl HttpResp {
         };
         let s = self.conn.read(amt)?;
         if s.is_empty() && amt > 0 {
-            // Ideally, we would raise IncompleteRead if the content-length
-            // wasn't satisfied, but it might break compatibility.
+            if let Some(left) = self.length.filter(|&l| l > 0) {
+                return Err(format!("IncompleteRead: {left} more bytes expected"));
+            }
             self.closed = true;
         } else if let Some(l) = self.length {
             let left = l - s.len() as i128;
@@ -3204,6 +3341,9 @@ fn http_error(req: Req, resp: Resp, code: i128, depth: usize) -> Result<Resp, St
     }
     let newurl = quote_redirect(&urlunparse(&parts))?;
     let newurl = urljoin(&req.full_url(), &newurl)?;
+    if !redirect_allowed(&req.typ, &newurl)? {
+        return Err(format!("HTTPError: HTTP Error {code}: refusing a redirect from https to {newurl}"));
+    }
     let headers: Vec<(String, String)> = req
         .headers
         .iter()
@@ -3225,6 +3365,13 @@ fn http_error(req: Req, resp: Resp, code: i128, depth: usize) -> Result<Resp, St
     new.redirect_dict = Some(visited);
     h.read_all()?;
     open(new, depth + 1)
+}
+
+/// Whether a redirect from a `from` URL to `to` may be followed. urllib
+/// follows https to http; that would hand the download to anyone on the
+/// path, so it is refused.
+pub(super) fn redirect_allowed(from: &str, to: &str) -> Result<bool, String> {
+    Ok(!from.eq_ignore_ascii_case("https") || urlparse(to)?[0].eq_ignore_ascii_case("https"))
 }
 
 /// `OpenerDirector.open(req)`.
@@ -3368,13 +3515,16 @@ mod tests {
         format!("http://{addr}/x")
     }
 
+    /// The smallest body `download` takes for an AppImage: an ELF header.
+    const NEW: &[u8] = b"\x7fELFNEW";
+
     #[test]
     fn test_previous_build_is_kept_for_rollback() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("app.AppImage");
         std::fs::write(&dest, b"OLD").unwrap();
-        download(&serve(b"NEW"), &dest, None).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"NEW");
+        download(&serve(NEW), &dest, None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), NEW);
         assert_eq!(
             std::fs::read(dest.with_extension("previous")).unwrap(),
             b"OLD",
@@ -3426,24 +3576,89 @@ mod tests {
         format!("http://{addr}/x")
     }
 
+    /// A body shorter than its Content-Length is a failed download, not a
+    /// new build: the installed one and its rollback copy stay as they were.
     #[test]
-    fn test_short_body_is_kept_like_http_client() {
+    fn test_short_body_fails_and_touches_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("app.AppImage");
-        let url = serve_raw(b"HTTP/1.0 200 OK\r\nContent-Length: 100\r\n\r\nNEW".to_vec());
-        let seen = std::cell::RefCell::new(Vec::new());
-        let cb = |f: f64| seen.borrow_mut().push(f);
-        download(&url, &dest, Some(&cb)).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"NEW");
-        assert_eq!(*seen.borrow(), vec![0.03]);
+        std::fs::write(&dest, b"\x7fELFOLD").unwrap();
+        std::fs::write(tmp.path().join("app.previous"), b"\x7fELFOLDER").unwrap();
+        let url = serve_raw(b"HTTP/1.0 200 OK\r\nContent-Length: 100\r\n\r\n\x7fELFNEW".to_vec());
+        let err = download(&url, &dest, None).unwrap_err();
+        assert!(err.contains("IncompleteRead"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFOLD");
+        assert_eq!(std::fs::read(tmp.path().join("app.previous")).unwrap(), b"\x7fELFOLDER");
+        assert!(!tmp.path().join("app.download").exists(), "the partial file is left behind");
+    }
+
+    /// Only an ELF file (every AppImage is one) replaces the installed
+    /// build: an HTML error page served with 200 does not.
+    #[test]
+    fn test_a_download_that_is_not_an_appimage_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("app.AppImage");
+        std::fs::write(&dest, b"\x7fELFOLD").unwrap();
+        let err = download(&serve(b"<html>rate limited</html>"), &dest, None).unwrap_err();
+        assert!(err.contains("not an AppImage"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFOLD");
+        assert!(!tmp.path().join("app.previous").exists());
+        assert!(!tmp.path().join("app.download").exists());
+    }
+
+    /// A published sha256 is checked before the swap.
+    #[test]
+    fn test_checksum_is_verified_before_the_swap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("app.AppImage");
+        std::fs::write(&dest, b"\x7fELFOLD").unwrap();
+        let wrong = "0".repeat(64);
+        let err = download_verified(&serve(NEW), &dest, None, &wrong).unwrap_err();
+        assert!(err.contains("checksum mismatch"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFOLD");
+        assert!(!tmp.path().join("app.previous").exists());
+        let right = {
+            use sha2::{Digest, Sha256};
+            hex::encode(Sha256::digest(NEW)).to_uppercase()
+        };
+        download_verified(&serve(NEW), &dest, None, &right).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), NEW);
+        assert_eq!(std::fs::read(tmp.path().join("app.previous")).unwrap(), b"\x7fELFOLD");
+    }
+
+    /// The window and the scheduled update cannot download the same app at
+    /// once: the second finds the download locked and fails without
+    /// touching anything.
+    #[test]
+    fn test_a_download_in_progress_is_not_joined() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("app.AppImage");
+        std::fs::write(&dest, b"\x7fELFOLD").unwrap();
+        let held = lock_download(&tmp.path().join("app.download")).unwrap();
+        let err = download(&serve(NEW), &dest, None).unwrap_err();
+        assert!(err.starts_with("busy:"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFOLD");
+        drop(held);
+        download(&serve(NEW), &dest, None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), NEW);
+    }
+
+    /// An https download is not followed down to http.
+    #[test]
+    fn test_no_redirect_from_https_to_http() {
+        assert_eq!(urllib::redirect_allowed("https", "http://example.invalid/b"), Ok(false));
+        assert_eq!(urllib::redirect_allowed("https", "HTTP://example.invalid/b"), Ok(false));
+        assert_eq!(urllib::redirect_allowed("https", "https://cdn.example.invalid/b"), Ok(true));
+        assert_eq!(urllib::redirect_allowed("http", "http://example.invalid/b"), Ok(true));
     }
 
     #[test]
     fn test_encoded_body_is_written_as_sent() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("app.AppImage");
-        // gzip of "x", sent although identity was asked for.
-        let body: &[u8] = &[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xab, 0, 0, 0x83, 0x16, 0xdc, 0x8c, 1, 0, 0, 0];
+        // An ELF header, gzipped, sent although identity was asked for: it
+        // is written as it came (and so is not an AppImage).
+        let body: &[u8] = &[0x7f, b'E', b'L', b'F', 0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xab, 0, 0, 0x83, 0x16];
         let mut resp = format!("HTTP/1.0 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
         resp.extend_from_slice(body);
         download(&serve_raw(resp), &dest, None).unwrap();
@@ -3454,14 +3669,15 @@ mod tests {
     fn test_file_and_data_urls_download() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("s rc");
-        std::fs::write(&src, b"FILE").unwrap();
+        std::fs::write(&src, b"\x7fELFFILE").unwrap();
         let dest = tmp.path().join("app.AppImage");
         download(&format!("file://{}", tmp.path().join("s%20rc").display()), &dest, None).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"FILE");
-        download("data:,NEW%41#frag", &dest, None).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"NEWA#frag");
-        download("data:text/plain;base64,TkVX", &dest, None).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"NEW");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFFILE");
+        download("data:,%7FELFNEW%41#frag", &dest, None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFNEWA#frag");
+        download("data:text/plain;base64,f0VMRk5FVw==", &dest, None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFNEW");
+        assert!(download("data:,NEW", &dest, None).is_err(), "not an ELF file");
         assert!(download("data:no-comma", &dest, None).is_err());
         assert!(download("gopher://x/y", &dest, None).is_err());
     }
@@ -3569,12 +3785,12 @@ mod tests {
         assert!(download(&url, &dest, None).is_err());
         assert_eq!(std::fs::read(&dest).unwrap(), b"OLD");
         for len in ["+10", "1_0", "-5"] {
-            let resp = format!("HTTP/1.0 200 OK\r\nContent-Length: {len}\r\n\r\n0123456789");
+            let resp = format!("HTTP/1.0 200 OK\r\nContent-Length: {len}\r\n\r\n\x7fELF456789");
             download(&serve_raw(resp.into_bytes()), &dest, None).unwrap();
-            assert_eq!(std::fs::read(&dest).unwrap(), b"0123456789");
+            assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELF456789");
         }
-        download("data:,abc#", &dest, None).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"abc");
+        download("data:,%7FELFabc#", &dest, None).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFabc");
     }
 
     #[test]
