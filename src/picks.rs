@@ -1611,12 +1611,6 @@ fn _shortlist(plugins: &[Plugin], size: usize, now: f64, eligible: &dyn Fn(&Plug
     out
 }
 
-/// Stars and forks in the last 24 hours, from the repository's event feed,
-/// and how many hours of it the feed actually reached back.
-pub fn activity_today(full: &str, now: f64, pages: u32) -> Result<(i64, i64, i64), String> {
-    _activity_today(full, now, pages, &_real_get)
-}
-
 /// `int(x)` of a float.
 fn _float_int(x: f64) -> Result<i64, String> {
     if x.is_nan() {
@@ -1693,11 +1687,6 @@ fn _comments_this_week(full: &str, now: f64, get: GetJson) -> Result<(i64, bool)
         return Ok((-1, false));
     };
     Ok((rows.len() as i64, rows.len() >= 100))
-}
-
-/// Downloads of the current release's assets, and its tag.
-pub fn release_downloads(full: &str) -> Result<(BigInt, PyJson), String> {
-    _release_downloads(full, &_real_get)
 }
 
 fn _release_downloads(full: &str, get: GetJson) -> Result<(BigInt, PyJson), String> {

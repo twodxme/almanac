@@ -252,28 +252,6 @@ pub fn snapshot_before(started: f64, journal_text: Option<&str>) -> Result<Optio
     Ok(Some(_CREATE.is_match(journal_text)))
 }
 
-/// A task step that snapshots the root config, or None without Snapper.
-///
-/// The step never fails the task. A snapshot that could not be taken (the
-/// password prompt dismissed, the config broken) is reported in the log and
-/// the update goes ahead -- the same choice `omarchy update` makes, because
-/// refusing to update is not safer than updating without a net.
-///
-/// Returns `(label, step)`; the label is "Taking a snapshot first".
-#[deprecated(
-    note = "the Python raises out of create_step() when snapper's output is not UTF-8, so the action never starts; use try_create_step and stop on Err as the Python caller would"
-)]
-pub fn create_step(description: &str) -> Option<(String, StepFn)> {
-    match try_create_step(description) {
-        Ok(step) => step,
-        // Python's create_step raises here (snapper output that is not
-        // UTF-8), so the action never starts. This signature has no room for
-        // an error, so the step carries it and fails the task before
-        // anything else in it runs.
-        Err(exc) => Some(("Taking a snapshot first".to_string(), Box::new(move |_log: Log<'_>| Err(exc.clone())))),
-    }
-}
-
 /// `create_step`, with Python's raise as Err: callers that can stop the
 /// action, as Python's `_snapshot_first` did, should use this one.
 pub fn try_create_step(description: &str) -> Result<Option<(String, StepFn)>, String> {

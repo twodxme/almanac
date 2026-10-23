@@ -25,9 +25,7 @@
 //! Where the Python raises past its own `except` clauses (a non-UTF-8 byte in
 //! git's output under `text=True`, an encoding ElementTree cannot look up, a
 //! description nested deeper than the recursion limit), the `try_*` functions
-//! return `Err` with the exception. The plain `check`, `as_app` and
-//! `release_notes` keep their old signatures only for the callers in other
-//! modules, and are deprecated: they cannot stop where the Python stops.
+//! return `Err` with the exception, so callers stop where the Python stops.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
@@ -108,23 +106,7 @@ pub struct Info {
 /// Read from the same AppStream file software centres show, so the About
 /// window's "What's New" never disagrees with them. A checkout has it under
 /// docs/; a package installs it to the system metainfo directory.
-///
-/// Where the Python raises, this cannot: the exception goes to stderr (as an
-/// uncaught one would) and the answer is None. Callers that must stop where
-/// the Python stops use `try_release_notes`.
-#[deprecated(note = "the Python raises here; use try_release_notes and stop on Err")]
-pub fn release_notes() -> Option<(String, String)> {
-    try_release_notes().unwrap_or_else(|e| uncaught(e, None))
-}
-
-/// An exception the Python lets escape, reaching a caller that cannot take
-/// one: printed, as the interpreter prints an uncaught traceback.
-fn uncaught<T>(exc: String, fallback: T) -> T {
-    eprintln!("{exc}");
-    fallback
-}
-
-/// `release_notes`, with the exceptions ElementTree lets through as `Err`.
+/// The exceptions ElementTree lets through are `Err`.
 pub fn try_release_notes() -> Result<Option<(String, String)>, String> {
     release_notes_in(&ROOT)
 }
@@ -279,18 +261,9 @@ pub fn dirty_in(root: &Path) -> Result<bool, String> {
     Ok(code == 0 && !out.is_empty())
 }
 
-/// What an update would consist of, without performing one.
+/// What an update would consist of, without performing one: kind,
+/// version, behind, latest, note, can_update.
 ///
-/// Returns a dict with: kind, version, behind, latest, note, can_update.
-///
-/// Where the Python raises, this cannot: the exception goes to stderr and
-/// the answer is the default `Info` -- which is not what the Python's callers
-/// see (they stop). Callers use `try_check` and stop on Err.
-#[deprecated(note = "the Python raises here; use try_check and stop on Err")]
-pub fn check(fetch: bool) -> Info {
-    try_check(fetch).unwrap_or_else(|e| uncaught(e, Info::default()))
-}
-
 /// `check`, with an exception the Python lets through as `Err`. This is a
 /// compiled build, so it is `compiled_check_in` for the running binary.
 pub fn try_check(fetch: bool) -> Result<Info, String> {
@@ -585,14 +558,6 @@ fn exit_without_cleanup() -> ! {
 
 /// Almanac as an entry in its own inventory.
 ///
-/// Where the Python raises (and the inventory drops the row), this cannot:
-/// the exception goes to stderr and the row is built from a default `Info`.
-/// Callers use `try_as_app` and leave the row out on Err.
-#[deprecated(note = "the Python raises here; use try_as_app and drop the row on Err")]
-pub fn as_app(check_updates: bool) -> crate::inventory::App {
-    try_as_app(check_updates).unwrap_or_else(|e| uncaught(e, app_from(&ROOT, Info::default(), String::new())))
-}
-
 /// `as_app`, with an exception the Python lets through as `Err`: the row for
 /// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {

@@ -449,18 +449,6 @@ pub fn arg_str<'a>(args: &'a serde_json::Value, key: &str) -> &'a str {
     args.get(key).and_then(|v| v.as_str()).unwrap_or_default()
 }
 
-pub fn arg_f64(args: &serde_json::Value, key: &str) -> f64 {
-    args.get(key).and_then(|v| v.as_f64()).unwrap_or_default()
-}
-
-pub fn arg_i64(args: &serde_json::Value, key: &str) -> i64 {
-    args.get(key).and_then(|v| v.as_i64()).unwrap_or_default()
-}
-
-pub fn arg_bool(args: &serde_json::Value, key: &str) -> bool {
-    args.get(key).and_then(|v| v.as_bool()).unwrap_or_default()
-}
-
 /// Walking a value as nested as Python's json allows (52000 levels on the
 /// default stack) without recursion: a derived `Clone`, `PartialEq` or a
 /// recursive conversion goes one Rust frame per level and overflows the

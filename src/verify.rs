@@ -66,14 +66,6 @@ pub type Probe = Arc<dyn Fn() -> Option<ProbeValue> + Send + Sync>;
 /// report the way the Python's does.
 pub type TryProbe = Arc<dyn Fn() -> Result<Option<ProbeValue>, String> + Send + Sync>;
 
-/// The `Probe` the UI holds. A Python probe that raises takes the action's
-/// report down with it; `Probe` cannot carry an exception, so here it is
-/// "could not tell" instead. Callers that need the exception use the
-/// matching `*_try` constructor.
-fn lenient(p: TryProbe) -> Probe {
-    Arc::new(move || p().ok().flatten())
-}
-
 /// `str.isspace()`: Rust's whitespace plus the four separators \x1c-\x1f.
 fn py_isspace(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
@@ -237,7 +229,8 @@ fn raising(err: String) -> TryProbe {
 
 // ---- probes ------------------------------------------------------------------
 
-/// [`installed_package`], raising what the Python raises.
+/// The installed version of a pacman package, or '' when it is absent;
+/// Err where the Python raises.
 pub fn installed_package_try(name: &str) -> TryProbe {
     let name = name.to_string();
     Arc::new(move || {
@@ -247,13 +240,7 @@ pub fn installed_package_try(name: &str) -> TryProbe {
     })
 }
 
-/// The installed version of a pacman package, or '' when it is absent.
-#[deprecated(note = "the Python probe raises (UnicodeDecodeError, ValueError, TypeError) and the action's report stops; this one answers None ('could not tell') instead. Use installed_package_try and stop on Err as the Python caller would")]
-pub fn installed_package(name: &str) -> Probe {
-    lenient(installed_package_try(name))
-}
-
-/// [`git_head`], raising what the Python raises.
+/// A checkout's HEAD; Err where the Python raises.
 pub fn git_head_try(repo: &str) -> TryProbe {
     let repo = repo.to_string();
     Arc::new(move || {
@@ -262,12 +249,8 @@ pub fn git_head_try(repo: &str) -> TryProbe {
     })
 }
 
-#[deprecated(note = "the Python probe raises (UnicodeDecodeError, ValueError, TypeError) and the action's report stops; this one answers None ('could not tell') instead. Use git_head_try and stop on Err as the Python caller would")]
-pub fn git_head(repo: &str) -> Probe {
-    lenient(git_head_try(repo))
-}
-
-/// [`mise_version`], raising what `agents._mise_installed` raises (mise
+/// The version mise has installed of `tool`, raising what
+/// `agents._mise_installed` raises (mise
 /// printing JSON that is not an object), as the Python probe does.
 pub fn mise_version_try(tool: &str) -> TryProbe {
     let tool = tool.to_string();
@@ -284,19 +267,7 @@ pub fn mise_version_try(tool: &str) -> TryProbe {
     })
 }
 
-#[deprecated(note = "the Python probe raises what agents._mise_installed raises; this one answers None ('could not tell') instead. Use mise_version_try and stop on Err as the Python caller would")]
-#[allow(deprecated)]
-pub fn mise_version(tool: &str) -> Probe {
-    let tool = tool.to_string();
-    Arc::new(move || {
-        crate::agents::mise_installed()
-            .get(&tool)
-            .filter(|v| !v.is_empty())
-            .map(|v| ProbeValue::Str(v.clone()))
-    })
-}
-
-/// [`binary_version`], raising what `agents._version_of` lets through: a
+/// What `<binary> --version` says, raising what `agents._version_of` lets through: a
 /// NUL in the name (ValueError) and output that is not UTF-8
 /// (UnicodeDecodeError).
 pub fn binary_version_try(binary: &str) -> TryProbe {
@@ -308,11 +279,6 @@ pub fn binary_version_try(binary: &str) -> TryProbe {
         let v = crate::agents::try_version_of(&binary)?;
         Ok(if v.is_empty() { None } else { Some(ProbeValue::Str(v)) })
     })
-}
-
-#[deprecated(note = "the Python probe raises (UnicodeDecodeError, ValueError, TypeError) and the action's report stops; this one answers None ('could not tell') instead. Use binary_version_try and stop on Err as the Python caller would")]
-pub fn binary_version(binary: &str) -> Probe {
-    lenient(binary_version_try(binary))
 }
 
 /// `Path(path)`: "" is ".", and empty and "." components are dropped (so a
@@ -332,7 +298,8 @@ fn py_path(path: &str) -> String {
     format!("{root}{}", parts.join("/"))
 }
 
-/// [`file_identity`], raising what the Python raises.
+/// Size and mtime: an AppImage swapped in place changes both. Err where
+/// the Python raises.
 pub fn file_identity_try(path: &str) -> TryProbe {
     let path = path.to_string();
     Arc::new(move || {
@@ -349,12 +316,6 @@ pub fn file_identity_try(path: &str) -> TryProbe {
         let mtime = (st.mtime() as f64 + st.mtime_nsec() as f64 * 1e-9).trunc() as i64;
         Ok(Some(ProbeValue::Identity(st.size(), mtime)))
     })
-}
-
-/// Size and mtime: an AppImage swapped in place changes both.
-#[deprecated(note = "the Python probe raises (UnicodeDecodeError, ValueError, TypeError) and the action's report stops; this one answers None ('could not tell') instead. Use file_identity_try and stop on Err as the Python caller would")]
-pub fn file_identity(path: &str) -> Probe {
-    lenient(file_identity_try(path))
 }
 
 /// Every repository and AUR package with an update waiting.
@@ -457,14 +418,8 @@ fn for_app_py(app: &PyApp) -> Result<Option<TryProbe>, String> {
     Ok(None)
 }
 
-/// The probe that answers "did this app's update land?".
-#[deprecated(note = "the Python probe raises (UnicodeDecodeError, ValueError, TypeError) and the action's report stops; this one answers None ('could not tell') instead. Use for_app_try and stop on Err as the Python caller would")]
-pub fn for_app(app: &crate::inventory::App) -> Option<Probe> {
-    // A typed App's extra is always a dict, so choosing cannot raise.
-    for_app_py(&PyApp::of(app)).ok().flatten().map(lenient)
-}
-
-/// [`for_app`], raising what the Python raises.
+/// The probe that answers "did this app's update land?", raising what the
+/// Python raises.
 pub fn for_app_try(app: &crate::inventory::App) -> Option<TryProbe> {
     for_app_py(&PyApp::of(app)).ok().flatten()
 }
@@ -535,19 +490,9 @@ fn judge_app_any<T: Answer>(app: &PyApp, before: Option<&T>, after: Option<&T>) 
     Ok(Outcome::new(Some(true), format!("{name} updated")))
 }
 
-/// Compare the pending-update set around a full upgrade.
-///
-/// Both sides are what `pending_updates` answers (`ProbeValue::Set`). The
-/// Python raises TypeError on most other answers (`before - after` on a str
-/// or a tuple); `Outcome` cannot carry that, so here it is "could not tell".
-/// [`try_judge_pending`] raises as the Python does.
-#[deprecated(note = "the Python raises TypeError on an answer that is not a set; this answers 'could not be checked'. Use try_judge_pending and stop on Err")]
-pub fn judge_pending(before: Option<&ProbeValue>, after: Option<&ProbeValue>) -> Outcome {
-    try_judge_pending(before, after)
-        .unwrap_or_else(|_| Outcome::new(None, "The update finished; what it installed could not be checked"))
-}
-
-/// [`judge_pending`], raising what the Python raises.
+/// Compare the pending-update set around a full upgrade (both sides what
+/// `pending_updates` answers); Err where the Python raises (TypeError on an
+/// answer that is not a set).
 pub fn try_judge_pending(before: Option<&ProbeValue>, after: Option<&ProbeValue>) -> Result<Outcome, String> {
     if let (Some(ProbeValue::Set(before)), Some(ProbeValue::Set(after))) = (before, after) {
         return Ok(judge_pending_sets(before, after));
@@ -1008,7 +953,6 @@ fn judge_pending_py(before: Option<&Py>, after: Option<&Py>) -> Result<Outcome, 
 
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::inventory;
@@ -1047,10 +991,10 @@ mod tests {
 
     #[test]
     fn test_full_upgrade_reports_what_is_still_waiting() {
-        let out = judge_pending(Some(&set(&["a", "b", "c"])), Some(&set(&["c"])));
+        let out = try_judge_pending(Some(&set(&["a", "b", "c"])), Some(&set(&["c"]))).unwrap();
         assert!(out.ok());
         assert!(out.message.contains('c'));
-        assert_eq!(judge_pending(Some(&set(&["a"])), Some(&set(&["a"]))).changed, Some(false));
+        assert_eq!(try_judge_pending(Some(&set(&["a"])), Some(&set(&["a"]))).unwrap().changed, Some(false));
     }
 
     #[test]
@@ -1080,8 +1024,8 @@ mod tests {
     #[test]
     fn test_an_empty_path_is_the_working_directory() {
         // Path("") is "." in Python.
-        assert_eq!(file_identity("")(), file_identity(".")());
-        assert!(file_identity("")().is_some());
+        assert_eq!(file_identity_try("")(), file_identity_try(".")());
+        assert!(file_identity_try("")().unwrap().is_some());
     }
     #[test]
     fn test_out_is_python_text_mode() {
@@ -1136,6 +1080,5 @@ mod tests {
     #[test]
     fn test_binary_version_raises_on_nul() {
         assert!(binary_version_try("a\0b")().is_err());
-        assert_eq!(binary_version("a\0b")(), None);
     }
 }

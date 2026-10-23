@@ -1016,8 +1016,7 @@ fn py_sort_key(p: &Path) -> Vec<PyStr> {
 ///
 /// Python raises out of `resets` in two places nothing catches: a backup
 /// named `..bak.<epoch>` (`with_name(".")`, a ValueError) and a document too
-/// deep to parse or walk (RecursionError). Callers that must go on use
-/// [`resets`], which then finds nothing.
+/// deep to parse or walk (RecursionError).
 ///
 /// Called from where app.py's `_config_check` calls it; see
 /// [`try_resets_at`] for the others.
@@ -1029,22 +1028,6 @@ pub fn try_resets(now: Option<f64>) -> Result<Vec<Reset>, String> {
 /// may be before Python raises.
 pub fn try_resets_at(now: Option<f64>, at: PyStack) -> Result<Vec<Reset>, String> {
     Ok(resets_exact(now, at)?.into_iter().map(|(r, _)| r).collect())
-}
-
-/// [`try_resets`], with nothing found where Python would raise (the error
-/// is printed). Python's `resets()` raises to its caller -- app.py's window
-/// setup and its `_config_check` thread, and `watcher.main` -- and each of
-/// them stops there, so those callers use [`try_resets_at`] with their own
-/// [`PyStack`] and stop on `Err` as the Python would.
-#[deprecated(note = "the Python raises out of resets() (a `..bak.<epoch>` backup, a document too deep to parse or walk); use try_resets_at with the caller's PyStack and stop on Err as the Python caller would")]
-pub fn resets(now: Option<f64>) -> Vec<Reset> {
-    match try_resets(now) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{e}");
-            Vec::new()
-        }
-    }
 }
 
 /// Each reset with its lost ids as Python's strs (`Reset.lost` is their

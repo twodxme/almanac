@@ -25,8 +25,8 @@
 //! and rate files are read into [`PyValue`] (Python's JSON values: exact
 //! ints, inf/nan floats, strings that may hold lone surrogates) and written
 //! back with Python's `json.dumps`, so the files on disk stay identical. The
-//! public infallible functions other modules call are deprecated: each has a
-//! `try_` twin that raises (returns `Err`) exactly where the Python raises.
+//! public functions are the `try_` forms: they return `Err` exactly where the
+//! Python raises.
 //!
 //! The network side is urllib and http.client themselves, ported: the same
 //! request bytes, the same response parsing (an `email` header block, the
@@ -979,13 +979,6 @@ fn py_int(s: &[u32]) -> Option<BigInt> {
 /// working wherever gh stores it -- here that is the system keyring. Held in
 /// memory only.
 ///
-/// Output from gh that is not UTF-8 raises in Python; this form reads it as
-/// no token. Use [`try_token`] and stop on Err, as the Python caller would.
-#[deprecated(note = "the Python raises out of token() when gh's output is not UTF-8; use try_token and stop on Err")]
-pub fn token() -> String {
-    try_token().unwrap_or_default()
-}
-
 /// `token()`, raising where the Python does: `text=True` decodes gh's output
 /// strictly, and a UnicodeDecodeError is not among the exceptions caught.
 pub fn try_token() -> Result<String, String> {
@@ -1279,21 +1272,14 @@ fn _some(v: PyValue) -> Option<Value> {
 
 /// A cached GitHub API GET. Returns parsed JSON, or None.
 ///
-/// Never raises for network or quota problems: callers want "what do we know
+/// Never fails for network or quota problems: callers want "what do we know
 /// about this", and a listing that is six hours old beats no listing.
 ///
 /// Python's keyword defaults are `ttl=DEFAULT_TTL`, `allow_stale=True`,
 /// `accept=ACCEPT`. A JSON `null` body comes back as `None`. The body is a
 /// `serde_json::Value` (see [`PyValue::to_value`] for what that cannot
-/// hold; [`try_get_json_py`] has the exact value). Where the Python raises
-/// (a cache or rate file of the wrong shape, a URL with no scheme) this
-/// answers None.
-#[deprecated(note = "the Python raises out of get_json() for a broken cache or rate file or a URL with no scheme; use try_get_json and stop on Err")]
-pub fn get_json(url: &str, ttl: impl Into<Ttl>, allow_stale: bool, accept: &str) -> Option<Value> {
-    try_get_json(url, ttl, allow_stale, accept).ok().flatten()
-}
-
-/// `get_json`, raising where the Python does.
+/// hold; [`try_get_json_py`] has the exact value). Err where the Python
+/// raises (a cache or rate file of the wrong shape, a URL with no scheme).
 pub fn try_get_json(url: &str, ttl: impl Into<Ttl>, allow_stale: bool, accept: &str) -> Result<Option<Value>, String> {
     let ttl = ttl.into();
     deep(|| _get_json(url, ttl, allow_stale, accept).map(_some))
@@ -2917,46 +2903,20 @@ fn _file_open(full_url: &str) -> Fetched {
     }
 }
 
-#[deprecated(note = "the Python raises out of latest_release() where get_json() raises; use try_latest_release and stop on Err")]
-#[allow(deprecated)]
-pub fn latest_release(owner_repo: &str, ttl: impl Into<Ttl>) -> Option<Value> {
-    get_json(&format!("{API}/repos/{owner_repo}/releases/latest"), ttl, true, ACCEPT)
-}
-
 pub fn try_latest_release(owner_repo: &str, ttl: impl Into<Ttl>) -> Result<Option<Value>, String> {
     try_get_json(&format!("{API}/repos/{owner_repo}/releases/latest"), ttl, true, ACCEPT)
-}
-
-#[deprecated(note = "the Python raises out of repo() where get_json() raises; use try_repo and stop on Err")]
-#[allow(deprecated)]
-pub fn repo(owner_repo: &str, ttl: impl Into<Ttl>) -> Option<Value> {
-    get_json(&format!("{API}/repos/{owner_repo}"), ttl, true, ACCEPT)
 }
 
 pub fn try_repo(owner_repo: &str, ttl: impl Into<Ttl>) -> Result<Option<Value>, String> {
     try_get_json(&format!("{API}/repos/{owner_repo}"), ttl, true, ACCEPT)
 }
 
-#[deprecated(note = "the Python raises out of org_repos() where get_json() raises; use try_org_repos and stop on Err")]
-#[allow(deprecated)]
-pub fn org_repos(org: &str, ttl: impl Into<Ttl>) -> Option<Value> {
-    get_json(&format!("{API}/orgs/{org}/repos?per_page=100"), ttl, true, ACCEPT)
-}
-
 pub fn try_org_repos(org: &str, ttl: impl Into<Ttl>) -> Result<Option<Value>, String> {
     try_get_json(&format!("{API}/orgs/{org}/repos?per_page=100"), ttl, true, ACCEPT)
 }
 
-/// One line for the UI about where the quota stands.
-///
-/// Where the Python raises (a broken rate file, gh output that is not
-/// UTF-8) this says only "GitHub API: unauthenticated"; see [`try_describe`].
-#[deprecated(note = "the Python raises out of describe() for a broken rate file; use try_describe and stop on Err")]
-pub fn describe() -> String {
-    try_describe().unwrap_or_else(|_| "GitHub API: unauthenticated".into())
-}
-
-/// `describe()`, raising where the Python does.
+/// One line for the UI about where the quota stands; Err where the Python
+/// raises (a broken rate file, gh output that is not UTF-8).
 pub fn try_describe() -> Result<String, String> {
     deep(_describe)
 }
@@ -2997,7 +2957,6 @@ fn restore(cache_home: Option<std::ffi::OsString>, state_home: Option<std::ffi::
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -3041,7 +3000,7 @@ mod tests {
             crate::settings::set(key, Value::Bool(false)).unwrap();
         }
         reset_token();
-        assert_eq!(token(), "");
+        assert_eq!(try_token().unwrap(), "");
     }
 
     #[test]
@@ -3049,7 +3008,7 @@ mod tests {
         let _env = Env::new();
         let url = "http://127.0.0.1:1/never";
         _write(url, &entry(crate::util::now(), serde_json::json!({"tag_name": "v1"}))).unwrap();
-        assert_eq!(get_json(url, DEFAULT_TTL, true, ACCEPT), Some(serde_json::json!({"tag_name": "v1"})));
+        assert_eq!(try_get_json(url, DEFAULT_TTL, true, ACCEPT).unwrap(), Some(serde_json::json!({"tag_name": "v1"})));
     }
 
     #[test]
@@ -3062,9 +3021,9 @@ mod tests {
         assert!(!can_spend().unwrap());
         let url = "http://127.0.0.1:1/stale";
         _write(url, &entry(0.0, serde_json::json!([1, 2]))).unwrap();
-        assert_eq!(get_json(url, DEFAULT_TTL, true, ACCEPT), Some(serde_json::json!([1, 2])));
-        assert_eq!(get_json(url, DEFAULT_TTL, false, ACCEPT), None);
-        assert!(describe().starts_with("GitHub API: 3/60 left (unauthenticated), resets in "));
+        assert_eq!(try_get_json(url, DEFAULT_TTL, true, ACCEPT).unwrap(), Some(serde_json::json!([1, 2])));
+        assert_eq!(try_get_json(url, DEFAULT_TTL, false, ACCEPT).unwrap(), None);
+        assert!(try_describe().unwrap().starts_with("GitHub API: 3/60 left (unauthenticated), resets in "));
     }
 
     #[test]

@@ -1956,14 +1956,6 @@ pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
     Ok(out)
 }
 
-/// `try_catalog`, for callers that cannot fail: where the Python raises,
-/// the store is empty (and nothing is cached).
-#[deprecated(note = "the Python raises out of catalog() and the store page shows _store_failed(str(exc)); \
-                     use try_catalog and report its Err rather than showing an empty store")]
-pub fn catalog(force: bool) -> Vec<Plugin> {
-    try_catalog(force).unwrap_or_default()
-}
-
 /// `subprocess.run(argv, capture_output=True, text=True, timeout=secs).stdout`,
 /// or None where that raises: the command cannot start, times out, or
 /// writes something that is not UTF-8 (text=True decodes strictly, where

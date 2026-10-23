@@ -870,11 +870,9 @@ fn latest_impl(
 }
 
 // `try: data = ghcache.get_json(url) / except Exception: data = None`:
-// what get_json raises is "no update shown" here, so the lenient form is
-// the right one.
-#[allow(deprecated)]
+// what get_json raises is "no update shown" here.
 fn fetch_github(url: &str) -> Option<Value> {
-    ghcache::get_json(url, ghcache::DEFAULT_TTL, true, ghcache::ACCEPT)
+    ghcache::try_get_json(url, ghcache::DEFAULT_TTL, true, ghcache::ACCEPT).ok().flatten()
 }
 
 /// Newest release plus the asset matching the AppImage's own pattern.

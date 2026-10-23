@@ -1079,20 +1079,6 @@ fn loads_line(line: &str) -> Result<Option<PyVal>, String> {
 
 // ---- what Almanac did --------------------------------------------------------
 
-/// Append one of Almanac's own actions. Never raises.
-///
-/// Python's `items=None` is an empty slice here. (The Python can raise all
-/// the same: see `record_checked`. What happens then is up to each caller --
-/// a GTK handler's traceback, the rest of the handler skipped -- and the
-/// callers here take no error, so it is printed and the caller carries on.
-/// Callers that should stop as Python's do call `record_checked`.)
-#[deprecated(note = "the Python raises out of record() when trimming a log that is not UTF-8; use record_checked and stop on Err as the Python caller would")]
-pub fn record(kind: &str, title: &str, detail: &str, severity: &str, items: &[String]) {
-    if let Err(e) = record_checked(kind, title, detail, severity, items) {
-        eprintln!("{e}");
-    }
-}
-
 /// `record` with what escapes Python's `except OSError`: trimming a log
 /// that is not UTF-8 raises UnicodeDecodeError (after the line is written).
 pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, items: &[String]) -> Result<(), String> {
@@ -1761,7 +1747,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("almanac-history-test-{}", std::process::id()));
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", &d);
-        record(ALMANAC, "yaru did not change", "", "warn", &[]);
+        record_checked(ALMANAC, "yaru did not change", "", "warn", &[]).unwrap();
         let evs = recorded(0.0).unwrap();
         match old {
             Some(v) => std::env::set_var("XDG_STATE_HOME", v),

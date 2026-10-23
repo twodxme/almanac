@@ -687,15 +687,6 @@ fn py_json_number(b: &[u8], i: &mut usize, max_digits: usize) -> Result<J, ()> {
     Ok(if float { J::Float } else { J::Int })
 }
 
-/// Infallible form, for callers that cannot take an error. The Python
-/// raises where `try_services` returns `Err` -- and the switchboard's worker
-/// then dies without rebuilding the page -- so a caller porting that should
-/// call `try_services` and not show anything on `Err`.
-#[deprecated(note = "the Python raises out of services() and the switchboard then shows nothing; use try_services and skip the rebuild on Err")]
-pub fn services() -> Vec<Service> {
-    try_services().unwrap_or_default()
-}
-
 /// `services()` as the Python has it, raising (`Err`) where it raises:
 /// list-unit-files JSON that is not iterable (null, a number, true) or
 /// nested too deep (RecursionError), a unit entry without a string
@@ -833,15 +824,6 @@ fn services_with(available: bool, run: &dyn Fn(&[Vec<u16>]) -> Result<String, St
 pub fn toggle_argv(unit: &str, on: bool) -> Vec<String> {
     vec!["systemctl".into(), "--user".into(),
          if on { "enable" } else { "disable" }.into(), "--now".into(), unit.into()]
-}
-
-/// Infallible form, for callers that cannot take an error. The Python
-/// raises where `try_is_enabled` returns `Err` (output that does not
-/// decode, a NUL in the unit name), and the switchboard reports that as "was
-/// not switched" -- a caller porting that should call `try_is_enabled`.
-#[deprecated(note = "the Python raises out of is_enabled() and the switch reports 'was not switched'; use try_is_enabled and return its Err")]
-pub fn is_enabled(unit: &str) -> bool {
-    try_is_enabled(unit).unwrap_or(false)
 }
 
 /// `is_enabled()` as the Python has it: UnicodeDecodeError and

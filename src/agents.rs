@@ -1210,14 +1210,6 @@ pub fn try_version_of(binary: &str) -> Result<String, String> {
     Ok(String::new())
 }
 
-/// [`try_version_of`] with what the Python raises swallowed: "" for output
-/// that is not UTF-8 or a NUL in the name. No Python caller swallows those
-/// (`verify`'s probe lets them out), so callers should use `try_version_of`.
-#[deprecated(note = "the Python's _version_of raises (UnicodeDecodeError, ValueError) to its caller; this answers \"\" instead. Use try_version_of and stop on Err as the Python caller would")]
-pub fn version_of(binary: &str) -> String {
-    try_version_of(binary).unwrap_or_default()
-}
-
 /// `MISE_CACHE`: `CACHE / "mise-outdated.json"`.
 pub fn mise_cache() -> PathBuf {
     cache().join("mise-outdated.json")
@@ -1359,21 +1351,6 @@ fn mise_installed_here() -> Result<Vec<(String, Py)>, String> {
         }
     }
     Ok(data)
-}
-
-/// [`try_mise_installed`] as strings: a falsy version is "", a non-str one
-/// `str()` of it, and what the Python raises is {}. The Python's caller
-/// (`verify`'s mise probe, `.get(tool) or None`) gets the raw value and the
-/// exception, so it should use `try_mise_installed`.
-#[deprecated(note = "the Python's _mise_installed raises to its caller and keeps non-str versions as they are; this answers {} and strings instead. Use try_mise_installed")]
-pub fn mise_installed() -> BTreeMap<String, String> {
-    deep(|| {
-        mise_installed_here()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(k, v)| (k, if v.truthy() { as_text(&v) } else { String::new() }))
-            .collect()
-    })
 }
 
 /// What mise already knows. One call covers every tool it manages.
@@ -1774,13 +1751,6 @@ fn truthy_value(v: &serde_json::Value) -> bool {
 /// Python's json: RecursionError).
 pub fn try_hold_major(current: &str, latest: &str) -> Result<bool, String> {
     Ok(major_jump(current, latest) && truthy_value(&crate::settings::get("hold_majors")?))
-}
-
-/// [`try_hold_major`], false where the Python raises. No Python caller
-/// catches that, so callers should use `try_hold_major`.
-#[deprecated(note = "the Python's hold_major raises what settings.get raises (RecursionError) to its caller; this answers false instead. Use try_hold_major and stop on Err as the Python caller would")]
-pub fn hold_major(current: &str, latest: &str) -> bool {
-    try_hold_major(current, latest).unwrap_or(false)
 }
 
 /// Python's `str.strip()`: what `str.isspace` calls whitespace, which also

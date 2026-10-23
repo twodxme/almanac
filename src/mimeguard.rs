@@ -297,30 +297,6 @@ fn xdg_mime_ok(argv: &[&str]) -> bool {
     matches!(run_bytes(argv, 20), Some((Some(0), _, _)))
 }
 
-/// `try_restore` for callers written before it existed: the count, with a
-/// NUL in an argument (never the case for ids read from GIO) reported on
-/// stderr the way an uncaught exception in a GTK callback is, and nothing
-/// returned for the types after it. It cannot stop the caller the way the
-/// Python's exception does; use `try_restore` and return on `Err`.
-#[deprecated(note = "the Python raises out of restore(); use try_restore and stop on Err")]
-pub fn restore(moved: &[(String, String, String)], log: Option<&mut dyn FnMut(&str)>) -> usize {
-    let mut done = 0;
-    let mut count = |argv: &[&str]| {
-        let ok = xdg_mime_ok(argv);
-        if ok {
-            done += 1;
-        }
-        ok
-    };
-    match restore_with(moved, log, &mut count) {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!("ValueError: {e}");
-            done
-        }
-    }
-}
-
 /// `restore` with the command runner passed in (the Python tests patch
 /// `subprocess.run`; the port's tests pass a fake here).
 fn restore_with(moved: &[(String, String, String)], log: Option<&mut dyn FnMut(&str)>,
