@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::i18n::tr;
 use crate::inventory;
 use crate::ui::shell::{
-    name, page_spec, reverse_text, sorts_installed, source_label, spawn_bg, AppItem, Win,
+    lower_cmp, name, page_spec, reverse_text, sorts_installed, source_label, spawn_bg, AppItem, Win,
 };
 
 /// The header's primary action for one page: (label, enabled, tooltip,
@@ -65,6 +65,9 @@ pub struct State {
     /// pacman.log watcher and page changes each asked for their own, and
     /// they piled up.
     pub scanning: bool,
+    /// The search box's pending filter pass: typing re-filters once it
+    /// pauses rather than on every key.
+    pub search_timer: Option<glib::SourceId>,
     /// `reload` was called while a scan ran: that scan's answer predates
     /// whatever prompted the call, so it is dropped and one more scan runs.
     pub scan_again: bool,
@@ -562,20 +565,24 @@ fn float_cmp(a: f64, b: f64) -> Ordering {
 /// that would raise in Python (an unparseable date, or "" compared with a
 /// number) makes the pair compare equal, as the failed callback did.
 pub fn sort_cmp(key: &str, a: &AppItem, b: &AppItem) -> Ordering {
-    let (an, bn) = (a.name.to_lowercase(), b.name.to_lowercase());
+    // Lowered as they are compared, not up front: this runs on every
+    // comparison, and most stop before the name.
+    let names = || lower_cmp(&a.name, &b.name);
     match key {
-        "name" => an.cmp(&bn),
-        "name_desc" => reverse_text(&an, &bn),
+        "name" => names(),
+        "name_desc" => names().reverse(),
         "size" => float_cmp(-a.size_mb, -b.size_mb),
         "installed" => float_cmp(-a.installed_ts, -b.installed_ts),
-        "category" => (a.category.is_empty(), a.category.to_lowercase())
-            .cmp(&(b.category.is_empty(), b.category.to_lowercase())),
+        "category" => (a.category.is_empty())
+            .cmp(&b.category.is_empty())
+            .then_with(|| lower_cmp(&a.category, &b.category)),
         // Negated in i128: Python ints are unbounded, so -i64::MIN is just a
         // bigger number there, not an overflow.
         "behind" => (-i128::from(a.behind)).cmp(&-i128::from(b.behind)),
         // All-time standing. Unverified plugins sink: anyone can list one.
-        "popular" => (-i128::from(a.votes), !a.verified, an)
-            .cmp(&(-i128::from(b.votes), !b.verified, bn)),
+        "popular" => (-i128::from(a.votes), !a.verified)
+            .cmp(&(-i128::from(b.votes), !b.verified))
+            .then_with(names),
         // The AUR's popularity is already decay-weighted, which is what
         // "trending" means; plugins fall back to how recently they landed.
         "trending" => {
@@ -598,12 +605,12 @@ pub fn sort_cmp(key: &str, a: &AppItem, b: &AppItem) -> Ordering {
                 (Added::Neg(x), Added::Neg(y)) => x.cmp(y),
                 _ => return Ordering::Equal, // str vs int: TypeError
             };
-            second.then_with(|| an.cmp(&bn))
+            second.then_with(names)
         }
         "newest" => (a.added.is_empty())
             .cmp(&b.added.is_empty())
             .then_with(|| reverse_text(&a.added, &b.added))
-            .then_with(|| an.cmp(&bn)),
+            .then_with(names),
         _ => Ordering::Equal,
     }
 }
@@ -1831,8 +1838,36 @@ impl Win {
             }
             return;
         }
-        self.shared.borrow_mut().query = py_strip(&entry.text()).to_lowercase();
-        self.filter_changed();
+        // Debounced: each pass re-filters every row and re-sorts what is
+        // left, and typing a word asked for one per letter.
+        let query = py_strip(&entry.text()).to_lowercase();
+        if let Some(old) = self.packages.borrow_mut().search_timer.take() {
+            old.remove();
+        }
+        let w = self.downgrade();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            if let Some(w) = w.upgrade() {
+                w.packages.borrow_mut().search_timer = None;
+                w.search_now(query);
+            }
+        });
+        self.packages.borrow_mut().search_timer = Some(id);
+    }
+
+    /// The search box's filter pass. A query that only grew keeps the rows
+    /// already hidden hidden (GTK re-checks just the shown ones), and one
+    /// that only shrank re-checks just the hidden ones.
+    fn search_now(&self, query: String) {
+        let old = std::mem::replace(&mut self.shared.borrow_mut().query, query.clone());
+        let change = if query != old && query.contains(&old) {
+            gtk::FilterChange::MoreStrict
+        } else if query != old && old.contains(&query) {
+            gtk::FilterChange::LessStrict
+        } else {
+            gtk::FilterChange::Different
+        };
+        let filter = self.shared.borrow().filter.clone();
+        filter.changed(change);
         if let Err(e) = self.update_status() {
             eprintln!("almanac: on_search: {e}");
         }

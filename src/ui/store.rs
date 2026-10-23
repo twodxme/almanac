@@ -84,10 +84,14 @@ fn pool_page(page: Option<&str>, current: &str) -> String {
 
 /// `_store_pool` without the window: what a store page draws from.
 fn pool_of(plugins: &[Plugin], page: &str) -> Vec<Plugin> {
-    if page == "themes" {
-        return plugins.iter().filter(|p| p.install_kind == "theme").cloned().collect();
-    }
-    plugins.iter().filter(|p| p.install_kind != "theme").cloned().collect()
+    pool_refs(plugins, page).into_iter().cloned().collect()
+}
+
+/// `pool_of`, borrowed: what the search and the count read on every
+/// keystroke, without copying the catalogue to read it.
+fn pool_refs<'a>(plugins: &'a [Plugin], page: &str) -> Vec<&'a Plugin> {
+    let themes = page == "themes";
+    plugins.iter().filter(|p| (p.install_kind == "theme") == themes).collect()
 }
 
 /// `f"{n:,}"`: thousands separated by commas.
@@ -630,9 +634,12 @@ impl Win {
             market.selected() > 0 && !pinned
         };
 
-        let pool = self.store_pool(Some(&page));
-        let total = pool.len();
-        let installed = pool.iter().filter(|p| p.installed).count();
+        let pool_page = pool_page(Some(&page), &self.store_page());
+        let (total, installed) = {
+            let plugins = self.store_plugins();
+            let pool = pool_refs(&plugins, &pool_page);
+            (pool.len(), pool.iter().filter(|p| p.installed).count())
+        };
 
         if shown < results {
             self.summarize(&format!("{shown} of {results} shown"), Some(&page));
@@ -1172,8 +1179,9 @@ impl Win {
         let sel = store_sort.selected() as usize;
         let sort = if sel < store_mod::SORTS.len() { store_mod::SORTS[sel].0 } else { "popular" };
 
-        // Arguments in the order the Python evaluates them.
-        let pool = self.store_pool(None);
+        // Arguments in the order the Python evaluates them. The pool is
+        // borrowed below, once no more widgets are read.
+        let page = pool_page(None, &self.store_page());
         let query = self.search.text().to_string();
         let Some(store_installed) = self.store_toggle("store_installed") else {
             return glib::ControlFlow::Break;
@@ -1189,16 +1197,14 @@ impl Win {
             return glib::ControlFlow::Break;
         };
         let market = pick_key(&self.shared.borrow().store_markets, store_market.selected());
-        let results = match store_mod::try_browse(
-            &pool,
-            &query,
-            &category,
-            sort,
-            store_installed.is_active(),
-            store_verified.is_active(),
-            &market,
-            &trust,
-        ) {
+        let (installed_only, verified_only) = (store_installed.is_active(), store_verified.is_active());
+        let results = {
+            let plugins = self.store_plugins();
+            let pool = pool_refs(&plugins, &page);
+            store_mod::try_browse_refs(&pool, &query, &category, sort, installed_only, verified_only, &market, &trust)
+                .map(|idx| idx.into_iter().map(|i| pool[i].clone()).collect::<Vec<Plugin>>())
+        };
+        let results = match results {
             Ok(results) => results,
             Err(e) => {
                 eprintln!("almanac: {e}");
