@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The outcome of `subprocess.run(..., capture_output=True, text=True)`.
 #[derive(Debug, Clone, Default)]
@@ -87,28 +87,37 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
         }
         s
     });
-    let start = Instant::now();
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) => {
-                if let Some(t) = opts.timeout {
-                    if start.elapsed() >= t {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        timed_out = true;
-                        break None;
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break None,
+    let status = match opts.timeout {
+        Some(t) if !exits_within(&child, t) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            timed_out = true;
+            None
         }
+        _ => child.wait().ok(),
     };
     let stdout = String::from_utf8_lossy(&out_t.join().unwrap_or_default()).into_owned();
     let stderr = String::from_utf8_lossy(&err_t.join().unwrap_or_default()).into_owned();
     Output { code: status.and_then(|s| s.code()), stdout, stderr, timed_out, failed_to_start: false }
+}
+
+/// Whether `child` exits within `timeout`, without polling: a thread blocks
+/// in `waitid` and the caller waits on a channel with `recv_timeout`.
+///
+/// The thread waits with `WNOWAIT`, so it never reaps: the child stays the
+/// caller's to kill and `wait()` for, and its pid cannot be reused while the
+/// caller still holds it. Should `waitid` itself fail, the thread reports an
+/// exit and the caller's blocking `wait()` decides.
+fn exits_within(child: &std::process::Child, timeout: Duration) -> bool {
+    use rustix::process::{waitid, Pid, WaitId, WaitIdOptions};
+    let pid = Pid::from_child(child);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Err(rustix::io::Errno::INTR) = waitid(WaitId::Pid(pid), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT) {}
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(timeout).is_ok()
 }
 
 /// `shutil.which(name)`.
