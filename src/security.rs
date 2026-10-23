@@ -13,8 +13,10 @@
 //!
 //! * Fetched from security.archlinux.org, cached for six hours. Nothing about
 //!   this machine is sent; the whole list is downloaded and matched locally.
-//! * Versions are compared with pacman's own `vercmp`, the only comparison that
-//!   agrees with pacman about epochs and pkgrels.
+//! * Versions are compared the way pacman's own `vercmp` compares them (a
+//!   port of libalpm's `alpm_pkg_vercmp`, checked against the binary in the
+//!   tests), the only comparison that agrees with pacman about epochs and
+//!   pkgrels.
 //! * When the tracker cannot be reached, callers get None -- "unknown", which
 //!   the inventory treats differently from "no vulnerabilities".
 
@@ -913,8 +915,9 @@ fn _py_int(s: &str) -> Option<(bool, String)> {
     Some((neg && digits != "0", digits.to_string()))
 }
 
-/// The sign of `int(out.strip())`, all the Python's comparisons look at;
+/// The sign of `int(out.strip())`, all the Python's comparisons looked at;
 /// None where int() raises.
+#[cfg(test)]
 fn _py_int_sign(out: &str) -> Option<i8> {
     let (neg, digits) = _py_int(out.trim_matches(_py_isspace))?;
     Some(if digits == "0" { 0 } else if neg { -1 } else { 1 })
@@ -1547,43 +1550,132 @@ pub fn advisories(ttl: i64) -> Result<Option<PyValue>, String> {
     Ok(Some(groups).filter(|v| !matches!(v, J::Null)))
 }
 
-/// `{(a, b): sign}` via one `vercmp` process per pair, run concurrently.
+/// `{(a, b): sign}`, as `vercmp a b` prints it.
 ///
-/// Python keeps `int(out)`; every use of it only asks for its sign, so that
-/// is what is kept here (an int() of any size, underscores or non-ASCII
-/// digits included).
+/// This used to start one `vercmp` process per pair (over a thousand on
+/// every inventory scan); `vercmp` is computed in-process now. None where
+/// the process could not have answered: a NUL byte cannot go into its argv,
+/// and `vercmp -h x` / `vercmp --help x` print the usage instead of a number.
 fn _vercmp_all(pairs: &[(String, String)]) -> HashMap<(String, String), Option<i8>> {
-    fn one(pair: &(String, String)) -> Option<i8> {
-        let out = crate::util::run(&["vercmp", &pair.0, &pair.1], 10);
-        if out.failed_to_start || out.timed_out {
-            return None;
-        }
-        _py_int_sign(&out.stdout)
-    }
-    let unique: Vec<(String, String)> = pairs
-        .iter()
-        .cloned()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
     let mut out = HashMap::new();
-    if unique.is_empty() {
-        return out;
+    for (a, b) in pairs {
+        if out.contains_key(&(a.clone(), b.clone())) {
+            continue;
+        }
+        let sign = if a.contains('\0') || b.contains('\0') || a == "-h" || a == "--help" {
+            None
+        } else {
+            Some(vercmp(a, b) as i8)
+        };
+        out.insert((a.clone(), b.clone()), sign);
     }
-    // ThreadPoolExecutor(max_workers=8)
-    let per = unique.len().div_ceil(8);
-    std::thread::scope(|s| {
-        let handles: Vec<_> = unique
-            .chunks(per)
-            .map(|chunk| s.spawn(move || chunk.iter().map(|p| (p.clone(), one(p))).collect::<Vec<_>>()))
-            .collect();
-        for h in handles {
-            if let Ok(results) = h.join() {
-                out.extend(results);
+    out
+}
+
+/// pacman's version comparison (libalpm `alpm_pkg_vercmp`): `[epoch:]version[-release]`,
+/// the epoch first (missing means 0), then the version, then the release
+/// only when both have one. Each part is compared with `rpmvercmp`.
+pub fn vercmp(a: &str, b: &str) -> Ordering {
+    if a == b {
+        return Ordering::Equal;
+    }
+    let (e1, v1, r1) = parse_evr(a.as_bytes());
+    let (e2, v2, r2) = parse_evr(b.as_bytes());
+    rpmvercmp(e1, e2).then_with(|| rpmvercmp(v1, v2)).then_with(|| match (r1, r2) {
+        (Some(r1), Some(r2)) => rpmvercmp(r1, r2),
+        _ => Ordering::Equal,
+    })
+}
+
+/// libalpm's `parseEVR`: the epoch is the leading digits when a ':' follows
+/// them ("0" when there are none, or no ':'); the release is what follows the
+/// last '-' after those digits, None when there is no '-'.
+fn parse_evr(evr: &[u8]) -> (&[u8], &[u8], Option<&[u8]>) {
+    let digits = evr.iter().take_while(|c| c.is_ascii_digit()).count();
+    let dash = evr[digits..].iter().rposition(|&c| c == b'-').map(|i| digits + i);
+    let (epoch, version_start) = if evr.get(digits) == Some(&b':') {
+        (if digits == 0 { &b"0"[..] } else { &evr[..digits] }, digits + 1)
+    } else {
+        (&b"0"[..], 0)
+    };
+    match dash {
+        Some(d) => (epoch, &evr[version_start..d], Some(&evr[d + 1..])),
+        None => (epoch, &evr[version_start..], None),
+    }
+}
+
+/// libalpm's `rpmvercmp`, with its C-locale `isalnum`/`isdigit`/`isalpha`.
+///
+/// Both strings are walked as alternating runs of separators (anything not
+/// ASCII alphanumeric) and segments (all digits or all letters). Separator
+/// runs of different lengths decide; a number beats letters; numbers compare
+/// by value (leading zeros dropped, then length, then digits); letters
+/// compare bytewise. When one string runs out, a leftover letter segment is
+/// older than nothing and anything else is newer.
+fn rpmvercmp(a: &[u8], b: &[u8]) -> Ordering {
+    if a == b {
+        return Ordering::Equal;
+    }
+    let (mut one, mut two) = (0usize, 0usize);
+    let (mut ptr1, mut ptr2) = (0usize, 0usize);
+    let at = |s: &[u8], i: usize| s.get(i).copied().unwrap_or(0);
+    while at(a, one) != 0 && at(b, two) != 0 {
+        while at(a, one) != 0 && !at(a, one).is_ascii_alphanumeric() {
+            one += 1;
+        }
+        while at(b, two) != 0 && !at(b, two).is_ascii_alphanumeric() {
+            two += 1;
+        }
+        if at(a, one) == 0 || at(b, two) == 0 {
+            break;
+        }
+        // Separator runs of different lengths.
+        if one - ptr1 != two - ptr2 {
+            return (one - ptr1).cmp(&(two - ptr2));
+        }
+        ptr1 = one;
+        ptr2 = two;
+        let isnum = at(a, ptr1).is_ascii_digit();
+        let class: fn(&u8) -> bool = if isnum { u8::is_ascii_digit } else { u8::is_ascii_alphabetic };
+        while at(a, ptr1) != 0 && class(&at(a, ptr1)) {
+            ptr1 += 1;
+        }
+        while at(b, ptr2) != 0 && class(&at(b, ptr2)) {
+            ptr2 += 1;
+        }
+        // A number against letters (an empty segment of b's kind).
+        if two == ptr2 {
+            return if isnum { Ordering::Greater } else { Ordering::Less };
+        }
+        let (mut s1, mut s2) = (&a[one..ptr1], &b[two..ptr2]);
+        if isnum {
+            while s1.first() == Some(&b'0') {
+                s1 = &s1[1..];
+            }
+            while s2.first() == Some(&b'0') {
+                s2 = &s2[1..];
+            }
+            if s1.len() != s2.len() {
+                return s1.len().cmp(&s2.len());
             }
         }
-    });
-    out
+        match s1.cmp(s2) {
+            Ordering::Equal => {}
+            o => return o,
+        }
+        one = ptr1;
+        two = ptr2;
+    }
+    let (c1, c2) = (at(a, one), at(b, two));
+    if c1 == 0 && c2 == 0 {
+        return Ordering::Equal;
+    }
+    // A leftover letter segment never beats an empty string.
+    if (c1 == 0 && !c2.is_ascii_alphabetic()) || c1.is_ascii_alphabetic() {
+        Ordering::Less
+    } else {
+        Ordering::Greater
+    }
 }
 
 /// `str.splitlines()`: every line boundary Python recognises.
@@ -2208,6 +2300,121 @@ mod tests {
         // int() itself does not strip U+001C.
         assert_eq!(_py_int("\x1c1"), None);
         assert_eq!(_py_int(" 9 "), Some((false, "9".into())));
+    }
+
+    #[test]
+    fn vercmp_known_answers() {
+        use Ordering::*;
+        for (a, b, want) in [
+            ("1.0", "1.0", Equal),
+            ("1.0", "1.1", Less),
+            ("1.0.0", "1.0", Greater),
+            ("1.0a", "1.0", Less),
+            ("1.0alpha", "1.0", Less),
+            ("1.0", "1.0.a", Less),
+            ("1.0rc1", "1.0", Less),
+            ("1.001", "1.1", Equal),
+            ("1.0-1", "1.0-2", Less),
+            ("1.0-2", "1.0", Equal),
+            ("1:1.0", "2.0", Greater),
+            ("0:1.0", "1.0", Equal),
+            (":1.0", "1.0", Equal),
+            ("1.0~rc1", "1.0", Greater),
+            ("1..0", "1.0", Greater),
+            ("1-", "1-a", Greater),
+            ("1", "a", Greater),
+            ("", "", Equal),
+            ("", "1", Less),
+            ("", "a", Greater),
+        ] {
+            assert_eq!(vercmp(a, b), want, "{a:?} vs {b:?}");
+            assert_eq!(vercmp(b, a), want.reverse(), "{b:?} vs {a:?}");
+        }
+        let signs = _vercmp_all(&[
+            ("1".into(), "2".into()),
+            ("-h".into(), "1".into()),
+            ("1\0".into(), "1".into()),
+        ]);
+        assert_eq!(signs[&("1".into(), "2".into())], Some(-1));
+        assert_eq!(signs[&("-h".into(), "1".into())], None);
+        assert_eq!(signs[&("1\0".into(), "1".into())], None);
+    }
+
+    /// The port agrees with pacman's `vercmp` binary, when it is installed,
+    /// on a few thousand generated pairs and the versions installed here.
+    #[test]
+    fn vercmp_agrees_with_pacman() {
+        if !std::path::Path::new("/usr/bin/vercmp").exists() {
+            return;
+        }
+        // Building blocks for the awkward cases: epochs, empty epochs and
+        // releases, leading zeros, letters against digits, '~', '+', '_',
+        // repeated and non-ASCII separators, very long numbers.
+        const TOKENS: &[&str] = &[
+            "0", "1", "2", "9", "10", "01", "007", "123456789012345678901234567890", "a", "b", "z", "A", "alpha",
+            "beta", "rc", "pre", "git", "r", ".", ".", "..", "-", "-", ":", ":", "~", "+", "_", "é", "1:", "2:",
+            "-1", "-2", ".r", "g1a2",
+        ];
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for _ in 0..3000 {
+            let a: String = (0..next(6)).map(|_| TOKENS[next(TOKENS.len())]).collect();
+            // Half the time a near miss of a, which is where the rules bite.
+            let b: String = if next(2) == 0 {
+                format!("{a}{}", TOKENS[next(TOKENS.len())])
+            } else {
+                (0..next(6)).map(|_| TOKENS[next(TOKENS.len())]).collect()
+            };
+            pairs.push((a, b));
+        }
+        let curated = [
+            "1.0", "1.0.0", "1.0a", "1.0.a", "1.0-1", "1.0-2", "1:1.0", "1:1.0-1", "2:0.1", "0:1.0", ":1.0", "1.0~rc1",
+            "1.0rc1", "1.0+git1", "1.0_1", "1..0", "1.001", "1.1", "1-", "-1", "1-a", "a", "", "r123.abc",
+            "1.2.3.r45.g6789", "20241001", "6.11.2.arch1-1", "6.11.2.arch1-2", "1:6.11.2.arch1-1",
+        ];
+        for a in curated {
+            for b in curated {
+                pairs.push((a.into(), b.into()));
+            }
+        }
+        // Real versions: each installed package against its neighbour's.
+        if let Ok(out) = std::process::Command::new("pacman").arg("-Q").output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let vers: Vec<&str> = text.lines().filter_map(|l| l.split_whitespace().nth(1)).take(400).collect();
+            for w in vers.windows(2) {
+                pairs.push((w[0].into(), w[1].into()));
+                pairs.push((w[0].into(), w[0].into()));
+            }
+        }
+        pairs.retain(|(a, _)| a != "-h" && a != "--help");
+        let per = pairs.len().div_ceil(8);
+        let mismatches: Vec<String> = std::thread::scope(|s| {
+            let handles: Vec<_> = pairs
+                .chunks(per)
+                .map(|chunk| {
+                    s.spawn(move || {
+                        let mut bad = Vec::new();
+                        for (a, b) in chunk {
+                            let out = std::process::Command::new("/usr/bin/vercmp").args([a, b]).output().unwrap();
+                            let real: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+                            if vercmp(a, b) != real.cmp(&0) {
+                                bad.push(format!("{a:?} vs {b:?}: vercmp says {real}, port {:?}", vercmp(a, b)));
+                            }
+                        }
+                        bad
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        assert!(pairs.len() > 3500, "{}", pairs.len());
+        assert!(mismatches.is_empty(), "{} of {} disagree:\n{}", mismatches.len(), pairs.len(), mismatches.join("\n"));
     }
 
     #[test]
