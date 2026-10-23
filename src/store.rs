@@ -1241,7 +1241,7 @@ fn py_repr_str(s: &str) -> String {
 }
 
 /// `shlex.quote(s)`.
-fn shlex_quote(s: &str) -> String {
+pub fn shlex_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".into();
     }
