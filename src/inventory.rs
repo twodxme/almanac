@@ -2671,8 +2671,14 @@ pub fn collect() -> Vec<App> {
     ];
     let mut out = Vec::new();
     std::thread::scope(|s| {
-        let handles: Vec<_> = sources.iter().map(|f| s.spawn(f)).collect();
+        // The deep stack spawn_bg gives its jobs: a collector can drop a
+        // deeply nested GitHub cache value, and that free recurses.
+        let handles: Vec<_> = sources
+            .iter()
+            .map(|f| std::thread::Builder::new().stack_size(crate::util::JSON_STACK).spawn_scoped(s, f))
+            .collect();
         for h in handles {
+            let Ok(h) = h else { continue };
             match h.join() {
                 Ok(Ok(apps)) => out.extend(apps),
                 // One collector failing must not empty the whole window; the

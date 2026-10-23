@@ -127,6 +127,9 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
 /// keep the reader waiting, and itself running, after the child is gone.
 pub fn spawn_group(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
+    // Out of the terminal's foreground group, a prompt for a password would
+    // stop the child (SIGTTIN) until the timeout; git can fail at once.
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.process_group(0).spawn()
 }
 
