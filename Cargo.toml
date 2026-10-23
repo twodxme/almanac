@@ -22,7 +22,6 @@ cairo-rs = { version = "0.22.9", features = ["png"] }
 chrono = "0.4.45"
 close_fds = "0.3.2"
 encoding_rs = "0.8.35"
-gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
 gio-unix = "0.22.8"
 glib-unix = "0.22.8"
 glob = "0.3.4"
@@ -43,8 +42,6 @@ sha1 = "0.11.0"
 sha2 = "0.11.0"
 shell-words = "1.1.1"
 tempfile = "3.27.0"
-toml = "1.1.8"
-toml_v10 = { version = "0.8", package = "toml" }
 ureq = { version = "3.4.2", features = ["json", "rustls"], default-features = false }
 url = "2.5.8"
 
