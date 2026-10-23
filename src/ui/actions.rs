@@ -970,16 +970,44 @@ impl Win {
     /// turns the two answers into what the user is told (see verify.py).
     /// Every silent failure this app has had passed an exit-status check.
     ///
-    /// `Err` where the first asking raises, as `_checked` itself then does
-    /// (and the action it was building never starts). A raise on the second
-    /// asking ends the worker: nothing is reported.
-    pub fn checked(&self, probe: Option<TryProbe>, judge: Judge, then: Option<OnDone>) -> Result<OnDone, String> {
-        let before = match &probe {
-            Some(p) => p()?,
-            None => None,
+    /// The first asking runs off the main thread (`<agent> --version` took
+    /// 4.5 s for one agent, the window frozen meanwhile): `start` is handed
+    /// the on_done once it has answered, and starts the action with it, so
+    /// the action still begins after the first answer is in.
+    ///
+    /// Where the first asking raises, as `_checked` itself then does,
+    /// `on_err` reports it and the action never starts. A raise on the
+    /// second asking ends the worker: nothing is reported.
+    pub fn checked(
+        &self,
+        probe: Option<TryProbe>,
+        judge: Judge,
+        then: Option<OnDone>,
+        on_err: fn(&str),
+        start: impl FnOnce(OnDone) + 'static,
+    ) {
+        let Some(first) = probe.clone() else {
+            start(self.checked_from(None, None, judge, then));
+            return;
         };
         let w = self.downgrade();
-        Ok(Box::new(move |ok| {
+        spawn_bg(
+            move || first(),
+            move |before| match before {
+                Ok(before) => {
+                    if let Some(win) = w.upgrade() {
+                        start(win.checked_from(before, probe, judge, then));
+                    }
+                }
+                Err(e) => on_err(&e),
+            },
+        );
+    }
+
+    /// `checked`'s on_done, once the first answer is `before`.
+    fn checked_from(&self, before: Option<ProbeValue>, probe: Option<TryProbe>, judge: Judge, then: Option<OnDone>) -> OnDone {
+        let w = self.downgrade();
+        Box::new(move |ok| {
             if let Some(then) = then {
                 then(ok);
             }
@@ -997,20 +1025,45 @@ impl Win {
                     Err(e) => raised(&e),
                 },
             );
-        }))
+        })
     }
 
     /// `_checked` for a `done` that may run more than once (the Python
-    /// reuses one `done` each time `tasks.confirm` answers yes).
+    /// reuses one `done` each time `tasks.confirm` answers yes). As with
+    /// `checked`, the first asking is off the main thread and `start` gets
+    /// the done once it has answered.
     fn checked_again(
         &self,
         probe: TryProbe,
         judge: JudgeAgain,
         then: Rc<dyn Fn(bool)>,
-    ) -> Result<Rc<dyn Fn(bool)>, String> {
-        let before = probe()?;
+        start: impl FnOnce(Rc<dyn Fn(bool)>) + 'static,
+    ) {
         let w = self.downgrade();
-        Ok(Rc::new(move |ok| {
+        let first = probe.clone();
+        spawn_bg(
+            move || first(),
+            move |before| match before {
+                Ok(before) => {
+                    if let Some(win) = w.upgrade() {
+                        start(win.checked_again_from(before, probe, judge, then));
+                    }
+                }
+                Err(e) => raised(&e),
+            },
+        );
+    }
+
+    /// `checked_again`'s done, once the first answer is `before`.
+    fn checked_again_from(
+        &self,
+        before: Option<ProbeValue>,
+        probe: TryProbe,
+        judge: JudgeAgain,
+        then: Rc<dyn Fn(bool)>,
+    ) -> Rc<dyn Fn(bool)> {
+        let w = self.downgrade();
+        Rc::new(move |ok| {
             then(ok);
             let (probe, judge, before) = (probe.clone(), judge.clone(), before.clone());
             let w = w.clone();
@@ -1025,7 +1078,7 @@ impl Win {
                     Err(e) => raised(&e),
                 },
             );
-        }))
+        })
     }
 
     pub fn report_outcome(&self, out: &Outcome) {
@@ -1327,7 +1380,8 @@ impl Win {
             Ok(steps) => steps,
             Err(e) => return raised(&e),
         };
-        let done = self.checked(
+        let w = self.downgrade();
+        self.checked(
             Some(verify::installed_package_try(&name)),
             Box::new(move |b, a| {
                 let landed = probe_truthy(&a) && a != b;
@@ -1341,12 +1395,13 @@ impl Win {
                 )
             }),
             Some(after),
+            raised,
+            move |done| {
+                if let Some(win) = w.upgrade() {
+                    tasks::run(&win.window, &format!("Installing {name}"), steps, Some(done));
+                }
+            },
         );
-        let done = match done {
-            Ok(done) => done,
-            Err(e) => return raised(&e),
-        };
-        tasks::run(&self.window, &format!("Installing {name}"), steps, Some(done));
     }
 
     /// The app ran it, so it knows to re-read rather than guess.
@@ -1437,11 +1492,13 @@ impl Win {
                     Ok(steps) => steps,
                     Err(e) => return raised(&e),
                 };
-                let done = match win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win))) {
-                    Ok(done) => done,
-                    Err(e) => return raised(&e),
-                };
-                tasks::run(&win.window, &format!("Updating {}", app.name), steps, Some(done));
+                let w = win.downgrade();
+                let title = format!("Updating {}", app.name);
+                win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
+                    if let Some(win) = w.upgrade() {
+                        tasks::run(&win.window, &title, steps, Some(done));
+                    }
+                });
             },
         );
     }
@@ -1520,16 +1577,13 @@ impl Win {
         tasks::confirm(&self.window, &heading, &body, &detail, &action, false, move || {
             let Some(win) = w.upgrade() else { return };
             let app = app_c.clone();
-            let done = match win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win))) {
-                Ok(done) => done,
-                Err(e) => return raised(&e),
-            };
-            tasks::run(
-                &win.window,
-                &format!("Updating {}", app.name),
-                vec![Step::argv(format!("Updating {}", app.name), cmd.clone())],
-                Some(done),
-            );
+            let w = win.downgrade();
+            let (title, cmd) = (format!("Updating {}", app.name), cmd.clone());
+            win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
+                if let Some(win) = w.upgrade() {
+                    tasks::run(&win.window, &title, vec![Step::argv(title.clone(), cmd)], Some(done));
+                }
+            });
         });
     }
 
@@ -1588,10 +1642,17 @@ impl Win {
             }
         };
         let steps = patches::steps(repo, state, &app.name, pull.as_deref());
-        let done = match self.checked_again(verify::git_head_try(repo), app_judge_again(app), after_pacman_again(self)) {
-            Ok(done) => done,
-            Err(e) => return raised(&e),
-        };
+        let w = self.downgrade();
+        let (app, state) = (app.clone(), state.clone());
+        self.checked_again(verify::git_head_try(repo), app_judge_again(&app), after_pacman_again(self), move |done| {
+            if let Some(win) = w.upgrade() {
+                win.confirm_pull_with(&app, &state, steps, done);
+            }
+        });
+    }
+
+    /// `confirm_pull`, once the checkout's head before the pull is known.
+    fn confirm_pull_with(&self, app: &App, state: &PatchState, steps: Vec<Step>, done: Rc<dyn Fn(bool)>) {
         if state.kind == patches::CLEAN || state.kind == patches::UNKNOWN {
             tasks::run(&self.window, &format!("Updating {}", app.name), steps, Some(Box::new(move |ok| done(ok))));
             return;
