@@ -1676,6 +1676,64 @@ pub fn try_pending_repo() -> Result<BTreeMap<String, String>, String> {
     Ok(pending_from(&run(&["checkupdates"], 60)?))
 }
 
+/// When pacman's databases last changed: the local database directory
+/// (a package installed, upgraded or removed) and the newest sync database
+/// (`pacman -Sy`). None where they cannot be read, and then nothing is kept.
+fn pacman_db_stamp() -> Option<(std::time::SystemTime, std::time::SystemTime)> {
+    let root = Path::new("/var/lib/pacman");
+    let local = std::fs::metadata(root.join("local")).and_then(|m| m.modified()).ok()?;
+    let sync = std::fs::read_dir(root.join("sync"))
+        .ok()?
+        .filter_map(|e| e.ok()?.metadata().ok()?.modified().ok())
+        .max()?;
+    Some((local, sync))
+}
+
+/// How long `pending_both` keeps an answer while the databases stand still:
+/// long enough that the scans an action, the log watcher and page changes
+/// set off together share one, short enough that a release upstream still
+/// shows up on its own.
+const PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+type Pending = (BTreeMap<String, String>, BTreeMap<String, String>);
+
+/// The last `pending_both` answer, with the database stamp and time it was
+/// taken at.
+static PENDING: std::sync::Mutex<Option<((std::time::SystemTime, std::time::SystemTime), std::time::Instant, Pending)>> =
+    std::sync::Mutex::new(None);
+
+/// (`try_pending_repo`, `try_pending_aur`), run side by side: checkupdates
+/// (0.9 s) and `yay -Qua` (1.2 s) do not wait on each other. An answer is
+/// kept for `PENDING_TTL` while pacman's databases are unchanged; installing,
+/// upgrading or syncing anything starts afresh, as does `forget_pending`.
+/// Err as the two give it, the repo's first.
+pub fn pending_both() -> Result<Pending, String> {
+    let stamp = pacman_db_stamp();
+    if let Some(stamp) = stamp {
+        let kept = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, when, pending)) = kept.as_ref() {
+            if *at == stamp && when.elapsed() < PENDING_TTL {
+                return Ok(pending.clone());
+            }
+        }
+    }
+    let (repo, aur) = std::thread::scope(|s| {
+        let aur = s.spawn(try_pending_aur);
+        let repo = try_pending_repo();
+        (repo, aur.join().unwrap_or_else(|_| Err("yay -Qua panicked".into())))
+    });
+    let pending = (repo?, aur?);
+    if let Some(stamp) = stamp {
+        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some((stamp, std::time::Instant::now(), pending.clone()));
+    }
+    Ok(pending)
+}
+
+/// Drop what `pending_both` keeps: the user asked for a fresh look.
+pub fn forget_pending() {
+    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// `try_pending_repo` for callers that need a plain map: where the Python
 /// raises, this answers `{}`.
 pub fn pending_repo() -> BTreeMap<String, String> {
@@ -1758,7 +1816,7 @@ pub fn packages() -> Result<Vec<App>, String> {
     let versions = version_map(&run(&["pacman", "-Q"], 25)?)?;
     // Pull in any non-explicit package that has an update waiting, so the
     // list can never disagree with "Update all".
-    let (up_repo_pre, up_aur_pre) = (try_pending_repo()?, try_pending_aur()?);
+    let (up_repo_pre, up_aur_pre) = pending_both()?;
     let known: HashSet<String> = repo_names.iter().chain(aur_names.iter()).cloned().collect();
     let foreign: HashSet<String> = words(run(&["pacman", "-Qmq"], 25)?).into_iter().collect();
     // (The Python walks a set here, in hash order; sorted is one fixed order.)
@@ -1777,10 +1835,9 @@ pub fn packages() -> Result<Vec<App>, String> {
     let desktops = desktop_map(&all_names)?;
     let aur = try_aur_health(&aur_names)?;
     let (up_repo, up_aur) = (up_repo_pre, up_aur_pre);
-    let explicit: HashSet<String> = words(run(&["pacman", "-Qentq"], 25)?)
-        .into_iter()
-        .chain(words(run(&["pacman", "-Qemq"], 25)?))
-        .collect();
+    // The explicit installs: the two lists above as pacman gave them, before
+    // the pending names joined them (asking pacman again took 0.4 s).
+    let explicit = known;
 
     // "Security update" means the update fixes a known vulnerability in the
     // installed version, per the Arch Security Tracker. Only when the tracker

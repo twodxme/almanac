@@ -2019,7 +2019,12 @@ impl Win {
             "plugins" => self.plugins_reload(),
             "switchboard" => self.switchboard_reload(),
             p if p == inventory::AGENT => self.ai_check(),
-            _ => self.reload(),
+            _ => {
+                // Asked for: look upstream again rather than reuse the
+                // pending updates the last scans shared.
+                inventory::forget_pending();
+                self.reload()
+            }
         }
     }
 
