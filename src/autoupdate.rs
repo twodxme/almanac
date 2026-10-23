@@ -300,8 +300,6 @@ const DECODE_MAX_DEPTH: usize = 52130;
 /// The same for `json.dumps(indent=2)`, counting the top-level dict and
 /// empty containers (52120, measured the same way).
 const ENCODE_MAX_DEPTH: usize = 52120;
-/// `sys.get_int_max_str_digits()`: a longer int literal is a ValueError.
-const INT_MAX_STR_DIGITS: usize = 4300;
 
 /// How `json.loads` failed: a ValueError (JSONDecodeError, or an int over
 /// the digit limit), which `load` catches, or a RecursionError, which it
@@ -311,290 +309,56 @@ enum LoadsError {
     Recursion(String),
 }
 
-fn verr<T>(msg: &str, at: usize) -> Result<T, LoadsError> {
-    Err(LoadsError::Value(format!("{msg}: char {at}")))
-}
-
-fn is_ws(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\r')
-}
-
-/// A container being filled while scanning.
-enum Frame {
-    List(Vec<PyValue>),
-    Dict(Vec<(PyStr, PyValue)>, HashMap<PyStr, usize>, PyStr),
-}
-
 /// `json.loads(s)` with the C scanner's rules (strict strings, NaN and
-/// Infinity accepted). Iterative, so a deeply nested file cannot overflow
-/// the Rust stack before Python's own limit is reached.
+/// Infinity accepted), nesting as deep as Python's.
 fn json_loads(text: &str) -> Result<PyValue, LoadsError> {
-    let s: Vec<char> = text.chars().collect();
-    if s.first() == Some(&'\u{feff}') {
-        return verr("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
-    }
-    let n = s.len();
-    let ws = |mut i: usize| {
-        while i < n && is_ws(s[i]) {
-            i += 1;
-        }
-        i
-    };
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut i = ws(0);
-    loop {
-        // Scan one value at i (or open a container and scan its first item).
-        let mut v = match s.get(i) {
-            None => return verr("Expecting value", i),
-            Some('"') => {
-                let (st, end) = scan_string(&s, i + 1)?;
-                i = end;
-                PyValue::Str(st)
-            }
-            Some(c @ ('{' | '[')) => {
-                if stack.len() + 1 > DECODE_MAX_DEPTH {
-                    let what = if *c == '{' { "object" } else { "array" };
-                    return Err(LoadsError::Recursion(format!(
-                        "maximum recursion depth exceeded while decoding a JSON {what} from a unicode string"
-                    )));
-                }
-                let open = *c;
-                i = ws(i + 1);
-                if open == '[' {
-                    if s.get(i) == Some(&']') {
-                        i += 1;
-                        PyValue::List(Vec::new())
-                    } else {
-                        stack.push(Frame::List(Vec::new()));
-                        continue;
-                    }
-                } else if s.get(i) == Some(&'}') {
-                    i += 1;
-                    PyValue::Dict(Vec::new())
-                } else {
-                    let key = scan_key(&s, &mut i, &ws)?;
-                    stack.push(Frame::Dict(Vec::new(), HashMap::new(), key));
-                    continue;
-                }
-            }
-            Some(_) => scan_scalar(&s, &mut i)?,
-        };
-        // Hand the finished value to its container, closing every container
-        // that ends here.
-        loop {
-            match stack.last_mut() {
-                None => {
-                    if ws(i) != n {
-                        return verr("Extra data", ws(i));
-                    }
-                    return Ok(v);
-                }
-                Some(Frame::List(items)) => {
-                    items.push(v);
-                    i = ws(i);
-                    match s.get(i) {
-                        Some(']') => {
-                            i += 1;
-                            let Some(Frame::List(items)) = stack.pop() else { unreachable!() };
-                            v = PyValue::List(items);
-                        }
-                        Some(',') => {
-                            i = ws(i + 1);
-                            if s.get(i) == Some(&']') {
-                                return verr("Illegal trailing comma before end of array", i);
-                            }
-                            break;
-                        }
-                        _ => return verr("Expecting ',' delimiter", i),
-                    }
-                }
-                Some(Frame::Dict(pairs, index, key)) => {
-                    let k = std::mem::take(key);
-                    // dict semantics: a repeated key keeps its first place
-                    // and takes the last value.
-                    match index.get(&k) {
-                        Some(&at) => pairs[at].1 = v,
-                        None => {
-                            index.insert(k.clone(), pairs.len());
-                            pairs.push((k, v));
-                        }
-                    }
-                    i = ws(i);
-                    match s.get(i) {
-                        Some('}') => {
-                            i += 1;
-                            let Some(Frame::Dict(pairs, _, _)) = stack.pop() else { unreachable!() };
-                            v = PyValue::Dict(pairs);
-                        }
-                        Some(',') => {
-                            i = ws(i + 1);
-                            if s.get(i) == Some(&'}') {
-                                return verr("Illegal trailing comma before end of object", i);
-                            }
-                            *key = scan_key(&s, &mut i, &ws)?;
-                            break;
-                        }
-                        _ => return verr("Expecting ',' delimiter", i),
-                    }
-                }
-            }
-        }
-    }
+    use crate::util::pyjson;
+    pyjson::loads(text, pyjson::Limit::containers(DECODE_MAX_DEPTH)).map_err(|e| match e {
+        pyjson::Error::Value(m) => LoadsError::Value(m),
+        pyjson::Error::Recursion(is_obj) => LoadsError::Recursion(format!(
+            "maximum recursion depth exceeded while decoding a JSON {} from a unicode string",
+            if is_obj { "object" } else { "array" }
+        )),
+    })
 }
 
-/// `"key"` then `:`; leaves i at the value.
-fn scan_key(s: &[char], i: &mut usize, ws: &dyn Fn(usize) -> usize) -> Result<PyStr, LoadsError> {
-    if s.get(*i) != Some(&'"') {
-        return verr("Expecting property name enclosed in double quotes", *i);
+impl crate::util::pyjson::Build for PyValue {
+    type Key = PyStr;
+    fn null() -> Self {
+        PyValue::None
     }
-    let (key, end) = scan_string(s, *i + 1)?;
-    let at = ws(end);
-    if s.get(at) != Some(&':') {
-        return verr("Expecting ':' delimiter", at);
+    fn bool(b: bool) -> Self {
+        PyValue::Bool(b)
     }
-    *i = ws(at + 1);
-    Ok(key)
-}
-
-fn hex4(s: &[char], at: usize) -> Option<u32> {
-    let mut v = 0u32;
-    for k in 0..4 {
-        v = (v << 4) | s.get(at + k)?.to_digit(16)?;
-    }
-    Some(v)
-}
-
-/// The body of a string starting after its opening quote: (value, index
-/// after the closing quote). Control characters are errors (`strict=True`).
-fn scan_string(s: &[char], start: usize) -> Result<(PyStr, usize), LoadsError> {
-    let n = s.len();
-    let mut out: Vec<u32> = Vec::new();
-    let mut i = start;
-    loop {
-        let Some(&c) = s.get(i) else {
-            return verr("Unterminated string starting at", start - 1);
-        };
-        match c {
-            '"' => return Ok((PyStr(out), i + 1)),
-            '\\' => {
-                let Some(&e) = s.get(i + 1) else {
-                    return verr("Unterminated string starting at", start - 1);
-                };
-                let simple = match e {
-                    '"' => Some('"'),
-                    '\\' => Some('\\'),
-                    '/' => Some('/'),
-                    'b' => Some('\u{8}'),
-                    'f' => Some('\u{c}'),
-                    'n' => Some('\n'),
-                    'r' => Some('\r'),
-                    't' => Some('\t'),
-                    'u' => None,
-                    _ => return verr("Invalid \\escape", i),
-                };
-                if let Some(ch) = simple {
-                    out.push(ch as u32);
-                    i += 2;
-                    continue;
-                }
-                // `\uXXXX`: there must be a character after the four digits.
-                let end = i + 6;
-                if end >= n {
-                    return verr("Invalid \\uXXXX escape", i + 1);
-                }
-                let Some(mut cp) = hex4(s, i + 2) else {
-                    return verr("Invalid \\uXXXX escape", i + 1);
-                };
-                let mut next = end;
-                // A high surrogate joins a following `\uXXXX` low surrogate;
-                // otherwise both stay lone, as Python keeps them.
-                if (0xd800..=0xdbff).contains(&cp) && end + 6 < n && s[end] == '\\' && s[end + 1] == 'u' {
-                    let Some(c2) = hex4(s, end + 2) else {
-                        return verr("Invalid \\uXXXX escape", end + 1);
-                    };
-                    if (0xdc00..=0xdfff).contains(&c2) {
-                        cp = 0x10000 + ((cp - 0xd800) << 10) + (c2 - 0xdc00);
-                        next = end + 6;
-                    }
-                }
-                out.push(cp);
-                i = next;
-            }
-            c if (c as u32) < 0x20 => return verr("Invalid control character at", i),
-            c => {
-                out.push(c as u32);
-                i += 1;
-            }
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => PyValue::Int(BigInt::from(i)),
+            Num::UInt(u) => PyValue::Int(BigInt::from(u)),
+            Num::Big(digits) => PyValue::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Float(f) => PyValue::Float(f),
         }
     }
-}
-
-/// A number or one of the literals, at *i.
-fn scan_scalar(s: &[char], i: &mut usize) -> Result<PyValue, LoadsError> {
-    let at = *i;
-    let lit = |w: &str| w.chars().enumerate().all(|(k, c)| s.get(at + k) == Some(&c));
-    for (word, v) in [
-        ("null", PyValue::None),
-        ("true", PyValue::Bool(true)),
-        ("false", PyValue::Bool(false)),
-        ("NaN", PyValue::Float(f64::NAN)),
-        ("Infinity", PyValue::Float(f64::INFINITY)),
-        ("-Infinity", PyValue::Float(f64::NEG_INFINITY)),
-    ] {
-        if lit(word) {
-            *i = at + word.chars().count();
-            return Ok(v);
-        }
+    fn str(s: String) -> Self {
+        PyValue::Str(PyStr::new(&s))
     }
-    // -?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?
-    let digit = |k: usize| s.get(k).is_some_and(|c| c.is_ascii_digit());
-    let mut k = at;
-    if s.get(k) == Some(&'-') {
-        k += 1;
+    fn wstr(units: Vec<u32>) -> Self {
+        PyValue::Str(PyStr(units))
     }
-    match s.get(k) {
-        Some('0') => k += 1,
-        Some('1'..='9') => {
-            while digit(k) {
-                k += 1;
-            }
-        }
-        _ => return verr("Expecting value", at),
+    fn key(s: String) -> PyStr {
+        PyStr::new(&s)
     }
-    let int_end = k;
-    let mut is_float = false;
-    if s.get(k) == Some(&'.') && digit(k + 1) {
-        is_float = true;
-        k += 1;
-        while digit(k) {
-            k += 1;
-        }
+    fn wkey(units: Vec<u32>) -> PyStr {
+        PyStr(units)
     }
-    if matches!(s.get(k), Some('e' | 'E')) {
-        let mut e = k + 1;
-        if matches!(s.get(e), Some('-' | '+')) {
-            e += 1;
-        }
-        if digit(e) {
-            while digit(e) {
-                e += 1;
-            }
-            is_float = true;
-            k = e;
-        }
+    fn list(items: Vec<Self>) -> Self {
+        PyValue::List(items)
     }
-    let text: String = s[at..k].iter().collect();
-    *i = k;
-    if is_float {
-        return Ok(PyValue::Float(text.parse().unwrap_or(f64::NAN)));
+    fn dict(pairs: Vec<(PyStr, Self)>) -> Self {
+        // dict semantics: a repeated key keeps its first place and takes
+        // the last value.
+        PyValue::Dict(crate::util::pyjson::dict_pairs(pairs))
     }
-    let digits = int_end - at - usize::from(s[at] == '-');
-    if digits > INT_MAX_STR_DIGITS {
-        return Err(LoadsError::Value(format!(
-            "Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion: value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
-        )));
-    }
-    Ok(PyValue::Int(BigInt::parse_bytes(text.as_bytes(), 10).unwrap_or_default()))
 }
 
 // --- The settings ------------------------------------------------------------

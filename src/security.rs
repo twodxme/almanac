@@ -663,217 +663,47 @@ fn _py_dumps(v: &J, out: &mut String) {
 
 /// `json.loads(text)`; None where it raises ValueError (JSONDecodeError).
 fn _py_loads(text: &str) -> Option<J> {
-    struct P<'a> {
-        s: &'a str,
-        b: &'a [u8],
-        i: usize,
+    // Nesting far past Python's recursion limit is refused too.
+    crate::util::pyjson::loads(text, crate::util::pyjson::Limit::values(1001)).ok()
+}
+
+impl crate::util::pyjson::Build for PyValue {
+    type Key = String;
+    fn null() -> Self {
+        J::Null
     }
-    impl P<'_> {
-        fn ws(&mut self) {
-            while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') {
-                self.i += 1;
-            }
-        }
-        fn lit(&mut self, word: &str) -> bool {
-            if self.s[self.i..].starts_with(word) {
-                self.i += word.len();
-                true
-            } else {
-                false
-            }
-        }
-        fn hex4(&mut self) -> Option<u32> {
-            let h = self.s.get(self.i..self.i + 4)?;
-            if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
-                return None;
-            }
-            self.i += 4;
-            u32::from_str_radix(h, 16).ok()
-        }
-        fn string(&mut self) -> Option<J> {
-            // at the opening quote
-            self.i += 1;
-            // Code points: a lone surrogate escape is kept, as Python does.
-            let mut out: Vec<u32> = Vec::new();
-            loop {
-                let start = self.i;
-                while self.i < self.b.len() && !matches!(self.b[self.i], b'"' | b'\\') && self.b[self.i] >= 0x20 {
-                    self.i += 1;
-                }
-                out.extend(self.s[start..self.i].chars().map(u32::from));
-                match self.b.get(self.i)? {
-                    b'"' => {
-                        self.i += 1;
-                        return Some(_from_cps(out));
-                    }
-                    b'\\' => {
-                        self.i += 1;
-                        let e = *self.b.get(self.i)?;
-                        self.i += 1;
-                        match e {
-                            b'"' => out.push(u32::from('"')),
-                            b'\\' => out.push(u32::from('\\')),
-                            b'/' => out.push(u32::from('/')),
-                            b'b' => out.push(u32::from('\u{8}')),
-                            b'f' => out.push(u32::from('\u{c}')),
-                            b'n' => out.push(u32::from('\n')),
-                            b'r' => out.push(u32::from('\r')),
-                            b't' => out.push(u32::from('\t')),
-                            b'u' => {
-                                let mut c = self.hex4()?;
-                                if (0xd800..0xdc00).contains(&c) && self.s[self.i..].starts_with("\\u") {
-                                    let save = self.i;
-                                    self.i += 2;
-                                    match self.hex4() {
-                                        Some(lo) if (0xdc00..0xe000).contains(&lo) => {
-                                            c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
-                                        }
-                                        Some(_) => self.i = save,
-                                        None => return None,
-                                    }
-                                }
-                                // A lone surrogate stays, as Python keeps it.
-                                out.push(c);
-                            }
-                            _ => return None,
-                        }
-                    }
-                    // A control character: strict mode refuses it.
-                    _ => return None,
-                }
-            }
-        }
-        fn number(&mut self) -> Option<J> {
-            let start = self.i;
-            if self.b.get(self.i) == Some(&b'-') {
-                self.i += 1;
-            }
-            let digits = |p: &mut Self| {
-                let s = p.i;
-                while p.i < p.b.len() && p.b[p.i].is_ascii_digit() {
-                    p.i += 1;
-                }
-                p.i - s
-            };
-            match self.b.get(self.i) {
-                Some(b'0') => self.i += 1,
-                Some(b'1'..=b'9') => {
-                    digits(self);
-                }
-                _ => return None,
-            }
-            let mut float = false;
-            if self.b.get(self.i) == Some(&b'.') && self.b.get(self.i + 1).is_some_and(u8::is_ascii_digit) {
-                self.i += 1;
-                digits(self);
-                float = true;
-            }
-            if matches!(self.b.get(self.i), Some(b'e' | b'E')) {
-                let save = self.i;
-                self.i += 1;
-                if matches!(self.b.get(self.i), Some(b'+' | b'-')) {
-                    self.i += 1;
-                }
-                if digits(self) == 0 {
-                    self.i = save;
-                } else {
-                    float = true;
-                }
-            }
-            let t = &self.s[start..self.i];
-            if float {
-                return Some(J::Float(t.parse().ok()?));
-            }
-            // int(t): past 4300 digits Python refuses the conversion
-            // (ValueError), and -0 is 0.
-            let mag = t.trim_start_matches('-');
-            if mag.len() > 4300 {
-                return None;
-            }
-            Some(J::Int(if mag == "0" { mag.to_string() } else { t.to_string() }))
-        }
-        fn value(&mut self, depth: usize) -> Option<J> {
-            // Far past Python's recursion limit; refused rather than
-            // overflowing the stack.
-            if depth > 1000 {
-                return None;
-            }
-            self.ws();
-            match *self.b.get(self.i)? {
-                b'{' => {
-                    self.i += 1;
-                    let mut items = Vec::new();
-                    self.ws();
-                    if self.b.get(self.i) == Some(&b'}') {
-                        self.i += 1;
-                        return Some(J::Obj(items));
-                    }
-                    loop {
-                        self.ws();
-                        if self.b.get(self.i) != Some(&b'"') {
-                            return None;
-                        }
-                        // A key keeps a lone surrogate only as U+FFFD.
-                        let k = match self.string()? {
-                            J::WStr(c) => _lossy(&c),
-                            J::Str(k) => k,
-                            _ => return None,
-                        };
-                        self.ws();
-                        if self.b.get(self.i) != Some(&b':') {
-                            return None;
-                        }
-                        self.i += 1;
-                        let v = self.value(depth + 1)?;
-                        items.push((k, v));
-                        self.ws();
-                        match self.b.get(self.i)? {
-                            b',' => self.i += 1,
-                            b'}' => {
-                                self.i += 1;
-                                return Some(J::Obj(items));
-                            }
-                            _ => return None,
-                        }
-                    }
-                }
-                b'[' => {
-                    self.i += 1;
-                    let mut items = Vec::new();
-                    self.ws();
-                    if self.b.get(self.i) == Some(&b']') {
-                        self.i += 1;
-                        return Some(J::Arr(items));
-                    }
-                    loop {
-                        items.push(self.value(depth + 1)?);
-                        self.ws();
-                        match self.b.get(self.i)? {
-                            b',' => self.i += 1,
-                            b']' => {
-                                self.i += 1;
-                                return Some(J::Arr(items));
-                            }
-                            _ => return None,
-                        }
-                    }
-                }
-                b'"' => self.string(),
-                _ if self.lit("null") => Some(J::Null),
-                _ if self.lit("true") => Some(J::Bool(true)),
-                _ if self.lit("false") => Some(J::Bool(false)),
-                _ if self.lit("NaN") => Some(J::Float(f64::NAN)),
-                _ if self.lit("Infinity") => Some(J::Float(f64::INFINITY)),
-                _ if self.lit("-Infinity") => Some(J::Float(f64::NEG_INFINITY)),
-                _ => self.number(),
-            }
+    fn bool(b: bool) -> Self {
+        J::Bool(b)
+    }
+    fn num(n: crate::util::pyjson::Num<'_>) -> Self {
+        use crate::util::pyjson::Num;
+        match n {
+            Num::Int(i) => J::Int(i.to_string()),
+            Num::UInt(u) => J::Int(u.to_string()),
+            Num::Big(digits) => J::Int(digits.to_string()),
+            Num::Float(f) => J::Float(f),
         }
     }
-    let mut p = P { s: text, b: text.as_bytes(), i: 0 };
-    let v = p.value(0)?;
-    p.ws();
-    // "Extra data"
-    (p.i == p.b.len()).then_some(v)
+    fn str(s: String) -> Self {
+        J::Str(s)
+    }
+    fn wstr(units: Vec<u32>) -> Self {
+        _from_cps(units)
+    }
+    fn key(s: String) -> String {
+        s
+    }
+    /// A key keeps a lone surrogate only as U+FFFD.
+    fn wkey(units: Vec<u32>) -> String {
+        _lossy(&units)
+    }
+    fn list(items: Vec<Self>) -> Self {
+        J::Arr(items)
+    }
+    /// Every pair, a repeated key included (see [`PyValue::Obj`]).
+    fn dict(pairs: Vec<(String, Self)>) -> Self {
+        J::Obj(pairs)
+    }
 }
 
 // ---- Python's int(), ==, hash(), set() and sorted() over those values -------

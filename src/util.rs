@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod pyjson;
+
 /// The outcome of `subprocess.run(..., capture_output=True, text=True)`.
 #[derive(Debug, Clone, Default)]
 pub struct Output {
