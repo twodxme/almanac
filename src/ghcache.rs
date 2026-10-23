@@ -800,12 +800,11 @@ pub fn try_token() -> Result<String, String> {
 fn _gh_auth_token() -> Result<Option<(bool, PyStr)>, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
-    let mut child = match Command::new("gh")
+    let mut child = match crate::util::spawn_group(Command::new("gh")
         .args(["auth", "token"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
     {
         Ok(c) => c,
         Err(_) => return Ok(None),
@@ -826,8 +825,7 @@ fn _gh_auth_token() -> Result<Option<(bool, PyStr)>, String> {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) if start.elapsed() >= std::time::Duration::from_secs(15) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 return Ok(None); // TimeoutExpired
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),

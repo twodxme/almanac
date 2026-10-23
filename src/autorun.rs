@@ -1069,13 +1069,12 @@ fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
                 Some(f) => f.try_clone().map(Stdio::from),
             };
             stdin.and_then(|stdin| {
-                Command::new(std::ffi::OsStr::from_bytes(&cand))
+                crate::util::spawn_group(Command::new(std::ffi::OsStr::from_bytes(&cand))
                     .arg0(std::ffi::OsStr::from_bytes(&bytes[0]))
                     .args(bytes[1..].iter().map(|b| std::ffi::OsStr::from_bytes(b)))
                     .stdin(stdin)
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
+                    .stderr(Stdio::piped()))
             })
         };
         match attempt {
@@ -1129,8 +1128,7 @@ fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
                 Ok(Some(st)) => status = Some(st),
                 Ok(None) => {}
                 Err(e) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::util::kill_group(&mut child);
                     return Ok(Err(py_os_error(&e, &[])));
                 }
             }
@@ -1140,8 +1138,7 @@ fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
         }
         let elapsed = start.elapsed();
         if elapsed >= limit {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             let cmd: Vec<String> = argv.iter().map(|a| py_repr_py(a)).collect();
             return Ok(Err(format!(
                 "Command '[{}]' timed out after {timeout} seconds",

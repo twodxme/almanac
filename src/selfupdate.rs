@@ -680,13 +680,12 @@ fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Captured, RunE
     let mut child: Option<Child> = None;
     let (mut first_err, mut last_err) = (None, None);
     for candidate in exec_candidates(prog) {
-        let spawned = Command::new(&candidate)
+        let spawned = crate::util::spawn_group(Command::new(&candidate)
             .arg0(prog)
             .args(args)
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped()));
         match spawned {
             Ok(c) => {
                 child = Some(c);
@@ -708,8 +707,7 @@ fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Captured, RunE
 
     let deadline = timeout.map(|t| Instant::now() + Duration::from_secs(t));
     let timed_out = |mut child: Child| {
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(&mut child);
         Err(RunError::Timeout)
     };
     // Drain both pipes on their own threads, or a chatty child fills one and

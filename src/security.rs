@@ -1543,12 +1543,11 @@ fn _run_bytes(argv: &[&str], timeout_secs: u64) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let (prog, args) = argv.split_first()?;
-    let mut child = Command::new(prog)
+    let mut child = crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null()))
         .ok()?;
     let mut pipe = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
@@ -1564,8 +1563,7 @@ fn _run_bytes(argv: &[&str], timeout_secs: u64) -> Option<Vec<u8>> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 return None;
             }
         }

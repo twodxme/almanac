@@ -593,12 +593,11 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Result<RawOutput, String> {
     let Some((prog, args)) = argv.split_first() else {
         return Ok(RawOutput { failed_to_start: true, ..Default::default() });
     };
-    let mut child = match Command::new(prog)
+    let mut child = match crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
     {
         Ok(c) => c,
         Err(_) => return Ok(RawOutput { failed_to_start: true, ..Default::default() }),
@@ -624,8 +623,7 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Result<RawOutput, String> {
             Ok(Some(st)) => break Some(st),
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::util::kill_group(&mut child);
                     timed_out = true;
                     break None;
                 }

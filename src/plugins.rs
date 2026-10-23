@@ -310,7 +310,7 @@ fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], tim
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        match cmd.spawn() {
+        match crate::util::spawn_group(&mut cmd) {
             Ok(c) => {
                 child = Some(c);
                 break;
@@ -347,8 +347,7 @@ fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], tim
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) if start.elapsed() >= limit => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 break None;
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),

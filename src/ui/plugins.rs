@@ -730,12 +730,11 @@ fn run_checked(argv: &[String], timeout: u64) -> Result<util::Output, String> {
         // Popen([]) raises IndexError before anything starts.
         return Err("list index out of range".to_string());
     };
-    let mut child = Command::new(prog)
+    let mut child = crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
         .map_err(|e| py_oserror(&e, prog))?;
     // Drain both pipes on their own threads, or a chatty child fills one and
     // blocks forever while we wait on it.
@@ -756,8 +755,7 @@ fn run_checked(argv: &[String], timeout: u64) -> Result<util::Output, String> {
         match child.try_wait() {
             Ok(Some(st)) => break Some(st),
             Ok(None) if start.elapsed() >= limit => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::util::kill_group(&mut child);
                 let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
                 return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
             }

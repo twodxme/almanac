@@ -1102,13 +1102,12 @@ fn spawn_piped_in(argv: &[&str], path: Option<Vec<u8>>) -> std::io::Result<std::
     let mut first: Option<std::io::Error> = None;
     let mut last: Option<std::io::Error> = None;
     for exe in candidates {
-        let spawned = Command::new(&exe)
+        let spawned = crate::util::spawn_group(Command::new(&exe)
             .arg0(prog)
             .args(&argv[1..])
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped()));
         match spawned {
             Ok(child) => return Ok(child),
             Err(e) => {
@@ -1170,10 +1169,7 @@ fn run_capture(argv: &[&str], timeout: Duration) -> std::io::Result<Ran> {
         }
     };
     let Some(status) = status else {
-        if child.try_wait()?.is_none() {
-            let _ = child.kill();
-        }
-        let _ = child.wait();
+        crate::util::kill_group(&mut child);
         return Ok(Ran::TimedOut);
     };
     let code = status.code().or_else(|| status.signal().map(|s| -s)).unwrap_or(-1);

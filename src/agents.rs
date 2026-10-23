@@ -776,12 +776,11 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     let (prog, args) = argv.split_first()?;
-    let mut child = Command::new(prog)
+    let mut child = crate::util::spawn_group(Command::new(prog)
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
         .ok()?;
     let reader = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -809,8 +808,7 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
             break;
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             return None;
         }
         std::thread::sleep(Duration::from_millis(10));

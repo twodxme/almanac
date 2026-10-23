@@ -112,8 +112,8 @@ fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
         argv.push(std::ffi::OsString::from_vec(b));
     }
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let mut child = match Command::new("systemctl").arg("--user").args(&argv)
-        .stdin(Stdio::inherit()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+    let mut child = match crate::util::spawn_group(Command::new("systemctl").arg("--user").args(&argv)
+        .stdin(Stdio::inherit()).stdout(Stdio::piped()).stderr(Stdio::piped()))
     {
         Ok(c) => c,
         // OSError -> "".
@@ -142,8 +142,7 @@ fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
     let mut got: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
     let timed_out = |child: &mut std::process::Child| -> Result<String, String> {
         // TimeoutExpired: run() kills and reaps the child, and we return "".
-        let _ = child.kill();
-        let _ = child.wait();
+        crate::util::kill_group(child);
         Ok(String::new())
     };
     for _ in 0..n {

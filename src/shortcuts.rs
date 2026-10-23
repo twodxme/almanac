@@ -814,11 +814,10 @@ fn _write(raw: &str, mode: u32) -> Result<(), String> {
 fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String), String> {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
-    let mut child = Command::new(argv[0])
+    let mut child = crate::util::spawn_group(Command::new(argv[0])
         .args(&argv[1..])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped()))
         .map_err(|e| os_error(&e, Some(Path::new(argv[0])), None))?;
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();
@@ -857,8 +856,7 @@ fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String)
             // without decoding what was read and without waiting for the
             // pipes, which a grandchild may still hold open. The reader
             // threads end on their own when it lets go.
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::util::kill_group(&mut child);
             let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
             return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
         }
