@@ -1468,7 +1468,7 @@ pub fn github_latest(repo: &str) -> Result<(String, Py), String> {
 /// `pool.map(f, items)` on `workers` threads, results in input order.
 /// The workers are Python worker threads (see [`deep`]); an item no worker
 /// got to (one could not be started) is done here.
-fn pool_map<T: Sync, R: Send>(items: &[T], workers: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn pool_map<T: Sync, R: Send>(items: &[T], workers: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     let next = AtomicUsize::new(0);
