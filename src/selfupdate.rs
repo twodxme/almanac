@@ -267,7 +267,63 @@ pub fn dirty_in(root: &Path) -> Result<bool, String> {
 /// `check`, with an exception the Python lets through as `Err`. This is a
 /// compiled build, so it is `compiled_check_in` for the running binary.
 pub fn try_check(fetch: bool) -> Result<Info, String> {
-    compiled_check_in(&ROOT, &running_exe(), fetch)
+    let mut info = compiled_check_in(&ROOT, &running_exe(), fetch)?;
+    note_release(&mut info, fetch);
+    Ok(info)
+}
+
+/// Where a release is published, with the package to download.
+pub const RELEASES_URL: &str = "https://github.com/twodxme/almanac/releases/latest";
+const RELEASE_REPO: &str = "twodxme/almanac";
+
+/// What the note says for a copy pacman owns. There is no repository
+/// package yet, so it may have come from a repository (or the AUR) or from
+/// the package on the releases page, which nothing updates by itself.
+pub fn package_note(pkg: &str) -> String {
+    format!(
+        "Installed as the {pkg} package. Update it with your package manager; \
+         if you installed the package downloaded from GitHub, download the \
+         latest one from {RELEASES_URL} and install it with sudo pacman -U."
+    )
+}
+
+/// The newest release tag GitHub lists, as last fetched by this process.
+static LATEST_RELEASE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// For a package install, say so in the note when GitHub lists a newer
+/// release than this build. With `fetch`, ask GitHub (through `ghcache`:
+/// cached for hours, within the API budget); without, use what this
+/// process last heard, so the About window does not wait on the network.
+fn note_release(info: &mut Info, fetch: bool) {
+    if info.kind != PACKAGE {
+        return;
+    }
+    let tag = if fetch {
+        let tag = crate::ghcache::try_latest_release(RELEASE_REPO, crate::ghcache::DEFAULT_TTL)
+            .ok()
+            .flatten()
+            .and_then(|r| r.get("tag_name")?.as_str().map(String::from));
+        if let (Some(t), Ok(mut seen)) = (&tag, LATEST_RELEASE.lock()) {
+            *seen = Some(t.clone());
+        }
+        tag
+    } else {
+        LATEST_RELEASE.lock().ok().and_then(|seen| seen.clone())
+    };
+    if let Some(tag) = tag {
+        mention_release(info, &tag);
+    }
+}
+
+/// `info.note`, led by the news when `tag` (v2.2.0 or 2.2.0) is newer than
+/// the version running.
+fn mention_release(info: &mut Info, tag: &str) {
+    let newer = tag.trim().trim_start_matches('v');
+    if newer.is_empty() || crate::security::vercmp(newer, &info.version) != std::cmp::Ordering::Greater {
+        return;
+    }
+    info.latest = newer.to_string();
+    info.note = format!("Almanac {newer} is out (this is {}). {}", info.version, info.note);
 }
 
 /// `check` as the Python does it, against `root`. The app itself goes
@@ -291,7 +347,7 @@ fn check_as(
 
     if kind == PACKAGE {
         let pkg = owner()?;
-        info.note = format!("Installed as the {pkg} package — it updates with the rest of the system.");
+        info.note = package_note(&pkg);
         return Ok(info);
     }
 
@@ -561,7 +617,9 @@ fn exit_without_cleanup() -> ! {
 /// `as_app`, with an exception the Python lets through as `Err`: the row for
 /// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {
-    compiled_as_app_in(&ROOT, &running_exe(), check_updates)
+    let mut info = compiled_check_in(&ROOT, &running_exe(), check_updates)?;
+    note_release(&mut info, check_updates);
+    app_with_home(&ROOT, info)
 }
 
 /// `as_app` for a compiled build: the same row, from `compiled_check_in`. It
@@ -2723,6 +2781,27 @@ mod tests {
         assert_eq!(info.kind, PLAIN);
         assert_eq!(info.version, BUILD_VERSION);
         assert!(!info.can_update);
+    }
+
+    #[test]
+    fn a_package_install_hears_of_a_newer_release() {
+        let note = package_note("almanac");
+        assert!(note.contains("package manager") && note.contains(RELEASES_URL) && note.contains("sudo pacman -U"));
+        let info = |version: &str| Info { kind: PACKAGE.into(), version: version.into(), note: note.clone(), ..Default::default() };
+        let mut i = info("2.1.2");
+        mention_release(&mut i, "v2.2.0");
+        assert_eq!(i.latest, "2.2.0");
+        assert!(i.note.starts_with("Almanac 2.2.0 is out (this is 2.1.2). Installed as"));
+        assert!(!i.can_update, "pacman installs it, not Almanac");
+        for (running, tag) in [("2.2.0", "v2.2.0"), ("2.3.0", "2.2.0"), ("2.1.2", "")] {
+            let mut i = info(running);
+            mention_release(&mut i, tag);
+            assert_eq!((i.latest.as_str(), i.note.as_str()), ("", note.as_str()), "{running} {tag}");
+        }
+        // only a package install is told
+        let mut git = Info { kind: GIT.into(), version: "2.1.2".into(), ..Default::default() };
+        note_release(&mut git, false);
+        assert_eq!(git.note, "");
     }
 
     // AboutWindow.test_whats_new_comes_from_the_shipped_metainfo
