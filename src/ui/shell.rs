@@ -2706,6 +2706,11 @@ impl AlmanacApp {
                     None => glib::Propagation::Proceed,
                 });
                 *self.win.borrow_mut() = Some(w.clone());
+                // Old thumbnails and cache files, orphaned AppImage copies:
+                // at most once a day, never on the main thread.
+                let _ = std::thread::Builder::new()
+                    .name("housekeeping".into())
+                    .spawn(crate::housekeeping::run_if_due);
                 w
             }
         };

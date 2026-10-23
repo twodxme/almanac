@@ -2812,14 +2812,30 @@ pub fn thumb_path(p: &Plugin, detail: bool) -> Option<PathBuf> {
     Some(thumbs().join(format!("{key}{}", if suffix.is_empty() { ".webp" } else { &suffix })))
 }
 
+/// Move a cached thumbnail's mtime to now when it is a day or more old, so
+/// `housekeeping` (which drops what has not been used for a month) keeps
+/// what is still shown. A day's slack keeps this to one write per file a day.
+fn mark_used(path: &Path, meta: &std::fs::Metadata) {
+    let now = std::time::SystemTime::now();
+    let stale = meta.modified().ok().and_then(|t| now.duration_since(t).ok());
+    if stale.is_some_and(|age| age >= std::time::Duration::from_secs(24 * 3600)) {
+        if let Ok(f) = std::fs::File::options().write(true).open(path) {
+            let _ = f.set_modified(now);
+        }
+    }
+}
+
 /// Download a card image if it is not already cached. Blocking.
 pub fn fetch_thumb(p: &Plugin, detail: bool) -> Option<PathBuf> {
     if p.install_kind == "theme" {
         return crate::themeart::thumbnail(&p.repo);
     }
     let dest = thumb_path(p, detail)?;
-    if dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-        return Some(dest);
+    if let Ok(m) = dest.metadata() {
+        if m.len() > 0 {
+            mark_used(&dest, &m);
+            return Some(dest);
+        }
     }
     let url = if detail { p.preview_url() } else { p.thumb_url() };
     if url.is_empty() {

@@ -15,6 +15,7 @@ pub mod featured;
 pub mod ghcache;
 pub mod guard;
 pub mod history;
+pub mod housekeeping;
 pub mod i18n;
 pub mod icons;
 pub mod inventory;
