@@ -131,6 +131,17 @@ fn pick_key(keys: &[String], i: u32) -> String {
 
 /// `Gdk.MemoryTexture.new(w, h, R8G8B8A8 if alpha else R8G8B8,
 /// GLib.Bytes.new(pb.get_pixels()), pb.get_rowstride())`
+/// `Win::texture`'s decode, on any thread: a texture is immutable and `Send`,
+/// so the decode can run on a worker and only the result cross over.
+pub fn decode_texture(path: &Path, max_width: i32) -> Option<gdk::Texture> {
+    if max_width != 0 {
+        let pb = gdk_pixbuf::Pixbuf::from_file_at_scale(path, max_width, -1, true).ok()?;
+        memory_texture(&pb, pb.width(), pb.height())
+    } else {
+        gdk::Texture::from_filename(path).ok()
+    }
+}
+
 fn memory_texture(pb: &gdk_pixbuf::Pixbuf, width: i32, height: i32) -> Option<gdk::Texture> {
     let format = if pb.has_alpha() {
         gdk::MemoryFormat::R8g8b8a8
@@ -1027,25 +1038,28 @@ impl Win {
     ///
     /// `max_width` 0 (the Python's default) decodes at the source size.
     pub fn texture(&self, path: &Path, max_width: i32) -> Option<gdk::Texture> {
-        let key = format!("{}@{}", path.display(), max_width);
-        let hit = self.shared.borrow().tex_cache.get(&key).cloned();
-        if let Some(tex) = hit {
+        if let Some(tex) = self.texture_cached(path, max_width) {
             return Some(tex);
         }
-        let tex = if max_width != 0 {
-            let pb = gdk_pixbuf::Pixbuf::from_file_at_scale(path, max_width, -1, true).ok()?;
-            memory_texture(&pb, pb.width(), pb.height())?
-        } else {
-            gdk::Texture::from_filename(path).ok()?
-        };
+        let tex = decode_texture(path, max_width)?;
+        self.texture_keep(path, max_width, &tex);
+        Some(tex)
+    }
+
+    /// What `texture` decoded before for this file and width, if anything.
+    pub fn texture_cached(&self, path: &Path, max_width: i32) -> Option<gdk::Texture> {
+        self.shared.borrow().tex_cache.get(&format!("{}@{}", path.display(), max_width)).cloned()
+    }
+
+    /// Keep a texture decoded elsewhere (see `decode_texture`) for `texture`.
+    pub fn texture_keep(&self, path: &Path, max_width: i32, tex: &gdk::Texture) {
         let mut sh = self.shared.borrow_mut();
         // A soft cap: scrolling the whole catalogue would otherwise hold every
         // decoded screenshot at once.
         if sh.tex_cache.len() > 160 {
             sh.tex_cache.clear();
         }
-        sh.tex_cache.insert(key, tex.clone());
-        Some(tex)
+        sh.tex_cache.insert(format!("{}@{}", path.display(), max_width), tex.clone());
     }
 
     /// A centred square crop, scaled -- so a 1600px-wide screenshot makes
