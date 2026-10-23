@@ -6,7 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 xgettext --language=Rust --keyword=tr --keyword=try_tr \
-  --keyword=ngettext:1,2 --keyword=try_ngettext:1,2 \
+  --keyword=ngettext:1,2 \
   --from-code=UTF-8 --add-comments=TRANSLATORS: --sort-by-file \
   --package-name=almanac --msgid-bugs-address=https://github.com/twodxme/almanac/issues \
   -o po/almanac.pot $(find src -name '*.rs' | sort)

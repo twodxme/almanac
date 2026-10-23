@@ -84,7 +84,6 @@ fn the_template_is_current() {
             "--keyword=tr",
             "--keyword=try_tr",
             "--keyword=ngettext:1,2",
-            "--keyword=try_ngettext:1,2",
             "--from-code=UTF-8",
             "-o",
         ])
