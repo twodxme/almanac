@@ -599,7 +599,9 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                     // Only scripts the plugin itself ships, never outside it.
                     if target.is_file() && target != base && target.starts_with(&base) {
                         let rel = target.strip_prefix(&base).unwrap_or(&target);
-                        let body: String = read_text(&target)?.chars().take(6000).collect();
+                        // All of it: it runs in full, so it is shown in full
+                        // (see `describe` for the one limit).
+                        let body: String = read_text(&target)?;
                         let key = rel.as_os_str().to_os_string();
                         if let Some(slot) = out.scripts.iter_mut().find(|(k, _)| *k == key) {
                             slot.1 = body;
@@ -639,6 +641,44 @@ pub fn terminal_script(p: &SetupPlan) -> String {
     lines.join("\n")
 }
 
+/// How much of one script the confirmation shows. A setup script is read in
+/// full before it runs, so it is shown in full; only past this many
+/// characters (far beyond any real one) is it cut, and then the cut says so,
+/// how long the script is, and where to read the rest.
+pub const SCRIPT_SHOWN_MAX: usize = 200_000;
+
+/// The scripts `describe` does not show in full, as paths to open.
+pub fn cut_scripts(p: &SetupPlan) -> Vec<PathBuf> {
+    p.scripts
+        .iter()
+        .filter(|(_, body)| body.chars().count() > SCRIPT_SHOWN_MAX)
+        .map(|(name, _)| p.plugin_dir.join(name))
+        .collect()
+}
+
+/// One script as the confirmation shows it: every line, indented, or
+/// (past `SCRIPT_SHOWN_MAX`) the lines that fit and a plain note of the cut.
+fn shown_script(dir: &Path, name: &OsString, body: &str) -> String {
+    let lines = py_splitlines(body);
+    let mut out: Vec<String> = Vec::new();
+    let mut used = 0;
+    for (i, l) in lines.iter().enumerate() {
+        used += l.chars().count() + 1;
+        if used > SCRIPT_SHOWN_MAX {
+            out.push(format!(
+                "  … cut here: only {i} of its {} lines ({} KB) are shown, and all of it runs. \
+                 Read the rest in {} before you run setup.",
+                lines.len(),
+                body.len().div_ceil(1024),
+                esc(dir.join(name).as_os_str()),
+            ));
+            break;
+        }
+        out.push(format!("  {l}"));
+    }
+    out.join("\n")
+}
+
 /// Everything the plan would do, for the confirmation dialog.
 pub fn describe(p: &SetupPlan) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -652,11 +692,7 @@ pub fn describe(p: &SetupPlan) -> String {
         ));
     }
     for (name, body) in &p.scripts {
-        parts.push(format!(
-            "Contents of {}\n{}",
-            esc(name),
-            py_splitlines(body).iter().take(60).map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
-        ));
+        parts.push(format!("Contents of {}\n{}", esc(name), shown_script(&p.plugin_dir, name, body)));
     }
     if !p.by_hand.is_empty() {
         parts.push(format!(
@@ -779,6 +815,31 @@ make build
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(p.scripts, vec![(bad.to_os_string(), "echo nu\n".to_string())]);
         assert!(describe(&p).contains("Contents of \\xff.sh"));
+    }
+
+    /// The whole script runs, so the whole script is shown: it used to be
+    /// cut at 60 lines (or 6000 characters) without a word.
+    #[test]
+    fn test_the_whole_script_is_shown() {
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "# Install\n```\n./a.sh\n./big.sh\n```\n").unwrap();
+        let script: String = (1..=500).map(|i| format!("echo step {i}\n")).collect();
+        std::fs::write(root.join("a.sh"), &script).unwrap();
+        let big: String = (1..=20_000).map(|i| format!("echo a rather long line, number {i}\n")).collect();
+        std::fs::write(root.join("big.sh"), &big).unwrap();
+        let p = plan(&root).unwrap();
+        let shown = describe(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(shown.contains("  echo step 1\n") && shown.contains("  echo step 500"), "a.sh shown in full");
+        // Past the limit the cut is said, with the length and where to read it.
+        assert!(shown.contains("echo a rather long line, number 1\n"));
+        assert!(!shown.contains("number 20000"));
+        assert!(shown.contains("of its 20000 lines"), "{}", &shown[shown.len() - 300..]);
+        assert!(shown.contains("all of it runs"));
+        assert!(shown.contains("big.sh before you run setup"));
+        assert_eq!(cut_scripts(&p), vec![p.plugin_dir.join("big.sh")]);
     }
 
     #[test]

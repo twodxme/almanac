@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 14:57-0700\n"
+"POT-Creation-Date: 2026-10-23 14:58-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -109,8 +109,8 @@ msgstr ""
 
 #: src/ui/actions.rs:1313 src/ui/plugins.rs:1736 src/ui/plugins.rs:1779
 #: src/ui/plugins.rs:1817 src/ui/store_actions.rs:573
-#: src/ui/store_actions.rs:670 src/ui/store_actions.rs:1066
-#: src/ui/store_actions.rs:1524
+#: src/ui/store_actions.rs:670 src/ui/store_actions.rs:1075
+#: src/ui/store_actions.rs:1533
 msgid "Install"
 msgstr ""
 
@@ -340,7 +340,7 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages.rs:969 src/ui/store_actions.rs:1456
+#: src/ui/packages.rs:969 src/ui/store_actions.rs:1465
 msgid "On"
 msgstr ""
 
@@ -442,7 +442,7 @@ msgid ""
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1520
+#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1529
 msgid "Built in"
 msgstr ""
 
@@ -478,8 +478,8 @@ msgstr ""
 
 #: src/ui/plugins.rs:1262 src/ui/plugins.rs:1695 src/ui/plugins.rs:1895
 #: src/ui/store.rs:927 src/ui/store_actions.rs:611 src/ui/store_actions.rs:695
-#: src/ui/store_actions.rs:1173 src/ui/store_actions.rs:1428
-#: src/ui/store_actions.rs:1441
+#: src/ui/store_actions.rs:1182 src/ui/store_actions.rs:1437
+#: src/ui/store_actions.rs:1450
 msgid "Remove"
 msgstr ""
 
@@ -943,7 +943,7 @@ msgstr ""
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:264 src/ui/store_actions.rs:1309
+#: src/ui/store.rs:264 src/ui/store_actions.rs:1318
 msgid "Marketplace"
 msgstr ""
 
@@ -1004,8 +1004,8 @@ msgstr ""
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:917 src/ui/store_actions.rs:1004
-#: src/ui/store_actions.rs:1416
+#: src/ui/store.rs:917 src/ui/store_actions.rs:1013
+#: src/ui/store_actions.rs:1425
 msgid "Apply"
 msgstr ""
 
@@ -1079,87 +1079,91 @@ msgstr ""
 msgid "Open README"
 msgstr ""
 
-#: src/ui/store_actions.rs:852
+#: src/ui/store_actions.rs:854
+msgid "Open the script"
+msgstr ""
+
+#: src/ui/store_actions.rs:857
 msgid "Run setup"
 msgstr ""
 
-#: src/ui/store_actions.rs:891
+#: src/ui/store_actions.rs:900
 msgid "No terminal found to run the setup commands in"
 msgstr ""
 
-#: src/ui/store_actions.rs:931
+#: src/ui/store_actions.rs:940
 msgid "Installing what it needs"
 msgstr ""
 
-#: src/ui/store_actions.rs:1001
+#: src/ui/store_actions.rs:1010
 msgid ""
 "Applies the theme to the whole desktop — bar, terminal, editor and this "
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1170
+#: src/ui/store_actions.rs:1179
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
 msgstr ""
 
-#: src/ui/store_actions.rs:1305
+#: src/ui/store_actions.rs:1314
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1306
+#: src/ui/store_actions.rs:1315
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1310
+#: src/ui/store_actions.rs:1319
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1311
+#: src/ui/store_actions.rs:1320
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1312
+#: src/ui/store_actions.rs:1321
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1314
+#: src/ui/store_actions.rs:1323
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1316
+#: src/ui/store_actions.rs:1325
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1322
+#: src/ui/store_actions.rs:1331
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1323
+#: src/ui/store_actions.rs:1332
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1333
+#: src/ui/store_actions.rs:1342
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1347
+#: src/ui/store_actions.rs:1356
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1348
+#: src/ui/store_actions.rs:1357
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1351
+#: src/ui/store_actions.rs:1360
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1495
+#: src/ui/store_actions.rs:1504
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1508
+#: src/ui/store_actions.rs:1517
 msgid "Finish setup"
 msgstr ""
 

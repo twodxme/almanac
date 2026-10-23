@@ -848,6 +848,11 @@ impl Win {
         }
         dialog.add_response("later", &tr("Later"));
         dialog.add_response("readme", &tr("Open README"));
+        // A script too long to show in full can be read where it is.
+        let cut = setup_mod::cut_scripts(plan);
+        if !cut.is_empty() {
+            dialog.add_response("script", &tr("Open the script"));
+        }
         if plan.automatable() {
             dialog.add_response("run", &tr("Run setup"));
             dialog.set_response_appearance("run", adw::ResponseAppearance::Suggested);
@@ -860,7 +865,11 @@ impl Win {
         let plan = plan.clone();
         dialog.connect_response(None, move |_d, resp| {
             let Some(win) = w.upgrade() else { return };
-            if resp == "readme" {
+            if resp == "script" {
+                if let Some(script) = cut.first() {
+                    win.open_url(&gtk::gio::File::for_path(script).uri());
+                }
+            } else if resp == "readme" {
                 let url = if !p.repo.is_empty() {
                     format!("{}#readme", p.repo)
                 } else {
