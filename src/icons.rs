@@ -2653,7 +2653,8 @@ mod tests {
     }
 
     /// A server that answers one connection with `reply`, then closes.
-    fn serve(reply: Vec<u8>, pause: Option<Duration>) -> (String, std::thread::JoinHandle<Vec<u8>>) {
+    /// One reply to one request, in `piece`-byte writes `pause` apart.
+    fn serve(reply: Vec<u8>, piece: usize, pause: Option<Duration>) -> (String, std::thread::JoinHandle<Vec<u8>>) {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
         let h = std::thread::spawn(move || {
@@ -2667,11 +2668,11 @@ mod tests {
                 }
                 req.extend_from_slice(&buf[..n]);
             }
-            for piece in reply.chunks(7) {
-                let _ = s.write_all(piece);
-                if let Some(p) = pause {
+            for (i, piece) in reply.chunks(piece).enumerate() {
+                if let (Some(p), true) = (pause, i > 0) {
                     std::thread::sleep(p);
                 }
+                let _ = s.write_all(piece);
             }
             req
         });
@@ -2680,7 +2681,7 @@ mod tests {
 
     #[test]
     fn fetch_sends_what_urllib_sends_and_keeps_short_bodies() {
-        let (base, h) = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\nshort body".to_vec(), None);
+        let (base, h) = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\nshort body".to_vec(), 7, None);
         assert_eq!(_fetch(&format!("{base}/x?q#frag"), 12).unwrap(), b"short body");
         let req = String::from_utf8(h.join().unwrap()).unwrap();
         let port = base.rsplit(':').next().unwrap();
@@ -2688,13 +2689,15 @@ mod tests {
             req,
             format!("GET /x?q HTTP/1.1\r\nAccept-Encoding: identity\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: {UA}\r\nConnection: close\r\n\r\n")
         );
-        // Chunked, gzip left alone, and a read timeout per read, not overall.
+        // Chunked, gzip left alone, and a read timeout per read, not overall:
+        // four writes 0.4 s apart take 1.2 s, past the 1 s timeout.
         let body = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n\r\n5;x\r\nhello\r\n0\r\n\r\n";
-        let (base, h) = serve(body.to_vec(), Some(Duration::from_millis(150)));
+        assert_eq!(body.len().div_ceil(24), 4);
+        let (base, h) = serve(body.to_vec(), 24, Some(Duration::from_millis(400)));
         assert_eq!(_fetch(&base, 1).unwrap(), b"hello");
         h.join().unwrap();
         // A chunked body cut short is an error.
-        let (base, h) = serve(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n50\r\nabc".to_vec(), None);
+        let (base, h) = serve(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n50\r\nabc".to_vec(), 7, None);
         assert!(_fetch(&base, 12).is_err());
         h.join().unwrap();
         // Userinfo stays in the host, which then does not resolve.

@@ -740,6 +740,11 @@ fn _py_decode(b: &[u8]) -> Result<String, String> {
 /// (stdout, stderr) bytes, or None on OSError / TimeoutExpired.
 /// (`util::run` decodes lossily, where `text=True` raises.)
 fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    run_bytes_within(cmd, std::time::Duration::from_secs(timeout))
+}
+
+/// `_run_bytes` with any timeout (the tests use a fraction of a second).
+fn run_bytes_within(cmd: &[&str], timeout: std::time::Duration) -> Option<(Vec<u8>, Vec<u8>)> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let (prog, args) = cmd.split_first()?;
@@ -765,7 +770,7 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     // this up past it. On timeout the child's whole process group is killed
     // and the child reaped, so a grandchild holding a pipe dies with it and
     // the reader threads end.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    let deadline = std::time::Instant::now() + timeout;
     let (mut out, mut err): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
     let mut exited = false;
     loop {
@@ -2420,8 +2425,8 @@ mod tests {
     #[test]
     fn test_run_timeout_covers_a_grandchild_holding_the_pipe() {
         let start = std::time::Instant::now();
-        assert_eq!(_run_bytes(&["sh", "-c", "sleep 4 & echo hi"], 1), None);
-        assert!(start.elapsed() < std::time::Duration::from_secs(3));
+        assert_eq!(run_bytes_within(&["sh", "-c", "sleep 4 & echo hi"], std::time::Duration::from_millis(200)), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
         assert_eq!(_run_bytes(&["sh", "-c", "echo hi"], 5).map(|o| o.0), Some(b"hi\n".to_vec()));
     }
 

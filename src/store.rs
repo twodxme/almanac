@@ -1961,6 +1961,11 @@ pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
 /// writes something that is not UTF-8 (text=True decodes strictly, where
 /// `util::run` replaces bad bytes). Universal newlines as text mode has them.
 fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
+    run_text_within(argv, std::time::Duration::from_secs(timeout_secs))
+}
+
+/// `run_text` with any timeout (the tests use a fraction of a second).
+fn run_text_within(argv: &[&str], timeout: std::time::Duration) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let (prog, args) = argv.split_first()?;
@@ -1986,7 +1991,7 @@ fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
     let out_rx = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err_rx = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let start = std::time::Instant::now();
-    let deadline = start + std::time::Duration::from_secs(timeout_secs);
+    let deadline = start + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -3194,8 +3199,8 @@ mod tests {
     fn run_text_times_out_on_a_held_pipe() {
         // The child exits at once; the grandchild keeps stdout open.
         let start = std::time::Instant::now();
-        assert_eq!(run_text(&["sh", "-c", "sleep 5 & echo hi"], 1), None);
-        assert!(start.elapsed() < std::time::Duration::from_secs(4));
+        assert_eq!(run_text_within(&["sh", "-c", "sleep 5 & echo hi"], std::time::Duration::from_millis(200)), None);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
         assert_eq!(run_text(&["sh", "-c", "echo hi"], 5).as_deref(), Some("hi\n"));
     }
 

@@ -806,7 +806,7 @@ mod tests {
         assert!(out.ok());
         assert_eq!(out.stdout, "hi\n");
         assert_eq!(out.stderr, "err\n");
-        let slow = run(&["sleep", "5"], 1);
+        let slow = run_with(&["sleep", "5"], &RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() });
         assert!(slow.timed_out);
         assert!(run(&["/nonexistent-binary"], 1).failed_to_start);
     }
@@ -817,19 +817,21 @@ mod tests {
     fn a_timeout_kills_the_whole_group() {
         let dir = tempfile::tempdir().unwrap();
         let mark = dir.path().join("survived");
-        let script = format!("(sleep 3; touch '{}') & sleep 30", mark.display());
+        let script = format!("(sleep 0.6; touch '{}') & sleep 30", mark.display());
+        let opts = RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() };
         let started = Instant::now();
-        let out = run(&["sh", "-c", &script], 1);
+        let out = run_with(&["sh", "-c", &script], &opts);
         assert!(out.timed_out);
-        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
-        std::thread::sleep(Duration::from_millis(3500));
+        assert!(started.elapsed() < Duration::from_millis(600), "{:?}", started.elapsed());
+        // well past the moment the grandchild would have touched the mark
+        std::thread::sleep(Duration::from_millis(900));
         assert!(!mark.exists(), "the grandchild outlived the timeout");
 
         // The child exits at once; what it left behind holds stdout open.
         let started = Instant::now();
-        let out = run(&["sh", "-c", "sleep 30 & echo hi"], 1);
+        let out = run_with(&["sh", "-c", "sleep 30 & echo hi"], &opts);
         assert!(out.timed_out);
-        assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     #[test]

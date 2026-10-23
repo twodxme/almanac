@@ -643,6 +643,11 @@ fn fnmatch_translate(pat: &str) -> String {
 /// keeps the pipes open runs the clock out too; the child's whole process
 /// group is then killed and the child reaped, so the readers end.
 fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -> Option<Vec<u8>> {
+    run_bytes_within(argv, Duration::from_secs(timeout_secs), cwd)
+}
+
+/// `run_bytes` with any timeout (the tests use a fraction of a second).
+fn run_bytes_within(argv: &[&std::ffi::OsStr], timeout: Duration, cwd: Option<&Path>) -> Option<Vec<u8>> {
     use std::process::{Command, Stdio};
     let (prog, args) = argv.split_first()?;
     let mut cmd = Command::new(prog);
@@ -679,7 +684,7 @@ fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -
         if exited && out_t.is_finished() && err_t.is_finished() {
             break;
         }
-        if start.elapsed() >= Duration::from_secs(timeout_secs) {
+        if start.elapsed() >= timeout {
             crate::util::kill_group(&mut child);
             return None;
         }
@@ -3930,8 +3935,8 @@ mod tests {
         let sh = std::ffi::OsStr::new("sh");
         let started = Instant::now();
         let argv = [sh, std::ffi::OsStr::new("-c"), std::ffi::OsStr::new("(sleep 5) & echo x")];
-        assert_eq!(run_bytes(&argv, 1, None), None);
-        assert!(started.elapsed() < Duration::from_secs(4));
+        assert_eq!(run_bytes_within(&argv, Duration::from_millis(200), None), None);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

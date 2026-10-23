@@ -99,10 +99,15 @@ pub fn snapshot() -> Option<BTreeMap<String, String>> {
 /// pipe dies and its reader ends; the child is reaped. stdin is inherited
 /// (no `stdin=` argument in the Python).
 fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
+    run_bytes_within(argv, Duration::from_secs(timeout_secs))
+}
+
+/// `run_bytes` with any timeout (the tests use a fraction of a second).
+fn run_bytes_within(argv: &[&str], timeout: Duration) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
     let (prog, args) = argv.split_first()?;
     let mut child =
         crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let deadline = Instant::now() + timeout;
     // Drain both pipes on their own threads, or a chatty child fills one and
     // blocks forever while we wait on it. Each hands its bytes back at EOF.
     let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -746,9 +751,9 @@ mod tests {
     fn run_bytes_times_out_on_a_pipe_held_by_a_descendant() {
         // The child exits at once; its background sleep keeps stdout open.
         let t = Instant::now();
-        let r = run_bytes(&["/bin/sh", "-c", "/usr/bin/sleep 3 & exit 0"], 1);
+        let r = run_bytes_within(&["/bin/sh", "-c", "/usr/bin/sleep 3 & exit 0"], Duration::from_millis(200));
         assert_eq!(r, None);
-        assert!(t.elapsed() < Duration::from_millis(2500));
+        assert!(t.elapsed() < Duration::from_millis(1500));
         assert_eq!(run_bytes(&["/bin/sh", "-c", "echo hi; exit 3"], 5),
                    Some((Some(3), b"hi\n".to_vec(), Vec::new())));
     }
