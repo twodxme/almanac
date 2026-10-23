@@ -1255,7 +1255,70 @@ pub const TOOL_DOMAINS: &[(&str, (&str, &str))] = &[
 /// mise prints JSON that is not an object (AttributeError on `.items()`) or
 /// is nested too deep for Python's json (RecursionError).
 pub fn try_mise_installed() -> Result<Vec<(String, Py)>, String> {
-    deep(mise_installed_here)
+    deep(|| MISE_LS.run(mise_installed_here))
+}
+
+/// One `mise ls --json` at a time: the scan's collectors asked for it
+/// together, three runs within 40 ms. Not a cache; a caller that arrives
+/// while one runs gets that run's answer.
+static MISE_LS: SingleFlight<Result<Vec<(String, Py)>, String>> = SingleFlight::new();
+
+/// One `mise outdated --json` at a time, as `MISE_LS`: concurrent callers
+/// all missed the cache before the first had written it.
+static MISE_OUTDATED: SingleFlight<Result<Py, String>> = SingleFlight::new();
+
+/// Concurrent callers of `run` share one call of `f`: the first runs it,
+/// the others wait for its answer and get a copy. Nothing is kept after.
+pub struct SingleFlight<T> {
+    inflight: std::sync::Mutex<Option<std::sync::Arc<Flight<T>>>>,
+}
+
+/// One call in flight: its answer once it has one (None inside when it
+/// panicked, and each waiter then calls `f` itself).
+struct Flight<T> {
+    answer: std::sync::Mutex<Option<Option<T>>>,
+    landed: std::sync::Condvar,
+}
+
+impl<T: Clone> SingleFlight<T> {
+    pub const fn new() -> Self {
+        SingleFlight { inflight: std::sync::Mutex::new(None) }
+    }
+
+    pub fn run(&self, f: impl FnOnce() -> T) -> T {
+        use std::sync::{Arc, Condvar, Mutex};
+        let (flight, leads) = {
+            let mut g = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            match &*g {
+                Some(flight) => (flight.clone(), false),
+                None => {
+                    let flight = Arc::new(Flight { answer: Mutex::new(None), landed: Condvar::new() });
+                    *g = Some(flight.clone());
+                    (flight, true)
+                }
+            }
+        };
+        if !leads {
+            let mut answer = flight.answer.lock().unwrap_or_else(|e| e.into_inner());
+            while answer.is_none() {
+                answer = flight.landed.wait(answer).unwrap_or_else(|e| e.into_inner());
+            }
+            if let Some(Some(v)) = answer.as_ref() {
+                return v.clone();
+            }
+            drop(answer);
+            return f();
+        }
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        // Landed: the next caller starts a run of its own.
+        *self.inflight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *flight.answer.lock().unwrap_or_else(|e| e.into_inner()) = Some(out.as_ref().ok().cloned());
+        flight.landed.notify_all();
+        match out {
+            Ok(v) => v,
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    }
 }
 
 fn mise_installed_here() -> Result<Vec<(String, Py)>, String> {
@@ -1333,19 +1396,21 @@ fn mise_outdated_here(ttl: u64) -> Result<Py, String> {
             return Ok(blob.get("data")?.cloned().unwrap_or(Py::None).or(Py::Dict(Vec::new())));
         }
     }
-    let Some((stdout, stderr)) = run_raw(&["mise", "outdated", "--json"], 120) else {
-        return Ok(Py::Dict(Vec::new()));
-    };
-    // text=True decodes stderr too; its UnicodeDecodeError is a ValueError.
-    let (Ok(text), Ok(_)) = (decode_text(&stdout), decode_text(&stderr)) else {
-        return Ok(Py::Dict(Vec::new()));
-    };
-    let Some(data) = loads_output(&text)? else {
-        return Ok(Py::Dict(Vec::new()));
-    };
-    let blob = Py::Dict(vec![(Py::s("at"), Py::Float(util::now())), (Py::s("data"), data.clone())]);
-    write_json_file(&mise_cache(), &blob);
-    Ok(data)
+    MISE_OUTDATED.run(|| {
+        let Some((stdout, stderr)) = run_raw(&["mise", "outdated", "--json"], 120) else {
+            return Ok(Py::Dict(Vec::new()));
+        };
+        // text=True decodes stderr too; its UnicodeDecodeError is a ValueError.
+        let (Ok(text), Ok(_)) = (decode_text(&stdout), decode_text(&stderr)) else {
+            return Ok(Py::Dict(Vec::new()));
+        };
+        let Some(data) = loads_output(&text)? else {
+            return Ok(Py::Dict(Vec::new()));
+        };
+        let blob = Py::Dict(vec![(Py::s("at"), Py::Float(util::now())), (Py::s("data"), data.clone())]);
+        write_json_file(&mise_cache(), &blob);
+        Ok(data)
+    })
 }
 
 /// {repo: [latest, release_url]} from the cache, or {} once it is older than
@@ -1834,6 +1899,42 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn single_flight_shares_one_run_among_concurrent_callers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RUNS: AtomicUsize = AtomicUsize::new(0);
+        static FLIGHT: SingleFlight<usize> = SingleFlight::new();
+        let slow = || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            RUNS.fetch_add(1, Ordering::SeqCst) + 1
+        };
+        let answers: Vec<usize> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..6).map(|_| s.spawn(|| FLIGHT.run(slow))).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        // Six callers within the 200 ms the first one took: one run.
+        assert_eq!(RUNS.load(Ordering::SeqCst), 1);
+        assert!(answers.iter().all(|&a| a == 1));
+        // Nothing is kept: the next caller runs again.
+        assert_eq!(FLIGHT.run(slow), 2);
+        // A run that panics lets each waiter run for itself.
+        static PANICKY: SingleFlight<u8> = SingleFlight::new();
+        let r = std::thread::scope(|s| {
+            let leader = s.spawn(|| {
+                std::panic::catch_unwind(|| {
+                    PANICKY.run(|| {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        panic!("boom")
+                    })
+                })
+                .is_err()
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let follower = s.spawn(|| PANICKY.run(|| 7));
+            (leader.join().unwrap(), follower.join().unwrap())
+        });
+        assert_eq!(r, (true, 7));
+    }
 
     // UpdatesClearAfterUpdating
     #[test]

@@ -2403,8 +2403,17 @@ impl Win {
     }
 
     /// `_rescan_now`: the debounced rescan. One-shot timer.
+    ///
+    /// Skipped when a scan started after pacman.log last changed: the app's
+    /// own actions rescan when they finish, and the watcher then saw the
+    /// same transaction and asked for a second full scan six seconds later.
     pub fn rescan_now(&self) -> glib::ControlFlow {
         self.shell.borrow_mut().pending_rescan = None;
+        let changed = std::fs::metadata(crate::snapshots::PACMAN_LOG).and_then(|m| m.modified());
+        if changed.is_ok_and(|changed| self.scanned_since(changed)) {
+            println!("pacman.log changed — already rescanned");
+            return glib::ControlFlow::Break;
+        }
         // Logged as well as shown, so the watch can be verified from a terminal
         // rather than only by staring at the window.
         println!("pacman.log changed — rescanning");

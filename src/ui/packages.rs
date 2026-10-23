@@ -61,6 +61,19 @@ impl PlainRow for adw::ExpanderRow {
 pub struct State {
     /// Coalesces theme-change bursts into one restyle (`_theme_timer`).
     pub theme_timer: Option<glib::SourceId>,
+    /// A scan (`reload`) is running. One runs at a time: every action, the
+    /// pacman.log watcher and page changes each asked for their own, and
+    /// they piled up.
+    pub scanning: bool,
+    /// `reload` was called while a scan ran: that scan's answer predates
+    /// whatever prompted the call, so it is dropped and one more scan runs.
+    pub scan_again: bool,
+    /// When the running or last scan started; the pacman.log watcher has
+    /// nothing to add when the log has not changed since.
+    pub scan_started: Option<std::time::SystemTime>,
+    /// What the last scan found, to put back when the App Store hands the
+    /// list back (it shows its search results in the same list).
+    pub last_scan: Option<Vec<inventory::App>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +662,16 @@ impl Win {
 
     // ---- data ------------------------------------------------------------
     pub fn reload(&self) {
+        {
+            let mut st = self.packages.borrow_mut();
+            if st.scanning {
+                st.scan_again = true;
+                return;
+            }
+            st.scanning = true;
+            st.scan_again = false;
+            st.scan_started = Some(std::time::SystemTime::now());
+        }
         if let Some(act) = self.win_action("rescan") {
             act.set_enabled(false);
         }
@@ -656,11 +679,46 @@ impl Win {
 
         // checkupdates and yay take seconds; on the UI thread that is a freeze.
         let w = self.downgrade();
-        spawn_bg(inventory::collect, move |apps| {
-            if let Some(w) = w.upgrade() {
-                w.apply(apps);
+        spawn_bg(
+            || std::panic::catch_unwind(inventory::collect).ok(),
+            move |apps| {
+                if let Some(w) = w.upgrade() {
+                    w.scan_done(apps);
+                }
+            },
+        );
+    }
+
+    /// A scan landed: shown, unless `reload` was called meanwhile, in which
+    /// case it is dropped for the one more scan that call asked for.
+    fn scan_done(&self, apps: Option<Vec<inventory::App>>) {
+        let again = {
+            let mut st = self.packages.borrow_mut();
+            st.scanning = false;
+            std::mem::take(&mut st.scan_again)
+        };
+        if again {
+            self.reload();
+            return;
+        }
+        match apps {
+            Some(apps) => {
+                self.packages.borrow_mut().last_scan = Some(apps.clone());
+                self.apply(apps);
             }
-        });
+            // The scan panicked: the list stays as it was, rescanning allowed.
+            None => {
+                if let Some(act) = self.win_action("rescan") {
+                    act.set_enabled(true);
+                }
+            }
+        }
+    }
+
+    /// Whether a scan started after `changed`: the watcher's rescan for a
+    /// change that old would find nothing new.
+    pub fn scanned_since(&self, changed: std::time::SystemTime) -> bool {
+        self.packages.borrow().scan_started.is_some_and(|started| started > changed)
     }
 
     /// Desktop notification, falling back to the status line.
@@ -2380,7 +2438,19 @@ impl Win {
         self.rebuild_sort_menu(&sorts_installed());
         self.shared.borrow_mut().manual_sorter = None;
         self.rebuild_sorter();
-        self.reload();
+        // The store showed its search results in the list: put back what
+        // the last scan found rather than scanning again (seven ways out of
+        // the store each started a full scan). A scan still running puts
+        // its own answer there when it lands.
+        let (last, scanning) = {
+            let st = self.packages.borrow();
+            (st.last_scan.clone(), st.scanning)
+        };
+        match last {
+            _ if scanning => {}
+            Some(apps) => self.apply(apps),
+            None => self.reload(),
+        }
         true
     }
 }
