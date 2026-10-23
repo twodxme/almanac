@@ -1697,9 +1697,12 @@ const PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 type Pending = (BTreeMap<String, String>, BTreeMap<String, String>);
 
+/// What `pacman_db_stamp` answers: the local and sync databases' mtimes.
+type DbStamp = (std::time::SystemTime, std::time::SystemTime);
+
 /// The last `pending_both` answer, with the database stamp and time it was
 /// taken at.
-static PENDING: std::sync::Mutex<Option<((std::time::SystemTime, std::time::SystemTime), std::time::Instant, Pending)>> =
+static PENDING: std::sync::Mutex<Option<(DbStamp, std::time::Instant, Pending)>> =
     std::sync::Mutex::new(None);
 
 /// (`try_pending_repo`, `try_pending_aur`), run side by side: checkupdates
@@ -1730,7 +1733,7 @@ pub fn pending_both() -> Result<Pending, String> {
 }
 
 /// The last `pacman -Qq`, with the database stamp it was taken at.
-static INSTALLED: std::sync::Mutex<Option<((std::time::SystemTime, std::time::SystemTime), std::sync::Arc<HashSet<String>>)>> =
+static INSTALLED: std::sync::Mutex<Option<(DbStamp, std::sync::Arc<HashSet<String>>)>> =
     std::sync::Mutex::new(None);
 
 /// `pacman -Qq` as a set, kept while pacman's databases are unchanged: the
@@ -3277,7 +3280,7 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&a, &b));
         assert!(!std::sync::Arc::ptr_eq(&a, &c));
         assert_eq!(c["sources"].as_array().map(Vec::len), Some(2));
-        assert_eq!(plugin_registry_shared(false).is_object(), true);
+        assert!(plugin_registry_shared(false).is_object());
         assert_eq!(first, vec!["one"]);
         assert_eq!(second, vec!["one", "two"]);
     }

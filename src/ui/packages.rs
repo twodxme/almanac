@@ -1741,7 +1741,8 @@ impl Win {
         let q = query.clone();
         // What the searches raise ends the Python's worker before its
         // idle_add: the results are never shown.
-        let work = move || -> Result<(Vec<inventory::App>, Option<Result<usize, String>>), String> {
+        type Found = (Vec<inventory::App>, Option<Result<usize, String>>);
+        let work = move || -> Result<Found, String> {
             if browsing {
                 // Nothing typed: show the marketplace itself. Packages are
                 // excluded here -- 15,669 of them is a database dump, not a

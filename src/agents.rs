@@ -1280,6 +1280,12 @@ struct Flight<T> {
     landed: std::sync::Condvar,
 }
 
+impl<T: Clone> Default for SingleFlight<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Clone> SingleFlight<T> {
     pub const fn new() -> Self {
         SingleFlight { inflight: std::sync::Mutex::new(None) }
