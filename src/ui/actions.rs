@@ -359,6 +359,40 @@ pub fn appimage_name(src: &Path) -> String {
     }
 }
 
+/// What adding `src` under the key `name` would do to an AppImage already
+/// tracked (`reg` is the registry, `store` where tracked AppImages live).
+#[derive(Debug, PartialEq)]
+pub enum AddClash {
+    /// Nothing is tracked under that key, or it is this very file again:
+    /// go ahead.
+    Free,
+    /// Another AppImage is tracked under it (`existing`, its source file or
+    /// path), or its file is there. Adding would replace it -- its file,
+    /// its launcher and its registry entry -- so that is asked; `spare` is
+    /// a key that keeps both.
+    Taken { existing: String, spare: String },
+}
+
+/// See [`AddClash`]. The key is the file name up to its first `-`, so two
+/// different apps (`my-app`, `my-tool`) meet at the same one, and the
+/// second used to replace the first without a word.
+pub fn appimage_clash(reg: &Map<String, Value>, name: &str, src: &Path, store: &Path) -> AddClash {
+    let taken = |k: &str| reg.contains_key(k) || store.join(format!("{k}.AppImage")).exists();
+    if !taken(name) {
+        return AddClash::Free;
+    }
+    let field = |k: &str| reg.get(name).and_then(|e| e.get(k)).and_then(Value::as_str).map(str::to_string);
+    let src_s = src.to_string_lossy();
+    if field("source_file").as_deref() == Some(&*src_s) {
+        return AddClash::Free;
+    }
+    let existing = field("source_file")
+        .or_else(|| field("path"))
+        .unwrap_or_else(|| store.join(format!("{name}.AppImage")).to_string_lossy().into_owned());
+    let spare = (2..).map(|n| format!("{name}-{n}")).find(|k| !taken(k)).unwrap_or_default();
+    AddClash::Taken { existing, spare }
+}
+
 /// The `yay` argv that installs or updates one package (`on_update_one`,
 /// `_install_option`).
 pub fn yay_argv(name: &str) -> Vec<String> {
@@ -1689,14 +1723,61 @@ impl Win {
     ///
     /// Copying rather than referencing the download means a later cleanup of
     /// ~/Downloads cannot quietly break an installed app.
+    ///
+    /// A different AppImage already tracked under the same name is not
+    /// replaced without asking (see [`AddClash`]).
     pub fn install_appimage(&self, src: &Path) {
+        let registry = inventory::registry();
+        let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
+        let name = appimage_name(src);
+        match appimage_clash(&inventory::load_registry(), &name, src, &store) {
+            AddClash::Free => self.install_appimage_as(src, &name),
+            AddClash::Taken { existing, spare } => self.ask_appimage_clash(src, &name, &existing, &spare),
+        }
+    }
+
+    /// Ask whether an added AppImage replaces the one tracked under `name`,
+    /// or is kept beside it as `spare`.
+    fn ask_appimage_clash(&self, src: &Path, name: &str, existing: &str, spare: &str) {
+        let body = format!(
+            "{}\n\n{}\n{existing}\n\n{}\n{}",
+            tr("Another AppImage is already tracked under this name. Adding this one \
+                as it is would replace it: its file, its launcher and what Almanac \
+                knows about it."),
+            tr("Tracked now:"),
+            tr("Adding:"),
+            src.display(),
+        );
+        let dialog = adw::AlertDialog::new(Some(&format!("“{name}” is already tracked")), Some(&body));
+        dialog.add_response("cancel", &tr("Cancel"));
+        dialog.add_response("both", &format!("Keep both, as “{spare}”"));
+        dialog.add_response("replace", &tr("Replace"));
+        dialog.set_response_appearance("both", adw::ResponseAppearance::Suggested);
+        dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let w = self.downgrade();
+        let (src, name, spare) = (src.to_path_buf(), name.to_string(), spare.to_string());
+        dialog.connect_response(None, move |_d, resp| {
+            let Some(win) = w.upgrade() else { return };
+            match resp {
+                "both" => win.install_appimage_as(&src, &spare),
+                "replace" => win.install_appimage_as(&src, &name),
+                _ => {}
+            }
+        });
+        dialog.present(Some(&self.window));
+    }
+
+    /// `install_appimage` once the key it is tracked under is settled.
+    fn install_appimage_as(&self, src: &Path, name: &str) {
         use std::os::unix::fs::PermissionsExt;
         let registry = inventory::registry();
         let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
         if let Err(e) = std::fs::create_dir_all(&store) {
             return raised(&py_oserror_line(&e, &store));
         }
-        let name = appimage_name(src);
+        let name = name.to_string();
         let dest = store.join(format!("{name}.AppImage"));
         let copied = copy2(src, &dest).and_then(|()| {
             let mode = std::fs::metadata(&dest).map_err(|e| py_oserror(&e, &dest))?.permissions().mode();
@@ -1796,6 +1877,33 @@ mod tests {
     fn appimage_name_takes_stem_prefix() {
         assert_eq!(appimage_name(Path::new("/d/Foo-1.2-x86_64.AppImage")), "Foo");
         assert_eq!(appimage_name(Path::new("/d/-x.AppImage")), "-x");
+    }
+
+    /// Two different AppImages whose names start alike meet at one key:
+    /// the second is not added over the first without asking.
+    #[test]
+    fn a_different_appimage_under_the_same_name_is_asked_about() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("apps");
+        std::fs::create_dir_all(&store).unwrap();
+        let tool = Path::new("/home/u/Downloads/my-tool-2.0.AppImage");
+        assert_eq!(appimage_name(tool), "my");
+        let mut reg = Map::new();
+        assert_eq!(appimage_clash(&reg, "my", tool, &store), AddClash::Free);
+        reg.insert("my".into(), serde_json::json!({"path": "/s/my.AppImage",
+                                                    "source_file": "/home/u/Downloads/my-app-1.0.AppImage"}));
+        reg.insert("my-2".into(), serde_json::json!({}));
+        std::fs::write(store.join("my-3.AppImage"), b"").unwrap();
+        assert_eq!(
+            appimage_clash(&reg, "my", tool, &store),
+            AddClash::Taken { existing: "/home/u/Downloads/my-app-1.0.AppImage".into(), spare: "my-4".into() }
+        );
+        // The same file added again refreshes its own entry.
+        let app = Path::new("/home/u/Downloads/my-app-1.0.AppImage");
+        assert_eq!(appimage_clash(&reg, "my", app, &store), AddClash::Free);
+        // A file in the store that nothing tracks is in the way too.
+        std::fs::write(store.join("solo.AppImage"), b"").unwrap();
+        assert!(matches!(appimage_clash(&Map::new(), "solo", app, &store), AddClash::Taken { .. }));
     }
 
     #[test]

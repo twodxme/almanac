@@ -1971,6 +1971,24 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
         std::fs::create_dir_all(parent).map_err(|e| os_error(&e, parent))?;
     }
     let partial = dest.with_extension("unverified");
+    // The key is the repository's name alone, so another project's app of
+    // the same name (or one added from a file, or from the store) can be
+    // tracked under it already. Installing would replace it -- its file,
+    // launcher and entry -- so it is refused, before anything is fetched.
+    if let Py::Dict(d) = load_registry_py().map_err(|e| exc_str(&e))? {
+        if let Some((_, entry)) = d.iter().find(|(k, _)| *k == key) {
+            let from = match entry {
+                Py::Dict(e) => e.iter().find(|(k, _)| k == "url").map(|(_, u)| u.py_str()),
+                _ => None,
+            };
+            if !from.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(&res.url())) {
+                let from = from.filter(|u| !u.is_empty()).map(|u| format!(", from {u}")).unwrap_or_default();
+                return Err(format!(
+                    "another AppImage is already tracked as {key}{from}; remove it first to install this one"
+                ));
+            }
+        }
+    }
     log(&format!("{}  ({:.0} MB)", opt.name, opt.size_mb));
     // A file left there by an install that died would be kept as this
     // download's "previous build", under the name of the installed app's
@@ -2154,6 +2172,26 @@ mod tests {
         let _ = server.join();
         let apps = d.path().join("almanac").join("apps");
         assert_eq!(std::fs::read_dir(apps).expect("apps dir").count(), 0);
+    }
+
+    /// Another project's AppImage tracked under the same key is not
+    /// replaced by a link install; the same project's is (an update).
+    #[test]
+    fn test_another_projects_app_of_the_same_name_is_not_replaced() {
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        let reg = crate::inventory::registry();
+        std::fs::create_dir_all(reg.parent().expect("parent")).expect("dir");
+        std::fs::write(&reg, r#"{"app": {"url": "https://github.com/someone-else/app", "path": "/x"}}"#).expect("write");
+        let res = Resolution { owner: "o".into(), repo: "app".into(), ..Default::default() };
+        // A URL nothing listens on: reaching the download would fail differently.
+        let opt = Option { kind: APPIMAGE.into(), url: "http://127.0.0.1:9/app".into(), ..Default::default() };
+        let err = install_appimage(&res, &opt, &|_m: &str| {}).expect_err("replaced another project's app");
+        assert!(err.contains("already tracked as app, from https://github.com/someone-else/app"), "{err}");
+        std::fs::write(&reg, r#"{"app": {"url": "https://github.com/O/app", "path": "/x"}}"#).expect("write");
+        let err = install_appimage(&res, &opt, &|_m: &str| {}).expect_err("nothing listens there");
+        assert!(!err.contains("already tracked"), "{err}");
     }
 
     /// A `<key>.unverified` left by an install that died used to become

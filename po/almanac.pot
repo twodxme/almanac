@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 12:50-0700\n"
+"POT-Creation-Date: 2026-10-23 14:55-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -32,104 +32,123 @@ msgid_plural "many"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/ui/actions.rs:833 src/ui/actions.rs:1517 src/ui/ai.rs:812
+#: src/ui/actions.rs:871 src/ui/actions.rs:1555 src/ui/ai.rs:812
 #: src/ui/packages.rs:1146 src/ui/plugins.rs:1542 src/ui/shell.rs:2087
 #: src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
-#: src/ui/actions.rs:858
+#: src/ui/actions.rs:896
 msgid "Almanac was not updated"
 msgstr ""
 
-#: src/ui/actions.rs:864
+#: src/ui/actions.rs:902
 msgid "Almanac updated — restart to use the new version"
 msgstr ""
 
-#: src/ui/actions.rs:885
+#: src/ui/actions.rs:923
 msgid ""
 "A catalogue of everything installed on this machine: where each thing came "
 "from, how old it is, whether it still has a maintainer, and what needs "
 "attention."
 msgstr ""
 
-#: src/ui/actions.rs:1045
+#: src/ui/actions.rs:1083
 msgid "Nothing changed"
 msgstr ""
 
-#: src/ui/actions.rs:1101
+#: src/ui/actions.rs:1139
 msgid ""
 "\n"
 "\n"
 "Give them back to what opened them before?"
 msgstr ""
 
-#: src/ui/actions.rs:1106
+#: src/ui/actions.rs:1144
 msgid "Some files now open in a different app"
 msgstr ""
 
-#: src/ui/actions.rs:1109
+#: src/ui/actions.rs:1147
 msgid "Keep the new app"
 msgstr ""
 
-#: src/ui/actions.rs:1111
+#: src/ui/actions.rs:1149
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions.rs:1155
+#: src/ui/actions.rs:1193
 msgid "Install from a link"
 msgstr ""
 
-#: src/ui/actions.rs:1157
+#: src/ui/actions.rs:1195
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: src/ui/actions.rs:1162 src/ui/actions.rs:1274 src/ui/plugins.rs:1434
+#: src/ui/actions.rs:1200 src/ui/actions.rs:1312 src/ui/actions.rs:1752
+#: src/ui/plugins.rs:1434
 msgid "Cancel"
 msgstr ""
 
-#: src/ui/actions.rs:1163
+#: src/ui/actions.rs:1201
 msgid "Look it up"
 msgstr ""
 
-#: src/ui/actions.rs:1176
+#: src/ui/actions.rs:1214
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: src/ui/actions.rs:1179
+#: src/ui/actions.rs:1217
 msgid "Looking it up…"
 msgstr ""
 
-#: src/ui/actions.rs:1238
+#: src/ui/actions.rs:1276
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1275 src/ui/plugins.rs:1736 src/ui/plugins.rs:1779
+#: src/ui/actions.rs:1313 src/ui/plugins.rs:1736 src/ui/plugins.rs:1779
 #: src/ui/plugins.rs:1817 src/ui/store_actions.rs:505
 #: src/ui/store_actions.rs:588 src/ui/store_actions.rs:984
-#: src/ui/store_actions.rs:1433
+#: src/ui/store_actions.rs:1442
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1402 src/ui/packages.rs:855 src/ui/shell.rs:970
+#: src/ui/actions.rs:1440 src/ui/packages.rs:855 src/ui/shell.rs:970
 msgid "Update all"
 msgstr ""
 
-#: src/ui/actions.rs:1423
+#: src/ui/actions.rs:1461
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions.rs:1427
+#: src/ui/actions.rs:1465
 msgid "Update anyway"
 msgstr ""
 
-#: src/ui/actions.rs:1664
+#: src/ui/actions.rs:1702
 msgid "Choose an AppImage to track"
+msgstr ""
+
+#: src/ui/actions.rs:1744
+msgid ""
+"Another AppImage is already tracked under this name. Adding this one as it "
+"is would replace it: its file, its launcher and what Almanac knows about it."
+msgstr ""
+
+#: src/ui/actions.rs:1747
+msgid "Tracked now:"
+msgstr ""
+
+#: src/ui/actions.rs:1748
+msgid "Adding:"
+msgstr ""
+
+#: src/ui/actions.rs:1754
+msgid "Replace"
 msgstr ""
 
 #: src/ui/ai.rs:193
@@ -321,7 +340,7 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages.rs:969 src/ui/store_actions.rs:1365
+#: src/ui/packages.rs:969 src/ui/store_actions.rs:1374
 msgid "On"
 msgstr ""
 
@@ -423,7 +442,7 @@ msgid ""
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1429
+#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1438
 msgid "Built in"
 msgstr ""
 
@@ -459,8 +478,8 @@ msgstr ""
 
 #: src/ui/plugins.rs:1262 src/ui/plugins.rs:1695 src/ui/plugins.rs:1895
 #: src/ui/store.rs:927 src/ui/store_actions.rs:543 src/ui/store_actions.rs:613
-#: src/ui/store_actions.rs:1082 src/ui/store_actions.rs:1337
-#: src/ui/store_actions.rs:1350
+#: src/ui/store_actions.rs:1091 src/ui/store_actions.rs:1346
+#: src/ui/store_actions.rs:1359
 msgid "Remove"
 msgstr ""
 
@@ -924,7 +943,7 @@ msgstr ""
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:264 src/ui/store_actions.rs:1218
+#: src/ui/store.rs:264 src/ui/store_actions.rs:1227
 msgid "Marketplace"
 msgstr ""
 
@@ -985,7 +1004,7 @@ msgstr ""
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:917 src/ui/store_actions.rs:922 src/ui/store_actions.rs:1325
+#: src/ui/store.rs:917 src/ui/store_actions.rs:922 src/ui/store_actions.rs:1334
 msgid "Apply"
 msgstr ""
 
@@ -1077,69 +1096,69 @@ msgid ""
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1079
+#: src/ui/store_actions.rs:1088
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
 msgstr ""
 
-#: src/ui/store_actions.rs:1214
+#: src/ui/store_actions.rs:1223
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1215
+#: src/ui/store_actions.rs:1224
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1219
+#: src/ui/store_actions.rs:1228
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1220
+#: src/ui/store_actions.rs:1229
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1221
+#: src/ui/store_actions.rs:1230
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1223
+#: src/ui/store_actions.rs:1232
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1225
+#: src/ui/store_actions.rs:1234
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1231
+#: src/ui/store_actions.rs:1240
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1232
+#: src/ui/store_actions.rs:1241
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1242
+#: src/ui/store_actions.rs:1251
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1256
+#: src/ui/store_actions.rs:1265
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1257
+#: src/ui/store_actions.rs:1266
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1260
+#: src/ui/store_actions.rs:1269
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1404
+#: src/ui/store_actions.rs:1413
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1417
+#: src/ui/store_actions.rs:1426
 msgid "Finish setup"
 msgstr ""
 
