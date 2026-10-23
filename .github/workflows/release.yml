@@ -1,0 +1,71 @@
+# A published release gets a ready-to-install package, so installing Almanac
+# is a download and `pacman -U` -- no Rust toolchain, no build.
+#
+# The package is the tagged release (packaging/aur/almanac/PKGBUILD), built
+# from this checkout of the tag. It is attached twice: under its own name,
+# and as almanac-x86_64.pkg.tar.zst, which
+# releases/latest/download/almanac-x86_64.pkg.tar.zst always resolves to.
+#
+# Run it by hand (Actions → Release → Run workflow) to attach a package to a
+# release that was published without one.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach, e.g. v2.1.2
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita \
+            openssl polkit gettext github-cli
+          useradd -m user
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build the package
+        run: |
+          ver="${TAG#v}"
+          test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$ver" ||
+            { echo "Cargo.toml is not version $ver"; exit 1; }
+          mkdir /tmp/pkg
+          git config --global --add safe.directory '*'
+          git archive --prefix="almanac-$ver/" -o "/tmp/pkg/almanac-$ver.tar.gz" HEAD
+          cp packaging/aur/almanac/PKGBUILD /tmp/pkg/
+          cd /tmp/pkg
+          # The tag's own tree, not GitHub's tarball of it (whose checksum the
+          # AUR PKGBUILD pins, and which may not match until it is updated).
+          sed -i -e "s|^pkgver=.*|pkgver=$ver|" \
+                 -e "s|^source=.*|source=(\"almanac-$ver.tar.gz\")|" \
+                 -e "s|^sha256sums=.*|sha256sums=('SKIP')|" PKGBUILD
+          chown -R user /tmp/pkg
+          # The tests ran in CI for this commit; a release build need not
+          # repeat them without a display.
+          sudo -u user makepkg --nodeps --nocheck --noconfirm
+          pkg=$(ls almanac-"$ver"-*-x86_64.pkg.tar.zst)
+          tar -tf "$pkg" | grep -q usr/bin/almanac
+          cp "$pkg" almanac-x86_64.pkg.tar.zst
+          echo "PKG=/tmp/pkg/$pkg" >> "$GITHUB_ENV"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" "$PKG" /tmp/pkg/almanac-x86_64.pkg.tar.zst \
+            --clobber --repo "$GITHUB_REPOSITORY"

@@ -24,6 +24,24 @@ A native GTK4 / libadwaita catalogue for [Omarchy](https://omarchy.org) and Arch
 > case by case until the two matched. Settings, history and caches from 1.x
 > carry over untouched.
 
+## Install
+
+Almanac runs on **Arch Linux and Omarchy** (x86_64). Open a terminal and run:
+
+```bash
+curl -LO https://github.com/twodxme/almanac/releases/latest/download/almanac-x86_64.pkg.tar.zst
+sudo pacman -U almanac-x86_64.pkg.tar.zst
+```
+
+That is all: `pacman` installs everything Almanac needs along with it. Open
+**Almanac** from your app launcher, or run `almanac`.
+
+To update to a newer release, run the same two commands again. To remove it:
+`sudo pacman -R almanac`.
+
+Building it yourself, other architectures, and running from a checkout are
+[below](#building-it-yourself).
+
 ---
 
 ## Why
@@ -344,19 +362,24 @@ lines your change is set aside as a git stash — never discarded.
 
 ---
 
-## Install
+## Building it yourself
 
-**As a package** (recommended — Almanac then appears in its own Updates list
-as a package, and defers its updates to `pacman`). The `PKGBUILD` in this
-repository builds the Rust app from the latest commit and runs its tests
-while doing so:
+**As a package** — what the download above is, built on your own machine
+from the newest commit (also the way to get Almanac on aarch64):
 
 ```bash
-git clone https://github.com/twodxme/almanac && cd almanac
+sudo pacman -S --needed base-devel git rust
+git clone https://github.com/twodxme/almanac
+cd almanac
 makepkg -si
 ```
 
-**From source** (needs `cargo`):
+The build takes a few minutes and runs the test suite. If you use `rustup`
+instead of the `rust` package, skip `rust` above and run
+`rustup default stable` once first.
+
+**From a checkout**, for working on Almanac itself (needs `cargo`). The app
+finds its icons in the checkout, so keep it where you cloned it:
 
 ```bash
 git clone https://github.com/twodxme/almanac ~/.local/share/almanac
@@ -370,15 +393,14 @@ install -Dm644 docs/io.github.twodxme.Almanac.svg \
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
 ```
 
-Then run `almanac`, or launch it from your application menu.
-
 Runtime data lives in `~/.local/state/almanac/`, never inside the checkout, so
 a checkout can be pulled and rebuilt without fighting its own state.
 
 ### Updating
 
-Almanac appears in its own Updates list. Installed as a package, it defers to
-`pacman`, like everything else on the system. A build from a checkout cannot
+Installed from the download above, update by running the same two commands
+again. A package built with `makepkg` updates by pulling and running
+`makepkg -si` again in the clone. A build from a checkout cannot
 replace itself while it runs, so it says so and tells you to pull and run
 `cargo build --release` instead.
 

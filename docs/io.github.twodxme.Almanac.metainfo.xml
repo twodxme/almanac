@@ -96,6 +96,14 @@
   </requires>
 
   <releases>
+    <release version="2.1.2" date="2026-10-23">
+      <description>
+        <p>Fixed: Update all left plugins, AppImages, agent CLIs and local
+        checkouts listed after it ran, because it only ran the system update.
+        It now updates everything it counts, each with its own updater.</p>
+        <p>Each release now comes with a ready-to-install package.</p>
+      </description>
+    </release>
     <release version="2.1.1" date="2026-10-18">
       <description>
         <p>Fixed: building the package without a display (a clean chroot)
