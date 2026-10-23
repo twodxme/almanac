@@ -2018,7 +2018,7 @@ impl Win {
             "history" => self.history_reload(),
             "plugins" => self.plugins_reload(),
             "switchboard" => self.switchboard_reload(),
-            p if p == inventory::AGENT => self.ai_reload(),
+            p if p == inventory::AGENT => self.ai_check(),
             _ => self.reload(),
         }
     }

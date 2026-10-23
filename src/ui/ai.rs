@@ -188,7 +188,19 @@ impl Win {
     /// server, which takes ten to twenty seconds on a cold cache. The skills
     /// and hooks are read from disk in milliseconds and should not be held
     /// behind it.
+    ///
+    /// This reads the last health check; `ai_check` runs a new one.
     pub fn ai_reload(&self) {
+        self.ai_reload_with(false);
+    }
+
+    /// `ai_reload`, checking every MCP server's health (which starts each
+    /// one): the AI page's refresh, the one place it is asked for.
+    pub fn ai_check(&self) {
+        self.ai_reload_with(true);
+    }
+
+    fn ai_reload_with(&self, check_mcp: bool) {
         self.busy(true);
         self.summarize(&tr("Reading the AI setup…"), Some(inventory::AGENT));
 
@@ -199,7 +211,7 @@ impl Win {
             return;
         }
 
-        let specs = ai::group_specs();
+        let specs = ai::group_specs_with(check_mcp);
         let survey: Vec<Group> = specs
             .iter()
             .map(|(title, desc, _fn)| (title.to_string(), desc.to_string(), Vec::new()))
