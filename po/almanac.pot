@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 19:40-0700\n"
+"POT-Creation-Date: 2026-10-23 19:44-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -41,128 +41,128 @@ msgstr ""
 msgid "changed since it was reviewed"
 msgstr ""
 
-#: src/ui/actions.rs:827
-msgid "Open the release"
+#: src/ui/actions/appimage_add.rs:165
+msgid "Choose an AppImage to track"
 msgstr ""
 
-#: src/ui/actions.rs:857 src/ui/actions.rs:1609 src/ui/ai.rs:894
-#: src/ui/packages/details.rs:285 src/ui/plugins/updates.rs:262
-#: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
-msgid "Update"
-msgstr ""
-
-#: src/ui/actions.rs:882
-msgid "Almanac was not updated"
-msgstr ""
-
-#: src/ui/actions.rs:888
-msgid "Almanac updated — restart to use the new version"
-msgstr ""
-
-#: src/ui/actions.rs:929
+#: src/ui/actions/appimage_add.rs:207
 msgid ""
-"A catalogue of everything installed on this machine: where each thing came "
-"from, how old it is, whether it still has a maintainer, and what needs "
-"attention."
+"Another AppImage is already tracked under this name. Adding this one as it "
+"is would replace it: its file, its launcher and what Almanac knows about it."
 msgstr ""
 
-#: src/ui/actions.rs:1133
-msgid "Nothing changed"
+#: src/ui/actions/appimage_add.rs:210
+msgid "Tracked now:"
 msgstr ""
 
-#: src/ui/actions.rs:1189
-msgid ""
-"\n"
-"\n"
-"Give them back to what opened them before?"
+#: src/ui/actions/appimage_add.rs:211
+msgid "Adding:"
 msgstr ""
 
-#: src/ui/actions.rs:1194
-msgid "Some files now open in a different app"
+#: src/ui/actions/appimage_add.rs:215 src/ui/actions/link.rs:37
+#: src/ui/actions/link.rs:149 src/ui/plugins/controls.rs:142
+msgid "Cancel"
 msgstr ""
 
-#: src/ui/actions.rs:1197
-msgid "Keep the new app"
+#: src/ui/actions/appimage_add.rs:217
+msgid "Replace"
 msgstr ""
 
-#: src/ui/actions.rs:1199
-msgid "Give them back"
-msgstr ""
-
-#: src/ui/actions.rs:1243
+#: src/ui/actions/link.rs:30
 msgid "Install from a link"
 msgstr ""
 
-#: src/ui/actions.rs:1245
+#: src/ui/actions/link.rs:32
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: src/ui/actions.rs:1250 src/ui/actions.rs:1362 src/ui/actions.rs:1810
-#: src/ui/plugins/controls.rs:142
-msgid "Cancel"
-msgstr ""
-
-#: src/ui/actions.rs:1251
+#: src/ui/actions/link.rs:38
 msgid "Look it up"
 msgstr ""
 
-#: src/ui/actions.rs:1264
+#: src/ui/actions/link.rs:51
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: src/ui/actions.rs:1267
+#: src/ui/actions/link.rs:54
 msgid "Looking it up…"
 msgstr ""
 
-#: src/ui/actions.rs:1326
+#: src/ui/actions/link.rs:113
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1363 src/ui/plugins/removal.rs:238
+#: src/ui/actions/link.rs:150 src/ui/plugins/removal.rs:238
 #: src/ui/plugins/removal.rs:281 src/ui/plugins/removal.rs:319
 #: src/ui/store_actions.rs:603 src/ui/store_actions.rs:705
 #: src/ui/store_actions.rs:1118 src/ui/store_actions.rs:1576
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1492 src/ui/packages/loading.rs:318
+#: src/ui/actions/rows.rs:96
+msgid "Open the release"
+msgstr ""
+
+#: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:894
+#: src/ui/packages/details.rs:285 src/ui/plugins/updates.rs:262
+#: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
+msgid "Update"
+msgstr ""
+
+#: src/ui/actions/rows.rs:151
+msgid "Almanac was not updated"
+msgstr ""
+
+#: src/ui/actions/rows.rs:157
+msgid "Almanac updated — restart to use the new version"
+msgstr ""
+
+#: src/ui/actions/rows.rs:198
+msgid ""
+"A catalogue of everything installed on this machine: where each thing came "
+"from, how old it is, whether it still has a maintainer, and what needs "
+"attention."
+msgstr ""
+
+#: src/ui/actions/takeovers.rs:56
+msgid ""
+"\n"
+"\n"
+"Give them back to what opened them before?"
+msgstr ""
+
+#: src/ui/actions/takeovers.rs:61
+msgid "Some files now open in a different app"
+msgstr ""
+
+#: src/ui/actions/takeovers.rs:64
+msgid "Keep the new app"
+msgstr ""
+
+#: src/ui/actions/takeovers.rs:66
+msgid "Give them back"
+msgstr ""
+
+#: src/ui/actions/update.rs:336 src/ui/packages/loading.rs:318
 #: src/ui/shell/build.rs:79
 msgid "Update all"
 msgstr ""
 
-#: src/ui/actions.rs:1513
+#: src/ui/actions/update.rs:357
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions.rs:1517
+#: src/ui/actions/update.rs:361
 msgid "Update anyway"
 msgstr ""
 
-#: src/ui/actions.rs:1760
-msgid "Choose an AppImage to track"
-msgstr ""
-
-#: src/ui/actions.rs:1802
-msgid ""
-"Another AppImage is already tracked under this name. Adding this one as it "
-"is would replace it: its file, its launcher and what Almanac knows about it."
-msgstr ""
-
-#: src/ui/actions.rs:1805
-msgid "Tracked now:"
-msgstr ""
-
-#: src/ui/actions.rs:1806
-msgid "Adding:"
-msgstr ""
-
-#: src/ui/actions.rs:1812
-msgid "Replace"
+#: src/ui/actions/verification.rs:149
+msgid "Nothing changed"
 msgstr ""
 
 #: src/ui/ai.rs:218

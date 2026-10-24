@@ -106,7 +106,7 @@ on any thread.
 | `ai.rs` | AI page |
 | `preferences.rs` | Preferences dialog |
 | `today.rs` | Today page, hero, picks |
-| `actions.rs` | row actions, verification, file takeovers, install from a link, update one, AppImage add |
+| `actions.rs` + `actions/` | row actions, verification, file takeovers, install from a link, update one, AppImage add — `rows` (row actions, self-update, About), `verification`, `takeovers`, `link`, `update` (update one, AppImage update and removal), `appimage_add`, `pyisms` |
 | `update_all.rs` | Update all: the system update in a terminal, then every other updater as one batch |
 
 - **The window** is `ui::shell::Win`: `#[derive(Clone)] pub struct Win(Rc<Inner>)`
