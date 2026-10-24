@@ -108,6 +108,12 @@ pub const CRITICAL: &[(&str, &[&str])] = &[
             // before it is mounted: a bad update here fails at the next boot.
             "dracut", "booster", "limine-mkinitcpio-hook", "plymouth", "cryptsetup",
             "lvm2", "mdadm", "efibootmgr", "refind",
+            // Copied into every initramfs (busybox for the `base` hook, kmod to
+            // load modules), what writes or signs the boot entries, and ZFS
+            // roots. Not util-linux or the fsck tools: they update often and a
+            // bad build of them does not stop the kernel reaching userspace.
+            "mkinitcpio-busybox", "kmod", "limine-snapper-sync", "systemd-ukify", "sbctl",
+            "shim-signed", "zfs-utils",
         ],
     ),
 ];
@@ -149,7 +155,7 @@ pub fn criticality(name: &str) -> String {
 /// `linux-atm` and the `-docs` packages are userland and stay ordinary.
 const KERNEL_FLAVOURS: &[&str] = &[
     "lts", "zen", "hardened", "rt", "mainline", "next", "libre", "lqx", "clear", "pf", "g14", "surface", "asahi",
-    "vfio",
+    "vfio", "git",
 ];
 
 /// Flavour families with their own variants after a dash
@@ -367,7 +373,11 @@ mod tests {
     fn test_boot_critical_is_core() {
         assert_eq!(criticality("linux"), "core");
         assert_eq!(criticality("mkinitcpio"), "core");
-        for name in ["dracut", "booster", "cryptsetup", "lvm2", "mdadm", "plymouth", "limine-mkinitcpio-hook"] {
+        for name in [
+            "dracut", "booster", "cryptsetup", "lvm2", "mdadm", "plymouth", "limine-mkinitcpio-hook",
+            "mkinitcpio-busybox", "kmod", "limine-snapper-sync", "systemd-ukify", "sbctl", "zfs-utils",
+            "linux-git-headers",
+        ] {
             assert_eq!(criticality(name), "core", "{name}");
         }
     }
