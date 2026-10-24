@@ -96,6 +96,21 @@
   </requires>
 
   <releases>
+    <release version="2.1.4" date="2026-10-23">
+      <description>
+        <p>Safer scheduled updates: when Almanac cannot tell which pending
+        updates touch boot, the update is held instead of applied, and AUR
+        updates are checked too. AppImages built for another processor are
+        refused, a download without a published checksum says so, and an
+        update that worked is no longer reported as failed.</p>
+        <p>Plugin trust is tied to where the code comes from: a plugin is
+        Verified only when it is the listed repository at the reviewed
+        commit, setup shows every file a step runs, and your GitHub token is
+        sent only to GitHub's API. Switches no longer flip back on their own
+        after a failed change, plugin toggles cannot hang, and adding an
+        AppImage no longer freezes the window.</p>
+      </description>
+    </release>
     <release version="2.1.3" date="2026-10-23">
       <description>
         <p>Safer AppImage updates: a download that is cut short, is not an
