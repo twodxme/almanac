@@ -1539,6 +1539,12 @@ mod tests {
     /// used to hold it strongly, a cycle that kept every one forever. A
     /// task whose worker ends in an error still finishes (it used to pulse
     /// on, unable to close).
+    ///
+    /// The cycle ran through `TaskDialog`, so it is what must be gone: its
+    /// done callback and pulse, which every copy holds. The widget itself
+    /// GTK frees when it is done with it, which, with other tests running
+    /// beside this one, was now and then later than any wait here (v2.1.4
+    /// as well): it is checked closed and out of its window instead.
     #[test]
     fn a_closed_task_dialog_is_freed() {
         if gtk_here().is_none() {
@@ -1562,8 +1568,9 @@ mod tests {
             assert!(t.close_btn.is_visible());
             t.close_btn.emit_clicked();
             drop(t);
+            let closed = || dialog.upgrade().is_none_or(|d| !d.is_mapped() && d.parent().is_none());
             assert!(
-                spin(10, || dialog.upgrade().is_none() && on_done.upgrade().is_none() && pulse.upgrade().is_none()),
+                spin(10, || closed() && on_done.upgrade().is_none() && pulse.upgrade().is_none()),
                 "the closed dialog is still alive"
             );
         }
