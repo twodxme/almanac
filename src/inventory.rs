@@ -83,6 +83,8 @@ pub const TOOL: &str = "tool";
 /// Updates worth pulling out of the crowd. Two kinds:
 ///   security   — network-facing or credential-handling; a stale one is exposure
 ///   core       — can stop the machine booting, or needs a reboot to take effect
+///                (plus, by rule in [`criticality`]: DKMS modules, every kernel
+///                flavour, firmware splits, NVIDIA drivers, CPU microcode)
 ///
 /// A slice of pairs rather than a map so the Python dict's iteration order
 /// (security first) is kept.
@@ -125,7 +127,70 @@ pub fn criticality(name: &str) -> String {
     if base.ends_with("-dkms") || lower.ends_with("-dkms") {
         return "core".to_string();
     }
+    // Kernels, the GPU drivers built for them and CPU microcode: all take
+    // effect only at the next boot, and a bad one stops it. By rule, since
+    // each has flavours and branches too many to list.
+    if [base.as_str(), lower.as_str()].iter().any(|n| is_kernel(n) || is_nvidia_driver(n) || n.ends_with("-ucode")) {
+        return "core".to_string();
+    }
     String::new()
+}
+
+/// Kernel flavours, after `linux-`: Arch's (lts, zen, hardened, rt, rt-lts),
+/// the AUR's and other repos' common ones. A name is only a package name at
+/// this point (nothing says whether it ships a vmlinuz), so this is an
+/// allowlist: `linux-wifi-hotspot`, `linux-api-headers`, `linux-tools-meta`,
+/// `linux-atm` and the `-docs` packages are userland and stay ordinary.
+const KERNEL_FLAVOURS: &[&str] = &[
+    "lts", "zen", "hardened", "rt", "rt-lts", "mainline", "next", "libre", "lqx", "ck", "clear", "pf", "g14",
+    "surface", "asahi", "amd", "vfio",
+];
+
+/// Flavour families with their own variants after a dash
+/// (`linux-cachyos-bore`, `linux-xanmod-edge`, `linux-tkg-pds`,
+/// `linux-omarchy-eevdf`).
+const KERNEL_FAMILIES: &[&str] = &["cachyos", "xanmod", "tkg", "omarchy"];
+
+/// A kernel, its headers (DKMS builds against them, so they move with it)
+/// or its firmware: `linux`, `linux-<flavour>[-headers]`, `linux-firmware`
+/// and its splits (`linux-firmware-amdgpu`, ...: the firmware itself since
+/// `linux-firmware` became a meta package). `-git` and `-bin` are already
+/// stripped.
+fn is_kernel(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("linux-") else {
+        return name == "linux";
+    };
+    if rest == "headers" || rest == "firmware" || rest.starts_with("firmware-") {
+        return true;
+    }
+    let flavour = rest.strip_suffix("-headers").unwrap_or(rest);
+    if flavour.ends_with("-docs") || flavour.ends_with("-dbg") {
+        return false;
+    }
+    KERNEL_FLAVOURS.contains(&flavour)
+        || KERNEL_FAMILIES.iter().any(|f| flavour == *f || flavour.strip_prefix(f).is_some_and(|v| v.starts_with('-')))
+}
+
+/// NVIDIA's kernel module packages and the userspace that must match them
+/// (`nvidia-utils` pins `nvidia`'s exact version; a mismatch leaves
+/// graphics broken until a reboot): `nvidia`, `nvidia-open`, `nvidia-lts`,
+/// `nvidia-utils`, `lib32-nvidia-utils`, legacy branches (`nvidia-580xx`,
+/// `nvidia-580xx-utils`) and `-beta`. Not the tools around them
+/// (`nvidia-settings`, `nvidia-prime`, `nvidia-container-toolkit`,
+/// `opencl-nvidia`).
+fn is_nvidia_driver(name: &str) -> bool {
+    let (lib32, n) = match name.strip_prefix("lib32-") {
+        Some(n) => (true, n),
+        None => (false, name),
+    };
+    let Some(rest) = n.strip_prefix("nvidia") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('-').skip(1).collect();
+    let legacy = |p: &str| p.strip_suffix("xx").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+    (rest.is_empty() || rest.starts_with('-'))
+        && parts.iter().all(|p| ["open", "lts", "beta", "utils"].contains(p) || legacy(p))
+        && (!lib32 || parts.last() == Some(&"utils"))
 }
 
 /// Same software present twice -- an AppImage plus its packaged build, or
@@ -293,7 +358,31 @@ mod tests {
         }
         // only the suffix: a name that merely mentions dkms is not a module
         assert_eq!(criticality("dkms-tools-doc"), "");
-        assert_eq!(criticality("nvidia-utils"), "");
+    }
+
+    #[test]
+    fn kernels_drivers_and_microcode_are_core_by_rule() {
+        for name in [
+            "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-rt-lts", "linux-rt-lts-headers",
+            "linux-headers", "linux-zen-headers", "linux-cachyos", "linux-cachyos-bore", "linux-cachyos-lts-headers",
+            "linux-xanmod", "linux-xanmod-edge", "linux-xanmod-lts-bin", "linux-tkg-pds", "linux-mainline",
+            "linux-mainline-git", "linux-git", "linux-omarchy", "linux-omarchy-eevdf-headers", "linux-firmware",
+            "linux-firmware-amdgpu", "linux-firmware-git", "nvidia", "nvidia-open", "nvidia-lts", "nvidia-open-lts",
+            "nvidia-utils", "lib32-nvidia-utils", "nvidia-580xx-utils", "lib32-nvidia-580xx-utils",
+            "nvidia-open-beta", "nvidia-open-dkms", "intel-ucode", "amd-ucode",
+        ] {
+            assert_eq!(criticality(name), "core", "{name}");
+        }
+        // linux-* userland, and the tools around a driver: ordinary.
+        for name in [
+            "linux-wifi-hotspot", "linux-api-headers", "linux-docs", "linux-zen-docs", "linux-cachyos-docs",
+            "linux-tools-meta", "linux-atm", "linux-pam", "linuxqq", "util-linux", "nvidia-settings", "nvidia-prime",
+            "nvidia-container-toolkit", "nvidia-cg-toolkit", "libnvidia-container", "opencl-nvidia",
+            "lib32-opencl-nvidia", "libva-nvidia-driver", "python-nvidia-ml-py", "nvidiax", "lib32-nvidia",
+            "iucode-tool",
+        ] {
+            assert_eq!(criticality(name), "", "{name}");
+        }
     }
 
     #[test]
