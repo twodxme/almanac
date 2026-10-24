@@ -2471,6 +2471,42 @@ fn main_with(args: &[PyStr]) -> i32 {
     code
 }
 
+// --- --core-holds -----------------------------------------------------------------
+
+/// The names among pending-update lines that Almanac counts as core (the
+/// kernel, boot, firmware -- what can stop the machine booting), one per
+/// core package, in the order given. Each line is `name old -> new`, what
+/// both `checkupdates` and `yay -Qua` print, so the repository and AUR
+/// lists are read alike; blank lines are skipped.
+pub fn core_holds(pending: &str) -> Vec<String> {
+    pending
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| inventory::criticality(name) == "core")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// [`core_holds`] of what `checkupdates` printed, failing closed: the
+/// script holds what this returns, so a check that did not finish must not
+/// read as "nothing to hold". checkupdates exits 2 when there is nothing to
+/// update; any other failure, a timeout, or a checkupdates that could not
+/// be started at all is an `Err` for the caller to report.
+pub fn core_holds_checked(out: &crate::util::Output) -> Result<Vec<String>, String> {
+    if out.failed_to_start {
+        return Err("checkupdates could not be started (is pacman-contrib installed?)".into());
+    }
+    if out.timed_out {
+        return Err("checkupdates timed out".into());
+    }
+    match out.code {
+        Some(0) => Ok(core_holds(&out.stdout)),
+        Some(2) => Ok(Vec::new()),
+        Some(code) => Err(format!("checkupdates failed (exit {code}): {}", out.stderr.trim())),
+        None => Err("checkupdates was killed by a signal".into()),
+    }
+}
+
 #[cfg(test)]
 /// A `_run` stand-in that records `[argv, timeout]` and answers `ok`.
 fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
@@ -2484,6 +2520,38 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repository and AUR lines read alike; blank and stray lines are
+    /// skipped, and only what the Updates page marks core is held.
+    #[test]
+    fn core_holds_reads_repo_and_aur_lines() {
+        let repo = "linux 6.11.1.arch1-1 -> 6.11.2.arch1-1\nfirefox 131.0-1 -> 131.0.2-1\n\n";
+        let aur = "  \nlinux-firmware-git 20240909-1 -> 20241010-1\nyay-bin 12.3.5-1 -> 12.4.2-1\n";
+        assert_eq!(core_holds(&format!("{repo}{aur}")), vec!["linux", "linux-firmware-git"]);
+        assert!(core_holds("").is_empty());
+        assert!(core_holds("\n\n   \n").is_empty());
+        assert!(core_holds("firefox 1 -> 2").is_empty());
+    }
+
+    /// checkupdates' exit 2 is "nothing to update"; every other failure is
+    /// an error, never an empty list of holds.
+    #[test]
+    fn core_holds_from_checkupdates_fail_closed() {
+        use crate::util::Output;
+        let ran = |code: Option<i32>, stdout: &str| Output { code, stdout: stdout.into(), ..Default::default() };
+        assert_eq!(core_holds_checked(&ran(Some(0), "linux 1 -> 2\nfirefox 1 -> 2\n")), Ok(vec!["linux".to_owned()]));
+        assert_eq!(core_holds_checked(&ran(Some(2), "")), Ok(vec![]));
+        let err = core_holds_checked(&Output { code: Some(1), stderr: "==> ERROR: Cannot fetch updates\n".into(), ..Default::default() })
+            .unwrap_err();
+        assert_eq!(err, "checkupdates failed (exit 1): ==> ERROR: Cannot fetch updates");
+        // A failure that still printed lines is not trusted either.
+        assert!(core_holds_checked(&ran(Some(1), "linux 1 -> 2\n")).is_err());
+        assert!(core_holds_checked(&Output { timed_out: true, ..Default::default() }).unwrap_err().contains("timed out"));
+        assert!(core_holds_checked(&Output { failed_to_start: true, ..Default::default() })
+            .unwrap_err()
+            .contains("could not be started"));
+        assert!(core_holds_checked(&ran(None, "")).is_err());
+    }
 
     #[test]
     fn a_scheduled_run_is_titled_by_what_it_updated() {
