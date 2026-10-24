@@ -4,10 +4,20 @@
 # The package is the tagged release (packaging/aur/almanac/PKGBUILD), built
 # from this checkout of the tag. It is attached twice: under its own name,
 # and as almanac-x86_64.pkg.tar.zst, which
-# releases/latest/download/almanac-x86_64.pkg.tar.zst always resolves to.
+# releases/latest/download/almanac-x86_64.pkg.tar.zst always resolves to,
+# with SHA256SUMS beside it and a signed build-provenance attestation
+# (`gh attestation verify <file> --repo twodxme/almanac`).
+#
+# The package is built only once CI has passed on the tagged commit: the
+# build itself skips the tests, so a release must never get ahead of them.
+#
+# The build runs 200-odd crates' build scripts, so it gets a read-only token
+# and no credentials left in the checkout; only the upload job can write,
+# and it runs nothing from the repository.
 #
 # Run it by hand (Actions → Release → Run workflow) to attach a package to a
-# release that was published without one.
+# release that was published without one. An asset that is already there is
+# replaced only when "replace" is ticked.
 name: Release
 
 on:
@@ -18,54 +28,122 @@ on:
       tag:
         description: Release tag to build and attach, e.g. v2.1.2
         required: true
+      replace:
+        description: Replace assets the release already has
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
+  ci-passed:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Wait for CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
+          echo "waiting for CI on $sha"
+          for _ in $(seq 1 90); do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=20" \
+              --jq '[.workflow_runs[] | {status, conclusion}]')
+            if echo "$runs" | jq -e 'any(.[]; .status == "completed" and .conclusion == "success")' >/dev/null; then
+              echo "CI passed"; exit 0
+            fi
+            if echo "$runs" | jq -e 'length > 0 and all(.[]; .status == "completed")' >/dev/null; then
+              echo "CI did not pass on $sha: $runs"; exit 1
+            fi
+            sleep 30
+          done
+          echo "CI did not finish on $sha in 45 minutes"; exit 1
+
   package:
+    needs: ci-passed
     runs-on: ubuntu-latest
     container: archlinux:latest
-    env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    permissions:
+      contents: read
     steps:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita \
-            openssl polkit gettext github-cli
+            openssl polkit gettext
           useradd -m user
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
 
       - name: Build the package
         run: |
           ver="${TAG#v}"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$ver" ||
             { echo "Cargo.toml is not version $ver"; exit 1; }
-          mkdir /tmp/pkg
+          pkgdir=$(mktemp -d)
           git config --global --add safe.directory '*'
-          git archive --prefix="almanac-$ver/" -o "/tmp/pkg/almanac-$ver.tar.gz" HEAD
-          cp packaging/aur/almanac/PKGBUILD /tmp/pkg/
-          cd /tmp/pkg
+          git archive --prefix="almanac-$ver/" -o "$pkgdir/almanac-$ver.tar.gz" HEAD
+          cp packaging/aur/almanac/PKGBUILD "$pkgdir/"
+          cd "$pkgdir"
           # The tag's own tree, not GitHub's tarball of it (whose checksum the
           # AUR PKGBUILD pins, and which may not match until it is updated).
           sed -i -e "s|^pkgver=.*|pkgver=$ver|" \
                  -e "s|^source=.*|source=(\"almanac-$ver.tar.gz\")|" \
                  -e "s|^sha256sums=.*|sha256sums=('SKIP')|" PKGBUILD
-          chown -R user /tmp/pkg
-          # The tests ran in CI for this commit; a release build need not
-          # repeat them without a display.
-          sudo -u user makepkg --nodeps --nocheck --noconfirm
+          chown -R user "$pkgdir"
+          # The tests passed in CI for this commit (the ci-passed job); a
+          # release build need not repeat them without a display.
+          sudo -u user env PACKAGER="Almanac release workflow <https://github.com/$GITHUB_REPOSITORY>" \
+            SOURCE_DATE_EPOCH="$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)" \
+            makepkg --nodeps --nocheck --noconfirm
           pkg=$(ls almanac-"$ver"-*-x86_64.pkg.tar.zst)
           tar -tf "$pkg" | grep -q usr/bin/almanac
-          cp "$pkg" almanac-x86_64.pkg.tar.zst
-          echo "PKG=/tmp/pkg/$pkg" >> "$GITHUB_ENV"
+          mkdir "$GITHUB_WORKSPACE/out"
+          cp "$pkg" "$GITHUB_WORKSPACE/out/"
+          cp "$pkg" "$GITHUB_WORKSPACE/out/almanac-x86_64.pkg.tar.zst"
+          cd "$GITHUB_WORKSPACE/out" && sha256sum *.pkg.tar.zst > SHA256SUMS && cat SHA256SUMS
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package
+          path: out/
+          if-no-files-found: error
+
+  upload:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: package
+          path: out
+
+      - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: out/*.pkg.tar.zst
 
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace && '--clobber' || '' }}
         run: |
-          gh release upload "$TAG" "$PKG" /tmp/pkg/almanac-x86_64.pkg.tar.zst \
-            --clobber --repo "$GITHUB_REPOSITORY"
+          cd out && sha256sum -c SHA256SUMS
+          # Without "replace" an asset already there makes this fail rather
+          # than be swapped for a rebuild that is not byte-identical.
+          gh release upload "$TAG" ./*.pkg.tar.zst SHA256SUMS $REPLACE --repo "$GITHUB_REPOSITORY"
