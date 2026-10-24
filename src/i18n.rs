@@ -42,9 +42,7 @@ pub const DOMAIN: &str = "almanac";
 /// A packaged build's source tree is gone at run time, so it gets None and
 /// uses the system's locale directory.
 pub fn localedir() -> Option<String> {
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let checkout = std::fs::canonicalize(checkout).unwrap_or_else(|_| checkout.to_path_buf());
-    let here = checkout.join("locale");
+    let here = crate::util::build_checkout()?.join("locale");
     if here.is_dir() {
         Some(here.to_string_lossy().into_owned())
     } else {

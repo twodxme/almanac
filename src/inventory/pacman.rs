@@ -359,6 +359,39 @@ pub fn try_pending_aur() -> Result<BTreeMap<String, String>, String> {
     Ok(pending_from(&run(&["yay", "-Qua"], 90)?))
 }
 
+/// Pending repository updates, or None when checkupdates could not tell
+/// (offline, a mirror down, a timeout). Its exit code says which: 0 lists
+/// updates, 2 means there are none, anything else is a failure -- and
+/// "nothing pending" read from a failed check is how "Update all" would
+/// report every update installed.
+pub fn checked_pending_repo() -> Option<BTreeMap<String, String>> {
+    let r = subprocess_run(&["checkupdates"], 60).ok()?;
+    match r.code {
+        Some(0) => Some(pending_from(&r.stdout)),
+        Some(2) => Some(BTreeMap::new()),
+        _ => None,
+    }
+}
+
+/// Pending AUR updates, or None when yay could not tell. yay exits 1 both
+/// when nothing is pending and when it fails, so a failure is told apart by
+/// what it says on stderr (the AUR unreachable, a rate limit).
+pub fn checked_pending_aur() -> Option<BTreeMap<String, String>> {
+    let out = crate::util::run_bytes(&["yay", "-Qua"], &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(90)),
+        ..Default::default()
+    });
+    if out.failed_to_start || out.timed_out {
+        return None;
+    }
+    let stdout = String::from_utf8(out.stdout).ok()?;
+    match out.code {
+        Some(0) => Some(pending_from(&stdout)),
+        Some(1) if stdout.trim().is_empty() && out.stderr.trim_ascii().is_empty() => Some(BTreeMap::new()),
+        _ => None,
+    }
+}
+
 /// `try_pending_aur` for callers that need a plain map: where the Python
 /// raises, this answers `{}`.
 pub fn pending_aur() -> BTreeMap<String, String> {

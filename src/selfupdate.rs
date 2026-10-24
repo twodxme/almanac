@@ -60,8 +60,9 @@ use tables::*;
 /// Found at run time: a build in a checkout lives under
 /// `<checkout>/target/...`, so the checkout is the nearest ancestor of the
 /// running binary that holds both `Cargo.toml` and `.git`. A binary that is
-/// not in a checkout (an installed package) falls back to where it was built,
-/// which `compiled_check_in` only trusts when the binary lives inside it.
+/// not in a checkout falls back to where it was built, when that can be
+/// trusted (`util::build_checkout`); an installed package gets a folder that
+/// does not exist, so nothing is read or run from its build directory.
 /// Symlinks are resolved.
 pub static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     let from_exe = std::env::current_exe().ok().map(|e| py_resolve(&e)).and_then(|exe| {
@@ -70,7 +71,9 @@ pub static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
             .find(|d| d.join("Cargo.toml").is_file() && d.join(".git").exists())
             .map(PathBuf::from)
     });
-    let root = from_exe.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let root = from_exe
+        .or_else(crate::util::build_checkout)
+        .unwrap_or_else(|| PathBuf::from("/nonexistent/almanac"));
     PathBuf::from(py_path(py_resolve(&root).as_os_str()))
 });
 

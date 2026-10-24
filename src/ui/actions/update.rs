@@ -23,10 +23,7 @@ use super::verification::{after_pacman_again, after_pacman_cb, app_judge, app_ju
 /// The `yay` argv that installs or updates one package (`on_update_one`,
 /// `_install_option`).
 pub fn yay_argv(name: &str) -> Vec<String> {
-    ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", name]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    tasks::yay_install(&[name])
 }
 
 /// The shell script `on_update_all` runs in a terminal.
@@ -290,8 +287,9 @@ fn step_text(step: &Step) -> Option<String> {
 }
 
 impl Win {
-    /// AppImages are ours, so remove them directly -- no package manager
-    /// is involved and there is nothing to confirm against.
+    /// AppImages are ours, so remove them directly -- no package manager is
+    /// involved. Every caller has asked first: the file and its rollback
+    /// copy are gone for good.
     pub fn remove_appimage(&self, app: &App) {
         // Its read and its write of the registry as one, under the lock;
         // let go before anything (the reload) reads the registry again.
@@ -725,6 +723,9 @@ mod tests {
     fn update_all_waits_for_a_key() {
         assert_eq!(update_all_script("omarchy update"),
                    "omarchy update; echo; read -n1 -r -p 'Done — press any key to close'");
-        assert_eq!(yay_argv("p").join(" "), "yay -S --needed --noconfirm --sudo pkexec p");
+        assert_eq!(
+            yay_argv("p").join(" "),
+            "yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"
+        );
     }
 }

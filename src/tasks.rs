@@ -70,14 +70,21 @@ impl std::fmt::Debug for StepAction {
     }
 }
 
-/// `Finding.fix` as a step: `[(f.fix_label, f.fix)]` in the Python.
-impl From<crate::maintenance::Fix> for StepAction {
-    fn from(fix: crate::maintenance::Fix) -> Self {
-        match fix {
-            crate::maintenance::Fix::Argv(a) => StepAction::Argv(a),
-            crate::maintenance::Fix::Func(f) => StepAction::Call(f),
-        }
-    }
+/// `Finding.fix` as steps, each labelled `label`: one per command it runs.
+pub fn fix_steps(label: &str, fix: Option<crate::maintenance::Fix>) -> Vec<Step> {
+    use crate::maintenance::Fix;
+    let actions = match fix {
+        Some(Fix::Argv(a)) => vec![StepAction::Argv(a)],
+        Some(Fix::Steps(s)) => s.into_iter().map(StepAction::Argv).collect(),
+        Some(Fix::Func(f)) => vec![StepAction::Call(f)],
+        None => vec![StepAction::Argv(Vec::new())],
+    };
+    let n = actions.len();
+    actions
+        .into_iter()
+        .enumerate()
+        .map(|(i, action)| Step { label: if n > 1 { format!("{label} ({}/{n})", i + 1) } else { label.to_string() }, action })
+        .collect()
 }
 
 /// One `(label, argv)` entry of the Python `steps` list.
@@ -114,14 +121,32 @@ pub fn needs_root(argv: &[String]) -> bool {
     matches!(argv[0].as_str(), "pacman" | "paccache" | "pacman-key")
 }
 
-/// Wrap a command that needs root so polkit can ask for the password.
+/// pkexec by path. PATH puts user-writable folders (npm and mise bins) first,
+/// and pkexec looks a bare program name up in the caller's PATH, so a
+/// `pkexec` or a `pacman` planted there must never be what runs as root.
+pub const PKEXEC: &str = "/usr/bin/pkexec";
+
+/// The `yay -S` argv that installs `names` without a terminal: yay builds as
+/// this user and only its final pacman runs as root, through pkexec, both
+/// named by path.
+pub fn yay_install<S: AsRef<str>>(names: &[S]) -> Vec<String> {
+    let mut argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", PKEXEC, "--pacman", "/usr/bin/pacman"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    argv.extend(names.iter().map(|n| n.as_ref().to_string()));
+    argv
+}
+
+/// Wrap a command that needs root so polkit can ask for the password; the
+/// program is named by path (`PKEXEC`).
 ///
 /// --keep-cwd is deliberate: pkexec otherwise switches to root's home, which
 /// changes what a relative path means mid-task.
 pub fn elevate(argv: &[String]) -> Vec<String> {
     if needs_root(argv) {
-        let mut out = vec!["pkexec".to_string(), "--keep-cwd".to_string()];
-        out.extend(argv.iter().cloned());
+        let mut out = vec![PKEXEC.to_string(), "--keep-cwd".to_string(), format!("/usr/bin/{}", argv[0])];
+        out.extend(argv[1..].iter().cloned());
         out
     } else {
         argv.to_vec()
@@ -1405,7 +1430,11 @@ mod tests {
     #[test]
     fn test_journal_vacuum_runs_as_root() {
         // As the user it deletes nothing, prints "freed 0B" and exits 0.
-        assert_eq!(elevate(&v(&["journalctl", "--vacuum-size=500M"]))[0], "pkexec");
+        assert_eq!(
+            elevate(&v(&["journalctl", "--vacuum-size=500M"])),
+            v(&["/usr/bin/pkexec", "--keep-cwd", "/usr/bin/journalctl", "--vacuum-size=500M"])
+        );
+        assert_eq!(elevate(&v(&["pacman", "-Sc"]))[..3], v(&["/usr/bin/pkexec", "--keep-cwd", "/usr/bin/pacman"]));
         assert!(!needs_root(&v(&["journalctl", "--disk-usage"])));
     }
 

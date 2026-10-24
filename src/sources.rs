@@ -1016,7 +1016,7 @@ fn proxy_for(scheme: &str, host: &str) -> Result<std::option::Option<ureq::Proxy
 /// OpenSSL's default verify paths, `SSL_CERT_FILE` (else `/etc/ssl/cert.pem`)
 /// and the hashed `<subject hash>.<n>` files of each `SSL_CERT_DIR` entry
 /// (else `/etc/ssl/certs`). Read once per pair of settings.
-fn system_roots() -> ureq::tls::RootCerts {
+pub(crate) fn system_roots() -> ureq::tls::RootCerts {
     type Key = (std::option::Option<std::ffi::OsString>, std::option::Option<std::ffi::OsString>);
     static CACHE: std::sync::Mutex<std::option::Option<(Key, ureq::tls::RootCerts)>> = std::sync::Mutex::new(None);
     let key: Key = (std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"));

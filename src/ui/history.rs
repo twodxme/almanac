@@ -155,13 +155,9 @@ fn clock_text(ts: f64) -> Option<String> {
     Some(d.format("%H:%M").to_string())
 }
 
-/// `(label, f.fix)`.
-fn fix_step(label: String, f: &maintenance::Finding) -> Step {
-    let action = match f.fix.clone() {
-        Some(fix) => fix.into(),
-        None => tasks::StepAction::Argv(Vec::new()),
-    };
-    Step { label, action }
+/// `(label, f.fix)`: a step for each command the fix runs.
+fn fix_steps(label: String, f: &maintenance::Finding) -> Vec<Step> {
+    tasks::fix_steps(&label, f.fix.clone())
 }
 
 fn panic_text(err: &(dyn std::any::Any + Send)) -> String {
@@ -501,7 +497,7 @@ impl Win {
             row.add_suffix(&btn);
         } else if !f.fix_note.is_empty()
             && !matches!(&f.fix, Some(maintenance::Fix::Func(_)))
-            && !matches!(&f.fix, Some(maintenance::Fix::Argv(a)) if !a.is_empty())
+            && !f.fix.as_ref().is_some_and(|x| x.commands().iter().any(|a| !a.is_empty()))
             && f.severity != maintenance::OK
         {
             // No button, but say what the human would have to do.
@@ -540,7 +536,7 @@ impl Win {
             destructive,
             move || {
                 if let Some(w) = w.upgrade() {
-                    let steps = vec![fix_step(fixed.fix_label.clone(), &fixed)];
+                    let steps = fix_steps(fixed.fix_label.clone(), &fixed);
                     let on_done = w.findings_done(vec![fixed.clone()]);
                     let _ = tasks::run(&w.window, &fixed.title, steps, Some(on_done));
                 }
@@ -598,7 +594,7 @@ impl Win {
         let findings = self.shared.borrow().findings.get();
         for f in &findings {
             if wanted.contains(&f.id.as_str()) && f.actionable() {
-                steps.push(fix_step(format!("{}: {}", f.title, f.fix_label), f));
+                steps.extend(fix_steps(format!("{}: {}", f.title, f.fix_label), f));
                 detail.push(format!(
                     "{:<22} {:>9}   {}",
                     f.title,

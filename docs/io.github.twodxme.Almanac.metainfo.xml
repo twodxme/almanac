@@ -96,6 +96,30 @@
   </requires>
 
   <releases>
+    <release version="2.1.7" date="2026-10-24">
+      <description>
+        <p>Fixes from a full audit of the app.</p>
+        <ul>
+          <li>"Update all" no longer reports every update installed when the
+          check for updates itself failed, for example offline.</li>
+          <li>Trimming the package cache now keeps two versions of installed
+          packages as it says; before, it only cleared uninstalled ones.</li>
+          <li>Clearing old session logs no longer removes the running
+          shell's socket after a few days of uptime.</li>
+          <li>Removing an AppImage from its row menu asks first.</li>
+          <li>The header button always names what it does on the page shown.</li>
+          <li>Commands that run as root are named by full path, never found
+          through a PATH that user-writable folders come first in.</li>
+          <li>Settings, caches and history are written so that two writers
+          or a crash can no longer leave a broken file.</li>
+          <li>Switching on a startup app the system ships switched off now
+          works.</li>
+          <li>Scheduled updates hold back a kernel when the list of pending
+          updates cannot be read, instead of installing it.</li>
+          <li>Releases come with SHA256SUMS and a signed build provenance.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.6" date="2026-10-24">
       <description>
         <p>Building the package no longer fails now and then on a test that

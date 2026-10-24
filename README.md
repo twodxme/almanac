@@ -39,6 +39,16 @@ That is all: `pacman` installs everything Almanac needs along with it. Open
 To update to a newer release, run the same two commands again. To remove it:
 `sudo pacman -R almanac`.
 
+To check the download before installing it, compare it with the release's
+`SHA256SUMS`, or verify that GitHub built it from this repository (needs the
+`github-cli` package):
+
+```bash
+curl -LO https://github.com/twodxme/almanac/releases/latest/download/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify almanac-x86_64.pkg.tar.zst --repo twodxme/almanac
+```
+
 Building it yourself, other architectures, and running from a checkout are
 [below](#building-it-yourself).
 

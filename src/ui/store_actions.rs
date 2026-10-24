@@ -963,11 +963,7 @@ impl Win {
         };
 
         if !plan.packages.is_empty() {
-            let mut argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec"]
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect();
-            argv.extend(plan.packages.iter().cloned());
+            let argv = crate::tasks::yay_install(&plan.packages);
             // What record raises ends `_run_setup` before the task starts.
             if let Err(e) = history::record_checked(
                 history::ALMANAC,

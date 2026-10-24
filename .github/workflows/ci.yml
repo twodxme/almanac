@@ -10,10 +10,17 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
+
+# A newer push to a pull request replaces its run; every commit on main is
+# tested to the end (a release waits for its commit's run).
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -39,9 +46,9 @@ jobs:
             > /usr/local/bin/as-user
           chmod +x /usr/local/bin/as-user
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          fetch-depth: 0          # pkgver counts commits
+          persist-credentials: false
 
       - name: Build
         run: |
@@ -65,6 +72,37 @@ jobs:
         run: |
           appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
           desktop-file-validate docs/almanac.desktop
+
+  # The package build, beside the tests rather than after them: the -git
+  # PKGBUILD as an AUR user would build it, its check() running the tests
+  # again inside the build.
+  package:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          # The image keeps no translations or locale data (NoExtract), and
+          # the i18n tests read the system's catalogs: keep them, and put
+          # back what the image stripped from the packages already there.
+          sed -i '/^NoExtract/d' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed \
+            base-devel git rust gtk4 libadwaita openssl pacman-contrib polkit \
+            xdg-utils appstream desktop-file-utils gettext
+          pacman -Qqn | pacman -S --noconfirm -
+          echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+          locale-gen
+          useradd -m user
+          # `as-user cmd...`: run as that user, 8 MiB stack, en_US.UTF-8.
+          printf '%s\n' '#!/bin/sh' \
+            'exec sudo -u user -H env LANG=en_US.UTF-8 sh -c '"'"'ulimit -Ss 8192 && exec "$@"'"'"' sh "$@"' \
+            > /usr/local/bin/as-user
+          chmod +x /usr/local/bin/as-user
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0          # pkgver counts commits
+          persist-credentials: false
 
       - name: Package builds
         run: |

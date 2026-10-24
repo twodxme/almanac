@@ -144,7 +144,7 @@ impl Win {
         st.insert("collapsed".into(), collapsed.into());
         // Path.write_text: no directory is made, and any failure is dropped.
         let text = crate::util::dumps(&Value::Object(st), Some(2), false);
-        let _ = std::fs::write(self.state_path(), text); // losing window state is not worth an error
+        let _ = crate::util::atomic_write(self.state_path(), text); // losing window state is not worth an error
     }
 
     /// `AlmanacApp._on_close`: save the window state, then let the close

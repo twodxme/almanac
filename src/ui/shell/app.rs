@@ -40,10 +40,11 @@ pub fn application_id() -> &'static str {
     "io.github.twodxme.Almanac"
 }
 
-/// Almanac's own glyphs: `Path(__file__).resolve().parent / "icons"`, the
-/// icons/ folder of the checkout this crate lives in.
-pub fn icons_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/icons"))
+/// Almanac's own glyphs in the checkout this binary was built in, when that
+/// is still there and can be trusted (`util::build_checkout`). A package
+/// installs them into hicolor instead.
+pub fn icons_dir() -> Option<PathBuf> {
+    crate::util::build_checkout().map(|c| c.join("icons"))
 }
 
 /// `AlmanacApp(Adw.Application)`.
@@ -128,8 +129,8 @@ impl AlmanacApp {
     /// look the same under any icon theme. (The Adw.Application default
     /// handler runs first: "startup" is a run-first signal.)
     pub fn startup(&self) {
-        if let Some(display) = gdk::Display::default() {
-            gtk::IconTheme::for_display(&display).add_search_path(icons_dir());
+        if let (Some(display), Some(icons)) = (gdk::Display::default(), icons_dir()) {
+            gtk::IconTheme::for_display(&display).add_search_path(icons);
         }
     }
 

@@ -161,12 +161,11 @@ pub fn github_page(url: &str) -> String {
 /// built in, so that is the one left to its self-update; only when that
 /// checkout is gone does the program's own directory stand in.
 pub(super) fn own_checkout() -> PathBuf {
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let built_from = Some(&crate_dir).filter(|c| c.is_dir()).map(|c| resolve(c));
+    let built_from = crate::util::build_checkout();
     let exe = match std::env::current_exe() {
         Ok(e) => resolve(&e),
         // No /proc: the checkout this binary was built from.
-        Err(_) => return built_from.unwrap_or_else(|| resolve(&crate_dir)),
+        Err(_) => return built_from.unwrap_or_default(),
     };
     let dir = exe.parent().map(PathBuf::from).unwrap_or_default();
     let built_in = dir
@@ -400,7 +399,7 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&path, py_dumps(&Value::Object(cache.clone()), Some(2)))
+            crate::util::atomic_write(&path, py_dumps(&Value::Object(cache.clone()), Some(2)))
         };
         let _ = write(); // a lost cache only costs a refetch
     }

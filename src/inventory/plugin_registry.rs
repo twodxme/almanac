@@ -78,7 +78,7 @@ pub fn plugin_registry_shared(force: bool) -> std::sync::Arc<Value> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, py_dumps(&data, None))
+        crate::util::atomic_write(&path, py_dumps(&data, None))
     };
     if write().is_err() {
         return fallback();

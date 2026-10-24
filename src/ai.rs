@@ -1282,7 +1282,7 @@ pub fn mcp_check() -> Result<Vec<Entry>, String> {
     if std::fs::create_dir_all(cache()).is_ok() {
         let rows: Vec<Value> = out.iter().filter_map(|e| serde_json::to_value(e).ok()).collect();
         let blob = serde_json::json!({"at": util::now(), "rows": rows});
-        let _ = std::fs::write(mcp_cache(), util::dumps(&blob, None, false));
+        let _ = crate::util::atomic_write(mcp_cache(), util::dumps(&blob, None, false));
     }
     Ok(out)
 }

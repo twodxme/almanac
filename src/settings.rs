@@ -527,17 +527,9 @@ pub fn set(key: &str, value: impl Into<Setting>) -> Result<(), String> {
     let mut data = load()?;
     data.insert(key, &value);
     let p = path();
-    let write = || -> std::io::Result<()> {
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Written by Doc::dumps, not util::write_json: the file may hold
-        // values a serde `Value` cannot (see Doc). Same tmp-then-replace.
-        let tmp = p.with_extension("tmp");
-        std::fs::write(&tmp, data.dumps(Some(2), true))?;
-        std::fs::rename(&tmp, &p)
-    };
-    write().map_err(|e| format!("OSError: {e}"))
+    // Written by Doc::dumps, not util::write_json: the file may hold values
+    // a serde `Value` cannot (see Doc).
+    crate::util::atomic_write(&p, data.dumps(Some(2), true).as_bytes()).map_err(|e| format!("OSError: {e}"))
 }
 
 

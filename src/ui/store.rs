@@ -1529,7 +1529,7 @@ mod tests {
         }
         let mut have = BTreeSet::new();
         stems(adwaita, &mut have);
-        stems(&crate::ui::shell::icons_dir(), &mut have);
+        stems(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
         let re = regex::Regex::new(r#""([a-z0-9-]+-symbolic)""#).unwrap();
         let src = source();
         let missing: Vec<String> = re

@@ -26,8 +26,8 @@ fn core_holds(rest: &[String]) -> i32 {
             let mut raw = Vec::new();
             std::io::stdin()
                 .read_to_end(&mut raw)
-                .map(|_| almanac::autorun::core_holds(&String::from_utf8_lossy(&raw)))
                 .map_err(|e| format!("reading stdin: {e}"))
+                .and_then(|_| almanac::autorun::core_holds(&String::from_utf8_lossy(&raw)))
         }
         _ => Err(format!("unexpected arguments after --core-holds: {}", rest.join(" "))),
     };

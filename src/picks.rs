@@ -1263,15 +1263,7 @@ fn _save(data: PyDict) -> PyDict {
     let mut text = String::new();
     let data = PyJson::Dict(data);
     json_dumps(&data, &mut text);
-    let write = || -> std::io::Result<()> {
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = p.with_extension("tmp");
-        std::fs::write(&tmp, text.as_bytes())?;
-        std::fs::rename(&tmp, &p)
-    };
-    let _ = write();
+    let _ = crate::util::atomic_write(&p, text.as_bytes());
     match data {
         PyJson::Dict(d) => d,
         _ => PyDict::default(),

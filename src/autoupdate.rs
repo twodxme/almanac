@@ -1056,10 +1056,10 @@ fn py_mkdir(p: &Path, parents: bool) -> Result<(), String> {
 
 fn save_to(dir: &Path, config: &Path, cfg: &Config) -> Result<(), String> {
     py_mkdir(dir, true)?;
-    let tmp = config.with_extension("tmp");
     let text = dumps(cfg)? + "\n";
-    std::fs::write(&tmp, text).map_err(|e| py_oserror(&e, &tmp))?;
-    std::fs::rename(&tmp, config).map_err(|e| py_oserror2(&e, &tmp, Some(config)))
+    // Flushed before it replaces the old: an empty config after a crash
+    // would read as package updates switched back on.
+    crate::util::atomic_write(config, text.as_bytes()).map_err(|e| py_oserror(&e, config))
 }
 
 // --- systemctl --------------------------------------------------------------------
@@ -1300,35 +1300,13 @@ fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, St
     Ok((true, calendar.to_owned()))
 }
 
-/// Replace the unit file at `path` with `text`, as `save_to` does the
-/// config: written beside it, then renamed over it. Writing in place left a
-/// truncated unit, which systemd then refuses, if the write was cut short
-/// (a full disk, a crash). Mode 0644, what systemd units are installed with.
+/// Replace the unit file at `path` with `text` atomically, as `save_to`
+/// does the config. Writing in place left a truncated unit, which systemd
+/// then refuses, if the write was cut short (a full disk, a crash). Mode
+/// 0644, what systemd units are installed with; a unit symlinked from a
+/// dotfiles checkout stays a link.
 fn write_unit(path: &Path, text: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = {
-        let mut s = path.as_os_str().to_owned();
-        s.push(".tmp");
-        PathBuf::from(s)
-    };
-    // A leftover from a cut-short run would keep its own mode: start afresh.
-    let _ = std::fs::remove_file(&tmp);
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o644)
-        .open(&tmp)
-        .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(py_oserror(&e, &tmp));
-    }
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        py_oserror2(&e, &tmp, Some(path))
-    })
+    crate::util::atomic_write_mode(path, text.as_bytes(), Some(0o644)).map_err(|e| py_oserror(&e, path))
 }
 
 /// `Err` where the Python raises: a timer unit that is not UTF-8.
@@ -1674,19 +1652,10 @@ mod tests {
         let mut sys = |_a: &[&str], _t: u64| Ok((1, String::new()));
         assert_eq!(set_schedule_with("daily", &t, &mut sys).unwrap(), (true, "*-*-* 11:00:00".to_owned()));
         assert_ne!(ino(&t), before, "written in place");
-        assert_eq!(std::fs::metadata(&t).unwrap().permissions().mode() & 0o777, 0o644 & !umask());
+        assert_eq!(std::fs::metadata(&t).unwrap().permissions().mode() & 0o777, 0o644);
         let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, vec![std::ffi::OsString::from(UNIT)]);
         assert_eq!(current_schedule_in(&t).unwrap(), "daily");
-    }
-
-    /// The process umask, read from /proc (0022 when it cannot be).
-    fn umask() -> u32 {
-        std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Umask:").map(|v| v.trim().to_owned())))
-            .and_then(|v| u32::from_str_radix(&v, 8).ok())
-            .unwrap_or(0o022)
     }
 
     #[test]
