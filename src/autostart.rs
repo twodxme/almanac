@@ -811,7 +811,7 @@ fn with_key(text: &str, key: &str, value: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut group = String::new();
     let mut done = false;
-    for line in py_splitlines(&text) {
+    for line in py_splitlines(text) {
         let stripped = py_strip(line);
         if stripped.starts_with('[') {
             if group == "[Desktop Entry]" && !done {

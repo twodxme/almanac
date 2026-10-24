@@ -848,7 +848,7 @@ fn _read(url: &str) -> Result<Option<PyValue>, String> {
 /// Err is json.dumps's RecursionError.
 fn _write(url: &str, entry: &PyValue) -> Result<(), String> {
     let text = dumps(entry).map_err(|_| RECURSION.to_string())?;
-    let _ = crate::util::atomic_write(&_path(url), text.as_bytes());
+    let _ = crate::util::atomic_write(_path(url), text.as_bytes());
     Ok(())
 }
 
