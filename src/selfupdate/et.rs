@@ -155,9 +155,7 @@ fn decode(b: &[u8]) -> R<Text> {
     };
     if let Some((le, skip)) = utf16 {
         let body = &b[skip..];
-        let units = body.chunks_exact(2).map(|p| {
-            if le { u16::from_le_bytes([p[0], p[1]]) } else { u16::from_be_bytes([p[0], p[1]]) }
-        });
+        let units = body.as_chunks::<2>().0.iter().map(|&p| if le { u16::from_le_bytes(p) } else { u16::from_be_bytes(p) });
         let mut chars = Vec::new();
         let mut broken = body.len() % 2 == 1;
         for r in char::decode_utf16(units) {
