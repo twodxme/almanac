@@ -46,8 +46,8 @@ msgid "Open the release"
 msgstr ""
 
 #: src/ui/actions.rs:857 src/ui/actions.rs:1609 src/ui/ai.rs:894
-#: src/ui/packages.rs:1253 src/ui/plugins.rs:1587 src/ui/shell/columns.rs:580
-#: src/ui/update_all.rs:331
+#: src/ui/packages/details.rs:285 src/ui/plugins.rs:1587
+#: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
@@ -127,7 +127,8 @@ msgstr ""
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1492 src/ui/packages.rs:950 src/ui/shell/build.rs:79
+#: src/ui/actions.rs:1492 src/ui/packages/loading.rs:318
+#: src/ui/shell/build.rs:79
 msgid "Update all"
 msgstr ""
 
@@ -308,127 +309,127 @@ msgstr ""
 msgid "Reclaim"
 msgstr ""
 
-#: src/ui/packages.rs:685
-msgid "Scanning…"
-msgstr ""
-
-#: src/ui/packages.rs:839
-msgid "Software no longer maintained"
-msgstr ""
-
-#: src/ui/packages.rs:851
-msgid "Duplicate software installed"
-msgstr ""
-
-#: src/ui/packages.rs:1059
-msgid "Version"
-msgstr ""
-
-#: src/ui/packages.rs:1060 src/ui/packages.rs:1181 src/ui/store.rs:337
-#: src/ui/store.rs:750 src/ui/store.rs:863
-msgid "Installed"
-msgstr ""
-
-#: src/ui/packages.rs:1062
-msgid "Available"
-msgstr ""
-
-#: src/ui/packages.rs:1065
-msgid "Released"
-msgstr ""
-
-#: src/ui/packages.rs:1068
-msgid "Latest upstream commit"
-msgstr ""
-
-#: src/ui/packages.rs:1071
-msgid "State"
-msgstr ""
-
-#: src/ui/packages.rs:1075
-msgid "Switched"
-msgstr ""
-
-#: src/ui/packages.rs:1076 src/ui/store.rs:863
-msgid "Off"
-msgstr ""
-
-#: src/ui/packages.rs:1076 src/ui/store_actions.rs:1506
-msgid "On"
-msgstr ""
-
-#: src/ui/packages.rs:1085
-msgid "Known vulnerabilities"
-msgstr ""
-
-#: src/ui/packages.rs:1086
-msgid "From the Arch Security Tracker, for the installed version."
-msgstr ""
-
-#: src/ui/packages.rs:1140
-msgid "Open the advisory"
-msgstr ""
-
-#: src/ui/packages.rs:1159
-msgid "Origin"
-msgstr ""
-
-#: src/ui/packages.rs:1160
-msgid "Source"
-msgstr ""
-
-#: src/ui/packages.rs:1184
-msgid "Built"
-msgstr ""
-
-#: src/ui/packages.rs:1187
-msgid "Files"
-msgstr ""
-
-#: src/ui/packages.rs:1196
-msgid "Project page"
-msgstr ""
-
-#: src/ui/packages.rs:1216
-msgid "Dependencies"
-msgstr ""
-
-#: src/ui/packages.rs:1747 src/ui/store.rs:1153
-msgid "Loading the plugin marketplace…"
-msgstr ""
-
-#: src/ui/packages.rs:2076 src/ui/shell/build.rs:313
+#: src/ui/packages/chrome.rs:25 src/ui/shell/build.rs:313
 msgid "Show categories"
 msgstr ""
 
-#: src/ui/packages.rs:2078
+#: src/ui/packages/chrome.rs:27
 msgid "Hide categories"
 msgstr ""
 
-#: src/ui/packages.rs:2111
+#: src/ui/packages/chrome.rs:60
 msgid "Filter and sort the marketplace"
 msgstr ""
 
-#: src/ui/packages.rs:2111 src/ui/shell/build.rs:378 src/ui/store.rs:283
+#: src/ui/packages/chrome.rs:60 src/ui/shell/build.rs:378 src/ui/store.rs:283
 msgid "Sort by"
 msgstr ""
 
-#: src/ui/packages.rs:2213
+#: src/ui/packages/chrome.rs:162
 msgid "Themes"
 msgstr ""
 
-#: src/ui/packages.rs:2216
+#: src/ui/packages/chrome.rs:165
 msgid "App Store"
 msgstr ""
 
-#: src/ui/packages.rs:2300
+#: src/ui/packages/chrome.rs:249
 msgid "Plugins current"
 msgstr ""
 
-#: src/ui/packages.rs:2304
+#: src/ui/packages/chrome.rs:253
 msgid ""
 "Update every plugin with a clean update waiting, within the scope set in "
 "Preferences"
+msgstr ""
+
+#: src/ui/packages/details.rs:91
+msgid "Version"
+msgstr ""
+
+#: src/ui/packages/details.rs:92 src/ui/packages/details.rs:213
+#: src/ui/store.rs:337 src/ui/store.rs:750 src/ui/store.rs:863
+msgid "Installed"
+msgstr ""
+
+#: src/ui/packages/details.rs:94
+msgid "Available"
+msgstr ""
+
+#: src/ui/packages/details.rs:97
+msgid "Released"
+msgstr ""
+
+#: src/ui/packages/details.rs:100
+msgid "Latest upstream commit"
+msgstr ""
+
+#: src/ui/packages/details.rs:103
+msgid "State"
+msgstr ""
+
+#: src/ui/packages/details.rs:107
+msgid "Switched"
+msgstr ""
+
+#: src/ui/packages/details.rs:108 src/ui/store.rs:863
+msgid "Off"
+msgstr ""
+
+#: src/ui/packages/details.rs:108 src/ui/store_actions.rs:1506
+msgid "On"
+msgstr ""
+
+#: src/ui/packages/details.rs:117
+msgid "Known vulnerabilities"
+msgstr ""
+
+#: src/ui/packages/details.rs:118
+msgid "From the Arch Security Tracker, for the installed version."
+msgstr ""
+
+#: src/ui/packages/details.rs:172
+msgid "Open the advisory"
+msgstr ""
+
+#: src/ui/packages/details.rs:191
+msgid "Origin"
+msgstr ""
+
+#: src/ui/packages/details.rs:192
+msgid "Source"
+msgstr ""
+
+#: src/ui/packages/details.rs:216
+msgid "Built"
+msgstr ""
+
+#: src/ui/packages/details.rs:219
+msgid "Files"
+msgstr ""
+
+#: src/ui/packages/details.rs:228
+msgid "Project page"
+msgstr ""
+
+#: src/ui/packages/details.rs:248
+msgid "Dependencies"
+msgstr ""
+
+#: src/ui/packages/filtering.rs:109 src/ui/store.rs:1153
+msgid "Loading the plugin marketplace…"
+msgstr ""
+
+#: src/ui/packages/loading.rs:53
+msgid "Scanning…"
+msgstr ""
+
+#: src/ui/packages/loading.rs:207
+msgid "Software no longer maintained"
+msgstr ""
+
+#: src/ui/packages/loading.rs:219
+msgid "Duplicate software installed"
 msgstr ""
 
 #: src/ui/plugins.rs:243

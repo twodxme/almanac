@@ -97,7 +97,7 @@ on any thread.
 | file | what |
 |---|---|
 | `shell.rs` + `shell/` | the shared frame, re-exported as `shell::…`: `helpers` (labels, formatting, the stylesheet, `spawn_bg`), `items` (list items), `tables` (sidebar groups, pages, sorts), `window` (`Win` / `Inner` / `Shared`, the texture cache), `build` (`Win::new`: CSS and theme providers, sidebar, header, pages), `columns`, `state` (shortcuts, persisted state), `watch` (change detection), `app` (the application and its command line) |
-| `packages.rs` | data loading and filtering: Updates, Applications, Everything, Orphans tables, the details sheet |
+| `packages.rs` + `packages/` | data loading and filtering: Updates, Applications, Everything, Orphans tables, the details sheet — `extra` (reading the `extra` dict as Python did), `decisions` (pure matching, grouping, sorting), `loading`, `details`, `counts` (badges, stats, sidebar counts), `filtering` (sort menu, filter, search, sidebar selection), `chrome` (page chrome, primary action, theme, status line) |
 | `store.rs` | App Store and Themes pages: grid, cards, marketplace data |
 | `store_actions.rs` | install/remove from the store, setup after install, themes, AppImages |
 | `plugins.rs` | Plugins page; on/off, shortcuts, bulk updates, the shell |
