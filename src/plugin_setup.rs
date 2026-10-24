@@ -11,7 +11,10 @@
 //!   Almanac itself, snapshotted and verified like any other install.
 //! * **commands**  build steps, setup scripts and `systemctl --user` lines from
 //!   the README's code blocks, run in a terminal in the plugin's directory --
-//!   after the user has seen every line, and the scripts' own contents.
+//!   after the user has seen every line, and the contents of every file of
+//!   the plugin's that a line runs (`./install`, `bash x.sh`, `python3
+//!   setup.py`). A line whose file cannot be shown is not offered, and a file
+//!   that changes after it was shown stops the run.
 //! * **by hand**   what cannot be done for the user: API keys and logins,
 //!   config and keybinding edits. Listed, with the README heading to read.
 //!
@@ -188,6 +191,11 @@ pub struct SetupPlan {
     /// see `esc` for how such a name is shown.
     #[serde(with = "ordered_map")]
     pub scripts: Vec<(OsString, String)>,
+    /// path -> SHA-256 of the bytes shown in `scripts`, checked again just
+    /// before anything runs (`unchanged`, and the guard `terminal_script`
+    /// puts in front of every command).
+    #[serde(with = "ordered_map")]
+    pub digests: Vec<(OsString, String)>,
     /// (what, README heading)
     pub by_hand: Vec<(String, String)>,
 }
@@ -544,10 +552,112 @@ fn _is_setup(path: &[String]) -> bool {
 }
 
 static AND_AND: LazyLock<Regex> = LazyLock::new(|| Regex::new(&py(r"\s*&&\s*")).unwrap());
-static SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("{}{}", py(r"^(?:sudo\s+)?(?:bash\s+|sh\s+)?(\.?/?[\w./-]+\.sh)"), end_b()))
-        .unwrap()
-});
+
+/// The plugin's own files a setup command would execute, as written:
+/// a program given by path (`./install`, `sudo ./x.sh`), the script a shell
+/// is handed (`bash x.sh`, `sh -e x.sh`), or the one Python is
+/// (`python3 setup.py`, or `python3 -m pkg.tool` when `pkg/tool.py` is the
+/// plugin's). Err where that cannot be told for certain -- a line that does
+/// not split, `-c` code, an option not known to take no argument, a script
+/// read from stdin -- and then the command is not offered at all.
+fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
+    let words = shlex_split(part).map_err(|_| ())?;
+    let mut w: &[String] = &words;
+    if w.first().is_some_and(|x| x == "sudo") {
+        w = &w[1..];
+    }
+    let Some((prog, args)) = w.split_first() else { return Ok(Vec::new()) };
+    if prog.contains('/') {
+        return Ok(vec![prog.clone()]);
+    }
+    let shell = matches!(prog.as_str(), "bash" | "sh" | "zsh" | "dash");
+    let python = prog == "python" || prog == "python3" || prog.starts_with("python3.");
+    if !shell && !python {
+        return Ok(Vec::new());
+    }
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        if a == "--" {
+            i += 1;
+            break;
+        }
+        if !a.starts_with('-') || a == "-" {
+            break;
+        }
+        if python && a == "-m" {
+            let module = args.get(i + 1).ok_or(())?.replace('.', "/");
+            // Python looks in the working directory first: a module of the
+            // plugin's own is a file it runs. One it does not ship is not.
+            for cand in [format!("{module}.py"), format!("{module}/__main__.py")] {
+                if plugin_dir.join(&cand).exists() {
+                    return Ok(vec![cand]);
+                }
+            }
+            return Ok(Vec::new());
+        }
+        let known = if shell {
+            matches!(a.as_str(), "-e" | "-x" | "-u" | "-v" | "-l" | "--login" | "--norc" | "--noprofile")
+        } else {
+            matches!(a.as_str(), "-u" | "-B" | "-E" | "-I" | "-s" | "-S" | "-O" | "-OO" | "-q" | "-b" | "-bb")
+        };
+        if !known {
+            return Err(());
+        }
+        i += 1;
+    }
+    match args.get(i) {
+        Some(f) if f != "-" => Ok(vec![f.clone()]),
+        _ => Err(()),
+    }
+}
+
+/// One file a command runs, as the confirmation will show it: its path in
+/// the plugin, its text and the SHA-256 of its bytes. None for a file that
+/// is not the plugin's own (missing, a folder, outside it once symlinks are
+/// followed), cannot be read, or is not text (a NUL byte: a binary cannot be
+/// shown, so it is not run either).
+fn shown_file(plugin_dir: &Path, rel: &str) -> Option<(OsString, String, String)> {
+    use sha2::{Digest, Sha256};
+    let target = resolve(&plugin_dir.join(rel));
+    let base = resolve(plugin_dir);
+    if !(target.is_file() && target != base && target.starts_with(&base)) {
+        return None;
+    }
+    let bytes = std::fs::read(&target).ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    let key = target.strip_prefix(&base).unwrap_or(&target).as_os_str().to_os_string();
+    // As `read_text` reads it: all of it, since it runs in full (see
+    // `describe` for the one limit on showing it).
+    let body = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n");
+    Some((key, body, hex::encode(Sha256::digest(&bytes))))
+}
+
+/// The SHA-256 of a file of the plugin's, as `shown_file` takes it; None
+/// where it no longer resolves inside the plugin or cannot be read.
+fn digest_now(plugin_dir: &Path, name: &std::ffi::OsStr) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let target = resolve(&plugin_dir.join(name));
+    let base = resolve(plugin_dir);
+    if !(target.is_file() && target != base && target.starts_with(&base)) {
+        return None;
+    }
+    Some(hex::encode(Sha256::digest(std::fs::read(&target).ok()?)))
+}
+
+/// Err naming the first file the commands run that is no longer what the
+/// confirmation showed: edited, replaced, moved or gone since the plan was
+/// made. Checked again in the terminal before every command.
+pub fn unchanged(p: &SetupPlan) -> Result<(), String> {
+    for (name, _) in &p.scripts {
+        let want = p.digests.iter().find(|(k, _)| k == name).map(|(_, d)| d.as_str());
+        if want.is_none() || digest_now(&p.plugin_dir, name).as_deref() != want {
+            return Err(esc(name));
+        }
+    }
+    Ok(())
+}
 
 pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
     let mut out = SetupPlan { plugin_dir: PathBuf::from(py_path_str(plugin_dir)), ..Default::default() };
@@ -590,24 +700,26 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 if NEVER.is_match(part) || CHORE.is_match(part) || !RUNNABLE.is_match(part) {
                     continue;
                 }
+                // Every file of the plugin's the command runs is shown in
+                // full, or the command is not offered: only files the plugin
+                // itself ships, never outside it, and never one unseen.
+                let Ok(files) = executed_files(part, plugin_dir) else { continue };
+                let Some(shown) = files.iter().map(|f| shown_file(plugin_dir, f)).collect::<Option<Vec<_>>>() else {
+                    continue;
+                };
                 if !out.commands.iter().any(|c| c == part) {
                     out.commands.push(part.to_string());
                 }
-                if let Some(script) = SCRIPT.captures(part) {
-                    let target = resolve(&plugin_dir.join(&script[1]));
-                    let base = resolve(plugin_dir);
-                    // Only scripts the plugin itself ships, never outside it.
-                    if target.is_file() && target != base && target.starts_with(&base) {
-                        let rel = target.strip_prefix(&base).unwrap_or(&target);
-                        // All of it: it runs in full, so it is shown in full
-                        // (see `describe` for the one limit).
-                        let body: String = read_text(&target)?;
-                        let key = rel.as_os_str().to_os_string();
-                        if let Some(slot) = out.scripts.iter_mut().find(|(k, _)| *k == key) {
-                            slot.1 = body;
-                        } else {
-                            out.scripts.push((key, body));
-                        }
+                for (key, body, digest) in shown {
+                    if let Some(slot) = out.scripts.iter_mut().find(|(k, _)| *k == key) {
+                        slot.1 = body;
+                    } else {
+                        out.scripts.push((key.clone(), body));
+                    }
+                    if let Some(slot) = out.digests.iter_mut().find(|(k, _)| *k == key) {
+                        slot.1 = digest;
+                    } else {
+                        out.digests.push((key, digest));
                     }
                 }
             }
@@ -630,10 +742,21 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
     Ok(out)
 }
 
-/// The commands, as one shell script that stops at the first failure.
+/// The commands, as one shell script that stops at the first failure. Each
+/// command is preceded by a check that every file shown is still the one
+/// shown: a step before it (a Makefile, a build script) could rewrite one.
 pub fn terminal_script(p: &SetupPlan) -> String {
     let mut lines = vec![format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))), "set -e".to_string()];
     for cmd in &p.commands {
+        for (name, digest) in &p.digests {
+            let shown = esc(name);
+            lines.push(format!(
+                "test \"$(sha256sum < {})\" = {} || {{ echo; echo {}; exit 1; }}",
+                shlex_quote(&shown),
+                shlex_quote(&format!("{digest}  -")),
+                shlex_quote(&format!("{shown} changed after it was shown -- setup stopped.")),
+            ));
+        }
         lines.push(format!("echo; echo '$ '{}", shlex_quote(cmd)));
         lines.push(cmd.clone());
     }
@@ -850,6 +973,96 @@ make build
         for bad in ["curl", "uninstall", "cargo test", "make build", "omarchy plugin add"] {
             assert!(!cmds.contains(bad), "{bad} offered in {cmds}");
         }
+    }
+
+    /// A step runs only files the confirmation shows, whatever their name.
+    #[test]
+    fn test_every_file_a_step_runs_is_shown_or_the_step_is_not_offered() {
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(root.join("tools")).unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            concat!(
+                "# Install\n```\n",
+                "./install\n",
+                "python3 setup.py install\n",
+                "bash tools/prep.sh\n",
+                "sh tools/go.sh\n",
+                "python3 -m tools.helper\n",
+                "python3 -m venv .venv\n",
+                "./missing\n",
+                "./bin/tool\n",
+                "bash ../outside.sh\n",
+                "bash -c 'echo hidden'\n",
+                "python3 -W ignore sneaky.py\n",
+                "make install\n",
+                "```\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("install"), "echo installing\n").unwrap();
+        std::fs::write(root.join("setup.py"), "print('setup')\n").unwrap();
+        std::fs::write(root.join("tools/prep.sh"), "echo prep\n").unwrap();
+        std::fs::write(root.join("tools/go.sh"), "echo go\n").unwrap();
+        std::fs::write(root.join("tools/helper.py"), "print('helper')\n").unwrap();
+        std::fs::write(root.join("sneaky.py"), "print('sneaky')\n").unwrap();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/tool"), b"\x7fELF\x00\x00binary").unwrap();
+        std::fs::write(d.join("outside.sh"), "echo outside\n").unwrap();
+        let p = plan(&root).unwrap();
+        let shown = describe(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(
+            p.commands,
+            [
+                "./install",
+                "python3 setup.py install",
+                "bash tools/prep.sh",
+                "sh tools/go.sh",
+                "python3 -m tools.helper",
+                "python3 -m venv .venv",
+                "make install",
+            ]
+        );
+        let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
+        assert_eq!(names, ["install", "setup.py", "tools/prep.sh", "tools/go.sh", "tools/helper.py"]);
+        assert_eq!(p.digests.iter().map(|(k, _)| esc(k)).collect::<Vec<_>>(), names);
+        for body in ["echo installing", "print('setup')", "echo prep", "echo go", "print('helper')"] {
+            assert!(shown.contains(&format!("  {body}")), "{body} not shown");
+        }
+        for never in ["missing", "bin/tool", "outside", "hidden", "sneaky"] {
+            assert!(!p.commands.iter().any(|c| c.contains(never)), "{never} offered");
+        }
+    }
+
+    /// The plan is checked against the files again when it runs: one edited
+    /// after the confirmation was shown is refused, by Almanac and by the
+    /// terminal script before every command.
+    #[test]
+    fn test_a_file_changed_after_it_was_shown_is_not_run() {
+        use sha2::{Digest, Sha256};
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "# Install\n```\nmake\n./install\n```\n").unwrap();
+        std::fs::write(root.join("install"), "echo fine\n").unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(unchanged(&p), Ok(()));
+        let script = terminal_script(&p);
+        let want = hex::encode(Sha256::digest(b"echo fine\n"));
+        let guard = format!("test \"$(sha256sum < install)\" = '{want}  -' || {{");
+        // Before each command, the make that could rewrite it included.
+        assert_eq!(script.matches(&guard).count(), 2, "{script}");
+        assert!(script.find(&guard) < script.find("make\n"));
+        std::fs::write(root.join("install"), "echo evil\n").unwrap();
+        assert_eq!(unchanged(&p), Err("install".to_string()));
+        std::fs::remove_file(root.join("install")).unwrap();
+        assert_eq!(unchanged(&p), Err("install".to_string()));
+        // A plan whose files carry no digest is not trusted either.
+        let bare = SetupPlan { digests: Vec::new(), ..p.clone() };
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(unchanged(&bare).is_err());
     }
 
     #[test]
