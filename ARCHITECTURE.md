@@ -12,6 +12,7 @@ comment explains *why*, keep it when you change the code beside it.
 |---|---|
 | `src/<module>.rs` | the logic: `inventory`, `store`, `maintenance`, `agents`, `plugins`, `theming`, … one module per concern |
 | `src/inventory.rs` + `src/inventory/` | the inventory: `collect`, criticality and duplicates at the top; one file per source (`pacman`, `appimages`, `flatpak`, `local`), the row type (`app`), staleness (`health`), search (`discover`, `plugin_registry`) and Python's str/json (`py`). Everything public is re-exported, so callers say `inventory::x` |
+| `src/selfupdate.rs` + `src/selfupdate/` | Almanac updating Almanac: the inventory row at the top; `checkout` (install kind, git state), `check` (what an update would be), `restart`, `notes` (What's New, through `et`, a port of ElementTree on expat), and what Python gave it (`process`, `pystr`, `tables`). Re-exported the same way |
 | `src/ui/*.rs` | the window, one file per section (see UI below) |
 | `src/util.rs` | subprocess with timeout, rounding and title-casing that match what users saw in 1.x, ISO dates, atomic JSON — **use it, do not re-implement** |
 | `src/main.rs` | the `almanac` binary |
