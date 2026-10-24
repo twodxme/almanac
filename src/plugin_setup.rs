@@ -11,12 +11,22 @@
 //!   Almanac itself, snapshotted and verified like any other install.
 //! * **commands**  build steps, setup scripts and `systemctl --user` lines from
 //!   the README's code blocks, run in a terminal in the plugin's directory --
-//!   after the user has seen every line, and the contents of every file of
-//!   the plugin's that a line runs (`./install`, `bash x.sh`, `python3
-//!   setup.py`), and of every build file a build step reads and runs code
-//!   from (`make`'s Makefile, `npm install`'s package.json, `pip install .`'s
-//!   setup.py, `cargo build`'s build.rs). A line whose file cannot be shown
-//!   is not offered, and a file that changes after it was shown stops the run.
+//!   after the user has seen every line, the full contents of the file of
+//!   the plugin's that a line names to run (`./install`, `bash x.sh`,
+//!   `python3 setup.py`, `bun x.ts`), and those of the build files a build
+//!   tool opens in the plugin (`make`'s Makefile, `npm install`'s
+//!   package.json, `pip install .`'s pyproject.toml, `cargo build`'s
+//!   build.rs, `go run`'s go.mod). A line whose file cannot be shown is not
+//!   offered. Before every command the shown files are checked unchanged,
+//!   and every build file the tool would have opened but that was absent is
+//!   checked still absent; either check failing stops the run.
+//!
+//!   That is all it guarantees. What a shown file goes on to run -- another
+//!   script, a module it imports, a Makefile recipe's `./x.sh`, a
+//!   postinstall's `node gen.js`, the sources a compiler builds and a build
+//!   script or `go generate` runs -- is not followed. Every build step (and
+//!   Python or JavaScript program) runs such code, and the confirmation says
+//!   so in as many words.
 //! * **by hand**   what cannot be done for the user: API keys and logins,
 //!   config and keybinding edits. Listed, with the README heading to read.
 //!
@@ -31,6 +41,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::i18n::tr;
 
 // Python's `re` and the regex crate disagree on `\w`, `\s`, `\b` and
 // re.I, so the patterns below spell out Python's meaning: `\w` is
@@ -82,17 +94,40 @@ static PKG: LazyLock<Regex> = LazyLock::new(|| {
 });
 static PKG_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9@][a-z0-9@._+-]*$").unwrap());
-// Commands worth running for the user, by the tool they start with.
+// Commands worth running for the user, by the tool they start with: the
+// pattern, and a line it takes (which `step_kind` must classify -- a test
+// holds every entry to that, so a tool added here cannot slip past the
+// files shown for it).
+const TOOLS: &[(&str, &str)] = &[
+    ("make", "make install"),
+    ("cmake", "cmake -B build"),
+    ("meson", "meson setup build"),
+    ("ninja", "ninja -C build"),
+    ("cargo", "cargo build --release"),
+    ("go", "go run ."),
+    ("npm", "npm install"),
+    ("pnpm", "pnpm install"),
+    ("yarn", "yarn"),
+    ("bun", "bun x.ts"),
+    ("uv", "uv sync"),
+    ("pip", "pip install ."),
+    ("just", "just setup"),
+    ("pipx", "pipx install ."),
+    ("python3?", "python3 x.py"),
+    ("gcc", "gcc -o x x.c"),
+    ("cc", "cc -o x x.c"),
+    (r"systemctl\s+--user", "systemctl --user enable --now x.service"),
+    (r"bash\s+\S+\.sh", "bash x.sh"),
+    (r"sh\s+\S+\.sh", "sh x.sh"),
+];
 static RUNNABLE: LazyLock<Regex> = LazyLock::new(|| {
     // `(?:...)\b`: every tool ends in a word character; `\./[\w./-]+` may
     // end in either kind, so each case gets its own boundary.
+    let tools: Vec<&str> = TOOLS.iter().map(|(pat, _)| *pat).collect();
     Regex::new(&format!(
         "{}(?:{}{}|{}(?:{PY_W}{}|[./-]{PY_W}))",
         py(r"^(?:sudo\s+)?"),
-        py(concat!(
-            r"(?:make|cmake|meson|ninja|cargo|go|npm|pnpm|yarn|bun|uv|pip|just|",
-            r"pipx|python3?|gcc|cc|systemctl\s+--user|bash\s+\S+\.sh|sh\s+\S+\.sh)"
-        )),
+        py(&format!("(?:{})", tools.join("|"))),
         end_b(),
         py(r"\./[\w./-]*"),
         end_b(),
@@ -198,6 +233,17 @@ pub struct SetupPlan {
     /// puts in front of every command).
     #[serde(with = "ordered_map")]
     pub digests: Vec<(OsString, String)>,
+    /// Build files a step's tool would open but that were not there when the
+    /// plan was made (paths relative to the plugin): a step before it (a
+    /// postinstall, a build script) could write one -- a GNUmakefile, which
+    /// make prefers to the Makefile shown, a `.cargo/config.toml`, an
+    /// `.npmrc` -- and so they are checked still absent wherever `digests`
+    /// are, and one that appears stops the run as a changed file does.
+    pub absent: Vec<String>,
+    /// The same for names a tool matches in any ASCII case (`just` takes
+    /// `JustFile` as readily as `justfile`): no entry of the folder may be
+    /// spelled like one, whatever its case.
+    pub absent_any_case: Vec<String>,
     /// (what, README heading)
     pub by_hand: Vec<(String, String)>,
 }
@@ -555,25 +601,162 @@ fn _is_setup(path: &[String]) -> bool {
 
 static AND_AND: LazyLock<Regex> = LazyLock::new(|| Regex::new(&py(r"\s*&&\s*")).unwrap());
 
-/// The plugin's own files a setup command would execute, as written:
-/// a program given by path (`./install`, `sudo ./x.sh`), the script a shell
-/// is handed (`bash x.sh`, `sh -e x.sh`), or the one Python is
-/// (`python3 setup.py`, or `python3 -m pkg.tool` when `pkg/tool.py` is the
-/// plugin's). Err where that cannot be told for certain -- a line that does
-/// not split, `-c` code, an option not known to take no argument, a script
-/// read from stdin -- and then the command is not offered at all.
+/// What a setup line is, by the program it starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Runs one file of the plugin's, given by path or handed to a shell
+    /// (`./install`, `bash x.sh`): that file is shown in full.
+    Script,
+    /// A build tool, compiler or interpreter (`make`, `cargo run`, `go run`,
+    /// `npm install`, `python3 x.py`, `bun x.ts`): the file it is handed and
+    /// the build files it opens are shown, but it goes on to run code of the
+    /// plugin's that is not -- recipes, install scripts, build scripts, the
+    /// sources it compiles, the modules it imports.
+    Build,
+    /// `systemctl --user`: starts what is already installed.
+    Service,
+}
+
+/// The program a line runs and its arguments, `sudo` taken off.
+fn program(words: &[String]) -> Option<(&str, &[String])> {
+    let w = match words.split_first() {
+        Some((s, rest)) if s == "sudo" => rest,
+        _ => words,
+    };
+    w.split_first().map(|(p, a)| (p.as_str(), a))
+}
+
+/// Every program `TOOLS` offers, and a path, has its own arm: one with none
+/// is not offered at all, rather than run with nothing shown for it.
+fn step_kind(part: &str) -> Option<Kind> {
+    let words = shlex_split(part).ok()?;
+    let (prog, _) = program(&words)?;
+    match prog {
+        p if p.contains('/') => Some(Kind::Script),
+        "bash" | "sh" | "zsh" | "dash" => Some(Kind::Script),
+        "make" | "cmake" | "meson" | "ninja" | "cargo" | "go" | "npm" | "pnpm" | "yarn" | "bun" | "uv" | "pip"
+        | "pipx" | "just" | "gcc" | "cc" => Some(Kind::Build),
+        p if is_python(p) => Some(Kind::Build),
+        "systemctl" => Some(Kind::Service),
+        _ => None,
+    }
+}
+
+/// Python's options that take no value, which may come before `-m` or the
+/// script.
+fn py_flag(a: &str) -> bool {
+    matches!(a, "-u" | "-B" | "-E" | "-I" | "-s" | "-S" | "-O" | "-OO" | "-q" | "-b" | "-bb")
+}
+
+/// `python3 [flags] -m module args...`: the module and its arguments.
+fn py_module(args: &[String]) -> Option<(&str, &[String])> {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        if a == "-m" {
+            return Some((args.get(i + 1)?.as_str(), &args[(i + 2).min(args.len())..]));
+        }
+        if !py_flag(a) {
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// What `python3 -m a.b` would load from the working directory, which
+/// Python searches first: the packages on the way (their `__init__.py`
+/// runs on import) and the module itself, as a file or a package. Even
+/// `-m venv` or `-m pip` is the plugin's own if it ships `venv.py`.
+fn python_module_files(module: &str) -> Vec<String> {
+    let parts: Vec<&str> = module.split('.').collect();
+    let mut out = Vec::new();
+    for i in 1..parts.len() {
+        out.push(format!("{}/__init__.py", parts[..i].join("/")));
+    }
+    let m = parts.join("/");
+    out.extend([format!("{m}.py"), format!("{m}/__init__.py"), format!("{m}/__main__.py")]);
+    out
+}
+
+/// The file `bun x.ts` or `bun run x.ts` runs, when the word names a file
+/// rather than one of bun's own commands or a package.json script.
+fn bun_file(args: &[String], plugin_dir: &Path) -> Option<String> {
+    const OWN: &[&str] = &[
+        "install", "i", "add", "a", "remove", "rm", "update", "upgrade", "x", "build", "test", "init",
+        "create", "link", "unlink", "pm", "outdated", "publish", "patch", "exec", "repl", "info", "audit", "why",
+    ];
+    let mut words = args.iter().filter(|a| !a.starts_with('-'));
+    let mut w = words.next()?;
+    if w == "run" {
+        w = words.next()?;
+    } else if OWN.contains(&w.as_str()) {
+        return None;
+    }
+    const EXT: &[&str] = &[".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".mts", ".cts"];
+    (w.contains('/') || EXT.iter().any(|e| w.ends_with(e)) || plugin_dir.join(w).is_file()).then(|| w.clone())
+}
+
+/// The names `just` looks for, in any ASCII case.
+const JUSTFILES: [&str; 2] = ["justfile", ".justfile"];
+
+/// The build files a configure step writes for a later step to read:
+/// `meson setup DIR`'s build.ninja, `cmake -B DIR`'s Makefile, `./configure`'s
+/// Makefile. A later `ninja -C DIR` or `make` reads one that was not there
+/// when the plan was made, and that is no file appearing unseen: it is the
+/// output of a step shown, from build files shown. (Normalised paths.)
+fn generated_by(part: &str, files: &[String]) -> Vec<String> {
+    let dir = (|| {
+        let words = shlex_split(part).ok()?;
+        let (prog, args) = program(&words)?;
+        match prog {
+            "meson" => {
+                let words: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+                match words.as_slice() {
+                    [s, d, ..] if *s == "setup" => Some(d.to_string()),
+                    _ => None,
+                }
+            }
+            "cmake" => {
+                if args.iter().any(|a| a == "--build" || a == "--install" || a == "-E") {
+                    return None;
+                }
+                let mut b = None;
+                scan_args(args, "SBHGTACDUWP", "", &[], |opt, v| {
+                    if opt == "B" {
+                        b = Some(v.to_string());
+                    }
+                })
+                .ok()?;
+                // Without -B, cmake configures into the folder it runs in.
+                Some(b.unwrap_or_else(|| ".".into()))
+            }
+            _ if files.iter().any(|f| Path::new(f).file_name().is_some_and(|n| n == "configure")) => Some(".".into()),
+            _ => None,
+        }
+    })();
+    dir.map(|d| ["Makefile", "build.ninja"].map(|n| py_path_str(Path::new(&under(&d, n)))).to_vec())
+        .unwrap_or_default()
+}
+
+/// The plugin's own file a setup command names to execute, which must be
+/// there and shown: a program given by path (`./install`, `sudo ./x.sh`),
+/// the script a shell is handed (`bash x.sh`, `sh -e x.sh`), the one Python
+/// is (`python3 setup.py`; `python3 -m pkg.tool` loads what
+/// `build_files` lists) or bun (`bun x.ts`). Err where that cannot be told
+/// for certain -- a line that does not split, `-c` code, an option not known
+/// to take no argument, a script read from stdin -- and then the command is
+/// not offered at all.
 fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let words = shlex_split(part).map_err(|_| ())?;
-    let mut w: &[String] = &words;
-    if w.first().is_some_and(|x| x == "sudo") {
-        w = &w[1..];
-    }
-    let Some((prog, args)) = w.split_first() else { return Ok(Vec::new()) };
+    let Some((prog, args)) = program(&words) else { return Ok(Vec::new()) };
     if prog.contains('/') {
-        return Ok(vec![prog.clone()]);
+        return Ok(vec![prog.to_string()]);
     }
-    let shell = matches!(prog.as_str(), "bash" | "sh" | "zsh" | "dash");
-    let python = prog == "python" || prog == "python3" || prog.starts_with("python3.");
+    if prog == "bun" {
+        return Ok(bun_file(args, plugin_dir).into_iter().collect());
+    }
+    let shell = matches!(prog, "bash" | "sh" | "zsh" | "dash");
+    let python = is_python(prog);
     if !shell && !python {
         return Ok(Vec::new());
     }
@@ -587,20 +770,16 @@ fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             break;
         }
         if python && a == "-m" {
-            let module = args.get(i + 1).ok_or(())?.replace('.', "/");
-            // Python looks in the working directory first: a module of the
-            // plugin's own is a file it runs. One it does not ship is not.
-            for cand in [format!("{module}.py"), format!("{module}/__main__.py")] {
-                if plugin_dir.join(&cand).exists() {
-                    return Ok(vec![cand]);
-                }
-            }
+            // Python looks in the working directory first: the module files
+            // the plugin ships (or could by then) are `build_files`' to list,
+            // shown when there and checked still absent when not.
+            args.get(i + 1).ok_or(())?;
             return Ok(Vec::new());
         }
         let known = if shell {
             matches!(a.as_str(), "-e" | "-x" | "-u" | "-v" | "-l" | "--login" | "--norc" | "--noprofile")
         } else {
-            matches!(a.as_str(), "-u" | "-B" | "-E" | "-I" | "-s" | "-S" | "-O" | "-OO" | "-q" | "-b" | "-bb")
+            py_flag(a)
         };
         if !known {
             return Err(());
@@ -729,26 +908,29 @@ fn pip_files(args: &[String], plugin_dir: &Path) -> Result<Vec<String>, ()> {
 /// Makefile, `npm install` the package.json's install scripts, `pip install
 /// .` setup.py or the backend pyproject.toml names, `cargo build` build.rs,
 /// and so on. Only the files the tool itself opens (paths relative to the
-/// plugin, present or not -- one that is missing makes the step fail, which
-/// is harmless); what those files include in turn is not followed. Err
-/// where the tool is pointed somewhere this cannot follow (`npm --prefix`,
-/// `just -f`, `uv --directory`), and then the step is not offered.
+/// plugin, present or not: one that is there is shown and checked
+/// unchanged, one that is not is checked still absent, since an earlier
+/// step could write it); what those files include or run in turn is not
+/// followed. Err where the tool is pointed somewhere this cannot follow
+/// (`npm --prefix`, `just -f`, `uv --directory`, `go -C`), and for a program
+/// with no arm here: then the step is not offered.
 fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let words = shlex_split(part).map_err(|_| ())?;
-    let mut w: &[String] = &words;
-    if w.first().is_some_and(|x| x == "sudo") {
-        w = &w[1..];
-    }
-    let Some((prog, mut args)) = w.split_first() else { return Ok(Vec::new()) };
-    let mut prog = prog.as_str();
-    if is_python(prog) && args.first().is_some_and(|a| a == "-m") {
-        match args.get(1).map(String::as_str) {
-            Some("pip") => {
+    let Some((mut prog, mut args)) = program(&words) else { return Ok(Vec::new()) };
+    let mut out: Vec<String> = Vec::new();
+    if is_python(prog) {
+        let Some((module, rest)) = py_module(args) else { return Ok(Vec::new()) };
+        out.extend(python_module_files(module));
+        match module {
+            "pip" => {
                 prog = "pip";
-                args = &args[2..];
+                args = rest;
             }
-            Some("build") => return Ok(python_project(".")),
-            _ => return Ok(Vec::new()),
+            "build" => {
+                out.extend(python_project("."));
+                return Ok(out);
+            }
+            _ => return Ok(out),
         }
     }
     // Options that point a tool at another folder or file than the one
@@ -756,7 +938,6 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let elsewhere = |names: &[&str]| {
         args.iter().any(|a| names.iter().any(|n| a == n || (n.starts_with("--") && a.starts_with(&format!("{n}=")))))
     };
-    let mut out: Vec<String> = Vec::new();
     match prog {
         "make" => {
             // GNU make reads GNUmakefile, makefile or Makefile (or the -f
@@ -795,14 +976,20 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
                 _ => {}
             })?;
             let src = src.or_else(|| words.first().map(|s| s.to_string())).unwrap_or_else(|| ".".into());
-            out.push(under(&src, "CMakeLists.txt"));
+            // Presets can set the compiler, or any cache variable, to a
+            // program of the plugin's.
+            out.extend(["CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json"].map(|n| under(&src, n)));
         }
         "cargo" => {
             if elsewhere(&["-C"]) {
                 return Err(());
             }
-            // .cargo/config.toml can name a rustc wrapper or a runner to run.
-            let project = |dir: &str| ["Cargo.toml", "build.rs", ".cargo/config.toml", ".cargo/config"].map(|n| under(dir, n));
+            // .cargo/config.toml can name a rustc wrapper or a runner to run,
+            // and rust-toolchain.toml a toolchain by path, whose cargo runs.
+            let project = |dir: &str| {
+                ["Cargo.toml", "build.rs", ".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain"]
+                    .map(|n| under(dir, n))
+            };
             out.extend(project("."));
             let mut dirs = Vec::new();
             scan_args(args, "pjFZ", "", &["manifest-path", "path"], |opt, v| match opt {
@@ -821,6 +1008,10 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             if elsewhere(&["--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"]) {
                 return Err(());
             }
+            // bun's preload and config options name files to run or read.
+            if prog == "bun" && elsewhere(&["-r", "--preload", "-c", "--config"]) {
+                return Err(());
+            }
             out.push("package.json".into());
             // Their own config, which can name a script shell, a hook file
             // or a yarn release to run in place of the tool.
@@ -835,7 +1026,7 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
                 .map(|s| s.to_string()),
             );
         }
-        "pip" | "pipx" => out = pip_files(args, plugin_dir)?,
+        "pip" | "pipx" => out.extend(pip_files(args, plugin_dir)?),
         "uv" => {
             if elsewhere(&["--directory", "--project"]) {
                 return Err(());
@@ -844,13 +1035,13 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             match words.as_slice() {
                 ["pip", ..] | ["tool", ..] => {
                     let at = args.iter().position(|a| a == words[0]).map_or(args.len(), |i| i + 1);
-                    out = pip_files(&args[at..], plugin_dir)?;
+                    out.extend(pip_files(&args[at..], plugin_dir)?);
                 }
                 ["sync" | "build" | "lock" | "install", ..] => out.extend(python_project(".")),
                 ["run", rest @ ..] => {
                     out.extend(python_project("."));
                     // `uv run x.py` runs the plugin's x.py.
-                    if let Some(f) = rest.first().filter(|f| plugin_dir.join(f).is_file()) {
+                    if let Some(f) = rest.first().filter(|f| f.ends_with(".py") || plugin_dir.join(f).is_file()) {
                         out.push(f.to_string());
                     }
                 }
@@ -861,9 +1052,36 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             if elsewhere(&["-f", "--justfile", "-d", "--working-directory"]) {
                 return Err(());
             }
-            out.extend(["justfile", "Justfile", "JUSTFILE", ".justfile"].map(String::from));
+            // just matches its names in any ASCII case (`JustFile` too), so
+            // the folder is read for them; the absent ones are checked in
+            // any case as well (`absent_any_case`).
+            let mut found: Vec<String> = std::fs::read_dir(plugin_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| JUSTFILES.iter().any(|j| n.eq_ignore_ascii_case(j)))
+                .collect();
+            found.sort();
+            out.extend(found);
         }
-        _ => {}
+        "go" => {
+            if elsewhere(&["-C"]) {
+                return Err(());
+            }
+            // go.mod and go.work name the module, its replacements (folders
+            // of the plugin's) and the toolchain; the .go files named on the
+            // line are what `go run x.go` compiles first.
+            out.extend(["go.mod", "go.work"].map(String::from));
+            out.extend(args.iter().filter(|a| a.ends_with(".go") && !a.starts_with('-')).cloned());
+        }
+        // A compiler opens the sources it is given, which it does not run.
+        "gcc" | "cc" => {}
+        // systemctl starts what is installed; shells and paths run the one
+        // file `executed_files` names, and Python's -m was handled above.
+        "systemctl" | "bash" | "sh" | "zsh" | "dash" => {}
+        p if p.contains('/') || is_python(p) => {}
+        _ => return Err(()),
     }
     Ok(out)
 }
@@ -903,15 +1121,36 @@ fn digest_now(plugin_dir: &Path, name: &std::ffi::OsStr) -> Option<String> {
     Some(hex::encode(Sha256::digest(std::fs::read(&target).ok()?)))
 }
 
+/// Whether the folder `name` is in (relative to the plugin) has an entry
+/// spelled like `name`'s last part in any ASCII case. True where the folder
+/// cannot be read: then it cannot be shown to have none.
+fn any_case_present(plugin_dir: &Path, name: &str) -> bool {
+    let rel = Path::new(name);
+    let dir = plugin_dir.join(rel.parent().unwrap_or(Path::new("")));
+    let Some(want) = rel.file_name().and_then(|n| n.to_str()) else { return true };
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.eq_ignore_ascii_case(want))),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 /// Err naming the first file the commands run that is no longer what the
 /// confirmation showed: edited, replaced, moved or gone since the plan was
-/// made. Checked again in the terminal before every command.
+/// made -- or a build file that was absent and is now there. Checked again
+/// in the terminal before every command.
 pub fn unchanged(p: &SetupPlan) -> Result<(), String> {
     for (name, _) in &p.scripts {
         let want = p.digests.iter().find(|(k, _)| k == name).map(|(_, d)| d.as_str());
         if want.is_none() || digest_now(&p.plugin_dir, name).as_deref() != want {
             return Err(esc(name));
         }
+    }
+    // A dangling symlink is there too: what it points at could be written.
+    if let Some(name) = p.absent.iter().find(|n| p.plugin_dir.join(n).symlink_metadata().is_ok()) {
+        return Err(name.clone());
+    }
+    if let Some(name) = p.absent_any_case.iter().find(|n| any_case_present(&p.plugin_dir, n)) {
+        return Err(name.clone());
     }
     Ok(())
 }
@@ -932,6 +1171,8 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
             .unwrap_or_default()
     };
 
+    // Build files a configure step already offered will write.
+    let mut generated: Vec<String> = Vec::new();
     for fence in FENCE.captures_iter(&text) {
         let start = fence.get(0).map_or(0, |m| m.start());
         if !_is_setup(&heading_at(start)) {
@@ -955,22 +1196,63 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 if NEVER.is_match(part) || CHORE.is_match(part) || !RUNNABLE.is_match(part) {
                     continue;
                 }
-                // Every file of the plugin's the command runs is shown in
-                // full, or the command is not offered: only files the plugin
-                // itself ships, never outside it, and never one unseen.
+                // A program with no case of its own is not offered: it would
+                // run with nothing shown for it.
+                if step_kind(part).is_none() {
+                    continue;
+                }
+                // The file of the plugin's the command names to run is shown
+                // in full, or the command is not offered: only a file the
+                // plugin itself ships, never outside it.
                 let Ok(files) = executed_files(part, plugin_dir) else { continue };
-                // And the build files a build step reads and runs code from
-                // (a Makefile, package.json's scripts, setup.py, build.rs):
-                // one that is absent is not run, so it need not be shown, but
-                // one that is there is shown and checked like a script.
+                // And the build files the step's tool opens (a Makefile,
+                // package.json's scripts, setup.py, build.rs, go.mod): one
+                // that is there is shown and checked like a script; one that
+                // is not is recorded, and checked still absent, since a step
+                // before could write it -- unless an earlier configure step
+                // shown here writes it (`generated_by`).
                 let Ok(read) = build_files(part, plugin_dir) else { continue };
-                let read = read.into_iter().filter(|f| plugin_dir.join(f).symlink_metadata().is_ok());
-                let Some(shown) = files.into_iter().chain(read).map(|f| shown_file(plugin_dir, &f)).collect::<Option<Vec<_>>>()
+                let base = resolve(plugin_dir);
+                let mut present = Vec::new();
+                let mut missing = Vec::new();
+                let mut inside = true;
+                for f in read {
+                    if plugin_dir.join(&f).symlink_metadata().is_ok() {
+                        present.push(f);
+                    } else if generated.contains(&py_path_str(Path::new(&f))) {
+                        // written by a configure step shown before this one
+                    } else if resolve(&plugin_dir.join(&f)).starts_with(&base) {
+                        missing.push(f);
+                    } else {
+                        // `make -C ..`: what the tool would read is not the plugin's.
+                        inside = false;
+                    }
+                }
+                if !inside {
+                    continue;
+                }
+                let any_case: Vec<&str> = match shlex_split(part).ok().as_deref().and_then(program) {
+                    Some(("just", _)) => JUSTFILES.iter().copied().filter(|j| !any_case_present(plugin_dir, j)).collect(),
+                    _ => Vec::new(),
+                };
+                let Some(shown) =
+                    files.iter().chain(&present).map(|f| shown_file(plugin_dir, f)).collect::<Option<Vec<_>>>()
                 else {
                     continue;
                 };
                 if !out.commands.iter().any(|c| c == part) {
                     out.commands.push(part.to_string());
+                }
+                generated.extend(generated_by(part, &files));
+                for f in missing {
+                    if !out.absent.contains(&f) {
+                        out.absent.push(f);
+                    }
+                }
+                for f in any_case {
+                    if !out.absent_any_case.iter().any(|a| a == f) {
+                        out.absent_any_case.push(f.to_string());
+                    }
                 }
                 for (key, body, digest) in shown {
                     if let Some(slot) = out.scripts.iter_mut().find(|(k, _)| *k == key) {
@@ -1004,11 +1286,26 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
     Ok(out)
 }
 
+/// `name` as a bash glob that matches it in any ASCII case.
+fn any_case_glob(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphabetic() {
+                format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())
+            } else {
+                shlex_quote(&c.to_string())
+            }
+        })
+        .collect()
+}
+
 /// The commands, as one shell script that stops at the first failure. Each
 /// command is preceded by a check that every file shown is still the one
-/// shown: a step before it (a Makefile, a build script) could rewrite one.
+/// shown, and that every build file absent then is still absent: a step
+/// before it (a Makefile, a build script, a postinstall) could write one.
 pub fn terminal_script(p: &SetupPlan) -> String {
     let mut lines = vec![format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))), "set -e".to_string()];
+    let stop = |shown: &str| shlex_quote(&format!("{shown} changed after it was shown -- setup stopped."));
     for cmd in &p.commands {
         for (name, digest) in &p.digests {
             let shown = esc(name);
@@ -1016,7 +1313,19 @@ pub fn terminal_script(p: &SetupPlan) -> String {
                 "test \"$(sha256sum < {})\" = {} || {{ echo; echo {}; exit 1; }}",
                 shlex_quote(&shown),
                 shlex_quote(&format!("{digest}  -")),
-                shlex_quote(&format!("{shown} changed after it was shown -- setup stopped.")),
+                stop(&shown),
+            ));
+        }
+        for name in &p.absent {
+            let q = shlex_quote(name);
+            lines.push(format!("test ! -e {q} && test ! -L {q} || {{ echo; echo {}; exit 1; }}", stop(name)));
+        }
+        // A glob that matches nothing stays as written, which is not there.
+        for name in &p.absent_any_case {
+            lines.push(format!(
+                "for f in {}; do test ! -e \"$f\" && test ! -L \"$f\" || {{ echo; echo {}; exit 1; }}; done",
+                any_case_glob(name),
+                stop(name),
             ));
         }
         lines.push(format!("echo; echo '$ '{}", shlex_quote(cmd)));
@@ -1097,10 +1406,19 @@ pub fn describe(p: &SetupPlan) -> String {
         parts.push(format!("Packages, installed by Almanac\n  {}", p.packages.join(" ")));
     }
     if !p.commands.is_empty() {
-        parts.push(format!(
+        let mut run = format!(
             "Run in a terminal, in the plugin's folder\n{}",
             p.commands.iter().map(|c| format!("  $ {c}")).collect::<Vec<_>>().join("\n")
-        ));
+        );
+        // What is shown below is what a build reads first, not all it runs:
+        // say so rather than let the list of files suggest otherwise.
+        if p.commands.iter().any(|c| step_kind(c) == Some(Kind::Build)) {
+            run.push('\n');
+            run.push_str(&tr(
+                "A build, or a Python or JavaScript program, runs code from the repository beyond the files shown here.",
+            ));
+        }
+        parts.push(run);
     }
     for (name, body) in &p.scripts {
         if let Some(scripts) = package_scripts(name, body) {
@@ -1357,7 +1675,7 @@ make build
     }
 
     /// A build step runs the plugin's build files, so the ones present are
-    /// shown and checked like scripts; absent ones are not asked for.
+    /// shown and checked like scripts; absent ones are held absent.
     #[test]
     fn test_a_build_step_shows_the_build_files_it_runs() {
         let d = tempdir();
@@ -1404,12 +1722,14 @@ make build
         assert!(!p.commands.iter().any(|c| c.contains("--prefix")), "a step pointed elsewhere is not offered");
         let mut names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
         names.sort();
-        // build.ninja, setup.py, setup.cfg, .npmrc ... are absent: not shown, not needed
+        // setup.py, setup.cfg, .npmrc ... are absent: not shown, but held absent (build.ninja meson writes)
         assert_eq!(
             names,
             ["Cargo.toml", "Makefile", "build.rs", "justfile", "meson.build", "package.json", "pyproject.toml", "sub/GNUmakefile"]
         );
         assert_eq!(p.digests.len(), p.scripts.len());
+        assert!(p.absent.contains(&"setup.py".to_string()) && p.absent.contains(&".npmrc".to_string()));
+        assert!(!p.absent.contains(&"build/build.ninja".to_string()));
         for body in ["echo make", "backend-path", "fn main() {}", "echo just", "project('p')", "echo sub"] {
             assert!(shown.contains(body), "{body} not shown");
         }
@@ -1448,11 +1768,20 @@ make build
         assert_eq!(files("make -j4 -f build.mk").unwrap(), ["build.mk"]);
         assert_eq!(files("make -C a -C b").unwrap(), ["a/b/GNUmakefile", "a/b/makefile", "a/b/Makefile"]);
         assert_eq!(files("ninja -C build").unwrap(), ["build/build.ninja"]);
-        assert_eq!(files("cmake -S src -B build").unwrap(), ["src/CMakeLists.txt"]);
+        assert_eq!(files("cmake -S src -B build").unwrap(), ["src/CMakeLists.txt", "src/CMakePresets.json", "src/CMakeUserPresets.json"]);
         assert!(files("cmake --build build").unwrap().is_empty());
         assert!(files("cargo install --path tool").unwrap().contains(&"tool/build.rs".to_string()));
         assert!(files("cargo build").unwrap().contains(&".cargo/config.toml".to_string()));
-        assert_eq!(files("python3 -m pip install ./pkg[cli]").unwrap(), ["./pkg/setup.py", "./pkg/pyproject.toml", "./pkg/setup.cfg"]);
+        // `-m pip` is the plugin's own if it ships a pip.py (the folder comes first).
+        assert_eq!(
+            files("python3 -m pip install ./pkg[cli]").unwrap(),
+            ["pip.py", "pip/__init__.py", "pip/__main__.py", "./pkg/setup.py", "./pkg/pyproject.toml", "./pkg/setup.cfg"]
+        );
+        assert_eq!(files("python3 -u -m a.b").unwrap(), ["a/__init__.py", "a/b.py", "a/b/__init__.py", "a/b/__main__.py"]);
+        assert!(files("cargo run").unwrap().contains(&"rust-toolchain.toml".to_string()));
+        assert_eq!(files("go generate ./...").unwrap(), ["go.mod", "go.work"]);
+        assert_eq!(files("go run main.go").unwrap(), ["go.mod", "go.work", "main.go"]);
+        assert!(files("gcc -o x x.c").unwrap().is_empty());
         assert_eq!(files("pip install pkg").unwrap(), ["pkg/setup.py", "pkg/pyproject.toml", "pkg/setup.cfg"]);
         assert_eq!(files("pip install -r requirements.txt requests").unwrap(), ["requirements.txt"]);
         assert!(files("pip install requests git+https://x/y").unwrap().is_empty());
@@ -1460,11 +1789,170 @@ make build
         assert_eq!(files("pipx install --editable .").unwrap(), ["setup.py", "pyproject.toml", "setup.cfg"]);
         assert!(files("yarn").unwrap().contains(&".yarnrc.yml".to_string()));
         assert!(files("pnpm install").unwrap().contains(&".pnpmfile.cjs".to_string()));
-        for elsewhere in ["npm --prefix x install", "yarn --cwd=x", "just -f other.just", "uv --directory x sync", "cargo -C x build"] {
+        for elsewhere in [
+            "npm --prefix x install", "yarn --cwd=x", "just -f other.just", "uv --directory x sync", "cargo -C x build",
+            "go -C x build", "bun --preload ./x.ts run build",
+        ] {
             assert!(files(elsewhere).is_err(), "{elsewhere}");
         }
         assert!(files("systemctl --user enable x").unwrap().is_empty());
+        // A program with no case of its own is not run with nothing shown.
+        assert!(files("node x.js").is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Every tool RUNNABLE offers has its own case: one added to `TOOLS`
+    /// without one fails here rather than run with nothing shown for it.
+    #[test]
+    fn test_every_runnable_tool_has_a_kind() {
+        let d = tempdir();
+        let lines = TOOLS.iter().map(|(_, line)| *line).chain(["./install", "python x.py", "python3.12 x.py", "sudo make"]);
+        for line in lines {
+            assert!(RUNNABLE.is_match(line), "{line} not runnable");
+            assert!(step_kind(line).is_some(), "{line} has no kind");
+            assert!(build_files(line, &d).is_ok(), "{line} has no build files case");
+            assert!(executed_files(line, &d).is_ok(), "{line} has no executed files case");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(step_kind("./install"), Some(Kind::Script));
+        assert_eq!(step_kind("bash x.sh"), Some(Kind::Script));
+        assert_eq!(step_kind("go run ."), Some(Kind::Build));
+        assert_eq!(step_kind("python3 x.py"), Some(Kind::Build));
+        assert_eq!(step_kind("systemctl --user enable x"), Some(Kind::Service));
+        assert_eq!(step_kind("node x.js"), None);
+    }
+
+    /// `go run`, `go generate` and `cargo run` used to be offered with
+    /// nothing shown; `bun x.ts` without x.ts. Now go.mod (and Cargo.toml)
+    /// are shown, the file bun runs is shown and checked, and a build is
+    /// said to run more than that.
+    #[test]
+    fn test_runners_show_what_they_run() {
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            "# Install\n```\ngo generate ./...\ngo run .\ncargo run --release\nbun x.ts\nbun missing.ts\nbun run build\n```\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("go.mod"), "module p\n").unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        std::fs::write(root.join("x.ts"), "console.log('x')\n").unwrap();
+        std::fs::write(root.join("package.json"), "{}\n").unwrap();
+        let p = plan(&root).unwrap();
+        let shown = describe(&p);
+        std::fs::write(root.join("x.ts"), "evil()\n").unwrap();
+        let after = unchanged(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(p.commands, ["go generate ./...", "go run .", "cargo run --release", "bun x.ts", "bun run build"]);
+        let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
+        assert_eq!(names, ["go.mod", "Cargo.toml", "x.ts", "package.json"]);
+        assert!(shown.contains("  console.log('x')") && shown.contains("  module p"));
+        assert!(shown.contains("runs code from the repository beyond the files shown here"));
+        assert!(p.absent.contains(&"go.work".to_string()) && p.absent.contains(&"bunfig.toml".to_string()));
+        assert_eq!(after, Err("x.ts".to_string()));
+    }
+
+    /// A build file a tool would read that was not there when the plan was
+    /// made is checked still absent before every command, by Almanac and
+    /// by the terminal: `npm install`'s postinstall must not slip a
+    /// GNUmakefile (which make prefers) in front of the Makefile shown.
+    #[test]
+    fn test_a_build_file_that_appears_stops_the_run() {
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "# Install\n```\nnpm install && make\njust setup\n```\n").unwrap();
+        std::fs::write(root.join("package.json"), "{\"scripts\": {\"postinstall\": \"node gen.js\"}}\n").unwrap();
+        std::fs::write(root.join("Makefile"), "all:\n\techo shown\n").unwrap();
+        std::fs::write(root.join("JustFile"), "setup:\n  echo just\n").unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["npm install", "make", "just setup"]);
+        // just matches its name in any case: the JustFile is shown.
+        assert!(p.scripts.iter().any(|(k, _)| k == "JustFile"));
+        for f in ["GNUmakefile", "makefile", ".npmrc"] {
+            assert!(p.absent.contains(&f.to_string()), "{f} not recorded absent: {:?}", p.absent);
+        }
+        assert_eq!(p.absent_any_case, [".justfile"]);
+        assert_eq!(unchanged(&p), Ok(()));
+
+        // The terminal's own check, run for real on a stand-in command.
+        let probe = SetupPlan { commands: vec!["echo ran".into()], ..p.clone() };
+        let run = || {
+            let out = std::process::Command::new("bash").arg("-c").arg(terminal_script(&probe)).output().unwrap();
+            (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+        };
+        let (ok, out) = run();
+        assert!(ok && out.contains("ran"), "the check passes while nothing appeared: {out}");
+        std::fs::write(root.join("GNUmakefile"), "all:\n\techo unseen\n").unwrap();
+        let (ok, out) = run();
+        assert!(!ok && !out.contains("ran") && out.contains("GNUmakefile changed after it was shown"), "{out}");
+        assert_eq!(unchanged(&p), Err("GNUmakefile".to_string()));
+        // A dangling symlink counts as there.
+        std::fs::remove_file(root.join("GNUmakefile")).unwrap();
+        std::os::unix::fs::symlink("nowhere", root.join("makefile")).unwrap();
+        assert_eq!(unchanged(&p), Err("makefile".to_string()));
+        assert!(!run().0);
+        // And a justfile in another case.
+        std::fs::remove_file(root.join("makefile")).unwrap();
+        assert!(run().0);
+        std::fs::write(root.join(".JUSTFILE"), "setup:\n").unwrap();
+        let (ok, out) = run();
+        let after = unchanged(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(!ok && out.contains(".justfile changed after it was shown"), "{out}");
+        assert_eq!(after, Err(".justfile".to_string()));
+    }
+
+    /// What a configure step shown before writes (meson's build.ninja,
+    /// cmake's and configure's Makefile) is no file appearing unseen; and a
+    /// build pointed outside the plugin is not offered.
+    #[test]
+    fn test_what_a_configure_step_writes_is_not_refused() {
+        let d = tempdir();
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            concat!(
+                "# Install\n```\n",
+                "meson setup build && ninja -C build\n",
+                "cmake -B out && make -C out\n",
+                "./configure && make\n",
+                "make -C ..\n",
+                "python3 -m venv .venv\n",
+                "```\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("meson.build"), "project('p')\n").unwrap();
+        std::fs::write(root.join("CMakeLists.txt"), "project(p)\n").unwrap();
+        std::fs::write(root.join("configure"), "echo configuring\n").unwrap();
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(
+            p.commands,
+            ["meson setup build", "ninja -C build", "cmake -B out", "make -C out", "./configure", "make", "python3 -m venv .venv"]
+        );
+        for written in ["build/build.ninja", "out/Makefile", "Makefile"] {
+            assert!(!p.absent.contains(&written.to_string()), "{written}: {:?}", p.absent);
+        }
+        // What they do not write is still held absent.
+        for held in ["out/GNUmakefile", "GNUmakefile", "makefile", "meson.options", "venv.py", "venv/__init__.py"] {
+            assert!(p.absent.contains(&held.to_string()), "{held}: {:?}", p.absent);
+        }
+    }
+
+    /// The confirmation says a build runs more than the files it shows; a
+    /// plan of scripts alone does not claim it.
+    #[test]
+    fn test_the_confirmation_says_a_build_runs_more_than_is_shown() {
+        let line = "A build, or a Python or JavaScript program, runs code from the repository beyond the files shown here.";
+        let build = SetupPlan { commands: vec!["make install".into(), "./install".into()], ..Default::default() };
+        assert!(describe(&build).contains(&format!("  $ ./install\n{line}")), "{}", describe(&build));
+        let script = SetupPlan { commands: vec!["./install".into(), "systemctl --user enable x".into()], ..Default::default() };
+        assert!(!describe(&script).contains(line));
     }
 
     #[test]

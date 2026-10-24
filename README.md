@@ -303,10 +303,12 @@ README asks for more than the install — an API key, a package, a build step.
 Almanac installs them like any other (`omarchy plugin add`, validated by
 Omarchy), says up front that setup follows, and then reads the README from the
 installed copy: packages it installs for you, build steps and setup scripts it
-shows in full — every file a step would run, and the build files (`Makefile`,
-`package.json`'s scripts, `pyproject.toml`, `Cargo.toml` …) a build tool reads —
-and runs in a terminal you can watch, refusing any file that changed after you
-saw it, and anything only you can
+shows — the file a line names to run, in full, and the build files a build tool
+opens (`Makefile`, `package.json`'s scripts, `pyproject.toml`, `Cargo.toml`,
+`go.mod` …) — and runs in a terminal you can watch, stopping if a file shown
+has changed or a build file that was absent has appeared. What those files go
+on to run (a recipe's script, a postinstall, the sources a build compiles) is
+not shown, and the confirmation says so for every build. Anything only you can
 do — credentials, config edits — it lists with the section to read. Only
 install, setup and configuration sections are read; development, testing and
 uninstall instructions are never offered. Plugins whose install itself cannot
