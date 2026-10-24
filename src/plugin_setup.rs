@@ -784,12 +784,19 @@ fn step_kind(part: &str) -> Option<Kind> {
 }
 
 /// Every line of a .python-version(s) file a version request and nothing
-/// else: `3.12`, `3.12.1`, `3.13t`, `pypy3.10`, `cpython-3.12`,
-/// `cpython@3.12`, blank lines and `#` comments. A path or a bare word (a
+/// else: `3.12`, `3`, `3.12.1`, `3.13t`, `pypy3.10`, `cpython3.12`,
+/// `pypy@3.10`, blank lines and `#` comments. A path or any other word (a
 /// folder of the plugin's with a bin/python in it) is not.
-fn python_versions_only(body: &str) -> bool {
-    let request = regex::Regex::new(r"^(?:[A-Za-z]+[-@]?)?[0-9]+(?:\.[0-9]+){0,2}[a-z0-9+]*$").expect("constant regex");
-    body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).all(|l| request.is_match(l))
+fn python_versions_only(body: &str, plugin_dir: &Path) -> bool {
+    let request =
+        regex::Regex::new(r"^(?:(?:cpython|pypy|graalpy|pyodide|python)@?)?[0-9]+(?:\.[0-9]+){0,2}[a-z0-9+]*$").expect("constant regex");
+    // uv reads a request that names something in the folder as that path
+    // (`cpython-3.12`, `py3`, `d3` all ran a folder's bin/python), so one
+    // that does is refused however much it looks like a version.
+    body.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .all(|l| request.is_match(l) && std::fs::symlink_metadata(plugin_dir.join(l)).is_err())
 }
 
 /// A `systemctl --user` line that only turns units already installed on or
@@ -1192,10 +1199,13 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             if elsewhere(&["--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"]) {
                 return Err(());
             }
-            // Their fetch-and-run commands run a package from the registry --
-            // code that is not even in the plugin -- rather than set it up.
-            const RUNNERS: &[&str] = &["exec", "x", "dlx"];
-            if args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| RUNNERS.contains(&a.as_str())) {
+            // The command comes first, as a README writes it: an option before
+            // it may take a value that cannot be told from the command
+            // (`npm --loglevel silent exec`). And not a fetch-and-run or a
+            // `create`/`init` (which runs a create-* package): those run a
+            // package from the registry, code that is not even in the plugin.
+            const RUNNERS: &[&str] = &["exec", "x", "dlx", "create", "init"];
+            if args.first().is_some_and(|a| a.starts_with('-') || RUNNERS.contains(&a.as_str())) {
                 return Err(());
             }
             // bun's preload and config options name files to run or read.
@@ -1216,10 +1226,9 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
                 .map(|s| s.to_string()),
             );
         }
-        // `pipx run` runs a program rather than installing one: whatever it
-        // names (a script of the plugin's, a package's entry point) is not a
-        // setup step, and nothing here could show what it runs.
-        "pipx" if args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| a == "run") => return Err(()),
+        // pipx installs, or it runs a program (`pipx run`) whose code nothing
+        // here could show: only the installing commands, named first.
+        "pipx" if !args.first().is_some_and(|a| ["install", "upgrade", "reinstall"].contains(&a.as_str())) => return Err(()),
         "pip" | "pipx" => out.extend(pip_files(args, plugin_dir)?),
         "uv" => {
             if elsewhere(&["--directory", "--project"]) {
@@ -1230,18 +1239,18 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // (.python-version(s)), which may name a path -- `./fakepy` made
             // uv run a program of the plugin's (see `PYTHON_VERSION_FILES`).
             out.extend(["uv.toml", "pyproject.toml", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
-            let words = scan_args(args, "pw", "", &["python", "with", "index-url", "extra-index-url", "find-links", "from"], |_, _| {})?;
+            // Only commands that set a project up, named first: an option
+            // before the command may take a value that cannot be told from it
+            // (`uv --cache-dir /tmp/c run`), and `uv run` / `uv tool run` run a
+            // program -- `uv run python evil.py`, `uv run python -m venv`
+            // importing the plugin's own venv.py -- rather than install one.
+            let words: Vec<&str> = args.iter().map(String::as_str).collect();
             match words.as_slice() {
-                // `uv run` and `uv tool run` run a program -- `uv run python
-                // evil.py`, `uv run python -m venv` importing the plugin's own
-                // venv.py -- rather than install anything: not offered.
-                ["run", ..] | ["tool", "run", ..] => return Err(()),
-                ["pip", ..] | ["tool", ..] => {
-                    let at = args.iter().position(|a| a == words[0]).map_or(args.len(), |i| i + 1);
-                    out.extend(pip_files(&args[at..], plugin_dir)?);
+                ["sync" | "build" | "lock", ..] => out.extend(python_project(".")),
+                ["pip", "install" | "sync", ..] | ["tool", "install" | "upgrade", ..] => {
+                    out.extend(pip_files(&args[1..], plugin_dir)?);
                 }
-                ["sync" | "build" | "lock" | "install", ..] => out.extend(python_project(".")),
-                _ => {}
+                _ => return Err(()),
             }
         }
         "just" => {
@@ -1471,7 +1480,7 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 if shown.iter().any(|(f, (key, body, _, _))| {
                     let name = Path::new(key).file_name().and_then(|n| n.to_str()).unwrap_or_default();
                     (PYTHON_VERSION_FILES.contains(&name) || PYTHON_VERSION_FILES.iter().any(|v| f.ends_with(v)))
-                        && !python_versions_only(body)
+                        && !python_versions_only(body, plugin_dir)
                 }) {
                     continue;
                 }
@@ -2562,7 +2571,7 @@ make build
     #[test]
     fn test_runners_folders_and_unit_globs_are_not_offered() {
         let d = tempdir();
-        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\n```\n";
+        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\n```\n";
         let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n")]);
         let p = plan(&root).unwrap();
         assert!(p.commands.is_empty(), "{:?}", p.commands);
@@ -2570,14 +2579,25 @@ make build
         let readme = "# Install\n```\nuv sync\n```\n";
         let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), (".python-version", "d\n"), ("d/bin/python", "#!/bin/sh\necho PWNED\n")]);
         assert!(plan(&root).unwrap().commands.is_empty());
-        for good in ["3.12\n", "3.12.1\n", "3.13t\n", "pypy3.10\n", "cpython-3.12\n", "cpython@3.12\n", "# pinned\n\n3.12\n"] {
-            assert!(python_versions_only(good), "{good:?}");
+        for good in ["3.12\n", "3\n", "3.12.1\n", "3.13t\n", "pypy3.10\n", "cpython3.12\n", "pypy@3.10\n", "# pinned\n\n3.12\n"] {
+            assert!(python_versions_only(good, &root), "{good:?}");
         }
-        for bad in ["d\n", "./fakepy\n", "/usr/bin/python3\n", "3.12 d\n", "python\n", "~/py\n"] {
-            assert!(!python_versions_only(bad), "{bad:?}");
+        for bad in ["d\n", "./fakepy\n", "/usr/bin/python3\n", "3.12 d\n", "python\n", "~/py\n", "cpython-3.12\n", "py3\n", "d3\n", "x1\n"] {
+            assert!(!python_versions_only(bad, &root), "{bad:?}");
         }
+        // A request that looks like a version but names a folder of the plugin's.
+        std::fs::create_dir_all(root.join("3.12/bin")).unwrap();
+        assert!(!python_versions_only("3.12\n", &root));
+        std::fs::remove_dir_all(root.join("3.12")).unwrap();
         std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
         assert_eq!(plan(&root).unwrap().commands, ["uv sync"]);
+
+        // What a README actually writes is still offered.
+        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "pnpm install", "yarn", "yarn build", "bun install", "pipx install ."];
+        let readme = format!("# Install\n```\n{}\n```\n", legit.join("\n"));
+        let root = plugin_with(&d, &readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{}\n")]);
+        let _ = std::fs::remove_file(root.join(".python-version"));
+        assert_eq!(plan(&root).unwrap().commands, legit);
 
         assert!(service_line(&["--user".into(), "stop".into(), "x.service".into()]));
         assert!(!service_line(&["--user".into(), "stop".into(), "*".into()]));
