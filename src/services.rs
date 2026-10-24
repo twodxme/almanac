@@ -250,11 +250,12 @@ fn locale_codec() -> Codec {
         } else {
             // nl_langinfo(CODESET) after setlocale(LC_CTYPE, ""): what
             // `locale charmap` prints in this environment.
-            match std::process::Command::new("locale").arg("charmap")
-                .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output()
-            {
-                Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_owned(),
-                Err(_) => "UTF-8".to_owned(),
+            // A `locale` that cannot start, or hangs, reads as UTF-8.
+            let o = crate::util::run(&["locale", "charmap"], 5);
+            if o.failed_to_start || o.timed_out {
+                "UTF-8".to_owned()
+            } else {
+                o.stdout.trim().to_owned()
             }
         };
         match charmap.as_str() {

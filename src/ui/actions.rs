@@ -1854,61 +1854,87 @@ impl Win {
     }
 
     /// `install_appimage` once the key it is tracked under is settled.
+    ///
+    /// The copy, the `--version` probe (up to 12 s) and the desktop entry
+    /// (extracting the icon, up to 180 s) run off the main thread; the
+    /// window says what it is doing meanwhile, and the outcome when done.
     fn install_appimage_as(&self, src: &Path, name: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        let registry = inventory::registry();
-        let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
-        if let Err(e) = std::fs::create_dir_all(&store) {
-            return raised(&py_oserror_line(&e, &store));
-        }
-        let name = name.to_string();
-        let dest = store.join(format!("{name}.AppImage"));
-        let copied = copy2(src, &dest).and_then(|()| {
-            let mode = std::fs::metadata(&dest).map_err(|e| py_oserror(&e, &dest))?.permissions().mode();
-            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode | 0o111))
-                .map_err(|e| py_oserror(&e, &dest))
-        });
-        if let Err(e) = copied {
-            self.say(&format!("Could not install: {e}"), 5);
-            return;
-        }
-
-        let mut version = "?".to_string();
-        match version_output(&dest) {
-            Ok(Some(out)) => {
-                let out = py_strip(&out);
-                if !out.is_empty() && out.chars().count() < 60 {
-                    version = py_first_line(out).to_string();
+        self.say(&format!("Adding {name}…"), 5);
+        let (src, name) = (src.to_path_buf(), name.to_string());
+        let w = self.downgrade();
+        spawn_bg(
+            move || add_appimage(&src, &name),
+            move |res| {
+                let Some(win) = w.upgrade() else { return };
+                match res {
+                    Ok(name) => {
+                        win.say(&format!("Tracking {name}"), 5);
+                        win.reload();
+                    }
+                    Err(AddFailed::Say(msg)) => win.say(&msg, 5),
+                    Err(AddFailed::Raised(exc)) => raised(&exc),
                 }
-            }
-            Ok(None) => {} // plenty of AppImages ignore --version
-            Err(e) => return raised(&e),
-        }
-
-        let dest_s = dest.to_string_lossy().into_owned();
-        let src_name = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        let entry = serde_json::json!({
-            "name": name,
-            "path": dest_s,
-            "version": version,
-            "description": format!("AppImage · {src_name}"),
-            "source_file": src.to_string_lossy(),
-        });
-        // Read afresh under the registry's lock: what changed meanwhile stays.
-        if let Err(e) = inventory::update_registry(|reg| {
-            reg.insert(name.clone(), entry);
-            Ok(true)
-        }) {
-            return raised(&e);
-        }
-        // A tracked AppImage should appear in the launcher like anything else,
-        // not just inside this window.
-        if let Err(e) = appimage::install_desktop_entry(&dest, &name) {
-            return raised(&e);
-        }
-        self.say(&format!("Tracking {name}"), 5);
-        self.reload();
+            },
+        );
     }
+}
+
+/// How adding an AppImage stopped short: told to the user, or raised (logged).
+enum AddFailed {
+    Say(String),
+    Raised(String),
+}
+
+/// The slow half of `install_appimage_as`, off the main thread: copy into
+/// our store, ask the version, register, and give it a launcher entry.
+/// Returns the name it is tracked under.
+fn add_appimage(src: &Path, name: &str) -> Result<String, AddFailed> {
+    use std::os::unix::fs::PermissionsExt;
+    let registry = inventory::registry();
+    let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
+    std::fs::create_dir_all(&store).map_err(|e| AddFailed::Raised(py_oserror_line(&e, &store)))?;
+    let name = name.to_string();
+    let dest = store.join(format!("{name}.AppImage"));
+    let copied = copy2(src, &dest).and_then(|()| {
+        let mode = std::fs::metadata(&dest).map_err(|e| py_oserror(&e, &dest))?.permissions().mode();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode | 0o111))
+            .map_err(|e| py_oserror(&e, &dest))
+    });
+    if let Err(e) = copied {
+        return Err(AddFailed::Say(format!("Could not install: {e}")));
+    }
+
+    let mut version = "?".to_string();
+    match version_output(&dest) {
+        Ok(Some(out)) => {
+            let out = py_strip(&out);
+            if !out.is_empty() && out.chars().count() < 60 {
+                version = py_first_line(out).to_string();
+            }
+        }
+        Ok(None) => {} // plenty of AppImages ignore --version
+        Err(e) => return Err(AddFailed::Raised(e)),
+    }
+
+    let dest_s = dest.to_string_lossy().into_owned();
+    let src_name = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let entry = serde_json::json!({
+        "name": name,
+        "path": dest_s,
+        "version": version,
+        "description": format!("AppImage · {src_name}"),
+        "source_file": src.to_string_lossy(),
+    });
+    // Read afresh under the registry's lock: what changed meanwhile stays.
+    inventory::update_registry(|reg| {
+        reg.insert(name.clone(), entry);
+        Ok(true)
+    })
+    .map_err(AddFailed::Raised)?;
+    // A tracked AppImage should appear in the launcher like anything else,
+    // not just inside this window.
+    appimage::install_desktop_entry(&dest, &name).map_err(AddFailed::Raised)?;
+    Ok(name)
 }
 
 /// `lambda b, a: verify.judge_app(app, b, a)`

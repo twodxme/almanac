@@ -20,6 +20,11 @@ pub struct Output {
     pub timed_out: bool,
     /// The process could not be started at all (Python's OSError).
     pub failed_to_start: bool,
+    /// Why it could not be started: the errno, when there is one, so a
+    /// caller can print the OSError text Python would (`[Errno 13] ...`).
+    pub start_errno: Option<i32>,
+    /// The start error's own text, for a failure with no errno.
+    pub start_error: String,
 }
 
 impl Output {
@@ -63,7 +68,14 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     }
     let mut child = match spawn_group(&mut cmd) {
         Ok(c) => c,
-        Err(_) => return Output { failed_to_start: true, ..Default::default() },
+        Err(e) => {
+            return Output {
+                failed_to_start: true,
+                start_errno: e.raw_os_error(),
+                start_error: e.to_string(),
+                ..Default::default()
+            }
+        }
     };
     if let (Some(text), Some(mut stdin)) = (opts.input, child.stdin.take()) {
         let text = text.to_owned();
@@ -118,7 +130,7 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     let stdout = String::from_utf8_lossy(&recv(&out_rx)).into_owned();
     let stderr = String::from_utf8_lossy(&recv(&err_rx)).into_owned();
     let code = if timed_out { None } else { status.and_then(|s| s.code()) };
-    Output { code, stdout, stderr, timed_out, failed_to_start: false }
+    Output { code, stdout, stderr, timed_out, ..Default::default() }
 }
 
 /// Start `cmd` as the leader of a process group of its own, so that a

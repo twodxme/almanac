@@ -16,7 +16,7 @@ use crate::sources;
 use crate::store as store_mod;
 use crate::tasks;
 use crate::ui::actions::Judge;
-use crate::ui::shell::{name, source_label, spawn_bg, AppItem, WeakWin, Win};
+use crate::ui::shell::{name, source_label, spawn_bg, AppItem, SwitchGuard, WeakWin, Win};
 use crate::util;
 use crate::verify::{self, Outcome, ProbeValue, TryProbe};
 
@@ -459,40 +459,53 @@ fn plugin_switch_shared(
     w: &WeakWin,
     switch: &gtk::Switch,
     on: bool,
+    guard: &SwitchGuard,
     i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
 ) -> glib::Propagation {
     switch.set_sensitive(false);
 
     let id = i.borrow().id.clone();
     let work = move || {
-        let r = run_checked(&plugins_mod::toggle_argv(&id, on), 60).ok()?;
-        // What `enabled()` raises ends the worker: the switch stays as it is.
+        // A command that could not start or timed out still leaves Omarchy's
+        // list to read, so the switch can show what really holds.
+        let r = run_checked(&plugins_mod::toggle_argv(&id, on), 60);
         let now = match plugins_mod::try_enabled() {
-            Ok(on) => on.get(&id).copied(),
+            Ok(on) => Ok(on.get(&id).copied()),
             Err(e) => {
                 uncaught_err(&e);
-                return None;
+                Err(())
             }
         };
-        Some((r, now))
+        (r, now)
     };
 
     let w = w.clone();
     let switch = switch.clone();
-    let done = move |res: Option<(util::Output, Option<bool>)>| {
-        let Some((r, now)) = res else { return };
-        let (nm, can_disable) = {
+    let guard = guard.clone();
+    let done = move |(r, now): (Result<util::Output, String>, Result<Option<bool>, ()>)| {
+        let (nm, can_disable, was) = {
             let x = i.borrow();
-            (x.name.clone(), x.can_disable)
+            (x.name.clone(), x.can_disable, x.enabled)
         };
-        let now_b = now.unwrap_or(false);
+        // Whatever happened, the switch is usable again.
         switch.set_sensitive(can_disable);
-        switch.set_state(now_b);
-        switch.set_active(now_b);
-        i.borrow_mut().enabled = now_b;
-        name(&switch, &switch_name(&nm, now_b));
         let win = w.upgrade();
         let word = if on { "on" } else { "off" };
+        let Ok(now) = now else {
+            // `enabled()` raised (logged above): what holds is unknown, so
+            // the switch goes back to what it showed before the flip.
+            guard.set(&switch, was);
+            name(&switch, &switch_name(&nm, was));
+            if let (Err(e), Some(w)) = (&r, &win) {
+                w.notify(&format!("{nm} was not switched {word}"), e, "normal");
+            }
+            return;
+        };
+        let now_b = now.unwrap_or(false);
+        // Quietly: snapping back must not run the toggle again.
+        guard.set(&switch, now_b);
+        i.borrow_mut().enabled = now_b;
+        name(&switch, &switch_name(&nm, now_b));
         if now == Some(on) {
             if let Some(w) = &win {
                 w.say(&format!("{nm} {word}"), 5);
@@ -501,9 +514,15 @@ fn plugin_switch_shared(
                 return uncaught_err(&e);
             }
         } else {
-            let text = if r.stderr.is_empty() { &r.stdout } else { &r.stderr };
-            let why: Vec<&str> = py_splitlines(py_strip(text));
-            let body = why.last().map(|s| s.to_string()).unwrap_or_else(|| tr("Omarchy did not change it"));
+            let body = match &r {
+                Ok(r) => {
+                    let text = if r.stderr.is_empty() { &r.stdout } else { &r.stderr };
+                    let why: Vec<&str> = py_splitlines(py_strip(text));
+                    why.last().map(|s| s.to_string()).unwrap_or_else(|| tr("Omarchy did not change it"))
+                }
+                // Could not start, or timed out: the error says which.
+                Err(e) => e.clone(),
+            };
             if let Some(w) = &win {
                 w.notify(&format!("{nm} was not switched {word}"), &body, "normal");
             }
@@ -720,52 +739,28 @@ fn py_strip(s: &str) -> &str {
 /// `subprocess.run(argv, capture_output=True, text=True, timeout=n)`, with
 /// the two exceptions it raises as `Err` (TimeoutExpired, OSError).
 ///
-/// Started here rather than through `util::run`, which reports a failed
-/// start only as a flag: the OSError text carries the real errno
-/// (`[Errno 13] Permission denied: 'omarchy'`), and it reaches the task log.
+/// Through `util::run`, whose deadline covers the output too: a grandchild
+/// left holding the pipe is a timeout, not a hang. A failed start keeps its
+/// errno, so the OSError text carries it (`[Errno 13] Permission denied:
+/// 'omarchy'`), and it reaches the task log.
 fn run_checked(argv: &[String], timeout: u64) -> Result<util::Output, String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let Some((prog, args)) = argv.split_first() else {
+    let Some(prog) = argv.first() else {
         // Popen([]) raises IndexError before anything starts.
         return Err("list index out of range".to_string());
     };
-    let mut child = crate::util::spawn_group(Command::new(prog)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-        .map_err(|e| py_oserror(&e, prog))?;
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut s);
-            }
-            String::from_utf8_lossy(&s).into_owned()
-        })
-    };
-    let out_t = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = std::time::Instant::now();
-    let limit = std::time::Duration::from_secs(timeout);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) if start.elapsed() >= limit => {
-                crate::util::kill_group(&mut child);
-                let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
-                return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(_) => break None,
-        }
-    };
-    let stdout = out_t.join().unwrap_or_default();
-    let stderr = err_t.join().unwrap_or_default();
-    Ok(util::Output { code: status.and_then(|s| s.code()), stdout, stderr, timed_out: false, failed_to_start: false })
+    let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let r = util::run(&args, timeout);
+    if r.failed_to_start {
+        return Err(match r.start_errno {
+            Some(code) => py_oserror(&std::io::Error::from_raw_os_error(code), prog),
+            None => r.start_error,
+        });
+    }
+    if r.timed_out {
+        let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
+        return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
+    }
+    Ok(r)
 }
 
 /// Python's `bool(a)` of a probe answer.
@@ -1036,7 +1031,9 @@ impl Win {
         let shared = std::rc::Rc::new(std::cell::RefCell::new(i.clone()));
         let w = self.downgrade();
         let ic = shared.clone();
-        switch.connect_state_set(move |sw, on| plugin_switch_shared(&w, sw, on, ic.clone()));
+        let guard = SwitchGuard::default();
+        let g = guard.clone();
+        guard.connect(&switch, move |sw, on| plugin_switch_shared(&w, sw, on, &g, ic.clone()));
         row.add_suffix(&switch);
         row.set_activatable_widget(Some(&switch));
         Ok((row, shared))
@@ -1202,11 +1199,13 @@ impl Win {
         &self,
         switch: &gtk::Switch,
         on: bool,
+        guard: &SwitchGuard,
         i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
     ) -> glib::Propagation {
         // `i` is the caller's own object (the store dialog's `info`), shared,
         // so what `done` writes to it the caller sees on the next toggle.
-        plugin_switch_shared(&self.downgrade(), switch, on, i)
+        // `guard` is the one `switch` was connected through.
+        plugin_switch_shared(&self.downgrade(), switch, on, guard, i)
     }
 
     pub fn plugin_action(&self, action: &str, pid: &str) {
@@ -2188,6 +2187,12 @@ mod tests {
         assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("out\n", "err\n", Some(3)));
         let err = run_checked(&["sleep".into(), "5".into()], 0).unwrap_err();
         assert_eq!(err, "Command '['sleep', '5']' timed out after 0 seconds");
+        // A grandchild still holding stdout is a timeout, not a hang.
+        let t = std::time::Instant::now();
+        let argv: Vec<String> = vec!["sh".into(), "-c".into(), "sleep 30 & echo started".into()];
+        let err = run_checked(&argv, 1).unwrap_err();
+        assert_eq!(err, "Command '['sh', '-c', 'sleep 30 & echo started']' timed out after 1 seconds");
+        assert!(t.elapsed() < std::time::Duration::from_secs(10));
     }
 
     #[test]

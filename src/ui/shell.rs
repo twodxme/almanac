@@ -57,6 +57,45 @@ pub fn name(widget: &impl IsA<gtk::Widget>, text: &str) {
     widget.update_property(&[gtk::accessible::Property::Label(text)]);
 }
 
+/// A switch whose `state-set` handler runs for the user's flips only.
+///
+/// In GTK 4 `set_active` emits `state-set` whenever the value changes, so a
+/// handler that snaps the switch back to what really holds (or a dialog's
+/// "Keep it on") would run itself again: apply the change a second time, or
+/// ask again. Every switch that moves only when a change holds connects
+/// through [`SwitchGuard::connect`] and moves through [`SwitchGuard::set`],
+/// one rule for all of them.
+#[derive(Clone, Default)]
+pub struct SwitchGuard(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl SwitchGuard {
+    /// `switch.connect_state_set(f)`, skipped while [`set`](Self::set) moves it.
+    pub fn connect(
+        &self,
+        switch: &gtk::Switch,
+        f: impl Fn(&gtk::Switch, bool) -> glib::Propagation + 'static,
+    ) -> glib::SignalHandlerId {
+        let quiet = self.0.clone();
+        switch.connect_state_set(move |sw, on| {
+            if quiet.get() {
+                // Our own move: let the default handler settle the state.
+                return glib::Propagation::Proceed;
+            }
+            f(sw, on)
+        })
+    }
+
+    /// Put the switch at `on` (state and position) without running the handler.
+    pub fn set(&self, switch: &gtk::Switch, on: bool) {
+        // Restored even if it was already set: a nested `set` from a signal
+        // handler leaves it as the outer one found it.
+        let was = self.0.replace(true);
+        switch.set_state(on);
+        switch.set_active(on);
+        self.0.set(was);
+    }
+}
+
 /// `_CSS`: the app's stylesheet, verbatim, in `data/style.css`.
 pub const CSS: &str = include_str!("../../data/style.css");
 
@@ -2366,10 +2405,16 @@ impl Win {
     /// distribution ships defaults for are watched, since nothing else can
     /// be "reset to defaults".
     pub fn watch_configs(&self) {
-        {
+        let pending = {
             let mut st = self.shell.borrow_mut();
             st.config_monitors.clear();
-            st.config_pending = None;
+            st.config_pending.take()
+        };
+        // A debounce still waiting would otherwise fire after the re-watch.
+        // Live by construction: `config_check` clears the id before it
+        // returns Break, so a stored id never names a source already gone.
+        if let Some(old) = pending {
+            old.remove();
         }
         // Where `guard.resets()` raises the Python's window is never built;
         // here it is logged and nothing is watched.
@@ -2830,6 +2875,37 @@ pub fn run() -> glib::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guarded_switch_runs_its_handler_for_user_flips_only() {
+        // As `ui::packages`' widget test: skip with no display (a package
+        // build's check()), or when GTK belongs to another test thread.
+        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
+        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
+            return;
+        }
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gdk::Display::default().is_none() {
+            return;
+        }
+        let sw = gtk::Switch::new();
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let guard = SwitchGuard::default();
+        let c = calls.clone();
+        guard.connect(&sw, move |_, _| {
+            c.set(c.get() + 1);
+            glib::Propagation::Stop
+        });
+        sw.set_active(true); // as a click does
+        assert_eq!(calls.get(), 1);
+        assert!(!sw.state(), "the handler stopped it: the state waits");
+        guard.set(&sw, false); // snapping back
+        guard.set(&sw, true);
+        assert_eq!(calls.get(), 1);
+        assert!(sw.is_active() && sw.state());
+        sw.set_active(false);
+        assert_eq!(calls.get(), 2);
+    }
 
     #[test]
     fn the_texture_cache_drops_the_least_recently_used_by_size() {

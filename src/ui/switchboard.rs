@@ -365,17 +365,19 @@ impl Win {
 
         let title = title.to_string();
         let apply = Arc::new(apply);
+        let guard = shell::SwitchGuard::default();
 
         let done = {
             let switch = switch.downgrade();
             let title = title.clone();
             let w = self.downgrade();
+            let guard = guard.clone();
             move |on: bool, now: Option<bool>, err: String| {
                 let held = now.unwrap_or(!on);
                 if let Some(switch) = switch.upgrade() {
                     switch.set_sensitive(sensitive);
-                    switch.set_state(held);
-                    switch.set_active(held);
+                    // Quietly: snapping back must not apply the change again.
+                    guard.set(&switch, held);
                     shell::name(&switch, &if held { format!("{title} on") } else { format!("{title} off") });
                 }
                 let word = if on { "on" } else { "off" };
@@ -416,7 +418,8 @@ impl Win {
         let go = std::rc::Rc::new(go);
 
         let w = self.downgrade();
-        switch.connect_state_set(move |sw, on| {
+        let keep = guard.clone();
+        guard.connect(&switch, move |sw, on| {
             if !on && !confirm_off.is_empty() {
                 let dialog = adw::AlertDialog::new(
                     Some(&format!("Switch off {title}?")),
@@ -430,11 +433,13 @@ impl Win {
 
                 let go = go.clone();
                 let sw = sw.downgrade();
+                let keep = keep.clone();
                 dialog.connect_response(None, move |_d, resp| {
                     if resp == "off" {
                         go(false);
                     } else if let Some(sw) = sw.upgrade() {
-                        sw.set_active(true);
+                        // Quietly, or the switch moving back on would ask again.
+                        keep.set(&sw, true);
                     }
                 });
                 let parent = w.upgrade().map(|w| w.window.clone());

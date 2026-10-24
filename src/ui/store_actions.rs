@@ -17,7 +17,7 @@ use crate::plugins as plugins_mod;
 use crate::shortcuts;
 use crate::store::{self as store_mod, Plugin};
 use crate::tasks::{self, LogFn, Step, StepFn};
-use crate::ui::shell::{name, PluginItem, WeakWin, Win, INSTALL_ICON};
+use crate::ui::shell::{name, PluginItem, SwitchGuard, WeakWin, Win, INSTALL_ICON};
 use crate::util;
 use crate::xdg;
 
@@ -1474,8 +1474,10 @@ impl Win {
                     ..Default::default()
                 }));
                 let w = self.downgrade();
-                sw.connect_state_set(move |sw, on| match w.upgrade() {
-                    Some(win) => win.plugin_switch(sw, on, info.clone()),
+                let guard = SwitchGuard::default();
+                let g = guard.clone();
+                guard.connect(&sw, move |sw, on| match w.upgrade() {
+                    Some(win) => win.plugin_switch(sw, on, &g, info.clone()),
                     None => glib::Propagation::Proceed,
                 });
                 holder.append(&sw);

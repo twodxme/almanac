@@ -16,7 +16,12 @@ use crate::ui::shell::{self, Win};
 #[derive(Default)]
 pub struct State {
     pub ai_page: Option<gtk::Box>,
+    /// Groups of the current reload still out; only the current one counts.
     pub ai_pending: i64,
+    /// Which reload is current. A group that lands from an older one (a
+    /// refresh pressed while the last was still checking) is dropped, so it
+    /// neither overwrites newer results nor ends the newer spinner early.
+    pub ai_generation: u64,
     /// Which `app_icon` call each table image last came from (see
     /// `icon_claim`), so a vendor icon that lands after its row widget was
     /// rebound to another app is dropped instead of painted on the wrong row.
@@ -225,22 +230,32 @@ impl Win {
             .map(|(title, desc, _fn)| (title.to_string(), desc.to_string(), Vec::new()))
             .collect();
         self.shared.borrow_mut().ai_survey = survey.clone();
-        self.ai.borrow_mut().ai_pending = specs.len() as i64;
+        let generation = {
+            let mut st = self.ai.borrow_mut();
+            st.ai_generation += 1;
+            st.ai_pending = specs.len() as i64;
+            st.ai_generation
+        };
         self.ai_show(&survey, false);
 
         for (index, (title, _desc, f)) in specs.into_iter().enumerate() {
-            let w = self.clone();
+            let w = self.downgrade();
             let t = title.to_string();
             self.thumb_submit(
                 move || ai::load_group(f, &t),
                 move |entries| {
-                    w.ai_group_done(index, title, entries);
+                    if let Some(w) = w.upgrade() {
+                        w.ai_group_done(generation, index, title, entries);
+                    }
                 },
             );
         }
     }
 
-    pub fn ai_group_done(&self, index: usize, _title: &str, entries: Vec<Entry>) -> glib::ControlFlow {
+    pub fn ai_group_done(&self, generation: u64, index: usize, _title: &str, entries: Vec<Entry>) -> glib::ControlFlow {
+        if self.ai.borrow().ai_generation != generation {
+            return glib::ControlFlow::Break; // a newer reload owns the page
+        }
         let survey = {
             let mut s = self.shared.borrow_mut();
             if index < s.ai_survey.len() {
