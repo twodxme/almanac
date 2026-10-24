@@ -79,7 +79,12 @@ pub fn fix_steps(label: &str, fix: Option<crate::maintenance::Fix>) -> Vec<Step>
         Some(Fix::Func(f)) => vec![StepAction::Call(f)],
         None => vec![StepAction::Argv(Vec::new())],
     };
-    actions.into_iter().map(|action| Step { label: label.to_string(), action }).collect()
+    let n = actions.len();
+    actions
+        .into_iter()
+        .enumerate()
+        .map(|(i, action)| Step { label: if n > 1 { format!("{label} ({}/{n})", i + 1) } else { label.to_string() }, action })
+        .collect()
 }
 
 /// One `(label, argv)` entry of the Python `steps` list.

@@ -462,7 +462,11 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std::io:
 pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let target = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+        // A link to a file not there yet still names where it should go.
+        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| match std::fs::read_link(path) {
+            Ok(to) => path.parent().unwrap_or(Path::new(".")).join(to),
+            Err(_) => path.to_path_buf(),
+        }),
         _ => path.to_path_buf(),
     };
     let parent = match target.parent() {
@@ -1064,6 +1068,12 @@ mod tests {
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
         assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        // A link whose file is not there yet is written through, too.
+        let dangling = d.path().join("dangling.conf");
+        std::os::unix::fs::symlink("later.conf", &dangling).unwrap();
+        atomic_write(&dangling, b"first").unwrap();
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(d.path().join("later.conf")).unwrap(), "first");
     }
 
     #[test]
