@@ -96,6 +96,18 @@
   </requires>
 
   <releases>
+    <release version="2.1.5" date="2026-10-23">
+      <description>
+        <p>Scheduled updates hold more of what can stop a boot: every kernel
+        flavour, CPU microcode, DKMS modules, the NVIDIA driver, and what
+        builds the initramfs or unlocks the root disk.</p>
+        <p>Plugin setup runs exactly the words you saw, checks every shown
+        file is unchanged before each step, and no longer offers steps that
+        run a program instead of setting one up, or that point a tool at
+        files it could not show. Errors read as plain English, and deeply
+        nested data can no longer crash the window.</p>
+      </description>
+    </release>
     <release version="2.1.4" date="2026-10-23">
       <description>
         <p>Safer scheduled updates: when Almanac cannot tell which pending

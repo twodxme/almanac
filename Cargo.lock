@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "almanac"
-version = "2.1.4"
+version = "2.1.5"
 dependencies = [
  "cairo-rs",
  "chrono",
