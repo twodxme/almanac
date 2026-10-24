@@ -1269,6 +1269,7 @@ fn _fetch() -> Option<Vec<u8>> {
         .timeout_connect(t)
         .timeout_send_request(t)
         .timeout_recv_response(t)
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
         .build()
         .into();
     let r = agent.get(URL).header("User-Agent", "almanac").call().ok()?;

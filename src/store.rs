@@ -1488,6 +1488,7 @@ fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(t))
         .timeout_recv_response(Some(t))
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
         .build()
         .into();
     let r = agent.get(url).header(UA.0, UA.1).call().map_err(|e| format!("URLError: {e}"))?;

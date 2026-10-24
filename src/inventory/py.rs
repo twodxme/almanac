@@ -650,6 +650,7 @@ pub(super) fn http_json(url: &str, timeout: u64) -> Result<Value, Box<dyn std::e
         .timeout_connect(Some(t))
         .timeout_send_request(Some(t))
         .timeout_recv_response(Some(t))
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
         .build()
         .into();
     let r = agent.get(url).call()?;
