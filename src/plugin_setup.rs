@@ -49,7 +49,8 @@
 //!   path, as Python puts it there, so a module beside it (even one named
 //!   like the standard library's) is part of what it runs. Runners whose
 //!   whole job is to run some program rather than install one -- `uv run`,
-//!   `uv tool run`, `pipx run` -- are not offered at all.
+//!   `uv tool run`, `pipx run`, and the `exec`/`x`/`dlx` of npm, pnpm,
+//!   yarn and bun -- are not offered at all.
 //! * **by hand**   what cannot be done for the user: API keys and logins,
 //!   config and keybinding edits. Listed, with the README heading to read.
 //!
@@ -1189,6 +1190,12 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
         }
         "npm" | "pnpm" | "yarn" | "bun" => {
             if elsewhere(&["--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"]) {
+                return Err(());
+            }
+            // Their fetch-and-run commands run a package from the registry --
+            // code that is not even in the plugin -- rather than set it up.
+            const RUNNERS: &[&str] = &["exec", "x", "dlx"];
+            if args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| RUNNERS.contains(&a.as_str())) {
                 return Err(());
             }
             // bun's preload and config options name files to run or read.
@@ -2555,7 +2562,7 @@ make build
     #[test]
     fn test_runners_folders_and_unit_globs_are_not_offered() {
         let d = tempdir();
-        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\n```\n";
+        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\n```\n";
         let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n")]);
         let p = plan(&root).unwrap();
         assert!(p.commands.is_empty(), "{:?}", p.commands);
