@@ -3265,8 +3265,13 @@ mod tests {
         assert_eq!(run_text(&["sh", "-c", "echo hi"], 5).as_deref(), Some("hi\n"));
     }
 
+    /// The two tests that plant a catalog in `CACHED` let go of its lock in
+    /// the middle, so without this one could read the other's plant.
+    static CACHE_PLANT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn annotate_marks_reach_the_cache() {
+        let _plant = CACHE_PLANT.lock().unwrap_or_else(|e| e.into_inner());
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let before = cached.take();
         let p = Plugin { id: "x".into(), name: "X".into(), ..Plugin::default() };
@@ -3288,6 +3293,7 @@ mod tests {
 
     #[test]
     fn catalog_annotated_marks_the_cache_itself() {
+        let _plant = CACHE_PLANT.lock().unwrap_or_else(|e| e.into_inner());
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let before = cached.take();
         // Marked installed before; nothing by this id is on any machine.
