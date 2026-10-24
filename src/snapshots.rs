@@ -283,7 +283,10 @@ fn create_step_with(description: &str, configs: Vec<String>, runner: Runner) -> 
         let argv: Vec<String> = if geteuid() == 0 {
             cmd.clone()
         } else {
-            std::iter::once("pkexec".to_string()).chain(cmd.iter().cloned()).collect()
+            [crate::tasks::PKEXEC.to_string(), "/usr/bin/snapper".to_string()]
+                .into_iter()
+                .chain(cmd[1..].iter().cloned())
+                .collect()
         };
         let r = match runner(&argv) {
             Ok(r) => r,

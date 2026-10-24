@@ -263,11 +263,15 @@ pub fn file_identity_try(path: &str) -> TryProbe {
     })
 }
 
-/// Every repository and AUR package with an update waiting.
+/// Every repository and AUR package with an update waiting, or None when
+/// either check failed: an empty set from a check that could not run would
+/// read as every update installed.
 pub fn pending_updates() -> Probe {
     Arc::new(|| {
-        let mut names: BTreeSet<String> = crate::inventory::pending_repo().into_keys().collect();
-        names.extend(crate::inventory::pending_aur().into_keys());
+        let mut names: BTreeSet<String> = crate::inventory::checked_pending_repo()?.into_keys().collect();
+        if crate::util::which("yay").is_some() {
+            names.extend(crate::inventory::checked_pending_aur()?.into_keys());
+        }
         Some(ProbeValue::Set(names))
     })
 }

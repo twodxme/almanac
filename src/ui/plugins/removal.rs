@@ -263,10 +263,7 @@ impl Win {
 
         // yay builds as this user and only needs root for the final pacman
         // call; --sudo pkexec is what lets that happen without a terminal.
-        let argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", &app.name]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let argv = crate::tasks::yay_install(&[&app.name]);
         let w = self.downgrade();
         let nm = app.name.clone();
         let detail = format!("{} {}\n{}\n\n$ {}", app.name, app.version, app.description, argv.join(" "));
@@ -303,10 +300,7 @@ impl Win {
             self.on_install_link(&text);
             return;
         }
-        let argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", "pkexec", &text]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let argv = crate::tasks::yay_install(&[&text]);
         let w = self.downgrade();
         let detail = format!("$ {}", argv.join(" "));
         let t = text.clone();

@@ -440,18 +440,66 @@ pub fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&text).ok()
 }
 
-/// Write JSON atomically: to `<name>.tmp` beside it, then rename -- the
-/// `tmp.write_text(...); tmp.replace(p)` pattern of the Python. Creates the
-/// parent directory. `indent` mirrors `json.dumps(indent=...)`; `sort_keys`
-/// mirrors `sort_keys=True`.
+/// Write JSON atomically (`atomic_write`). Creates the parent directory.
+/// `indent` mirrors `json.dumps(indent=...)`; `sort_keys` mirrors
+/// `sort_keys=True`.
 pub fn write_json(path: &Path, value: &serde_json::Value, indent: Option<usize>, sort_keys: bool) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    atomic_write(path, dumps(value, indent, sort_keys).as_bytes())
+}
+
+/// Replace a file so a reader sees the old contents or the new, never part
+/// of either: a temp file of its own beside it (two writers -- the window
+/// and the scheduled run -- never share one), flushed to disk, then renamed
+/// over. Creates the parent directory and keeps an existing file's mode. A
+/// symlink (a dotfiles checkout) is written through to its target, so the
+/// link stays a link.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let target = match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+        _ => path.to_path_buf(),
+    };
+    let parent = match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::Builder::new().prefix(".").suffix(".tmp").tempfile_in(parent)?;
+    tmp.write_all(bytes)?;
+    if let Ok(m) = std::fs::metadata(&target) {
+        tmp.as_file().set_permissions(m.permissions())?;
     }
-    let text = dumps(value, indent, sort_keys);
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    tmp.as_file().sync_all()?;
+    tmp.persist(&target).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// The checkout this binary was compiled in, when it is still there and only
+/// root or this user can change it or any folder above it (a root-owned
+/// sticky folder like /tmp is passed through). Translations, glyphs, release
+/// notes and `git -C` are read from it at run time, and a packaged build was
+/// compiled somewhere like `/tmp/pkg/src/almanac-x.y.z` that any local
+/// account could create afterwards.
+pub fn build_checkout() -> Option<PathBuf> {
+    static DIR: std::sync::LazyLock<Option<PathBuf>> =
+        std::sync::LazyLock::new(|| trusted_dir(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    DIR.clone()
+}
+
+/// `dir`, symlinks resolved, when it and every folder above it belong to
+/// root or this user and no one else can write to them.
+pub fn trusted_dir(dir: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let dir = std::fs::canonicalize(dir).ok()?;
+    let me = nix::unistd::geteuid().as_raw();
+    for d in dir.ancestors() {
+        let m = std::fs::metadata(d).ok()?;
+        let others_write = m.mode() & 0o022 != 0;
+        let root_sticky = m.uid() == 0 && m.mode() & 0o1000 != 0;
+        if !m.is_dir() || (m.uid() != 0 && m.uid() != me) || (others_write && !root_sticky) {
+            return None;
+        }
+    }
+    Some(dir)
 }
 
 /// `json.dumps(value, indent=indent, sort_keys=sort_keys)` with Python's
@@ -955,6 +1003,56 @@ pub(crate) static TEST_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writers_at_once_never_leave_a_broken_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        std::thread::scope(|s| {
+            for t in 0..4 {
+                let p = &p;
+                s.spawn(move || {
+                    for i in 0..300 {
+                        let v = serde_json::json!({"writer": t, "i": i, "pad": "x".repeat(4000)});
+                        write_json(p, &v, Some(2), true).unwrap();
+                        assert!(read_json(p).is_some(), "a reader saw a half-written file");
+                    }
+                });
+            }
+        });
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("state.json")], "no temp file is left behind");
+    }
+
+    #[test]
+    fn an_atomic_write_keeps_a_symlink_and_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real.conf");
+        std::fs::write(&real, "old").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = d.path().join("link.conf");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        atomic_write(&link, b"new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    #[test]
+    fn only_a_folder_no_one_else_can_change_is_trusted() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let mine = d.path().join("mine");
+        std::fs::create_dir(&mine).unwrap();
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(trusted_dir(&mine), Some(std::fs::canonicalize(&mine).unwrap()));
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(trusted_dir(&mine), None, "a world-writable folder");
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert_eq!(trusted_dir(&mine), None, "a group-writable folder");
+        assert_eq!(trusted_dir(&d.path().join("gone")), None);
+    }
 
     #[test]
     fn rounds_like_python() {

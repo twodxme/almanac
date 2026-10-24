@@ -55,6 +55,8 @@ pub type FixFn = Arc<dyn Fn(LogFn<'_>) -> Result<(), String> + Send + Sync>;
 #[derive(Clone)]
 pub enum Fix {
     Argv(Vec<String>),
+    /// Several commands, run one after another as one fix.
+    Steps(Vec<Vec<String>>),
     Func(FixFn),
 }
 
@@ -62,6 +64,20 @@ impl Fix {
     /// Build an argv fix from string literals.
     pub fn argv(args: &[&str]) -> Fix {
         Fix::Argv(args.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// Build a fix of several commands from string literals.
+    pub fn steps(cmds: &[&[&str]]) -> Fix {
+        Fix::Steps(cmds.iter().map(|c| c.iter().map(|s| s.to_string()).collect()).collect())
+    }
+
+    /// The commands this fix runs, one per step; empty for a callable.
+    pub fn commands(&self) -> Vec<Vec<String>> {
+        match self {
+            Fix::Argv(a) => vec![a.clone()],
+            Fix::Steps(s) => s.clone(),
+            Fix::Func(_) => Vec::new(),
+        }
     }
 
     /// Wrap a closure as a callable fix.
@@ -77,6 +93,7 @@ impl fmt::Debug for Fix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Fix::Argv(a) => f.debug_tuple("Argv").field(a).finish(),
+            Fix::Steps(s) => f.debug_tuple("Steps").field(s).finish(),
             Fix::Func(_) => f.write_str("Func(<callable>)"),
         }
     }
@@ -86,6 +103,7 @@ impl PartialEq for Fix {
     fn eq(&self, other: &Fix) -> bool {
         match (self, other) {
             (Fix::Argv(a), Fix::Argv(b)) => a == b,
+            (Fix::Steps(a), Fix::Steps(b)) => a == b,
             (Fix::Func(a), Fix::Func(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
@@ -97,6 +115,7 @@ impl Serialize for Fix {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             Fix::Argv(a) => a.serialize(s),
+            Fix::Steps(c) => c.serialize(s),
             Fix::Func(_) => s.serialize_str("<callable>"),
         }
     }
@@ -108,6 +127,9 @@ impl<'de> Deserialize<'de> for Fix {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Fix, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
         match v {
+            serde_json::Value::Array(items) if !items.is_empty() && items.iter().all(|i| i.is_array()) => {
+                Ok(Fix::Steps(serde_json::from_value(serde_json::Value::Array(items)).map_err(serde::de::Error::custom)?))
+            }
             serde_json::Value::Array(items) => Ok(Fix::Argv(
                 items
                     .into_iter()
@@ -859,10 +881,11 @@ fn _pacman_cache_with(du: (f64, i64), run: RunFn<'_>) -> Result<Finding, String>
         count: n,
         size_mb: free,
         fix_label: "Trim to 2 versions".into(),
-        // -rk2 keeps the two newest of each installed package; -ruk0 drops
-        // every cached version of packages no longer installed, which can
-        // never be downgraded to anyway.
-        fix: Some(Fix::argv(&["paccache", "-rk2", "-ruk0"])),
+        // -rk2 keeps the two newest of each package; then -ruk0 drops every
+        // cached version of packages no longer installed, which can never be
+        // downgraded to anyway. Two runs: given together, the later -k0 and
+        // -u override -k2, and installed packages are never trimmed.
+        fix: Some(Fix::steps(&[&["paccache", "-rk2"], &["paccache", "-ruk0"]])),
         fix_note: "Keeps the 2 most recent versions of installed packages and \
                    removes cached packages that are no longer installed."
             .into(),
@@ -2022,14 +2045,10 @@ fn _clear_runtime_logs_in(runtime: &Path, instances: &str, now: f64, log: LogFn<
         let mut ds = _iterdir(&qs)?;
         ds.sort_by_key(|p| _sort_key(p));
         for d in ds {
-            if !d.is_dir() {
+            if !d.is_dir() || quickshell_running(&d) {
                 continue;
             }
-            let Ok(m) = std::fs::metadata(&d) else { continue };
-            // st_mtime: seconds + nanoseconds * 1e-9, negative before 1970.
-            use std::os::unix::fs::MetadataExt;
-            let mtime = m.mtime() as f64 + m.mtime_nsec() as f64 * 1e-9;
-            if mtime < cutoff {
+            if newest_mtime(&d).is_some_and(|t| t < cutoff) {
                 // rmtree(ignore_errors=True): a symlinked session directory
                 // is refused, left in place, and still logged as removed.
                 let _ = _rmtree(&d, true);
@@ -2039,6 +2058,37 @@ fn _clear_runtime_logs_in(runtime: &Path, instances: &str, now: f64, log: LogFn<
     }
     log("done");
     Ok(())
+}
+
+/// Whether the quickshell instance in `d` is still running: a running one
+/// holds a POSIX lock on its instance.lock, which /proc/locks lists without
+/// anyone taking it. Unreadable /proc/locks counts as running, so a live
+/// shell's socket is never what gets removed.
+fn quickshell_running(d: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::metadata(d.join("instance.lock")) else { return false };
+    quickshell_locked(m.ino(), std::fs::read_to_string("/proc/locks").ok().as_deref())
+}
+
+fn quickshell_locked(ino: u64, locks: Option<&str>) -> bool {
+    let Some(locks) = locks else { return true };
+    // "37: POSIX  ADVISORY  WRITE 2498825 00:54:9694 0 EOF": maj:min:inode.
+    locks.lines().any(|l| l.split_whitespace().any(|w| w.rsplit(':').next() == Some(&ino.to_string()) && w.contains(':')))
+}
+
+/// When anything in `d` last changed: the folder's own mtime moves only when
+/// entries are added or removed, not while a log in it is written.
+fn newest_mtime(d: &Path) -> Option<f64> {
+    use std::os::unix::fs::MetadataExt;
+    // st_mtime: seconds + nanoseconds * 1e-9, negative before 1970.
+    let at = |m: &std::fs::Metadata| m.mtime() as f64 + m.mtime_nsec() as f64 * 1e-9;
+    let mut newest = at(&std::fs::metadata(d).ok()?);
+    for e in std::fs::read_dir(d).ok()?.flatten() {
+        if let Ok(m) = e.path().symlink_metadata() {
+            newest = newest.max(at(&m));
+        }
+    }
+    Some(newest)
 }
 
 pub fn config_resets() -> Finding {
@@ -2194,6 +2244,25 @@ impl _PySum {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_running_shell_session_is_never_old() {
+        let locks = "36: FLOCK  ADVISORY  WRITE 1505 00:1c:812 0 EOF\n\
+                     37: POSIX  ADVISORY  WRITE 2498825 00:54:9694 0 EOF\n";
+        assert!(quickshell_locked(9694, Some(locks)));
+        assert!(!quickshell_locked(969, Some(locks)), "a different inode");
+        assert!(!quickshell_locked(54, Some(locks)), "a device number is not an inode");
+        assert!(quickshell_locked(1, None), "unreadable /proc/locks keeps it");
+
+        // Days of uptime: the folder's own mtime stays at the session's
+        // start while its log is written, so age is the newest file inside.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("log.log"), "x").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86400);
+        std::fs::File::open(d.path()).unwrap().set_modified(old).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        assert!(newest_mtime(d.path()).unwrap() > now - 60.0);
+    }
+
     // ---- DiskChecks ----
     // Checking only / misses how a machine actually runs out of room.
     //
@@ -2252,6 +2321,21 @@ mod tests {
         assert!((f.size_mb - 2.0 * 1.23 * 1024.0).abs() < 0.5);
         assert_eq!(f.severity, WARN);
         assert!(f.actionable());
+        // Given together, paccache's later -k0 and -u override -k2 and only
+        // uninstalled packages are trimmed, so the fix is two runs.
+        assert_eq!(
+            f.fix.unwrap().commands(),
+            vec![vec!["paccache".to_string(), "-rk2".into()], vec!["paccache".to_string(), "-ruk0".into()]]
+        );
+    }
+
+    #[test]
+    fn a_fix_of_several_commands_survives_a_round_trip() {
+        let fix = Fix::steps(&[&["paccache", "-rk2"], &["paccache", "-ruk0"]]);
+        let back: Fix = serde_json::from_value(serde_json::to_value(&fix).unwrap()).unwrap();
+        assert_eq!(back, fix);
+        let one = Fix::argv(&["pacman", "-Sc"]);
+        assert_eq!(serde_json::from_value::<Fix>(serde_json::to_value(&one).unwrap()).unwrap(), one);
     }
 
     #[test]
