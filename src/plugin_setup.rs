@@ -1326,13 +1326,17 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             }
             out.push("package.json".into());
             // Their own config, which can name a script shell, a hook file
-            // or a yarn release to run in place of the tool.
+            // or a yarn release to run in place of the tool; and the lockfile,
+            // which can link a dependency to a folder of the plugin's whose
+            // install scripts then run (`"link": true`), and yarn's loader,
+            // which `yarn run` executes. A binary lockfile cannot be shown,
+            // so a step that would read one is not offered.
             out.extend(
                 match prog {
-                    "npm" => &[".npmrc"][..],
-                    "pnpm" => &[".npmrc", ".pnpmfile.cjs", "pnpm-workspace.yaml"][..],
-                    "yarn" => &[".yarnrc", ".yarnrc.yml"][..],
-                    _ => &["bunfig.toml"][..],
+                    "npm" => &[".npmrc", "package-lock.json", "npm-shrinkwrap.json"][..],
+                    "pnpm" => &[".npmrc", ".pnpmfile.cjs", "pnpm-workspace.yaml", "pnpm-lock.yaml"][..],
+                    "yarn" => &[".yarnrc", ".yarnrc.yml", "yarn.lock", ".pnp.cjs", ".pnp.loader.mjs"][..],
+                    _ => &["bunfig.toml", "bun.lock", "bun.lockb"][..],
                 }
                 .iter()
                 .map(|s| s.to_string()),
@@ -1350,7 +1354,12 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // config (uv.toml, pyproject's [tool.uv]) and the Python to use
             // (.python-version(s)), which may name a path -- `./fakepy` made
             // uv run a program of the plugin's (see `PYTHON_VERSION_FILES`).
-            out.extend(["uv.toml", "pyproject.toml", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
+            out.extend(["uv.toml", "pyproject.toml", "uv.lock", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
+            // uv runs the interpreter of a .venv in the folder to ask it
+            // what it is, so a plugin that ships one runs that program.
+            if std::fs::symlink_metadata(plugin_dir.join(".venv")).is_ok() {
+                return Err(());
+            }
             // Only commands that set a project up, named first: an option
             // before the command may take a value that cannot be told from it
             // (`uv --cache-dir /tmp/c run`), and `uv run` / `uv tool run` run a
@@ -2191,7 +2200,7 @@ make build
         assert!(files("pip install requests git+https://x/y").is_err());
         assert_eq!(
             files("uv tool install .").unwrap(),
-            ["uv.toml", "pyproject.toml", ".python-version", ".python-versions", "setup.py", "pyproject.toml", "setup.cfg"]
+            ["uv.toml", "pyproject.toml", "uv.lock", ".python-version", ".python-versions", "setup.py", "pyproject.toml", "setup.cfg"]
         );
         assert_eq!(files("pipx install --editable .").unwrap(), ["setup.py", "pyproject.toml", "setup.cfg"]);
         assert!(files("yarn").unwrap().contains(&".yarnrc.yml".to_string()));
@@ -2677,6 +2686,29 @@ make build
             assert!(ok && !out.contains("planted") && out.contains("usage"), "{out}");
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The ninth review's probes: a lockfile that links a dependency to a
+    /// folder of the plugin's is shown with the step, and a .venv the
+    /// plugin ships keeps uv from being offered at all (uv runs its python).
+    #[test]
+    fn lockfiles_are_shown_and_a_shipped_venv_stops_uv() {
+        let d = tempdir();
+        let lock = "{\"packages\": {\"node_modules/foo\": {\"resolved\": \"evil\", \"link\": true}}}\n";
+        let root = plugin_with(
+            &d,
+            "# Install\n```\nnpm ci\nuv sync --frozen\n```\n",
+            &[("package.json", "{}\n"), ("package-lock.json", lock), ("pyproject.toml", "[project]\n"), ("uv.lock", "version = 1\n")],
+        );
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["npm ci", "uv sync --frozen"]);
+        let shown: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
+        assert!(shown.contains(&"package-lock.json".to_string()) && shown.contains(&"uv.lock".to_string()), "{shown:?}");
+        std::fs::create_dir_all(root.join(".venv/bin")).unwrap();
+        std::fs::write(root.join(".venv/bin/python"), "#!/bin/sh\n").unwrap();
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(p.commands, ["npm ci"]);
     }
 
     /// The fourth review's probes: runners through uv and pipx, a
