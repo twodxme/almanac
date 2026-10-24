@@ -96,6 +96,20 @@
   </requires>
 
   <releases>
+    <release version="2.1.3" date="2026-10-23">
+      <description>
+        <p>Safer AppImage updates: a download that is cut short, is not an
+        app, or does not match GitHub's checksum is discarded, and the working
+        copy and its backup are left alone. The App Store runs only the
+        install commands its catalogue uses, and plugin setup shows the whole
+        script before it runs.</p>
+        <p>Faster: startup launches about a quarter as many programs, slow
+        checks no longer freeze the window, and MCP servers are no longer
+        started just to list them. Closed task windows are freed, old cache
+        files are pruned, and a package install says when a newer release is
+        out.</p>
+      </description>
+    </release>
     <release version="2.1.2" date="2026-10-23">
       <description>
         <p>Fixed: Update all left plugins, AppImages, agent CLIs and local
