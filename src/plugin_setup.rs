@@ -23,8 +23,8 @@
 //!   that was absent is checked still absent; either check failing stops
 //!   the run. A name with a control character in it (a newline the
 //!   terminal's `$(...)` would drop) is not offered at all, and every
-//!   Python runs with PYTHONSAFEPATH=1, so the plugin's folder is not where
-//!   it finds `logging` or `shutil`. `systemctl --user` only enables,
+//!   `python -m` runs with `-P`, so the plugin's folder is not where it finds
+//!   `logging` or `shutil`. `systemctl --user` only enables,
 //!   disables, starts, stops or restarts units, or reloads the daemon.
 //!
 //!   A line is offered only when bash would read it as plain words, joined
@@ -1525,16 +1525,22 @@ fn exact_output(cmd: &str, want: &str, fail: &str) -> String {
     )
 }
 
-/// sudo clears the environment, PYTHONSAFEPATH with it: a Python step run
-/// through sudo is handed it again by `env`.
-fn sudo_keeps_safepath(words: Vec<Word>) -> Vec<Word> {
-    let python_after_sudo = words.first().is_some_and(|w| w.text == "sudo") && words.get(1).is_some_and(|w| is_python(&w.text));
-    if !python_after_sudo {
+/// `python -m X` puts the folder it runs in first on sys.path, so a
+/// plugin's own logging.py or shutil.py would be what venv or pip imports,
+/// unseen. `-P` (3.11+) leaves it off for that interpreter only: a flag, not
+/// PYTHONSAFEPATH in the environment, because the build backends pip starts
+/// would inherit the variable, and a setup.py importing the module beside
+/// it (its own version file, say) would then fail to build. A script run by
+/// path (`python3 setup.py`) is shown, and keeps its own folder.
+fn python_m_safe(words: Vec<Word>) -> Vec<Word> {
+    let at = usize::from(words.first().is_some_and(|w| w.text == "sudo"));
+    let is_m = words.get(at).is_some_and(|w| is_python(&w.text))
+        && words[at + 1..].iter().take_while(|w| w.text.starts_with('-')).any(|w| w.text == "-m");
+    if !is_m {
         return words;
     }
-    let plain = |s: &str| Word { text: s.to_string(), home: None };
-    let mut out = vec![words[0].clone(), plain("env"), plain("PYTHONSAFEPATH=1")];
-    out.extend(words.into_iter().skip(1));
+    let mut out = words;
+    out.insert(at + 1, Word { text: "-P".to_string(), home: None });
     out
 }
 
@@ -1551,12 +1557,6 @@ pub fn terminal_script(p: &SetupPlan) -> String {
     let mut lines = vec![
         format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))),
         "set -e".to_string(),
-        // Python puts the folder it runs in (or the script's) first on
-        // sys.path, so a plugin's own logging.py or shutil.py would be what
-        // `python3 -m venv`, pip or a shown script imports, unseen. 3.11 and
-        // later leave it off with this; it is in the environment, not a
-        // `-P`, so that the Pythons pip, venv and a build start inherit it.
-        "export PYTHONSAFEPATH=1".to_string(),
     ];
     let stop = |shown: &str| shlex_quote(&format!("{shown} changed after it was shown -- setup stopped."));
     for cmd in &p.commands {
@@ -1581,7 +1581,7 @@ pub fn terminal_script(p: &SetupPlan) -> String {
         }
         lines.push(format!("echo; echo '$ '{}", shlex_quote(cmd)));
         match literal_words(cmd) {
-            Some(words) if !words.is_empty() => lines.push(argv_line(&sudo_keeps_safepath(words))),
+            Some(words) if !words.is_empty() => lines.push(argv_line(&python_m_safe(words))),
             _ => {
                 let msg = shlex_quote(&format!("{cmd} is not plain words -- setup stopped."));
                 lines.push(format!("echo; echo {msg}; exit 1"));
@@ -2493,8 +2493,8 @@ make build
     }
 
     /// Python puts the folder first on sys.path: `python3 -m venv .venv`
-    /// imported a plugin's own logging.py, unseen. Every step now runs with
-    /// PYTHONSAFEPATH=1, through sudo too.
+    /// imported a plugin's own logging.py, unseen. Every `-m` step now runs
+    /// with `-P`, through sudo too; a script run by path keeps its folder.
     #[test]
     fn test_python_steps_do_not_import_the_plugins_files() {
         let d = tempdir();
@@ -2506,9 +2506,13 @@ make build
         let p = plan(&root).unwrap();
         assert_eq!(p.commands, ["python3 -m venv --help", "sudo python3 -m pip install ."]);
         let script = terminal_script(&p);
-        assert!(script.find("\nexport PYTHONSAFEPATH=1\n") < script.find("'python3' '-m' 'venv'"), "{script}");
-        assert!(script.contains("\n'sudo' 'env' 'PYTHONSAFEPATH=1' 'python3' '-m' 'pip' 'install' '.'\n"), "{script}");
-        assert_eq!(sudo_keeps_safepath(literal_words("sudo make").unwrap()).len(), 2);
+        assert!(script.contains("\n'python3' '-P' '-m' 'venv' '--help'\n"), "{script}");
+        assert!(script.contains("\n'sudo' 'python3' '-P' '-m' 'pip' 'install' '.'\n"), "{script}");
+        assert!(!script.contains("PYTHONSAFEPATH"), "{script}");
+        let texts = |line: &str| python_m_safe(literal_words(line).unwrap()).into_iter().map(|w| w.text).collect::<Vec<_>>();
+        assert_eq!(texts("sudo make"), ["sudo", "make"]);
+        assert_eq!(texts("python3 setup.py install"), ["python3", "setup.py", "install"]);
+        assert_eq!(texts("python3 -u -m build"), ["python3", "-P", "-u", "-m", "build"]);
         // Run for real where there is a Python to run.
         let python = |safe: bool| {
             let mut c = std::process::Command::new("python3");

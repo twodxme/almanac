@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 21:01-0700\n"
+"POT-Creation-Date: 2026-10-23 21:20-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -33,7 +33,7 @@ msgstr[1] ""
 msgid "No string anyone has translated"
 msgstr ""
 
-#: src/plugin_setup.rs:1596
+#: src/plugin_setup.rs:1675
 msgid ""
 "A build, or a Python or JavaScript program, runs code from the repository "
 "beyond the files shown here."
@@ -1335,7 +1335,7 @@ msgstr ""
 msgid "Some updates failed — see the log"
 msgstr ""
 
-#: src/util/human.rs:117 src/util/human.rs:185
+#: src/util/human.rs:117 src/util/human.rs:193
 msgid "The file is not valid UTF-8"
 msgstr ""
 
@@ -1343,46 +1343,46 @@ msgstr ""
 msgid "The text could not be decoded"
 msgstr ""
 
-#: src/util/human.rs:142
+#: src/util/human.rs:149
 msgid "The system refused"
 msgstr ""
 
-#: src/util/human.rs:157 src/util/human.rs:184
+#: src/util/human.rs:165 src/util/human.rs:192
 msgid "The data is nested too deeply to read"
 msgstr ""
 
-#: src/util/human.rs:163
+#: src/util/human.rs:171
 msgid "The text has characters that cannot be written out"
 msgstr ""
 
-#: src/util/human.rs:166 src/util/human.rs:186
+#: src/util/human.rs:174 src/util/human.rs:194
 msgid "The data is not valid JSON"
 msgstr ""
 
-#: src/util/human.rs:169
+#: src/util/human.rs:177
 msgid "A name contains a NUL character"
 msgstr ""
 
-#: src/util/human.rs:172 src/util/human.rs:195 src/util/human.rs:198
+#: src/util/human.rs:180 src/util/human.rs:203 src/util/human.rs:206
 msgid "Unexpected data"
 msgstr ""
 
-#: src/util/human.rs:175 src/util/human.rs:189
+#: src/util/human.rs:183 src/util/human.rs:197
 msgid "The connection timed out"
 msgstr ""
 
-#: src/util/human.rs:187
+#: src/util/human.rs:195
 msgid "A number in the data is out of range"
 msgstr ""
 
-#: src/util/human.rs:188
+#: src/util/human.rs:196
 msgid "Unexpected answer from the server"
 msgstr ""
 
-#: src/util/human.rs:191
+#: src/util/human.rs:199
 msgid "Unknown text encoding"
 msgstr ""
 
-#: src/util/human.rs:199
+#: src/util/human.rs:207
 msgid "Something went wrong"
 msgstr ""
