@@ -89,9 +89,9 @@ impl Win {
     }
 
     fn offer_self_update(&self, info: selfupdate::Info) {
-        if !info.can_update && info.kind == selfupdate::PACKAGE && !info.latest.is_empty() {
-            // A newer release than this package: pacman installs it, not
-            // Almanac, but the download is one click away.
+        if selfupdate::offers_download(&info) {
+            // A newer release than a package nothing updates: pacman
+            // installs it, not Almanac, but the download is one click away.
             let toast = adw::Toast::builder().title(info.note.as_str()).use_markup(false).timeout(0).build();
             toast.set_button_label(Some(&tr("Open the release")));
             let w = self.downgrade();

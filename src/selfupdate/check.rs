@@ -64,6 +64,19 @@ pub fn package_note(pkg: &str, origin: PackageOrigin) -> String {
     }
 }
 
+/// Whether "check for updates" should offer the releases page: a newer
+/// release is out and the note says nothing updates this package by itself
+/// (a foreign package the AUR does not carry). A repository or AUR package
+/// is updated by pacman or the AUR helper, so pointing it at a `pacman -U`
+/// download would steer it off the path that keeps it current; there, and
+/// when the origin is unknown, the note is said as before.
+pub fn offers_download(info: &Info) -> bool {
+    !info.can_update
+        && info.kind == PACKAGE
+        && !info.latest.is_empty()
+        && matches!(info.origin, Some(PackageOrigin::Foreign { aur: None | Some(false) }))
+}
+
 /// `pacman -Qmq <pkg>` read as a [`PackageOrigin`]. Local and quick: no
 /// network. The AUR is asked separately (`aur_listed`).
 pub(super) fn package_origin(pkg: &str) -> PackageOrigin {
@@ -193,6 +206,7 @@ pub(super) fn check_as(
             other => other,
         };
         info.note = package_note(&pkg, origin);
+        info.origin = Some(origin);
         return Ok(info);
     }
 
@@ -454,6 +468,33 @@ mod tests {
         let mut git = Info { kind: GIT.into(), version: "2.1.2".into(), ..Default::default() };
         note_release(&mut git, false);
         assert_eq!(git.note, "");
+    }
+
+    // The "Open the release" toast: only where the note says nothing updates
+    // the package. Repository and AUR packages, an unknown origin, an
+    // up-to-date package and other kinds just hear the note.
+    #[test]
+    fn only_a_package_nothing_updates_is_offered_the_download() {
+        let behind = |origin: PackageOrigin| Info {
+            kind: PACKAGE.into(),
+            latest: "2.2.0".into(),
+            origin: Some(origin),
+            ..Default::default()
+        };
+        assert!(offers_download(&behind(PackageOrigin::Foreign { aur: None })));
+        assert!(offers_download(&behind(PackageOrigin::Foreign { aur: Some(false) })));
+        assert!(!offers_download(&behind(PackageOrigin::Foreign { aur: Some(true) })));
+        assert!(!offers_download(&behind(PackageOrigin::Repo)));
+        assert!(!offers_download(&behind(PackageOrigin::Unknown)));
+        let current = Info { latest: String::new(), ..behind(PackageOrigin::Foreign { aur: None }) };
+        assert!(!offers_download(&current));
+        let unset = Info { origin: None, ..behind(PackageOrigin::Foreign { aur: None }) };
+        assert!(!offers_download(&unset));
+        let git = Info { kind: GIT.into(), ..behind(PackageOrigin::Foreign { aur: None }) };
+        assert!(!offers_download(&git));
+        // The origin rides along with the note, and never into the dict.
+        let json = serde_json::to_value(behind(PackageOrigin::Repo)).unwrap();
+        assert!(json.get("origin").is_none());
     }
 
     #[test]

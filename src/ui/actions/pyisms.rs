@@ -72,19 +72,10 @@ pub(super) fn py_str_repr(s: &str) -> String {
 }
 
 /// Python's `repr()` of a JSON value as Python loads it.
+/// Without recursion: the actions print `extra` values on the window's
+/// thread, and one can be as deep as a cache file holds.
 fn py_repr(v: &Value) -> String {
-    match v {
-        Value::String(s) => py_str_repr(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => format!(
-            "{{{}}}",
-            o.iter()
-                .map(|(k, x)| format!("{}: {}", py_str_repr(k), py_repr(x)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        other => py_str(other),
-    }
+    crate::util::tree::repr_value(v, py_str_repr, py_str)
 }
 
 /// `f"{v}"` of a JSON value as Python loads it.

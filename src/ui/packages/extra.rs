@@ -50,19 +50,10 @@ pub(super) fn py_type_name(v: &Value) -> &'static str {
 }
 
 /// `repr(value)` for a JSON value, as Python prints the decoded object.
+/// Without recursion: the details sheet reprs `extra` values on the
+/// window's thread, and one can be as deep as a cache file holds.
 pub(super) fn py_repr(v: &Value) -> String {
-    match v {
-        Value::String(s) => py_repr_str(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => format!(
-            "{{{}}}",
-            o.iter()
-                .map(|(k, x)| format!("{}: {}", py_repr_str(k), py_repr(x)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        other => py_str(other),
-    }
+    crate::util::tree::repr_value(v, py_repr_str, py_str)
 }
 
 /// `repr(str)`: single quotes unless the text has one and no double quote;

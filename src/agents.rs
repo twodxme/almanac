@@ -1277,6 +1277,19 @@ fn strip_raw(v: RawApps) -> Vec<App> {
     v.into_iter().map(|(a, _)| a).collect()
 }
 
+/// `extra["url"]`: `release_url or fallback`, where only a str counts as a
+/// release url. It comes from a cache file or `mise outdated --json`, so it
+/// can be anything json holds, as deep as Python's json reads (52000
+/// levels); the details sheet shows it on the window's thread and Python
+/// raised a TypeError there for anything but a str. Dropping it here keeps
+/// every agent row's `extra` flat (see `inventory::COLLECTOR_STACK`).
+fn url_value(release_url: &Py, fallback: &str) -> serde_json::Value {
+    match release_url {
+        Py::Str(_) | Py::WStr(_) if release_url.truthy() => release_url.to_value(),
+        _ => serde_json::Value::String(fallback.to_string()),
+    }
+}
+
 fn detect_here(check_updates: bool) -> Result<RawApps, String> {
     use crate::inventory;
     use serde_json::{json, Value};
@@ -1378,7 +1391,7 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
         extra.insert("manager".into(), json!(manager));
         extra.insert("update_cmd".into(), json!(update_cmd));
         extra.insert("repo".into(), json!(spec.repo));
-        extra.insert("url".into(), release_url.or(Py::s(&spec.home)).to_value());
+        extra.insert("url".into(), url_value(&release_url, &spec.home));
         extra.insert("home".into(), json!(spec.home));
         extra.insert("note".into(), json!(spec.note));
         extra.insert("domain".into(), json!(spec.domain));
@@ -1466,7 +1479,7 @@ fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps,
             .map(|(_, (n, d))| (n.to_string(), d.to_string()))
             .unwrap_or_else(|| (tool.clone(), String::new()));
         let fallback = if domain.is_empty() { String::new() } else { format!("https://{domain}") };
-        let url = info.get("release_url")?.cloned().unwrap_or(Py::None).or(Py::Str(fallback));
+        let url = url_value(info.get("release_url")?.unwrap_or(&Py::None), &fallback);
         let behind = if !update.is_empty() {
             inventory::versions_behind(&as_text(version), &update)
         } else {
@@ -1477,7 +1490,7 @@ fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps,
         extra.insert("manager".into(), json!("mise"));
         extra.insert("domain".into(), json!(domain));
         extra.insert("update_cmd".into(), json!(["mise", "upgrade", tool]));
-        extra.insert("url".into(), url.to_value());
+        extra.insert("url".into(), url);
         extra.insert("behind".into(), json!([behind.0, behind.1]));
         extra.insert("is_app".into(), Value::Bool(false));
         out.push((App {

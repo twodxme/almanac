@@ -493,8 +493,10 @@ widget.
 
 For an update script, `almanac-autorun --core-holds --stdin` reads pending
 updates as `checkupdates` and `yay -Qua` print them (`name old -> new`) and
-prints the ones Almanac counts as core — the kernel, boot, firmware, DKMS
-modules — one per line, so the script can hold exactly what the Updates page
+prints the ones Almanac counts as core — every kernel flavour and its headers
+(linux, -lts, -zen, -hardened, -rt, cachyos, xanmod, ...), boot, firmware,
+CPU microcode, DKMS modules and the NVIDIA driver with its matching
+userspace — one per line, so the script can hold exactly what the Updates page
 marks. When it cannot tell, it exits non-zero rather than printing nothing, so
 a script holds instead of guessing.
 

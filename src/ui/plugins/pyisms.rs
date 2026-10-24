@@ -157,12 +157,9 @@ fn py_repr_value(v: &serde_json::Value) -> String {
             (None, None, Some(f)) => util::py_float_repr(f),
             _ => n.to_string(),
         },
-        V::String(s) => py_repr(s),
-        V::Array(a) => format!("[{}]", a.iter().map(py_repr_value).collect::<Vec<_>>().join(", ")),
-        V::Object(o) => format!(
-            "{{{}}}",
-            o.iter().map(|(k, v)| format!("{}: {}", py_repr(k), py_repr_value(v))).collect::<Vec<_>>().join(", ")
-        ),
+        // Lists and dicts without recursion: an `extra` value printed on the
+        // window's thread can be as deep as a cache file holds.
+        V::String(_) | V::Array(_) | V::Object(_) => util::tree::repr_value(v, py_repr, py_repr_value),
     }
 }
 

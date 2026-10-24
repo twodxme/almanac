@@ -114,6 +114,11 @@ pub struct Info {
     pub can_update: bool,
     pub remote: String,
     pub dirty: bool,
+    /// Where a package install came from, as the note was written for
+    /// (`None` for any other kind). Not one of the Python dict's keys, so
+    /// never serialized.
+    #[serde(skip)]
+    pub origin: Option<PackageOrigin>,
 }
 
 /// Almanac as an entry in its own inventory.
