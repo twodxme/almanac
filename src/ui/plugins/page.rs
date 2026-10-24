@@ -92,6 +92,9 @@ pub fn switch_name(plugin_name: &str, on: bool) -> String {
     }
 }
 
+/// `shortcuts.set_shortcut(pid, binding)`: `None` removes it.
+type SetShortcut<'a> = &'a dyn Fn(&str, Option<&str>) -> Result<String, String>;
+
 /// The `_forget_shortcut` step body with the three `shortcuts` calls passed
 /// in -- the seam the Python tests reach with `mock.patch.object`.
 fn forget_shortcut_with(
@@ -99,7 +102,7 @@ fn forget_shortcut_with(
     log: tasks::LogFn<'_>,
     available: &dyn Fn() -> bool,
     current: &dyn Fn(&str) -> Result<String, String>,
-    set_shortcut: &dyn Fn(&str, Option<&str>) -> Result<String, String>,
+    set_shortcut: SetShortcut<'_>,
 ) {
     let run = || -> Result<(), String> {
         if available() && !current(pid)?.is_empty() {

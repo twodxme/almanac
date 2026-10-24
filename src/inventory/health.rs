@@ -320,7 +320,7 @@ pub fn versions_behind_big(current: &str, latest: &str) -> (num_bigint::BigInt, 
         let x = a.get(i).cloned().unwrap_or_default();
         let y = b.get(i).cloned().unwrap_or_default();
         if y != x {
-            let kind = if i < 3 { names[i] } else { "point" };
+            let kind = names.get(i).copied().unwrap_or("point");
             return (y - x, kind.to_string());
         }
     }

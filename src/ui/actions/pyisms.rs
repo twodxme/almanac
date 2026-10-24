@@ -252,9 +252,11 @@ mod tests {
         assert_eq!(py_first_line("a\u{85}b"), "a");
         assert_eq!(py_first_line("a"), "a");
         let b: &[u8] = &[b'a', b'b', 0xe2, 0x82];
+        #[allow(invalid_from_utf8)] // bad UTF-8 on purpose: the error is what is tested
         let e = std::str::from_utf8(b).unwrap_err();
         assert_eq!(utf8_error(b, &e), "'utf-8' codec can't decode bytes in position 2-3: unexpected end of data");
         let b: &[u8] = &[0xff];
+        #[allow(invalid_from_utf8)] // bad UTF-8 on purpose: the error is what is tested
         let e = std::str::from_utf8(b).unwrap_err();
         assert_eq!(utf8_error(b, &e), "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte");
         assert_eq!(py_str(&serde_json::json!(true)), "True");

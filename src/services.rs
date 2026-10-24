@@ -141,6 +141,8 @@ fn fsencode(s: &[u16]) -> Result<Vec<u8>, String> {
                 while end < chars.len() && chars[end].is_err() {
                     end += 1;
                 }
+                // `k` is the position the codec's error message reports.
+                #[allow(clippy::needless_range_loop)]
                 for k in i..end {
                     match chars[k] {
                         Err(u) if (0xdc80..=0xdcff).contains(&u) => out.push((u & 0xff) as u8),
@@ -657,11 +659,14 @@ fn u16s(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+/// `_run`: systemctl's arguments in, its stdout out.
+type SystemctlRun<'a> = &'a dyn Fn(&[Vec<u16>]) -> Result<String, String>;
+
 /// The body of `services()` with `available()` and `_run` passed in, so the
 /// tests can stand in for systemctl the way the Python tests mock them.
 /// `_run` gets its arguments as Python strings (UTF-16, lone surrogates and
 /// all); encoding them for the command line is its business, as in Python.
-fn services_with(available: bool, run: &dyn Fn(&[Vec<u16>]) -> Result<String, String>)
+fn services_with(available: bool, run: SystemctlRun<'_>)
     -> Result<Vec<Service>, String>
 {
     use std::collections::HashMap;

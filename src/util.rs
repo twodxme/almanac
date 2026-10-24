@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod human;
 pub mod pyjson;
+
+pub use human::human_error;
 
 /// The outcome of `subprocess.run(..., capture_output=True, text=True)`;
 /// `Output<Vec<u8>>` ([`run_bytes`]) is the same without `text=True`.
@@ -563,7 +566,8 @@ pub fn py_float_repr(f: f64) -> String {
         let e = format!("{f:e}");
         let (m, exp) = e.split_once('e').unwrap_or((&e, "0"));
         let exp: i32 = exp.parse().unwrap_or(0);
-        let m = if m.contains('.') { m.to_string() } else { m.to_string() };
+        // `{:e}` leaves the mantissa as Python does: "1" stays "1" (1e+16),
+        // "1.5" stays "1.5" (1.5e+16).
         return format!("{m}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
     }
     s

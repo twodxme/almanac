@@ -251,7 +251,8 @@ impl Doc {
         };
         // Open containers: their children (with keys for a dict), the next
         // one to write, and the closing bracket.
-        let mut stack: Vec<(Vec<(Option<&PyStr>, usize)>, usize, char)> = Vec::new();
+        type Open<'a> = (Vec<(Option<&'a PyStr>, usize)>, usize, char);
+        let mut stack: Vec<Open> = Vec::new();
         let mut out = String::new();
         let mut next = Some(root);
         loop {

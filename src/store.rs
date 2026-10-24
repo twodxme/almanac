@@ -1275,7 +1275,7 @@ fn py_hash_key(v: &Value) -> Option<String> {
             (None, Some(u), _) => format!("n:{u}"),
             // An integral float equals the int of the same value, however
             // large (`1e19 == 10**19`): both are keyed by its exact digits.
-            (_, _, Some(f)) if f == 0.0 => "n:0".into(),
+            (_, _, Some(0.0)) => "n:0".into(),
             (_, _, Some(f)) if f.is_finite() && f.fract() == 0.0 => format!("n:{f:.0}"),
             (_, _, f) => format!("f:{}", f.unwrap_or(0.0)),
         },
@@ -2383,6 +2383,8 @@ fn iso_hms(t: &[char]) -> Option<[i64; 4]> {
     let mut comps = [0i64; 4];
     let mut pos = 0;
     let mut has_sep = false;
+    // `for comp in range(0, 3)`: the index decides the separator and the stop.
+    #[allow(clippy::needless_range_loop)]
     for comp in 0..3 {
         if t.len() < pos + 2 {
             return None;
@@ -3019,7 +3021,7 @@ pub fn installed_themes() -> BTreeSet<String> {
 mod tests {
     use super::*;
 
-    /// The tests point XDG_CACHE_HOME / XDG_STATE_HOME at temp dirs; one at a time.
+    // The tests point XDG_CACHE_HOME / XDG_STATE_HOME at temp dirs; one at a time.
 
     fn artcraft_rows(releases: &(dyn Fn(&str, &Value) -> Option<Value> + Sync)) -> HashMap<String, Row> {
         let html = r#"<a href="/apps/wordcraft">WordCraft</a><a href="/apps/gridcraft">GridCraft</a>"#;

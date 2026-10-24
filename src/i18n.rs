@@ -793,10 +793,8 @@ impl Tokens {
                 // NUMBER: every shorter run of digits is followed by a digit,
                 // so only the whole run can end at a word boundary.
                 (run(&|c| c.is_ascii_digit()), false)
-            } else if c == 'n' && !py_word(cs.get(i + 1)) {
-                (1, false) // NAME
-            } else if "()-*/%+?:".contains(c) {
-                (1, false) // PARENTHESIS, OPERATOR
+            } else if (c == 'n' && !py_word(cs.get(i + 1))) || "()-*/%+?:".contains(c) {
+                (1, false) // NAME (only `n`), PARENTHESIS, OPERATOR
             } else if "><!".contains(c) {
                 (if cs.get(i + 1) == Some(&'=') { 2 } else { 1 }, false)
             } else if (c == '=' || c == '&' || c == '|') && cs.get(i + 1) == Some(&c) {

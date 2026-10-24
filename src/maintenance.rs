@@ -1506,7 +1506,10 @@ pub fn disk_space() -> Finding {
     _raise(_disk_space_with(&_usage))
 }
 
-fn _disk_space_with(usage: &dyn Fn(&str) -> Option<(f64, f64, f64)>) -> Result<Finding, String> {
+/// `shutil.disk_usage` for a path: (free MB, total MB, percent used).
+type DiskUsage<'a> = &'a dyn Fn(&str) -> Option<(f64, f64, f64)>;
+
+fn _disk_space_with(usage: DiskUsage<'_>) -> Result<Finding, String> {
     use std::os::unix::fs::MetadataExt;
 
     let mut watched: Vec<(String, String)> = vec![("/".into(), "/".into())];

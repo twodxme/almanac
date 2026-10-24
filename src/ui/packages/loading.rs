@@ -111,6 +111,7 @@ impl Win {
     /// to the caller and skipped the rest of it. Only a failed spawn (the
     /// OSError) falls back to the status line.
     pub fn try_notify(&self, title: &str, body: &str, urgency: &str) -> Result<(), String> {
+        let (title, body) = (&crate::util::human_error(title), &crate::util::human_error(body));
         let tool = crate::util::which("omarchy-notification-send")
             .or_else(|| crate::util::which("notify-send"));
         let Some(tool) = tool else {

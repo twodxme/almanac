@@ -43,14 +43,17 @@ pub fn history_icon(kind: &str) -> &'static str {
         .unwrap_or("object-select-symbolic")
 }
 
+/// (icon, title, body)
+pub type EmptyState = (&'static str, String, String);
+
 /// `EMPTY_STATES`: (icon, title, body) for a filter that shows nothing.
 /// Read by the packages section when a table comes up empty.
 ///
 /// Python runs `_()` on these once, when the class is defined, so they are
 /// translated once here too and kept.
-pub fn empty_states(key: &str) -> Option<(&'static str, String, String)> {
+pub fn empty_states(key: &str) -> Option<EmptyState> {
     thread_local! {
-        static CACHE: std::cell::RefCell<Vec<(String, Option<(&'static str, String, String)>)>> =
+        static CACHE: std::cell::RefCell<Vec<(String, Option<EmptyState>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
     if let Some(hit) = CACHE.with(|c| {
@@ -100,13 +103,16 @@ fn empty_states_uncached(key: &str) -> Option<(&'static str, String, String)> {
     Some(state)
 }
 
+/// (pill label, pill css class)
+pub type SeverityPill = (String, &'static str);
+
 /// `_SEVERITY_CSS`: (pill label, pill css class) per finding severity.
 /// Read by the Today section too.
 ///
 /// Translated once and kept, as the class-level `_()` in Python is.
-pub fn severity_css(severity: &str) -> Option<(String, &'static str)> {
+pub fn severity_css(severity: &str) -> Option<SeverityPill> {
     thread_local! {
-        static CACHE: std::cell::RefCell<Vec<(String, Option<(String, &'static str)>)>> =
+        static CACHE: std::cell::RefCell<Vec<(String, Option<SeverityPill>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
     if let Some(hit) = CACHE.with(|c| {
@@ -322,8 +328,10 @@ impl Win {
     pub fn history_row(&self, e: &history::Event) -> Option<adw::PreferencesRow> {
         let when = clock_text(e.ts)?;
         let subtitle = &e.detail;
+        // An entry's title can be an outcome that carries an error.
+        let title = &crate::util::human_error(&e.title);
         let row = if !e.items.is_empty() {
-            let row: adw::ExpanderRow = Win::plain(&e.title, subtitle);
+            let row: adw::ExpanderRow = Win::plain(title, subtitle);
             for item in e.items.iter().take(80) {
                 let entry: adw::ActionRow = Win::plain(item, "");
                 entry.add_css_class("property");
@@ -331,7 +339,7 @@ impl Win {
             }
             Row::Expander(row)
         } else {
-            Row::Action(Win::plain(&e.title, subtitle))
+            Row::Action(Win::plain(title, subtitle))
         };
         let icon = gtk::Image::from_icon_name(if e.severity == "warn" {
             "dialog-warning-symbolic"
@@ -459,7 +467,7 @@ impl Win {
         };
         // A problem gets room to explain itself; a pass gets one line.
         row.set_subtitle_lines(if f.severity == maintenance::OK { 1 } else { 3 });
-        row.row().set_tooltip_text(Some(&f.detail));
+        row.row().set_tooltip_text(Some(&crate::util::human_error(&f.detail)));
 
         let pill = gtk::Label::builder().label(label).valign(gtk::Align::Center).build();
         pill.add_css_class(css);

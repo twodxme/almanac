@@ -1668,7 +1668,9 @@ fn iso_hms(at: &dyn Fn(usize) -> u8, start: usize, end: usize) -> Option<(bool, 
 
 /// `parse_isoformat_time` over `[start, end)`: the time and, when there is
 /// one, the UTC offset as (seconds, microseconds).
-fn iso_time(at: &dyn Fn(usize) -> u8, start: usize, end: usize) -> Option<([i64; 4], Option<(i64, i64)>)> {
+type IsoTime = ([i64; 4], Option<(i64, i64)>);
+
+fn iso_time(at: &dyn Fn(usize) -> u8, start: usize, end: usize) -> Option<IsoTime> {
     let mut tz = start;
     loop {
         if matches!(at(tz), b'Z' | b'+' | b'-') {

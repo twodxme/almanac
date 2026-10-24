@@ -1659,8 +1659,9 @@ fn try_theme_name_at(current: &Path, lenient: bool) -> Result<String, String> {
     let parent = current.parent().unwrap_or(Path::new(""));
     // read_text(): text mode, so strict UTF-8 (the locale's encoding) and
     // universal newlines -- "\r\n" and a lone "\r" both read as "\n".
-    match std::fs::read(parent.join("theme.name")) {
-        Ok(bytes) => match String::from_utf8(bytes) {
+    // An OSError (no file, unreadable) falls through to the next source.
+    if let Ok(bytes) = std::fs::read(parent.join("theme.name")) {
+        match String::from_utf8(bytes) {
             Ok(text) => {
                 let text = universal_newlines(&text);
                 let name = py_strip(&text);
@@ -1678,8 +1679,7 @@ fn try_theme_name_at(current: &Path, lenient: bool) -> Result<String, String> {
                 return Err("UnicodeDecodeError: theme.name is not UTF-8".into());
             }
             Err(_) => {}
-        },
-        Err(_) => {} // OSError
+        }
     }
     if py_which("omarchy").is_some() {
         match omarchy_theme_current() {

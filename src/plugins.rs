@@ -1775,7 +1775,6 @@ mod tests {
     use std::process::Command;
 
     /// The tests that set environment variables run one at a time.
-
     fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
         let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
