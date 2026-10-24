@@ -138,10 +138,10 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
         }
         for s in &plan.ready {
             batch.lines.push(format!("{:22} omarchy plugin update", s.id));
-            batch.steps.push(Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone())));
+            batch.steps.push(Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone(), plan.pins.get(&s.id).cloned())));
         }
-        for s in &plan.held {
-            batch.hold(&s.id, "outside the plugin update scope set in Preferences");
+        for (s, why) in plan.held.iter().zip(&plan.held_why) {
+            batch.hold(&s.id, &format!("outside the plugin update scope set in Preferences ({why})"));
         }
         // Rows counted as updates that are not clean fast-forwards now.
         for a in by(Route::Plugin) {

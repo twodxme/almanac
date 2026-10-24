@@ -66,6 +66,9 @@ pub struct State {
     pub detail: String,
     pub behind: i64,
     pub url: String,
+    /// The upstream commit an UPDATE would fast-forward to ("" otherwise):
+    /// what a "Verified only" update compares with the reviewed commit.
+    pub remote: String,
 }
 
 impl State {
@@ -77,7 +80,14 @@ impl State {
             detail: detail.to_string(),
             behind,
             url: url.to_string(),
+            remote: String::new(),
         }
+    }
+
+    /// The same State, naming the upstream commit it is behind.
+    pub fn with_remote(mut self, remote: &str) -> State {
+        self.remote = remote.to_string();
+        self
     }
 
     pub fn updatable(&self) -> bool {
@@ -456,7 +466,7 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
         return Ok(State::new(pid, CURRENT, "", 0, &url));
     }
     if _git(d, &["merge-base", "--is-ancestor", &head, &remote], 25)?.ok() {
-        return Ok(State::new(pid, UPDATE, "behind", count(d, &head, &remote)?, &url));
+        return Ok(State::new(pid, UPDATE, "behind", count(d, &head, &remote)?, &url).with_remote(&remote));
     }
     if _git(d, &["merge-base", "--is-ancestor", &remote, &head], 25)?.ok() {
         return Ok(State::new(pid, LOCAL_CHANGES, "ahead", 0, &url));
@@ -1600,12 +1610,123 @@ pub fn update_argv(pid: &str) -> Vec<String> {
     vec!["omarchy".into(), "plugin".into(), "update".into(), pid.to_string(), "--yes".into()]
 }
 
+/// The commit a checkout is at, "" where git cannot say.
+pub fn checkout_head(d: &Path) -> String {
+    let d = d.to_string_lossy();
+    let r = util::run(&["git", "-C", &d, "rev-parse", "--verify", "HEAD"], 25);
+    if r.ok() { py_strip(&r.stdout).to_string() } else { String::new() }
+}
+
 /// Whether a plugin with this provenance is covered by a bulk update.
 /// `trust_key` is None for a plugin the marketplace does not list.
 pub fn in_scope(trust_key: Option<&str>, scope: &str) -> bool {
     let allowed = SCOPES.iter().find(|(k, _l, _s)| *k == scope).and_then(|(_k, _l, s)| *s);
     let Some(allowed) = allowed else { return true };
     trust_key.is_some_and(|t| allowed.contains(&t))
+}
+
+/// What the marketplace says about one listed plugin, as a bulk update
+/// weighs it: its trust key, the repository the listing names, and the
+/// commit its review or checks were run against ("" when it records none).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Listing {
+    pub key: String,
+    pub repo: String,
+    pub validated_commit: String,
+}
+
+/// A repository URL reduced to what names the repository: `host/path`,
+/// whatever the scheme (https, http, ssh, git, or scp-like `git@host:o/r`),
+/// without userinfo, a port, a trailing slash or `.git`. GitHub ignores case
+/// in owner and repository names, so on github.com the whole key is
+/// lowercased; elsewhere only the host is. None for anything that names no
+/// repository: no host, no path, a `.` or `..` or empty segment, a query,
+/// whitespace or a control character.
+pub fn repo_key(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() || url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#') {
+        return None;
+    }
+    let (authority, path) = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            if !matches!(scheme.to_ascii_lowercase().as_str(), "https" | "http" | "ssh" | "git" | "git+ssh") {
+                return None;
+            }
+            rest.split_at(rest.find('/').unwrap_or(rest.len()))
+        }
+        // scp-like `[user@]host:path`: git's rule is no slash before the colon.
+        None => {
+            let (a, p) = url.split_once(':')?;
+            if a.contains('/') {
+                return None;
+            }
+            (a, p)
+        }
+    };
+    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match hostport.rsplit_once(':') {
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => hostport,
+    };
+    let mut host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return None;
+    }
+    if host == "www.github.com" {
+        host = "github.com".into();
+    }
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
+    if path.is_empty() || path.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+        return None;
+    }
+    let path = if host == "github.com" { path.to_lowercase() } else { path.to_string() };
+    Some(format!("{host}/{path}"))
+}
+
+/// Whether two URLs name the same repository (see [`repo_key`]); never for
+/// a URL that names none.
+pub fn same_repo(a: &str, b: &str) -> bool {
+    matches!((repo_key(a), repo_key(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// The trust key a checkout carries: its listing's, but only when the
+/// checkout's `origin` is the repository the listing names. A folder only
+/// sharing a listed plugin's id is somebody else's code, and is unlisted.
+pub fn listed_trust<'a>(origin: &str, listing: Option<&'a Listing>) -> Option<&'a str> {
+    listing.filter(|l| same_repo(origin, &l.repo)).map(|l| l.key.as_str())
+}
+
+/// Why an update the scope covers is still held back, None when it is not.
+/// Under "Verified only" the commit an update would fast-forward to must be
+/// the very commit the marketplace reviewed or checked: a trust label is
+/// about that code, not whatever upstream pushed after it. Compared in full
+/// -- a short prefix of a commit id is cheap to collide with. Official and
+/// first-party listings that record no commit are trusted for who publishes
+/// them, and pass.
+pub fn pin_hold(st: &State, listing: Option<&Listing>, scope: &str) -> Option<String> {
+    if scope != "verified" {
+        return None;
+    }
+    let l = listing?; // unlisted: the scope holds it already
+    let reviewed = l.validated_commit.trim().to_ascii_lowercase();
+    if reviewed.is_empty() {
+        if matches!(l.key.as_str(), "official" | "first-party") {
+            return None;
+        }
+        return Some(crate::i18n::tr("no reviewed commit to compare with"));
+    }
+    let remote = st.remote.trim().to_ascii_lowercase();
+    if remote == reviewed {
+        return None;
+    }
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    Some(format!(
+        "{} (upstream {}, reviewed {})",
+        crate::i18n::tr("changed since it was reviewed"),
+        if remote.is_empty() { "?".to_string() } else { short(&remote) },
+        short(&reviewed)
+    ))
 }
 
 /// Restart the shell -- never `omarchy-refresh-shell`, which resets
@@ -1885,6 +2006,79 @@ mod tests {
         assert!(in_scope(Some("reviewed-stale"), "changed"));
         assert!(!in_scope(None, "changed")); // unlisted
         assert!(in_scope(None, "all"));
+    }
+
+    #[test]
+    fn repo_urls_normalize_to_one_repository() {
+        let k = Some("github.com/owner/repo".to_string());
+        for url in [
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo.git",
+            "https://github.com/owner/repo/",
+            "https://github.com/owner/repo.git/",
+            "https://GitHub.com/Owner/Repo",
+            "http://github.com/owner/repo",
+            "https://user@github.com/owner/repo",
+            "https://www.github.com/owner/repo",
+            "git@github.com:owner/repo.git",
+            "git@github.com:Owner/Repo",
+            "ssh://git@github.com/owner/repo.git",
+            "ssh://git@github.com:22/owner/repo",
+            "git://github.com/owner/repo",
+            "  https://github.com/owner/repo\n",
+        ] {
+            assert_eq!(repo_key(url), k, "{url}");
+        }
+        // Case matters off GitHub; the host's never does.
+        assert_eq!(repo_key("https://GitLab.com/O/R.git").as_deref(), Some("gitlab.com/O/R"));
+        assert!(!same_repo("https://gitlab.com/o/r", "https://gitlab.com/O/R"));
+        for bad in [
+            "", "repo", "/home/me/repo", "file:///home/me/repo", "ext::sh -c x", "https://github.com",
+            "https://github.com/", "https://github.com/o/../r", "https://github.com/o//r",
+            "https://github.com/o/r?x", "https://github.com/o/r#x", "https://git hub.com/o/r",
+        ] {
+            assert_eq!(repo_key(bad), None, "{bad}");
+        }
+        assert!(same_repo("git@github.com:a/x.git", "https://github.com/A/X"));
+        assert!(!same_repo("https://github.com/a/x", "https://github.com/a/x2"));
+        assert!(!same_repo("https://github.com/a/x", "https://github.com/b/x"));
+        assert!(!same_repo("https://github.com/a/x", "https://github.com.evil.example/a/x"));
+        assert!(!same_repo("https://evil.example/github.com/a/x", "https://github.com/a/x"));
+        assert!(!same_repo("", ""));
+    }
+
+    #[test]
+    fn trust_follows_the_checkout_origin_not_the_folder_name() {
+        let l = Listing { key: "verified".into(), repo: "https://github.com/a/x".into(), validated_commit: "c".into() };
+        assert_eq!(listed_trust("git@github.com:a/x.git", Some(&l)), Some("verified"));
+        assert_eq!(listed_trust("https://github.com/mallory/x", Some(&l)), None);
+        assert_eq!(listed_trust("", Some(&l)), None);
+        assert_eq!(listed_trust("https://github.com/a/x", None), None);
+    }
+
+    #[test]
+    fn verified_updates_only_to_the_reviewed_commit() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let other = "0123456fffffffffffffffffffffffffffffffff";
+        let l = Listing { key: "verified".into(), repo: "https://github.com/a/x".into(), validated_commit: sha.into() };
+        let st = |remote: &str| State::new("x", UPDATE, "behind", 1, "https://github.com/a/x").with_remote(remote);
+        assert_eq!(pin_hold(&st(sha), Some(&l), "verified"), None);
+        assert_eq!(pin_hold(&st(&sha.to_uppercase()), Some(&l), "verified"), None);
+        let why = pin_hold(&st(other), Some(&l), "verified").expect("held");
+        assert!(why.starts_with("changed since it was reviewed"), "{why}");
+        assert!(why.contains("0123456"), "{why}");
+        // A shared 7-character prefix is not the same commit.
+        let short = Listing { validated_commit: "0123456".into(), ..l.clone() };
+        assert!(pin_hold(&st(sha), Some(&short), "verified").is_some());
+        // Other scopes take what upstream has; unlisted is the scope's call.
+        assert_eq!(pin_hold(&st(other), Some(&l), "changed"), None);
+        assert_eq!(pin_hold(&st(other), Some(&l), "all"), None);
+        assert_eq!(pin_hold(&st(other), None, "verified"), None);
+        // Nothing recorded to compare with: only a publisher's own pass.
+        let none = Listing { validated_commit: String::new(), ..l.clone() };
+        assert!(pin_hold(&st(other), Some(&none), "verified").is_some());
+        let fp = Listing { key: "first-party".into(), ..none };
+        assert_eq!(pin_hold(&st(other), Some(&fp), "verified"), None);
     }
 
     #[test]

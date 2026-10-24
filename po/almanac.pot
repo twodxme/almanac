@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 14:58-0700\n"
+"POT-Creation-Date: 2026-10-23 18:43-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,164 +18,173 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
-#: src/i18n.rs:5695
+#: src/i18n.rs:1731 src/i18n.rs:1734 src/i18n.rs:1782 src/i18n.rs:1789
+#: src/i18n.rs:1794
 msgid "History"
 msgstr ""
 
-#: src/i18n.rs:5714
-msgid "No string anyone has translated"
-msgstr ""
-
-#: src/i18n.rs:5779 src/i18n.rs:5780
+#: src/i18n.rs:1750 src/i18n.rs:1834 src/i18n.rs:1835
 msgid "one"
 msgid_plural "many"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/ui/actions.rs:871 src/ui/actions.rs:1555 src/ui/ai.rs:812
-#: src/ui/packages.rs:1146 src/ui/plugins.rs:1542 src/ui/shell.rs:2087
+#: src/i18n.rs:1828
+msgid "No string anyone has translated"
+msgstr ""
+
+#: src/plugins.rs:1717
+msgid "no reviewed commit to compare with"
+msgstr ""
+
+#: src/plugins.rs:1726 src/ui/plugins.rs:224
+msgid "changed since it was reviewed"
+msgstr ""
+
+#: src/ui/actions.rs:883 src/ui/actions.rs:1635 src/ui/ai.rs:879
+#: src/ui/packages.rs:1253 src/ui/plugins.rs:1588 src/ui/shell.rs:2188
 #: src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
-#: src/ui/actions.rs:896
+#: src/ui/actions.rs:908
 msgid "Almanac was not updated"
 msgstr ""
 
-#: src/ui/actions.rs:902
+#: src/ui/actions.rs:914
 msgid "Almanac updated — restart to use the new version"
 msgstr ""
 
-#: src/ui/actions.rs:923
+#: src/ui/actions.rs:955
 msgid ""
 "A catalogue of everything installed on this machine: where each thing came "
 "from, how old it is, whether it still has a maintainer, and what needs "
 "attention."
 msgstr ""
 
-#: src/ui/actions.rs:1083
+#: src/ui/actions.rs:1159
 msgid "Nothing changed"
 msgstr ""
 
-#: src/ui/actions.rs:1139
+#: src/ui/actions.rs:1215
 msgid ""
 "\n"
 "\n"
 "Give them back to what opened them before?"
 msgstr ""
 
-#: src/ui/actions.rs:1144
+#: src/ui/actions.rs:1220
 msgid "Some files now open in a different app"
 msgstr ""
 
-#: src/ui/actions.rs:1147
+#: src/ui/actions.rs:1223
 msgid "Keep the new app"
 msgstr ""
 
-#: src/ui/actions.rs:1149
+#: src/ui/actions.rs:1225
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions.rs:1193
+#: src/ui/actions.rs:1269
 msgid "Install from a link"
 msgstr ""
 
-#: src/ui/actions.rs:1195
+#: src/ui/actions.rs:1271
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: src/ui/actions.rs:1200 src/ui/actions.rs:1312 src/ui/actions.rs:1752
-#: src/ui/plugins.rs:1434
+#: src/ui/actions.rs:1276 src/ui/actions.rs:1388 src/ui/actions.rs:1836
+#: src/ui/plugins.rs:1479
 msgid "Cancel"
 msgstr ""
 
-#: src/ui/actions.rs:1201
+#: src/ui/actions.rs:1277
 msgid "Look it up"
 msgstr ""
 
-#: src/ui/actions.rs:1214
+#: src/ui/actions.rs:1290
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: src/ui/actions.rs:1217
+#: src/ui/actions.rs:1293
 msgid "Looking it up…"
 msgstr ""
 
-#: src/ui/actions.rs:1276
+#: src/ui/actions.rs:1352
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1313 src/ui/plugins.rs:1736 src/ui/plugins.rs:1779
-#: src/ui/plugins.rs:1817 src/ui/store_actions.rs:573
-#: src/ui/store_actions.rs:670 src/ui/store_actions.rs:1075
-#: src/ui/store_actions.rs:1533
+#: src/ui/actions.rs:1389 src/ui/plugins.rs:1778 src/ui/plugins.rs:1821
+#: src/ui/plugins.rs:1859 src/ui/store_actions.rs:603
+#: src/ui/store_actions.rs:705 src/ui/store_actions.rs:1118
+#: src/ui/store_actions.rs:1576
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1440 src/ui/packages.rs:855 src/ui/shell.rs:970
+#: src/ui/actions.rs:1518 src/ui/packages.rs:950 src/ui/shell.rs:1070
 msgid "Update all"
 msgstr ""
 
-#: src/ui/actions.rs:1461
+#: src/ui/actions.rs:1539
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions.rs:1465
+#: src/ui/actions.rs:1543
 msgid "Update anyway"
 msgstr ""
 
-#: src/ui/actions.rs:1702
+#: src/ui/actions.rs:1786
 msgid "Choose an AppImage to track"
 msgstr ""
 
-#: src/ui/actions.rs:1744
+#: src/ui/actions.rs:1828
 msgid ""
 "Another AppImage is already tracked under this name. Adding this one as it "
 "is would replace it: its file, its launcher and what Almanac knows about it."
 msgstr ""
 
-#: src/ui/actions.rs:1747
+#: src/ui/actions.rs:1831
 msgid "Tracked now:"
 msgstr ""
 
-#: src/ui/actions.rs:1748
+#: src/ui/actions.rs:1832
 msgid "Adding:"
 msgstr ""
 
-#: src/ui/actions.rs:1754
+#: src/ui/actions.rs:1838
 msgid "Replace"
 msgstr ""
 
-#: src/ui/ai.rs:193
+#: src/ui/ai.rs:213
 msgid "Reading the AI setup…"
 msgstr ""
 
-#: src/ui/ai.rs:269
+#: src/ui/ai.rs:311
 msgid "Checking…"
 msgstr ""
 
-#: src/ui/ai.rs:279
+#: src/ui/ai.rs:321
 msgid "None"
 msgstr ""
 
-#: src/ui/ai.rs:279
+#: src/ui/ai.rs:321
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: src/ui/ai.rs:433 src/ui/history.rs:501
+#: src/ui/ai.rs:473 src/ui/history.rs:501
 msgid "manual"
 msgstr ""
 
-#: src/ui/ai.rs:775
+#: src/ui/ai.rs:842
 msgid "Held back (major release, update it on its own): "
 msgstr ""
 
-#: src/ui/ai.rs:810
+#: src/ui/ai.rs:877
 msgid ""
 "Each replaces its own binary. None of this needs root, and none of it "
 "touches your agent configuration."
@@ -295,741 +304,749 @@ msgstr ""
 msgid "Reclaim"
 msgstr ""
 
-#: src/ui/packages.rs:638
+#: src/ui/packages.rs:685
 msgid "Scanning…"
 msgstr ""
 
-#: src/ui/packages.rs:757
+#: src/ui/packages.rs:839
 msgid "Software no longer maintained"
 msgstr ""
 
-#: src/ui/packages.rs:769
+#: src/ui/packages.rs:851
 msgid "Duplicate software installed"
 msgstr ""
 
-#: src/ui/packages.rs:952
+#: src/ui/packages.rs:1059
 msgid "Version"
 msgstr ""
 
-#: src/ui/packages.rs:953 src/ui/packages.rs:1074 src/ui/store.rs:296
-#: src/ui/store.rs:707 src/ui/store.rs:820
+#: src/ui/packages.rs:1060 src/ui/packages.rs:1181 src/ui/store.rs:337
+#: src/ui/store.rs:750 src/ui/store.rs:863
 msgid "Installed"
 msgstr ""
 
-#: src/ui/packages.rs:955
+#: src/ui/packages.rs:1062
 msgid "Available"
 msgstr ""
 
-#: src/ui/packages.rs:958
+#: src/ui/packages.rs:1065
 msgid "Released"
 msgstr ""
 
-#: src/ui/packages.rs:961
+#: src/ui/packages.rs:1068
 msgid "Latest upstream commit"
 msgstr ""
 
-#: src/ui/packages.rs:964
+#: src/ui/packages.rs:1071
 msgid "State"
 msgstr ""
 
-#: src/ui/packages.rs:968
+#: src/ui/packages.rs:1075
 msgid "Switched"
 msgstr ""
 
-#: src/ui/packages.rs:969 src/ui/store.rs:820
+#: src/ui/packages.rs:1076 src/ui/store.rs:863
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages.rs:969 src/ui/store_actions.rs:1465
+#: src/ui/packages.rs:1076 src/ui/store_actions.rs:1508
 msgid "On"
 msgstr ""
 
-#: src/ui/packages.rs:978
+#: src/ui/packages.rs:1085
 msgid "Known vulnerabilities"
 msgstr ""
 
-#: src/ui/packages.rs:979
+#: src/ui/packages.rs:1086
 msgid "From the Arch Security Tracker, for the installed version."
 msgstr ""
 
-#: src/ui/packages.rs:1033
+#: src/ui/packages.rs:1140
 msgid "Open the advisory"
 msgstr ""
 
-#: src/ui/packages.rs:1052
+#: src/ui/packages.rs:1159
 msgid "Origin"
 msgstr ""
 
-#: src/ui/packages.rs:1053
+#: src/ui/packages.rs:1160
 msgid "Source"
 msgstr ""
 
-#: src/ui/packages.rs:1077
+#: src/ui/packages.rs:1184
 msgid "Built"
 msgstr ""
 
-#: src/ui/packages.rs:1080
+#: src/ui/packages.rs:1187
 msgid "Files"
 msgstr ""
 
-#: src/ui/packages.rs:1089
+#: src/ui/packages.rs:1196
 msgid "Project page"
 msgstr ""
 
-#: src/ui/packages.rs:1109
+#: src/ui/packages.rs:1216
 msgid "Dependencies"
 msgstr ""
 
-#: src/ui/packages.rs:1640 src/ui/store.rs:1110
+#: src/ui/packages.rs:1747 src/ui/store.rs:1153
 msgid "Loading the plugin marketplace…"
 msgstr ""
 
-#: src/ui/packages.rs:1949 src/ui/shell.rs:1203
+#: src/ui/packages.rs:2076 src/ui/shell.rs:1304
 msgid "Show categories"
 msgstr ""
 
-#: src/ui/packages.rs:1951
+#: src/ui/packages.rs:2078
 msgid "Hide categories"
 msgstr ""
 
-#: src/ui/packages.rs:1984
+#: src/ui/packages.rs:2111
 msgid "Filter and sort the marketplace"
 msgstr ""
 
-#: src/ui/packages.rs:1984 src/ui/shell.rs:1268 src/ui/store.rs:242
+#: src/ui/packages.rs:2111 src/ui/shell.rs:1369 src/ui/store.rs:283
 msgid "Sort by"
 msgstr ""
 
-#: src/ui/packages.rs:2081
+#: src/ui/packages.rs:2213
 msgid "Themes"
 msgstr ""
 
-#: src/ui/packages.rs:2084
+#: src/ui/packages.rs:2216
 msgid "App Store"
 msgstr ""
 
-#: src/ui/packages.rs:2168
+#: src/ui/packages.rs:2300
 msgid "Plugins current"
 msgstr ""
 
-#: src/ui/packages.rs:2172
+#: src/ui/packages.rs:2304
 msgid ""
 "Update every plugin with a clean update waiting, within the scope set in "
 "Preferences"
 msgstr ""
 
-#: src/ui/plugins.rs:358
+#: src/ui/plugins.rs:243
+msgid "updated past the reviewed commit — upstream changed during the update"
+msgstr ""
+
+#: src/ui/plugins.rs:259
+msgid "not the listed repository"
+msgstr ""
+
+#: src/ui/plugins.rs:409
 msgid ""
 "These are installed as dependencies but nothing needs them any more. "
 "Everything that would go is listed below."
 msgstr ""
 
-#: src/ui/plugins.rs:506
+#: src/ui/plugins.rs:557
 msgid "Omarchy did not change it"
 msgstr ""
 
-#: src/ui/plugins.rs:814
+#: src/ui/plugins.rs:863
 msgid "Reading plugins…"
 msgstr ""
 
-#: src/ui/plugins.rs:906
+#: src/ui/plugins.rs:955
 msgid "Your plugins"
 msgstr ""
 
-#: src/ui/plugins.rs:907
+#: src/ui/plugins.rs:956
 msgid ""
 "Added from the marketplace or by hand. Updated through omarchy plugin "
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins.rs:912 src/ui/store_actions.rs:1529
+#: src/ui/plugins.rs:961 src/ui/store_actions.rs:1572
 msgid "Built in"
 msgstr ""
 
-#: src/ui/plugins.rs:913
+#: src/ui/plugins.rs:962
 msgid "Ship with Omarchy and update with it. They can be switched on and off."
 msgstr ""
 
-#: src/ui/plugins.rs:947
+#: src/ui/plugins.rs:996
 msgid "No plugins found"
 msgstr ""
 
-#: src/ui/plugins.rs:948
+#: src/ui/plugins.rs:997
 msgid "The omarchy command did not list any plugins."
 msgstr ""
 
-#: src/ui/plugins.rs:1007
+#: src/ui/plugins.rs:1056
 msgid "Keyboard shortcut"
 msgstr ""
 
-#: src/ui/plugins.rs:1035
+#: src/ui/plugins.rs:1084
 msgid "Omarchy needs this one; it cannot be switched off"
 msgstr ""
 
-#: src/ui/plugins.rs:1196
+#: src/ui/plugins.rs:1245
 msgid "Removing its keyboard shortcut"
 msgstr ""
 
-#: src/ui/plugins.rs:1259
+#: src/ui/plugins.rs:1308
 msgid ""
 "Deletes the plugin's folder and takes it off the bar. Its settings in "
 "shell.json are removed with it."
 msgstr ""
 
-#: src/ui/plugins.rs:1262 src/ui/plugins.rs:1695 src/ui/plugins.rs:1895
-#: src/ui/store.rs:927 src/ui/store_actions.rs:611 src/ui/store_actions.rs:695
-#: src/ui/store_actions.rs:1182 src/ui/store_actions.rs:1437
-#: src/ui/store_actions.rs:1450
+#: src/ui/plugins.rs:1311 src/ui/plugins.rs:1737 src/ui/plugins.rs:1939
+#: src/ui/store.rs:970 src/ui/store_actions.rs:646 src/ui/store_actions.rs:730
+#: src/ui/store_actions.rs:1225 src/ui/store_actions.rs:1480
+#: src/ui/store_actions.rs:1493
 msgid "Remove"
 msgstr ""
 
-#: src/ui/plugins.rs:1390
+#: src/ui/plugins.rs:1435
 msgid "Press the keys, e.g. Super + Alt + V"
 msgstr ""
 
-#: src/ui/plugins.rs:1429
+#: src/ui/plugins.rs:1474
 msgid ""
 "Opens the plugin's panel. Checked against every binding Hyprland has now; "
 "written to its own block in bindings.lua, and put back if Hyprland rejects "
 "it."
 msgstr ""
 
-#: src/ui/plugins.rs:1436
+#: src/ui/plugins.rs:1481
 msgid "Remove shortcut"
 msgstr ""
 
-#: src/ui/plugins.rs:1439
+#: src/ui/plugins.rs:1484
 msgid "Save"
 msgstr ""
 
-#: src/ui/plugins.rs:1484
+#: src/ui/plugins.rs:1529
 msgid "Checking plugins…"
 msgstr ""
 
-#: src/ui/plugins.rs:1512
+#: src/ui/plugins.rs:1557
 msgid "No plugin updates to install"
 msgstr ""
 
-#: src/ui/plugins.rs:1602
+#: src/ui/plugins.rs:1645
 msgid "Updating plugins"
 msgstr ""
 
-#: src/ui/plugins.rs:1632
+#: src/ui/plugins.rs:1674
 msgid "Restart the shell?"
 msgstr ""
 
-#: src/ui/plugins.rs:1633
+#: src/ui/plugins.rs:1675
 msgid ""
 "Restarts the Omarchy shell and clears its compiled QML cache. Use it when a "
 "plugin behaves as if it had not been updated. Your bar and settings are not "
 "touched."
 msgstr ""
 
-#: src/ui/plugins.rs:1637
+#: src/ui/plugins.rs:1679
 msgid "Restart"
 msgstr ""
 
-#: src/ui/plugins.rs:1733
+#: src/ui/plugins.rs:1775
 msgid ""
 "Omarchy shell plugins run inside the shell process with your permissions — "
 "there is no sandbox."
 msgstr ""
 
-#: src/ui/plugins.rs:1797
+#: src/ui/plugins.rs:1839
 msgid "Type what to search for, then press Install"
 msgstr ""
 
-#: src/ui/plugins.rs:1814
+#: src/ui/plugins.rs:1856
 msgid ""
 "This installs a package by exact name. To browse what matches first, use the "
 "App Store and search there."
 msgstr ""
 
-#: src/ui/plugins.rs:1893
+#: src/ui/plugins.rs:1937
 msgid "The Flatpak and its data are removed."
 msgstr ""
 
-#: src/ui/preferences.rs:61
+#: src/ui/preferences.rs:73
 msgid "Preferences"
 msgstr ""
 
-#: src/ui/preferences.rs:65
+#: src/ui/preferences.rs:77
 msgid "General"
 msgstr ""
 
-#: src/ui/preferences.rs:68
+#: src/ui/preferences.rs:80
 msgid "Starting up"
 msgstr ""
 
-#: src/ui/preferences.rs:73
+#: src/ui/preferences.rs:85
 msgid "Open on"
 msgstr ""
 
-#: src/ui/preferences.rs:95
+#: src/ui/preferences.rs:107
 msgid "Notifications"
 msgstr ""
 
-#: src/ui/preferences.rs:97
+#: src/ui/preferences.rs:109
 msgid "Desktop notifications. Results still show inside the window either way."
 msgstr ""
 
-#: src/ui/preferences.rs:103
+#: src/ui/preferences.rs:115
 msgid "When an action changes nothing"
 msgstr ""
 
-#: src/ui/preferences.rs:104
+#: src/ui/preferences.rs:116
 msgid "An update or cleanup that ran but left things as they were"
 msgstr ""
 
-#: src/ui/preferences.rs:110
+#: src/ui/preferences.rs:122
 msgid "When settings are reset to defaults"
 msgstr ""
 
-#: src/ui/preferences.rs:111
+#: src/ui/preferences.rs:123
 msgid "A tool replaced one of your config files with its default"
 msgstr ""
 
-#: src/ui/preferences.rs:117
+#: src/ui/preferences.rs:129
 msgid "When plugin updates are available"
 msgstr ""
 
-#: src/ui/preferences.rs:118
+#: src/ui/preferences.rs:130
 msgid "Checked every few hours by the settings watcher (Background)"
 msgstr ""
 
-#: src/ui/preferences.rs:126
+#: src/ui/preferences.rs:138
 msgid "Updates"
 msgstr ""
 
-#: src/ui/preferences.rs:130
+#: src/ui/preferences.rs:142
 msgid "Automatic updates"
 msgstr ""
 
-#: src/ui/preferences.rs:132
+#: src/ui/preferences.rs:144
 msgid ""
 "A systemd user timer runs the update in the background. Anything that could "
 "stop the machine booting is always held for you to run by hand, whatever is "
 "set here."
 msgstr ""
 
-#: src/ui/preferences.rs:138
+#: src/ui/preferences.rs:150
 msgid "Run updates on a schedule"
 msgstr ""
 
-#: src/ui/preferences.rs:148
+#: src/ui/preferences.rs:160
 msgid "How often"
 msgstr ""
 
-#: src/ui/preferences.rs:153
+#: src/ui/preferences.rs:165
 msgid "Last run"
 msgstr ""
 
-#: src/ui/preferences.rs:153
+#: src/ui/preferences.rs:165
 msgid "Next run"
 msgstr ""
 
-#: src/ui/preferences.rs:161
+#: src/ui/preferences.rs:173
 msgid "What the scheduled run updates"
 msgstr ""
 
-#: src/ui/preferences.rs:163
+#: src/ui/preferences.rs:175
 msgid ""
 "Each of these updates independently. Turning one off does not stop you "
 "updating it by hand here."
 msgstr ""
 
-#: src/ui/preferences.rs:203
+#: src/ui/preferences.rs:215
 msgid "Care"
 msgstr ""
 
-#: src/ui/preferences.rs:207
+#: src/ui/preferences.rs:219
 msgid "Hold back major releases"
 msgstr ""
 
-#: src/ui/preferences.rs:208
+#: src/ui/preferences.rs:220
 msgid ""
 "A new major version of an agent CLI waits for you to update it on its own, "
 "with its release notes"
 msgstr ""
 
-#: src/ui/preferences.rs:215
+#: src/ui/preferences.rs:227
 msgid "Plugins that bulk updates touch"
 msgstr ""
 
-#: src/ui/preferences.rs:235
+#: src/ui/preferences.rs:247
 msgid "Run the update now"
 msgstr ""
 
-#: src/ui/preferences.rs:236
+#: src/ui/preferences.rs:248
 msgid "Runs exactly what the schedule would run, in a window you can watch."
 msgstr ""
 
-#: src/ui/preferences.rs:239
+#: src/ui/preferences.rs:251
 msgid "Run now"
 msgstr ""
 
-#: src/ui/preferences.rs:243
+#: src/ui/preferences.rs:255
 msgid "Run the scheduled update immediately, in a window you can watch"
 msgstr ""
 
-#: src/ui/preferences.rs:257
+#: src/ui/preferences.rs:269
 msgid "Last run log"
 msgstr ""
 
-#: src/ui/preferences.rs:272
+#: src/ui/preferences.rs:284
 msgid "Privacy"
 msgstr ""
 
-#: src/ui/preferences.rs:276
+#: src/ui/preferences.rs:288
 msgid "What Almanac fetches"
 msgstr ""
 
-#: src/ui/preferences.rs:278
+#: src/ui/preferences.rs:290
 msgid ""
 "Each is a request to the named service, made only to show you something. "
 "Nothing about this machine is sent with any of them. Switch one off and that "
 "part of Almanac does without."
 msgstr ""
 
-#: src/ui/preferences.rs:297
+#: src/ui/preferences.rs:309
 msgid "Omarchy plugin marketplace"
 msgstr ""
 
-#: src/ui/preferences.rs:304
+#: src/ui/preferences.rs:316
 msgid "Omarchy themes"
 msgstr ""
 
-#: src/ui/preferences.rs:305
+#: src/ui/preferences.rs:317
 msgid "GitHub, the omarchy-theme topic"
 msgstr ""
 
-#: src/ui/preferences.rs:311
+#: src/ui/preferences.rs:323
 msgid "ArtCraft apps"
 msgstr ""
 
-#: src/ui/preferences.rs:312
+#: src/ui/preferences.rs:324
 msgid "getartcraft.com and its GitHub releases"
 msgstr ""
 
-#: src/ui/preferences.rs:318
+#: src/ui/preferences.rs:330
 msgid "Arch Security Tracker"
 msgstr ""
 
-#: src/ui/preferences.rs:319
+#: src/ui/preferences.rs:331
 msgid "security.archlinux.org — the whole advisory list, matched here"
 msgstr ""
 
-#: src/ui/preferences.rs:337 src/ui/today.rs:75
+#: src/ui/preferences.rs:349 src/ui/today.rs:75
 msgid "Today's picks"
 msgstr ""
 
-#: src/ui/preferences.rs:338
+#: src/ui/preferences.rs:350
 msgid ""
 "GitHub: recent stars, forks, downloads and comments for a shortlist of about "
 "ten listings, once a day"
 msgstr ""
 
-#: src/ui/preferences.rs:345
+#: src/ui/preferences.rs:357
 msgid "Logos"
 msgstr ""
 
-#: src/ui/preferences.rs:346
+#: src/ui/preferences.rs:358
 msgid ""
 "Each from its vendor's own site, or GitHub for avatars; logos already saved "
 "still show"
 msgstr ""
 
-#: src/ui/preferences.rs:353
+#: src/ui/preferences.rs:365
 msgid "Use your GitHub sign-in"
 msgstr ""
 
-#: src/ui/preferences.rs:354
+#: src/ui/preferences.rs:366
 msgid ""
 "Your existing gh login raises GitHub's limit from 60 requests an hour to "
 "5,000. Held in memory, never saved or logged."
 msgstr ""
 
-#: src/ui/preferences.rs:363
+#: src/ui/preferences.rs:375
 msgid "Background"
 msgstr ""
 
-#: src/ui/preferences.rs:367
+#: src/ui/preferences.rs:379
 msgid "While Almanac is closed"
 msgstr ""
 
-#: src/ui/preferences.rs:369
+#: src/ui/preferences.rs:381
 msgid ""
 "A small background process with no window. It watches config folders for a "
 "reset to defaults, and checks plugins for updates every few hours."
 msgstr ""
 
-#: src/ui/preferences.rs:374 src/ui/switchboard.rs:521
+#: src/ui/preferences.rs:386 src/ui/switchboard.rs:526
 msgid "Settings watcher"
 msgstr ""
 
-#: src/ui/preferences.rs:375
+#: src/ui/preferences.rs:387
 msgid "Starts with your session, through the standard autostart folder"
 msgstr ""
 
-#: src/ui/shell.rs:504
+#: src/ui/shell.rs:515
 msgid "Priority (default)"
 msgstr ""
 
-#: src/ui/shell.rs:505 src/ui/shell.rs:524
+#: src/ui/shell.rs:516 src/ui/shell.rs:535
 msgid "Name A → Z"
 msgstr ""
 
-#: src/ui/shell.rs:506 src/ui/shell.rs:525
+#: src/ui/shell.rs:517 src/ui/shell.rs:536
 msgid "Name Z → A"
 msgstr ""
 
-#: src/ui/shell.rs:507
+#: src/ui/shell.rs:518
 msgid "Size"
 msgstr ""
 
-#: src/ui/shell.rs:508
+#: src/ui/shell.rs:519
 msgid "Install date"
 msgstr ""
 
-#: src/ui/shell.rs:509 src/ui/store.rs:231
+#: src/ui/shell.rs:520 src/ui/store.rs:272
 msgid "Category"
 msgstr ""
 
-#: src/ui/shell.rs:510
+#: src/ui/shell.rs:521
 msgid "Versions behind"
 msgstr ""
 
-#: src/ui/shell.rs:520
+#: src/ui/shell.rs:531
 msgid "Best match (default)"
 msgstr ""
 
-#: src/ui/shell.rs:521
+#: src/ui/shell.rs:532
 msgid "Most popular"
 msgstr ""
 
-#: src/ui/shell.rs:522
+#: src/ui/shell.rs:533
 msgid "Trending"
 msgstr ""
 
-#: src/ui/shell.rs:523
+#: src/ui/shell.rs:534
 msgid "Recently added"
 msgstr ""
 
-#: src/ui/shell.rs:914 src/ui/shell.rs:964 src/ui/shell.rs:1171
-#: src/ui/switchboard.rs:308
+#: src/ui/shell.rs:1014 src/ui/shell.rs:1064 src/ui/shell.rs:1272
+#: src/ui/switchboard.rs:312
 msgid "Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:948
+#: src/ui/shell.rs:1048
 msgid "Back to the App Store"
 msgstr ""
 
-#: src/ui/shell.rs:954
+#: src/ui/shell.rs:1054
 msgid "Nothing here"
 msgstr ""
 
-#: src/ui/shell.rs:967
+#: src/ui/shell.rs:1067
 msgid "Search installed software"
 msgstr ""
 
-#: src/ui/shell.rs:1179 src/ui/shell.rs:1263
+#: src/ui/shell.rs:1280 src/ui/shell.rs:1364
 msgid "About Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:1246
+#: src/ui/shell.rs:1347
 msgid "Install what’s in the search box…"
 msgstr ""
 
-#: src/ui/shell.rs:1247
+#: src/ui/shell.rs:1348
 msgid "Install from a link…"
 msgstr ""
 
-#: src/ui/shell.rs:1248
+#: src/ui/shell.rs:1349
 msgid "Track an AppImage file…"
 msgstr ""
 
-#: src/ui/shell.rs:1251
+#: src/ui/shell.rs:1352
 msgid "Review orphaned packages…"
 msgstr ""
 
-#: src/ui/shell.rs:1252
+#: src/ui/shell.rs:1353
 msgid "Update plugins…"
 msgstr ""
 
-#: src/ui/shell.rs:1254
+#: src/ui/shell.rs:1355
 msgid "Restart the shell…"
 msgstr ""
 
-#: src/ui/shell.rs:1256
+#: src/ui/shell.rs:1357
 msgid "Refresh this page"
 msgstr ""
 
-#: src/ui/shell.rs:1259
+#: src/ui/shell.rs:1360
 msgid "Preferences…"
 msgstr ""
 
-#: src/ui/shell.rs:1262
+#: src/ui/shell.rs:1363
 msgid "Update Almanac…"
 msgstr ""
 
-#: src/ui/shell.rs:1291
+#: src/ui/shell.rs:1392
 msgid "More actions"
 msgstr ""
 
-#: src/ui/shell.rs:1332
+#: src/ui/shell.rs:1433
 msgid "Return to the plugin marketplace"
 msgstr ""
 
-#: src/ui/shell.rs:1666
+#: src/ui/shell.rs:1767
 msgid ""
 "This checkout has uncommitted changes. Pulling upstream would overwrite them "
 "— commit or stash first."
 msgstr ""
 
-#: src/ui/shell.rs:1674
+#: src/ui/shell.rs:1775
 msgid ""
 "Omarchy itself — update with the whole system (Update all), never on its own"
 msgstr ""
 
-#: src/ui/shell.rs:1682
+#: src/ui/shell.rs:1783
 msgid "Build tooling or a debug package — the next AUR build will want it back"
 msgstr ""
 
-#: src/ui/shell.rs:1684
+#: src/ui/shell.rs:1785
 msgid "Nothing requires this any more"
 msgstr ""
 
-#: src/ui/shell.rs:1718
+#: src/ui/shell.rs:1819
 msgid "Network-facing or credential-handling: a stale version is exposure"
 msgstr ""
 
-#: src/ui/shell.rs:1725
+#: src/ui/shell.rs:1826
 msgid "Touches boot or needs a reboot — update with the full system, not alone"
 msgstr ""
 
-#: src/ui/shell.rs:1835
+#: src/ui/shell.rs:1936
 msgid "No upstream URL recorded"
 msgstr ""
 
-#: src/ui/shell.rs:1903
+#: src/ui/shell.rs:2004
 msgid " (Omarchy plugin)"
 msgstr ""
 
-#: src/ui/shell.rs:2055
+#: src/ui/shell.rs:2156
 msgid "Turn off"
 msgstr ""
 
-#: src/ui/shell.rs:2055
+#: src/ui/shell.rs:2156
 msgid "Turn on"
 msgstr ""
 
-#: src/ui/shell.rs:2072
+#: src/ui/shell.rs:2173
 msgid "Keyboard shortcut…"
 msgstr ""
 
-#: src/ui/shell.rs:2382
+#: src/ui/shell.rs:2483
 msgid "Your settings were reset"
 msgstr ""
 
-#: src/ui/shell.rs:2384
+#: src/ui/shell.rs:2485
 msgid "Settings reset to defaults — see Health check"
 msgstr ""
 
-#: src/ui/shell.rs:2411
+#: src/ui/shell.rs:2521
 msgid "Packages changed — rescanning…"
 msgstr ""
 
-#: src/ui/store.rs:252
+#: src/ui/store.rs:293
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:264 src/ui/store_actions.rs:1318
+#: src/ui/store.rs:305 src/ui/store_actions.rs:1361
 msgid "Marketplace"
 msgstr ""
 
-#: src/ui/store.rs:284
+#: src/ui/store.rs:325
 msgid "Verified"
 msgstr ""
 
-#: src/ui/store.rs:286
+#: src/ui/store.rs:327
 msgid ""
 "Only entries with a review that still applies to the current upstream commit"
 msgstr ""
 
-#: src/ui/store.rs:297
+#: src/ui/store.rs:338
 msgid "Only what is already on this system"
 msgstr ""
 
-#: src/ui/store.rs:309
+#: src/ui/store.rs:350
 msgid "Reset filters"
 msgstr ""
 
-#: src/ui/store.rs:311
+#: src/ui/store.rs:352
 msgid "Clear every filter and go back to Most popular"
 msgstr ""
 
-#: src/ui/store.rs:319
+#: src/ui/store.rs:360
 msgid "Search repos and the AUR instead"
 msgstr ""
 
-#: src/ui/store.rs:322
+#: src/ui/store.rs:363
 msgid ""
 "Packages are not plugins; 15,000 of them would bury the marketplace, so they "
 "are searched separately"
 msgstr ""
 
-#: src/ui/store.rs:431
+#: src/ui/store.rs:472
 msgid "Try again"
 msgstr ""
 
-#: src/ui/store.rs:444
+#: src/ui/store.rs:485
 msgid "Nothing matches"
 msgstr ""
 
-#: src/ui/store.rs:445 src/ui/store.rs:1216
+#: src/ui/store.rs:486 src/ui/store.rs:1268
 msgid "Try a different search, or clear the filters."
 msgstr ""
 
-#: src/ui/store.rs:450
+#: src/ui/store.rs:491
 msgid "The catalogue could not be loaded"
 msgstr ""
 
-#: src/ui/store.rs:451
+#: src/ui/store.rs:492
 msgid ""
 "Almanac could not reach the marketplaces. It will use the last copy it has "
 "as soon as one exists."
 msgstr ""
 
-#: src/ui/store.rs:704
+#: src/ui/store.rs:747
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:917 src/ui/store_actions.rs:1013
-#: src/ui/store_actions.rs:1425
+#: src/ui/store.rs:960 src/ui/store_actions.rs:1056
+#: src/ui/store_actions.rs:1468
 msgid "Apply"
 msgstr ""
 
-#: src/ui/store.rs:932
+#: src/ui/store.rs:975
 msgid "Ships with Omarchy — cannot be removed"
 msgstr ""
 
-#: src/ui/store.rs:947
+#: src/ui/store.rs:990
 msgid " — setup follows"
 msgstr ""
 
-#: src/ui/store.rs:969
+#: src/ui/store.rs:1012
 msgid "Manual setup"
 msgstr ""
 
-#: src/ui/store.rs:1218
+#: src/ui/store.rs:1270
 msgid "This marketplace has nothing listed right now."
 msgstr ""
 
-#: src/ui/store.rs:1269
+#: src/ui/store.rs:1321
 msgid "Type at least two characters to search repos and the AUR"
 msgstr ""
 
-#: src/ui/store.rs:1273
+#: src/ui/store.rs:1325
 msgid "Repositories and AUR"
 msgstr ""
 
@@ -1046,124 +1063,142 @@ msgid ""
 "running any of it."
 msgstr ""
 
-#: src/ui/store_actions.rs:667
+#: src/ui/store_actions.rs:252
+msgid ""
+"this is not the commit that was reviewed, so its trust label does not cover "
+"it"
+msgstr ""
+
+#: src/ui/store_actions.rs:253
+msgid "installed"
+msgstr ""
+
+#: src/ui/store_actions.rs:255
+msgid "reviewed"
+msgstr ""
+
+#: src/ui/store_actions.rs:702
 msgid ""
 "The theme is cloned into ~/.config/omarchy/themes. Nothing changes "
 "appearance until you apply it."
 msgstr ""
 
-#: src/ui/store_actions.rs:692
+#: src/ui/store_actions.rs:727
 msgid ""
 "Deletes the cloned theme from ~/.config/omarchy/themes. If it is the theme "
 "you are wearing, Omarchy falls back to another one."
 msgstr ""
 
-#: src/ui/store_actions.rs:816
+#: src/ui/store_actions.rs:851
 msgid ""
 "From the plugin's README. Packages are installed by Almanac; commands run in "
 "a terminal in the plugin's folder, where you can watch them. Nothing runs "
 "until you choose."
 msgstr ""
 
-#: src/ui/store_actions.rs:821
+#: src/ui/store_actions.rs:856
 msgid ""
 "Nothing here can be done for you — these need you. The README has the "
 "details."
 msgstr ""
 
-#: src/ui/store_actions.rs:849
+#: src/ui/store_actions.rs:884
 msgid "Later"
 msgstr ""
 
-#: src/ui/store_actions.rs:850
+#: src/ui/store_actions.rs:885
 msgid "Open README"
 msgstr ""
 
-#: src/ui/store_actions.rs:854
+#: src/ui/store_actions.rs:889
 msgid "Open the script"
 msgstr ""
 
-#: src/ui/store_actions.rs:857
+#: src/ui/store_actions.rs:892
 msgid "Run setup"
 msgstr ""
 
-#: src/ui/store_actions.rs:900
+#: src/ui/store_actions.rs:934
+msgid "Setup was not run — a file changed after it was shown"
+msgstr ""
+
+#: src/ui/store_actions.rs:943
 msgid "No terminal found to run the setup commands in"
 msgstr ""
 
-#: src/ui/store_actions.rs:940
+#: src/ui/store_actions.rs:983
 msgid "Installing what it needs"
 msgstr ""
 
-#: src/ui/store_actions.rs:1010
+#: src/ui/store_actions.rs:1053
 msgid ""
 "Applies the theme to the whole desktop — bar, terminal, editor and this "
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1179
+#: src/ui/store_actions.rs:1222
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
 msgstr ""
 
-#: src/ui/store_actions.rs:1314
+#: src/ui/store_actions.rs:1357
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1315
+#: src/ui/store_actions.rs:1358
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1319
+#: src/ui/store_actions.rs:1362
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1320
+#: src/ui/store_actions.rs:1363
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1321
+#: src/ui/store_actions.rs:1364
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1323
+#: src/ui/store_actions.rs:1366
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1325
+#: src/ui/store_actions.rs:1368
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1331
+#: src/ui/store_actions.rs:1374
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1332
+#: src/ui/store_actions.rs:1375
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1342
+#: src/ui/store_actions.rs:1385
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1356
+#: src/ui/store_actions.rs:1399
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1357
+#: src/ui/store_actions.rs:1400
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1360
+#: src/ui/store_actions.rs:1403
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1504
+#: src/ui/store_actions.rs:1547
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1517
+#: src/ui/store_actions.rs:1560
 msgid "Finish setup"
 msgstr ""
 
@@ -1171,77 +1206,77 @@ msgstr ""
 msgid "Reading what can be switched…"
 msgstr ""
 
-#: src/ui/switchboard.rs:244
+#: src/ui/switchboard.rs:248
 msgid "Plugins"
 msgstr ""
 
-#: src/ui/switchboard.rs:283
+#: src/ui/switchboard.rs:287
 msgid "Startup apps"
 msgstr ""
 
-#: src/ui/switchboard.rs:284
+#: src/ui/switchboard.rs:288
 msgid ""
 "Started when you log in. Switching one off writes a per-user override; the "
 "system's copy is never touched."
 msgstr ""
 
-#: src/ui/switchboard.rs:292
+#: src/ui/switchboard.rs:296
 msgid "Background services"
 msgstr ""
 
-#: src/ui/switchboard.rs:293
+#: src/ui/switchboard.rs:297
 msgid ""
 "Your session's systemd services and timers. Off stops it now and at every "
 "login. Essential ones ask first."
 msgstr ""
 
-#: src/ui/switchboard.rs:308
+#: src/ui/switchboard.rs:312
 msgid "Almanac's own background work."
 msgstr ""
 
-#: src/ui/switchboard.rs:388
+#: src/ui/switchboard.rs:392
 msgid "The change did not take effect"
 msgstr ""
 
-#: src/ui/switchboard.rs:419
+#: src/ui/switchboard.rs:423
 msgid "You can switch it back on here."
 msgstr ""
 
-#: src/ui/switchboard.rs:421
+#: src/ui/switchboard.rs:425
 msgid "Keep it on"
 msgstr ""
 
-#: src/ui/switchboard.rs:422
+#: src/ui/switchboard.rs:426
 msgid "Switch off"
 msgstr ""
 
-#: src/ui/switchboard.rs:476
+#: src/ui/switchboard.rs:480
 msgid "Essential"
 msgstr ""
 
-#: src/ui/switchboard.rs:479
+#: src/ui/switchboard.rs:483
 msgid "Omarchy"
 msgstr ""
 
-#: src/ui/switchboard.rs:482
+#: src/ui/switchboard.rs:486
 msgid "Running"
 msgstr ""
 
-#: src/ui/switchboard.rs:488
+#: src/ui/switchboard.rs:492
 msgid "Omarchy set this up, and a later omarchy update may expect it to be on."
 msgstr ""
 
-#: src/ui/switchboard.rs:522
+#: src/ui/switchboard.rs:527
 msgid ""
 "Notices settings reset to defaults, and plugin updates, while Almanac is "
 "closed"
 msgstr ""
 
-#: src/ui/switchboard.rs:535
+#: src/ui/switchboard.rs:540
 msgid "Scheduled updates"
 msgstr ""
 
-#: src/ui/switchboard.rs:536
+#: src/ui/switchboard.rs:541
 msgid "What runs and how often: Preferences → Updates"
 msgstr ""
 

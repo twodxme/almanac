@@ -153,6 +153,11 @@ fn forget_shortcut_with(
 pub struct UpdatePlan {
     pub ready: Vec<plugins_mod::State>,
     pub held: Vec<plugins_mod::State>,
+    /// Why each of `held` is held, in the same order.
+    pub held_why: Vec<String>,
+    /// id -> the reviewed commit a ready plugin may update to, under
+    /// "Verified only" (its step checks it again; see `plugin_step`).
+    pub pins: BTreeMap<String, String>,
     pub blocked: Vec<plugins_mod::State>,
     /// `None` for a scope `SCOPES` does not list: the Python's
     /// `dict(...)[scope]` raises KeyError there, once there is something to
@@ -164,15 +169,15 @@ pub struct UpdatePlan {
     pub raised: Option<String>,
 }
 
-/// Every installed plugin classified (fetching), with its trust key: what
-/// a bulk update plans from. `have` is the catalog already loaded, if any.
+/// Every installed plugin classified (fetching), with its listing: what a
+/// bulk update plans from. `have` is the catalog already loaded, if any.
 pub(super) fn plugin_update_states(
     have: Vec<crate::store::Plugin>,
-) -> Result<(Vec<plugins_mod::State>, BTreeMap<String, String>), String> {
+) -> Result<(Vec<plugins_mod::State>, BTreeMap<String, plugins_mod::Listing>), String> {
     let plugins = if have.is_empty() { store_mod::try_catalog(false)? } else { have };
-    let mut trust: BTreeMap<String, String> = BTreeMap::new();
+    let mut trust: BTreeMap<String, plugins_mod::Listing> = BTreeMap::new();
     for p in &plugins {
-        trust.insert(p.id.clone(), p.try_trust()?.key);
+        trust.insert(p.id.clone(), p.try_listing()?);
     }
     let mut cache = plugins_mod::FetchCache::new();
     let mut states = Vec::new();
@@ -194,8 +199,11 @@ pub(super) fn plugin_update_states(
     Ok((states, trust))
 }
 
-/// One plugin's update, as a task step.
-pub(super) fn plugin_step(pid: String) -> tasks::StepFn {
+/// One plugin's update, as a task step. `pin`: the commit the plan let it
+/// update to, under "Verified only" (see `plugins::pin_hold`); upstream
+/// moving past it between the check and the run holds it back, and an
+/// update that lands anywhere else is reported as a failure.
+pub(super) fn plugin_step(pid: String, pin: Option<String>) -> tasks::StepFn {
     std::sync::Arc::new(move |log: tasks::LogFn<'_>| {
         // Checked again now: the dialog may have stayed open while the
         // plugin was edited, or swapped for a development link.
@@ -211,6 +219,12 @@ pub(super) fn plugin_step(pid: String) -> tasks::StepFn {
             log(&format!("{pid}: skipped — {why}"));
             return Err(format!("{pid} changed since the check"));
         }
+        if let Some(pin) = &pin {
+            if !now.remote.eq_ignore_ascii_case(pin) {
+                log(&format!("{pid}: skipped — {}", tr("changed since it was reviewed")));
+                return Err(format!("{pid} changed since the check"));
+            }
+        }
         let r = run_checked(&plugins_mod::update_argv(&pid), 300)?;
         let both = r.stdout.clone() + &r.stderr;
         let lines: Vec<&str> = py_splitlines(&both);
@@ -220,24 +234,62 @@ pub(super) fn plugin_step(pid: String) -> tasks::StepFn {
         if !r.ok() {
             return Err(format!("{pid} was not updated"));
         }
+        if let Some(pin) = &pin {
+            // `omarchy plugin update` pulls whatever upstream has at that
+            // moment; it cannot be told which commit. Say so if that was not
+            // the one reviewed.
+            let head = plugins_mod::checkout_head(&plugins_mod::plugins_dir().join(&pid));
+            if !head.eq_ignore_ascii_case(pin) {
+                log(&format!("{pid}: {}", tr("updated past the reviewed commit — upstream changed during the update")));
+                return Err(format!("{pid} is not at the reviewed commit"));
+            }
+        }
         Ok(())
     })
 }
 
+/// Why a plugin is held back from a bulk update in this scope, or None.
+/// Its listing counts only when the checkout's origin is the repository the
+/// listing names -- a folder that only shares a listed id is unlisted -- and
+/// under "Verified only" upstream must still be at the reviewed commit.
+fn held_reason(s: &plugins_mod::State, listing: Option<&plugins_mod::Listing>, scope: &str) -> Option<String> {
+    let key = plugins_mod::listed_trust(&s.url, listing);
+    if !plugins_mod::in_scope(key, scope) {
+        return Some(match (listing, key) {
+            (Some(_), None) => tr("not the listed repository"),
+            (_, Some(k)) if !k.is_empty() => k.to_string(),
+            _ => "not listed".to_string(),
+        });
+    }
+    plugins_mod::pin_hold(s, listing.filter(|_| key.is_some()), scope)
+}
+
 /// The planning half of `_confirm_plugin_updates`. `trust` maps plugin id
-/// to its marketplace trust key.
+/// to its marketplace listing.
 pub fn plan_plugin_updates(
     states: &[plugins_mod::State],
-    trust: &BTreeMap<String, String>,
+    trust: &BTreeMap<String, plugins_mod::Listing>,
     scope: &str,
 ) -> UpdatePlan {
-    let ready: Vec<plugins_mod::State> = states
-        .iter()
-        .filter(|s| s.updatable() && plugins_mod::in_scope(trust.get(&s.id).map(String::as_str), scope))
-        .cloned()
-        .collect();
-    let held: Vec<plugins_mod::State> =
-        states.iter().filter(|s| s.updatable() && !ready.contains(s)).cloned().collect();
+    let mut ready: Vec<plugins_mod::State> = Vec::new();
+    let mut held: Vec<plugins_mod::State> = Vec::new();
+    let mut held_why: Vec<String> = Vec::new();
+    let mut pins: BTreeMap<String, String> = BTreeMap::new();
+    for s in states.iter().filter(|s| s.updatable()) {
+        let listing = trust.get(&s.id);
+        match held_reason(s, listing, scope) {
+            None => {
+                if scope == "verified" && listing.is_some_and(|l| !l.validated_commit.trim().is_empty()) {
+                    pins.insert(s.id.clone(), s.remote.clone());
+                }
+                ready.push(s.clone());
+            }
+            Some(why) => {
+                held.push(s.clone());
+                held_why.push(why);
+            }
+        }
+    }
     let blocked: Vec<plugins_mod::State> = states
         .iter()
         .filter(|s| {
@@ -255,9 +307,8 @@ pub fn plan_plugin_updates(
     if !held.is_empty() {
         lines.push(String::new());
         lines.push(format!("Held back (outside “{label}”):"));
-        for s in &held {
-            let t = trust.get(&s.id).map(String::as_str).unwrap_or("");
-            lines.push(format!("  {} — {}", s.id, if t.is_empty() { "not listed" } else { t }));
+        for (s, why) in held.iter().zip(&held_why) {
+            lines.push(format!("  {} — {why}", s.id));
         }
     }
     let mut raised = None;
@@ -274,7 +325,7 @@ pub fn plan_plugin_updates(
             }
         }
     }
-    UpdatePlan { ready, held, blocked, scope_label, lines, raised }
+    UpdatePlan { ready, held, held_why, pins, blocked, scope_label, lines, raised }
 }
 
 /// The orphan split of `on_clean_orphans`: `(source, advice, name)` per row
@@ -1489,7 +1540,7 @@ impl Win {
     pub fn confirm_plugin_updates(
         &self,
         states: Vec<plugins_mod::State>,
-        trust: BTreeMap<String, String>,
+        trust: BTreeMap<String, plugins_mod::Listing>,
     ) {
         let scope = match plugins_mod::try_scope() {
             Ok(scope) => scope,
@@ -1515,6 +1566,7 @@ impl Win {
             return uncaught_err(e);
         }
         let ready = plan.ready.clone();
+        let pins = plan.pins.clone();
 
 
         let heads: Vec<(String, String)> = ready
@@ -1584,7 +1636,7 @@ impl Win {
                 });
                 let steps: Vec<tasks::Step> = ready
                     .iter()
-                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone())))
+                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone(), pins.get(&s.id).cloned())))
                     .collect();
                 let wr = w.downgrade();
                 w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
@@ -2303,12 +2355,16 @@ mod tests {
     #[test]
     fn update_plan_holds_back_out_of_scope_and_lists_blocked() {
         let states = vec![
-            plugins_mod::State::new("a", "update", "", 2, ""),
+            plugins_mod::State::new("a", "update", "", 2, "https://github.com/o/a"),
             plugins_mod::State::new("b", "update", "", 1, ""),
             plugins_mod::State::new("c", "local-changes", "modified", 3, ""),
             plugins_mod::State::new("d", "current", "", 0, ""),
         ];
-        let trust: BTreeMap<String, String> = [("a".to_string(), "official".to_string())].into();
+        let trust: BTreeMap<String, plugins_mod::Listing> = [(
+            "a".to_string(),
+            plugins_mod::Listing { key: "official".into(), repo: "https://github.com/o/a".into(), ..Default::default() },
+        )]
+        .into();
         let plan = plan_plugin_updates(&states, &trust, "verified");
         assert_eq!(plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a"]);
         assert_eq!(plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b"]);
@@ -2325,6 +2381,48 @@ mod tests {
         assert!(all.held.is_empty());
         // `dict(...)[scope]` raises for a scope SCOPES does not list.
         assert_eq!(plan_plugin_updates(&states, &trust, "nonsense").scope_label, None);
+    }
+
+    #[test]
+    fn update_plan_trusts_the_listed_repository_not_the_folder_name() {
+        let listing = |key: &str, commit: &str| plugins_mod::Listing {
+            key: key.into(),
+            repo: "https://github.com/owner/x".into(),
+            validated_commit: commit.into(),
+        };
+        let sha = "1111111111111111111111111111111111111111";
+        let newer = "2222222222222222222222222222222222222222";
+        let st = |id: &str, url: &str, remote: &str| {
+            plugins_mod::State::new(id, "update", "behind", 1, url).with_remote(remote)
+        };
+        let states = vec![
+            // the listed repository, at the reviewed commit, in ssh form
+            st("same", "git@github.com:Owner/X.git", sha),
+            // a folder named like the listing, cloned from somewhere else
+            st("impostor", "https://github.com/mallory/x", sha),
+            // the listed repository, moved past what was reviewed
+            st("moved", "https://github.com/owner/x", newer),
+        ];
+        let trust: BTreeMap<String, plugins_mod::Listing> = [
+            ("same".to_string(), listing("verified", sha)),
+            ("impostor".to_string(), listing("verified", sha)),
+            ("moved".to_string(), listing("reviewed", sha)),
+        ]
+        .into();
+        let plan = plan_plugin_updates(&states, &trust, "verified");
+        assert_eq!(plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["same"]);
+        assert_eq!(plan.pins.get("same").map(String::as_str), Some(sha));
+        assert_eq!(plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["impostor", "moved"]);
+        assert_eq!(plan.held_why[0], "not the listed repository");
+        assert!(plan.held_why[1].starts_with("changed since it was reviewed"), "{}", plan.held_why[1]);
+        assert!(plan.lines.contains(&"  impostor — not the listed repository".to_string()));
+        // "Verified, and changed since review" takes the newer commits and
+        // pins nothing; the impostor is still not the listing.
+        let changed = plan_plugin_updates(&states, &trust, "changed");
+        assert_eq!(changed.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["same", "moved"]);
+        assert!(changed.pins.is_empty());
+        // "All plugins" asks nothing of provenance.
+        assert_eq!(plan_plugin_updates(&states, &trust, "all").ready.len(), 3);
     }
 
     #[test]
