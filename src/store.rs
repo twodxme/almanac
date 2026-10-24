@@ -1998,51 +1998,16 @@ fn run_text(argv: &[&str], timeout_secs: u64) -> Option<String> {
 
 /// `run_text` with any timeout (the tests use a fraction of a second).
 fn run_text_within(argv: &[&str], timeout: std::time::Duration) -> Option<String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let (prog, args) = argv.split_first()?;
-    let mut child = crate::util::spawn_group(
-        Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()),
-    )
-    .ok()?;
-    // The pipes are read on their own threads, and the deadline covers the
-    // reading too, as `communicate(timeout=...)` does: a grandchild that
-    // keeps stdout open past it means a timeout, not a wait for it to close.
-    // A timeout kills the child's whole process group, so the readers end.
-    let read = |pipe: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut b = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut b);
-            }
-            let _ = tx.send(b);
-        });
-        rx
-    };
-    let out_rx = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = std::time::Instant::now();
-    let deadline = start + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                crate::util::kill_group(&mut child);
-                return None;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(_) => return None,
-        }
-    }
-    let left = || deadline.saturating_duration_since(std::time::Instant::now());
-    let (Ok(out), Ok(err)) = (out_rx.recv_timeout(left()), err_rx.recv_timeout(left())) else {
-        crate::util::kill_group(&mut child);
+    // The deadline covers reading the pipes too, as `communicate(timeout=...)`
+    // does: a grandchild that keeps stdout open past it means a timeout, not
+    // a wait for it to close (`util::run_bytes` kills the whole group).
+    let out = crate::util::run_bytes(argv, &crate::util::RunOpts { timeout: Some(timeout), ..Default::default() });
+    if out.failed_to_start || out.timed_out {
         return None;
-    };
-    let out = String::from_utf8(out).ok()?;
-    String::from_utf8(err).ok()?;
-    Some(out.replace("\r\n", "\n").replace('\r', "\n"))
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    String::from_utf8(out.stderr).ok()?;
+    Some(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
 /// id -> enabled, for everything the shell already knows about.

@@ -83,8 +83,11 @@ on any thread.
   it (sources 2000, security 1000, inventory 900) were measured on.
   `util::JSON_STACK` is left where code still recurses as deep as Python's
   json reads: ghcache's cache writer and conversions (`ghcache::deep`),
-  agents (`agents::deep`, its pool workers), picks (`picks::_deep`) and the
-  inventory collector threads. New code that needs it starts its own.
+  agents (`agents::deep`, its pool workers) and picks (`picks::_deep`). New
+  code that needs it starts its own. The inventory collector threads are
+  back on 8 MiB (`inventory::COLLECTOR_STACK`): nothing they hold is deeper
+  than 900 levels, since agents drop their raw cache values on their own
+  deep threads.
 
 ## UI (`src/ui/`)
 

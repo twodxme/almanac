@@ -28,12 +28,11 @@
 //! return `Err` with the exception, so callers stop where the Python stops.
 
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
@@ -795,8 +794,7 @@ enum RunError {
 /// inherited; and the timeout bounds the whole call -- on expiry the child is
 /// killed and the call returns, even while a grandchild still holds the pipes.
 fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Captured, RunError> {
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
-    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use crate::util::{run_bytes, RunOpts, Stdin};
 
     let Some((prog, args)) = argv.split_first() else {
         return Err(RunError::Os("[Errno 2] No such file or directory: ''".to_string()));
@@ -805,90 +803,36 @@ fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Captured, RunE
     if argv.iter().any(|a| a.as_bytes().contains(&0)) {
         return Err(RunError::Raise("ValueError: embedded null byte".to_string()));
     }
-    let mut child: Option<Child> = None;
+    let opts = RunOpts {
+        timeout: timeout.map(Duration::from_secs),
+        stdin: Stdin::Inherit,
+        arg0: Some(prog),
+        ..Default::default()
+    };
     let (mut first_err, mut last_err) = (None, None);
     for candidate in exec_candidates(prog) {
-        let spawned = crate::util::spawn_group(Command::new(&candidate)
-            .arg0(prog)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()));
-        match spawned {
-            Ok(c) => {
-                child = Some(c);
-                break;
-            }
-            Err(e) => {
-                let n = e.raw_os_error().unwrap_or(libc::ENOENT);
-                if n != libc::ENOENT && n != libc::ENOTDIR && first_err.is_none() {
-                    first_err = Some(n);
-                }
-                last_err = Some(n);
-            }
+        let mut cmd: Vec<&OsStr> = Vec::with_capacity(argv.len());
+        cmd.push(&candidate);
+        cmd.extend(args.iter().map(OsString::as_os_str));
+        // The timeout bounds reading the pipes as well as the exit: on
+        // expiry the child's group is killed and the call returns, even
+        // while a grandchild still holds the pipes.
+        let out = run_bytes(&cmd, &opts);
+        if out.timed_out {
+            return Err(RunError::Timeout);
         }
-    }
-    let Some(mut child) = child else {
-        let n = first_err.or(last_err).unwrap_or(libc::ENOENT);
-        return Err(RunError::Os(format!("[Errno {n}] {}: {}", strerror(n), py_str_repr(&prog.to_string_lossy()))));
-    };
-
-    let deadline = timeout.map(|t| Instant::now() + Duration::from_secs(t));
-    let timed_out = |mut child: Child| {
-        crate::util::kill_group(&mut child);
-        Err(RunError::Timeout)
-    };
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever. They are not joined: a grandchild may hold the pipes open
-    // long after git is gone, and the timeout must not wait for it.
-    let (tx, rx) = channel::<(bool, Vec<u8>)>();
-    for (is_err, pipe) in [
-        (false, child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-        (true, child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-    ] {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            let _ = tx.send((is_err, buf));
-        });
-    }
-    drop(tx);
-    let (mut stdout, mut stderr) = (None, None);
-    while stdout.is_none() || stderr.is_none() {
-        let got = match deadline {
-            Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
-                Ok(got) => got,
-                Err(RecvTimeoutError::Timeout) => return timed_out(child),
-                Err(RecvTimeoutError::Disconnected) => break,
-            },
-            None => match rx.recv() {
-                Ok(got) => got,
-                Err(_) => break,
-            },
-        };
-        if got.0 {
-            stderr = Some(got.1);
-        } else {
-            stdout = Some(got.1);
+        if !out.failed_to_start {
+            let code = out.code.unwrap_or_else(|| -out.signal.unwrap_or(0));
+            return Ok(Captured { code, stdout: out.stdout, stderr: out.stderr });
         }
-    }
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) => {
-                if deadline.is_some_and(|d| Instant::now() >= d) {
-                    return timed_out(child);
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(e) => return Err(RunError::Os(os_error_str(&e))),
+        let n = out.start_errno.unwrap_or(libc::ENOENT);
+        if n != libc::ENOENT && n != libc::ENOTDIR && first_err.is_none() {
+            first_err = Some(n);
         }
-    };
-    let code = status.code().unwrap_or_else(|| -status.signal().unwrap_or(0));
-    Ok(Captured { code, stdout: stdout.unwrap_or_default(), stderr: stderr.unwrap_or_default() })
+        last_err = Some(n);
+    }
+    let n = first_err.or(last_err).unwrap_or(libc::ENOENT);
+    Err(RunError::Os(format!("[Errno {n}] {}: {}", strerror(n), py_str_repr(&prog.to_string_lossy()))))
 }
 
 /// The paths CPython's `_execute_child` tries for `prog`: itself when it has a
@@ -918,14 +862,6 @@ fn strerror(n: i32) -> String {
     match s.rfind(" (os error ") {
         Some(i) => s[..i].to_string(),
         None => s,
-    }
-}
-
-/// `str(OSError)` for an error with no filename.
-fn os_error_str(e: &std::io::Error) -> String {
-    match e.raw_os_error() {
-        Some(n) => format!("[Errno {n}] {}", strerror(n)),
-        None => e.to_string(),
     }
 }
 
@@ -2821,6 +2757,8 @@ mod et {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Stdio;
+    use std::time::Instant;
 
     fn sh_git(dir: &Path, args: &[&str]) {
         let ok = Command::new("git")

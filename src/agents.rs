@@ -769,51 +769,15 @@ fn write_json_file(path: &std::path::Path, v: &Py) {
 ///
 /// The timeout covers reading both pipes to their end, as `communicate()`
 /// does: a child that exits while something it started still holds its
-/// output open times out like any other. On a timeout the child is killed
-/// and reaped, and the readers are left to finish whenever the pipes close.
+/// output open times out like any other (`util::run_bytes` sees to both).
 fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    let (prog, args) = argv.split_first()?;
-    let mut child = crate::util::spawn_group(Command::new(prog)
-        .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-        .ok()?;
-    let reader = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut s);
-            }
-            s
-        })
-    };
-    let out_t = reader(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = reader(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = Instant::now();
-    let timeout = Duration::from_secs(timeout_secs);
-    let mut exited = false;
-    loop {
-        if !exited {
-            match child.try_wait() {
-                Ok(Some(_)) => exited = true,
-                Ok(None) => {}
-                Err(_) => return None,
-            }
-        }
-        if exited && out_t.is_finished() && err_t.is_finished() {
-            break;
-        }
-        if start.elapsed() >= timeout {
-            crate::util::kill_group(&mut child);
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    Some((out_t.join().unwrap_or_default(), err_t.join().unwrap_or_default()))
+    use crate::util::{run_bytes, RunOpts, Stdin};
+    let out = run_bytes(argv, &RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout_secs)),
+        stdin: Stdin::Inherit,
+        ..Default::default()
+    });
+    (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
 }
 
 /// `shutil.which(cmd)`: PATH, or `os.confstr("CS_PATH")` when PATH is unset
@@ -1299,13 +1263,16 @@ fn app_version(v: &Py) -> String {
 ///
 /// Python's default is `check_updates=True`. Err where the Python raises.
 pub fn try_detect(check_updates: bool) -> Result<Vec<App>, String> {
-    deep(|| detect_here(check_updates)).map(strip_raw)
+    deep(|| detect_here(check_updates).map(strip_raw))
 }
 
 /// Each App with the version exactly as the Python stores it (any value:
 /// `inventory::App.version` only holds its `str`), for the parity hook.
 type RawApps = Vec<(App, Py)>;
 
+/// The Apps alone. Call it inside [`deep`]: the raw versions it drops can
+/// be as deep as a cache file holds, and a `Py` drops recursively, so the
+/// caller's thread (an inventory collector's) never needs a deep stack.
 fn strip_raw(v: RawApps) -> Vec<App> {
     v.into_iter().map(|(a, _)| a).collect()
 }
@@ -1454,7 +1421,7 @@ pub fn detect(check_updates: bool) -> Vec<App> {
 ///
 /// Python's default is `check_updates=True`. Err where the Python raises.
 pub fn try_mise_tools(check_updates: bool) -> Result<Vec<App>, String> {
-    deep(|| mise_tools_here(check_updates)).map(strip_raw)
+    deep(|| mise_tools_here(check_updates).map(strip_raw))
 }
 
 fn mise_tools_here(check_updates: bool) -> Result<RawApps, String> {
@@ -1476,7 +1443,7 @@ pub fn mise_tools(check_updates: bool) -> Vec<App> {
 /// can hand it what the Python tests mock `_mise_installed` and
 /// `_mise_outdated` to return.
 pub fn mise_tools_from(have: &[(String, Py)], outdated: &Py) -> Result<Vec<App>, String> {
-    deep(|| mise_tools_from_here(have, outdated)).map(strip_raw)
+    deep(|| mise_tools_from_here(have, outdated).map(strip_raw))
 }
 
 fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps, String> {

@@ -1259,6 +1259,11 @@ fn py_text(bytes: Vec<u8>) -> Result<String, String> {
 /// `subprocess.run(argv, capture_output=True, timeout=...)` without the
 /// decoding: `Some((returncode, stdout, stderr))`, or `None` when it timed
 /// out (the child is killed and reaped, as `run` does).
+///
+/// Not `util::run_bytes`: the start goes through [`py_popen`] so that it
+/// fails as Python's does (no /bin/sh retry of a file without `#!`, which
+/// std's fork path makes through execvp; close_fds; the first PATH error
+/// that is not ENOENT, named).
 #[allow(clippy::type_complexity)]
 fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec<u8>, Vec<u8>)>, SpawnError> {
     use std::io::Read;

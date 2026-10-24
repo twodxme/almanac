@@ -800,49 +800,20 @@ pub fn try_token() -> Result<String, String> {
 /// Err for UnicodeDecodeError. Not `util::run`, which decodes lossily: the
 /// Python's strict decoding (and its newline translation) decides here.
 fn _gh_auth_token() -> Result<Option<(bool, PyStr)>, String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = match crate::util::spawn_group(Command::new("gh")
-        .args(["auth", "token"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-    {
-        Ok(c) => c,
-        Err(_) => return Ok(None),
-    };
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut s);
-            }
-            s
-        })
-    };
-    let out_t = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) if start.elapsed() >= std::time::Duration::from_secs(15) => {
-                crate::util::kill_group(&mut child);
-                return Ok(None); // TimeoutExpired
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(_) => return Ok(None),
-        }
-    };
-    let out = out_t.join().unwrap_or_default();
-    let err = err_t.join().unwrap_or_default();
+    let out = crate::util::run_bytes(&["gh", "auth", "token"], &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(15)),
+        ..Default::default()
+    });
+    if out.failed_to_start || out.timed_out {
+        return Ok(None); // OSError / TimeoutExpired
+    }
     let decode = |b: &[u8]| -> Result<PyStr, String> {
         let s = std::str::from_utf8(b).map_err(|e| format!("UnicodeDecodeError: 'utf-8' codec can't decode: {e}"))?;
         Ok(ps(&s.replace("\r\n", "\n").replace('\r', "\n")))
     };
-    let stdout = decode(&out)?;
-    decode(&err)?;
-    Ok(Some((status.code() == Some(0), stdout)))
+    let stdout = decode(&out.stdout)?;
+    decode(&out.stderr)?;
+    Ok(Some((out.ok(), stdout)))
 }
 
 /// Forget the memoised token so the next `token()` asks again (the tests set

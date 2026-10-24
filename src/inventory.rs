@@ -2613,6 +2613,17 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
     Ok(apps)
 }
 
+/// Stack for each [`collect`] thread: the 8 MiB of `ui::shell::BG_STACK`,
+/// Python's own thread stack. It was `util::JSON_STACK` while a collector
+/// could free a value nested as deep as Python's json reads; none can now.
+/// GitHub answers stop at `ghcache::VALUE_DEPTH` (512) levels, the registry
+/// and git cache at [`py_loads`]' 900, AUR answers at serde's 128, and agents
+/// drop their raw cache values on their own deep threads (`strip_raw`), so
+/// the deepest thing a collector clones, writes or drops here is 900 levels
+/// of `serde_json::Value` (`collector_stack_holds_the_deepest_value`).
+/// Reserved, not used, like every stack.
+const COLLECTOR_STACK: usize = 8 << 20;
+
 /// Everything, in one list.
 ///
 /// The six collectors are independent and each is dominated by waiting --
@@ -2640,11 +2651,9 @@ pub fn collect() -> Vec<App> {
     ];
     let mut out = Vec::new();
     std::thread::scope(|s| {
-        // The deep stack spawn_bg gives its jobs: a collector can drop a
-        // deeply nested GitHub cache value, and that free recurses.
         let handles: Vec<_> = sources
             .iter()
-            .map(|f| std::thread::Builder::new().stack_size(crate::util::JSON_STACK).spawn_scoped(s, f))
+            .map(|f| std::thread::Builder::new().stack_size(COLLECTOR_STACK).spawn_scoped(s, f))
             .collect();
         for h in handles {
             let Ok(h) = h else { continue };
@@ -3393,6 +3402,29 @@ mod tests {
         assert_eq!(py_type(&v["big"]), "int");
         assert_eq!(py_str(&v["a"]), "nan");
         assert!(py_loads("{\"a\": 1} x").is_err());
+    }
+
+    #[test]
+    fn collector_stack_holds_the_deepest_value() {
+        // The deepest a collector reads (py_loads' limit), cloned, written
+        // and dropped on a collector's stack, as local_builds does with the
+        // git cache; one level more is refused before anything recurses.
+        let deep = |n: usize| format!("{}{}", "{\"k\": [".repeat(n / 2), "]}".repeat(n / 2));
+        assert!(py_loads(&deep(902)).is_err());
+        let text = deep(900);
+        let ok = std::thread::Builder::new()
+            .stack_size(COLLECTOR_STACK)
+            .spawn(move || {
+                let v = py_loads(&text).unwrap();
+                let copy = v.clone();
+                let out = py_dumps(&Value::Object(Map::from_iter([("c".to_string(), copy)])), Some(2));
+                drop(v);
+                out.len() > 900
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(ok);
     }
 
     #[test]

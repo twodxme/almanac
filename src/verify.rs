@@ -120,81 +120,28 @@ fn py_text(bytes: Vec<u8>) -> Result<String, String> {
 /// raises past `(OSError, SubprocessError)`. A timeout that is not finite
 /// (`timeout=None`) is no timeout.
 ///
-/// Not `util::run`: that gives the child /dev/null as stdin, returns as soon
-/// as the direct child exits, and decodes lossily without newline translation.
+/// `util::run_bytes` with stdin inherited, and the decode done here: `util::run`
+/// would decode lossily without newline translation.
 fn py_subprocess(cmd: &[&str], timeout: f64) -> Result<Option<(Option<i32>, String)>, String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use crate::util::{run_bytes, RunOpts, Stdin};
+    use std::time::Duration;
 
-    let Some((prog, args)) = cmd.split_first() else {
+    if cmd.is_empty() {
         return Err("IndexError: list index out of range".into());
-    };
+    }
     if cmd.iter().any(|a| a.contains('\0')) {
         return Err("ValueError: embedded null byte".into());
     }
-    let mut child = match crate::util::spawn_group(Command::new(prog)
-        .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-    {
-        Ok(c) => c,
-        Err(_) => return Ok(None),
-    };
-    // None: wait as long as it takes.
-    let deadline = if timeout.is_finite() {
-        Instant::now().checked_add(Duration::from_secs_f64(timeout.clamp(0.0, 1e9)))
-    } else {
-        None
-    };
-    let left = |d: Option<Instant>| d.map(|d| d.saturating_duration_since(Instant::now()));
-    let (tx, rx) = mpsc::channel::<(usize, Vec<u8>)>();
-    let pipes: [Option<Box<dyn Read + Send>>; 2] = [
-        child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-        child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-    ];
-    for (i, pipe) in pipes.into_iter().enumerate() {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            let _ = tx.send((i, buf));
-        });
+    // None: wait as long as it takes (as when the deadline would overflow).
+    let timeout = timeout.is_finite().then(|| Duration::from_secs_f64(timeout.clamp(0.0, 1e9)))
+        .filter(|t| std::time::Instant::now().checked_add(*t).is_some());
+    let out = run_bytes(cmd, &RunOpts { timeout, stdin: Stdin::Inherit, ..Default::default() });
+    if out.failed_to_start || out.timed_out {
+        return Ok(None); // OSError / TimeoutExpired
     }
-    drop(tx);
-    let timed_out = |child: &mut std::process::Child| {
-        // run(): on TimeoutExpired, kill the child and wait for it.
-        crate::util::kill_group(child);
-        Ok(None)
-    };
-    let mut got: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
-    for _ in 0..2 {
-        let r = match left(deadline) {
-            Some(l) => rx.recv_timeout(l),
-            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-        };
-        match r {
-            Ok((i, buf)) => got[i] = buf,
-            Err(mpsc::RecvTimeoutError::Timeout) => return timed_out(&mut child),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) if deadline.is_some_and(|d| Instant::now() >= d) => return timed_out(&mut child),
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-            Err(_) => return Ok(None),
-        }
-    };
-    let [out, err] = got;
-    let stdout = py_text(out)?;
-    py_text(err)?;
-    Ok(Some((status.code(), stdout)))
+    let stdout = py_text(out.stdout)?;
+    py_text(out.stderr)?;
+    Ok(Some((out.code, stdout)))
 }
 
 /// `_out`: stdout, stripped, when the command succeeded; "" otherwise
