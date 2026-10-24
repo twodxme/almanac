@@ -96,7 +96,7 @@ on any thread.
 
 | file | what |
 |---|---|
-| `shell.rs` | helpers, CSS and theme providers, list items, the window, sidebar, header, columns, persisted state, change detection, the application and its command line |
+| `shell.rs` + `shell/` | the shared frame, re-exported as `shell::…`: `helpers` (labels, formatting, the stylesheet, `spawn_bg`), `items` (list items), `tables` (sidebar groups, pages, sorts), `window` (`Win` / `Inner` / `Shared`, the texture cache), `build` (`Win::new`: CSS and theme providers, sidebar, header, pages), `columns`, `state` (shortcuts, persisted state), `watch` (change detection), `app` (the application and its command line) |
 | `packages.rs` | data loading and filtering: Updates, Applications, Everything, Orphans tables, the details sheet |
 | `store.rs` | App Store and Themes pages: grid, cards, marketplace data |
 | `store_actions.rs` | install/remove from the store, setup after install, themes, AppImages |
@@ -115,7 +115,8 @@ on any thread.
   read by more than one section, e.g. the plugin list), and one
   `RefCell<<section>::State>` per section. Each section file defines
   `#[derive(Default)] pub struct State` holding its own widgets and data.
-- **Methods** live in `impl Win { … }` blocks in their section's file.
+- **Methods** live in `impl Win { … }` blocks in their section's file; a
+  section split into a directory (`shell/`, …) spreads them across its files.
 - **Callbacks** hold a weak handle: `let w = self.downgrade();
   btn.connect_clicked(move |_| if let Some(w) = w.upgrade() { w.on_x(); });`
 - **Background work** → `shell::spawn_bg(move || work(), move |result| on_main_thread(result))`.

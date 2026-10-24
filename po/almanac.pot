@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 19:07-0700\n"
+"POT-Creation-Date: 2026-10-23 19:36-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -33,134 +33,134 @@ msgstr[1] ""
 msgid "No string anyone has translated"
 msgstr ""
 
-#: src/plugins.rs:1717
+#: src/plugins.rs:1686
 msgid "no reviewed commit to compare with"
 msgstr ""
 
-#: src/plugins.rs:1726 src/ui/plugins.rs:224
+#: src/plugins.rs:1695 src/ui/plugins.rs:224
 msgid "changed since it was reviewed"
 msgstr ""
 
-#: src/ui/actions.rs:867
+#: src/ui/actions.rs:827
 msgid "Open the release"
 msgstr ""
 
-#: src/ui/actions.rs:897 src/ui/actions.rs:1649 src/ui/ai.rs:894
-#: src/ui/packages.rs:1253 src/ui/plugins.rs:1587 src/ui/shell.rs:2227
+#: src/ui/actions.rs:857 src/ui/actions.rs:1609 src/ui/ai.rs:894
+#: src/ui/packages.rs:1253 src/ui/plugins.rs:1587 src/ui/shell/columns.rs:580
 #: src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
-#: src/ui/actions.rs:922
+#: src/ui/actions.rs:882
 msgid "Almanac was not updated"
 msgstr ""
 
-#: src/ui/actions.rs:928
+#: src/ui/actions.rs:888
 msgid "Almanac updated — restart to use the new version"
 msgstr ""
 
-#: src/ui/actions.rs:969
+#: src/ui/actions.rs:929
 msgid ""
 "A catalogue of everything installed on this machine: where each thing came "
 "from, how old it is, whether it still has a maintainer, and what needs "
 "attention."
 msgstr ""
 
-#: src/ui/actions.rs:1173
+#: src/ui/actions.rs:1133
 msgid "Nothing changed"
 msgstr ""
 
-#: src/ui/actions.rs:1229
+#: src/ui/actions.rs:1189
 msgid ""
 "\n"
 "\n"
 "Give them back to what opened them before?"
 msgstr ""
 
-#: src/ui/actions.rs:1234
+#: src/ui/actions.rs:1194
 msgid "Some files now open in a different app"
 msgstr ""
 
-#: src/ui/actions.rs:1237
+#: src/ui/actions.rs:1197
 msgid "Keep the new app"
 msgstr ""
 
-#: src/ui/actions.rs:1239
+#: src/ui/actions.rs:1199
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions.rs:1283
+#: src/ui/actions.rs:1243
 msgid "Install from a link"
 msgstr ""
 
-#: src/ui/actions.rs:1285
+#: src/ui/actions.rs:1245
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: src/ui/actions.rs:1290 src/ui/actions.rs:1402 src/ui/actions.rs:1850
+#: src/ui/actions.rs:1250 src/ui/actions.rs:1362 src/ui/actions.rs:1810
 #: src/ui/plugins.rs:1478
 msgid "Cancel"
 msgstr ""
 
-#: src/ui/actions.rs:1291
+#: src/ui/actions.rs:1251
 msgid "Look it up"
 msgstr ""
 
-#: src/ui/actions.rs:1304
+#: src/ui/actions.rs:1264
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: src/ui/actions.rs:1307
+#: src/ui/actions.rs:1267
 msgid "Looking it up…"
 msgstr ""
 
-#: src/ui/actions.rs:1366
+#: src/ui/actions.rs:1326
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1403 src/ui/plugins.rs:1777 src/ui/plugins.rs:1820
+#: src/ui/actions.rs:1363 src/ui/plugins.rs:1777 src/ui/plugins.rs:1820
 #: src/ui/plugins.rs:1858 src/ui/store_actions.rs:603
 #: src/ui/store_actions.rs:705 src/ui/store_actions.rs:1118
 #: src/ui/store_actions.rs:1576
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1532 src/ui/packages.rs:950 src/ui/shell.rs:1109
+#: src/ui/actions.rs:1492 src/ui/packages.rs:950 src/ui/shell/build.rs:79
 msgid "Update all"
 msgstr ""
 
-#: src/ui/actions.rs:1553
+#: src/ui/actions.rs:1513
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions.rs:1557
+#: src/ui/actions.rs:1517
 msgid "Update anyway"
 msgstr ""
 
-#: src/ui/actions.rs:1800
+#: src/ui/actions.rs:1760
 msgid "Choose an AppImage to track"
 msgstr ""
 
-#: src/ui/actions.rs:1842
+#: src/ui/actions.rs:1802
 msgid ""
 "Another AppImage is already tracked under this name. Adding this one as it "
 "is would replace it: its file, its launcher and what Almanac knows about it."
 msgstr ""
 
-#: src/ui/actions.rs:1845
+#: src/ui/actions.rs:1805
 msgid "Tracked now:"
 msgstr ""
 
-#: src/ui/actions.rs:1846
+#: src/ui/actions.rs:1806
 msgid "Adding:"
 msgstr ""
 
-#: src/ui/actions.rs:1852
+#: src/ui/actions.rs:1812
 msgid "Replace"
 msgstr ""
 
@@ -397,7 +397,7 @@ msgstr ""
 msgid "Loading the plugin marketplace…"
 msgstr ""
 
-#: src/ui/packages.rs:2076 src/ui/shell.rs:1343
+#: src/ui/packages.rs:2076 src/ui/shell/build.rs:313
 msgid "Show categories"
 msgstr ""
 
@@ -409,7 +409,7 @@ msgstr ""
 msgid "Filter and sort the marketplace"
 msgstr ""
 
-#: src/ui/packages.rs:2111 src/ui/shell.rs:1408 src/ui/store.rs:283
+#: src/ui/packages.rs:2111 src/ui/shell/build.rs:378 src/ui/store.rs:283
 msgid "Sort by"
 msgstr ""
 
@@ -792,171 +792,171 @@ msgstr ""
 msgid "Starts with your session, through the standard autostart folder"
 msgstr ""
 
-#: src/ui/shell.rs:554
-msgid "Priority (default)"
-msgstr ""
-
-#: src/ui/shell.rs:555 src/ui/shell.rs:574
-msgid "Name A → Z"
-msgstr ""
-
-#: src/ui/shell.rs:556 src/ui/shell.rs:575
-msgid "Name Z → A"
-msgstr ""
-
-#: src/ui/shell.rs:557
-msgid "Size"
-msgstr ""
-
-#: src/ui/shell.rs:558
-msgid "Install date"
-msgstr ""
-
-#: src/ui/shell.rs:559 src/ui/store.rs:272
-msgid "Category"
-msgstr ""
-
-#: src/ui/shell.rs:560
-msgid "Versions behind"
-msgstr ""
-
-#: src/ui/shell.rs:570
-msgid "Best match (default)"
-msgstr ""
-
-#: src/ui/shell.rs:571
-msgid "Most popular"
-msgstr ""
-
-#: src/ui/shell.rs:572
-msgid "Trending"
-msgstr ""
-
-#: src/ui/shell.rs:573
-msgid "Recently added"
-msgstr ""
-
-#: src/ui/shell.rs:1053 src/ui/shell.rs:1103 src/ui/shell.rs:1311
+#: src/ui/shell/build.rs:23 src/ui/shell/build.rs:73 src/ui/shell/build.rs:281
 #: src/ui/switchboard.rs:312
 msgid "Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:1087
+#: src/ui/shell/build.rs:57
 msgid "Back to the App Store"
 msgstr ""
 
-#: src/ui/shell.rs:1093
+#: src/ui/shell/build.rs:63
 msgid "Nothing here"
 msgstr ""
 
-#: src/ui/shell.rs:1106
+#: src/ui/shell/build.rs:76
 msgid "Search installed software"
 msgstr ""
 
-#: src/ui/shell.rs:1319 src/ui/shell.rs:1403
+#: src/ui/shell/build.rs:289 src/ui/shell/build.rs:373
 msgid "About Almanac"
 msgstr ""
 
-#: src/ui/shell.rs:1386
+#: src/ui/shell/build.rs:356
 msgid "Install what’s in the search box…"
 msgstr ""
 
-#: src/ui/shell.rs:1387
+#: src/ui/shell/build.rs:357
 msgid "Install from a link…"
 msgstr ""
 
-#: src/ui/shell.rs:1388
+#: src/ui/shell/build.rs:358
 msgid "Track an AppImage file…"
 msgstr ""
 
-#: src/ui/shell.rs:1391
+#: src/ui/shell/build.rs:361
 msgid "Review orphaned packages…"
 msgstr ""
 
-#: src/ui/shell.rs:1392
+#: src/ui/shell/build.rs:362
 msgid "Update plugins…"
 msgstr ""
 
-#: src/ui/shell.rs:1394
+#: src/ui/shell/build.rs:364
 msgid "Restart the shell…"
 msgstr ""
 
-#: src/ui/shell.rs:1396
+#: src/ui/shell/build.rs:366
 msgid "Refresh this page"
 msgstr ""
 
-#: src/ui/shell.rs:1399
+#: src/ui/shell/build.rs:369
 msgid "Preferences…"
 msgstr ""
 
-#: src/ui/shell.rs:1402
+#: src/ui/shell/build.rs:372
 msgid "Update Almanac…"
 msgstr ""
 
-#: src/ui/shell.rs:1431
+#: src/ui/shell/build.rs:401
 msgid "More actions"
 msgstr ""
 
-#: src/ui/shell.rs:1472
+#: src/ui/shell/build.rs:442
 msgid "Return to the plugin marketplace"
 msgstr ""
 
-#: src/ui/shell.rs:1806
+#: src/ui/shell/columns.rs:159
 msgid ""
 "This checkout has uncommitted changes. Pulling upstream would overwrite them "
 "— commit or stash first."
 msgstr ""
 
-#: src/ui/shell.rs:1814
+#: src/ui/shell/columns.rs:167
 msgid ""
 "Omarchy itself — update with the whole system (Update all), never on its own"
 msgstr ""
 
-#: src/ui/shell.rs:1822
+#: src/ui/shell/columns.rs:175
 msgid "Build tooling or a debug package — the next AUR build will want it back"
 msgstr ""
 
-#: src/ui/shell.rs:1824
+#: src/ui/shell/columns.rs:177
 msgid "Nothing requires this any more"
 msgstr ""
 
-#: src/ui/shell.rs:1858
+#: src/ui/shell/columns.rs:211
 msgid "Network-facing or credential-handling: a stale version is exposure"
 msgstr ""
 
-#: src/ui/shell.rs:1865
+#: src/ui/shell/columns.rs:218
 msgid "Touches boot or needs a reboot — update with the full system, not alone"
 msgstr ""
 
-#: src/ui/shell.rs:1975
+#: src/ui/shell/columns.rs:328
 msgid "No upstream URL recorded"
 msgstr ""
 
-#: src/ui/shell.rs:2043
+#: src/ui/shell/columns.rs:396
 msgid " (Omarchy plugin)"
 msgstr ""
 
-#: src/ui/shell.rs:2195
+#: src/ui/shell/columns.rs:548
 msgid "Turn off"
 msgstr ""
 
-#: src/ui/shell.rs:2195
+#: src/ui/shell/columns.rs:548
 msgid "Turn on"
 msgstr ""
 
-#: src/ui/shell.rs:2212
+#: src/ui/shell/columns.rs:565
 msgid "Keyboard shortcut…"
 msgstr ""
 
-#: src/ui/shell.rs:2528
+#: src/ui/shell/tables.rs:129
+msgid "Priority (default)"
+msgstr ""
+
+#: src/ui/shell/tables.rs:130 src/ui/shell/tables.rs:149
+msgid "Name A → Z"
+msgstr ""
+
+#: src/ui/shell/tables.rs:131 src/ui/shell/tables.rs:150
+msgid "Name Z → A"
+msgstr ""
+
+#: src/ui/shell/tables.rs:132
+msgid "Size"
+msgstr ""
+
+#: src/ui/shell/tables.rs:133
+msgid "Install date"
+msgstr ""
+
+#: src/ui/shell/tables.rs:134 src/ui/store.rs:272
+msgid "Category"
+msgstr ""
+
+#: src/ui/shell/tables.rs:135
+msgid "Versions behind"
+msgstr ""
+
+#: src/ui/shell/tables.rs:145
+msgid "Best match (default)"
+msgstr ""
+
+#: src/ui/shell/tables.rs:146
+msgid "Most popular"
+msgstr ""
+
+#: src/ui/shell/tables.rs:147
+msgid "Trending"
+msgstr ""
+
+#: src/ui/shell/tables.rs:148
+msgid "Recently added"
+msgstr ""
+
+#: src/ui/shell/watch.rs:165
 msgid "Your settings were reset"
 msgstr ""
 
-#: src/ui/shell.rs:2530
+#: src/ui/shell/watch.rs:167
 msgid "Settings reset to defaults — see Health check"
 msgstr ""
 
-#: src/ui/shell.rs:2566
+#: src/ui/shell/watch.rs:203
 msgid "Packages changed — rescanning…"
 msgstr ""
 
