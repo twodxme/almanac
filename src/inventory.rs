@@ -81,7 +81,7 @@ pub const CRITICAL: &[(&str, &[&str])] = &[
         "core",
         &[
             "linux", "linux-lts", "linux-zen", "linux-firmware", "glibc", "systemd",
-            "mkinitcpio", "limine", "grub", "mesa", "pacman", "btrfs-progs",
+            "mkinitcpio", "limine", "grub", "mesa", "pacman", "btrfs-progs", "dkms",
         ],
     ),
 ];
@@ -781,6 +781,13 @@ pub fn criticality(name: &str) -> String {
         if names.contains(&base.as_str()) || names.contains(&lower.as_str()) {
             return kind.to_string();
         }
+    }
+    // A DKMS module (nvidia-dkms, zfs-dkms, virtualbox-host-dkms, ...) is
+    // rebuilt against every kernel, and one that fails to build leaves the
+    // next boot without its graphics or its filesystem: core, by suffix,
+    // since there are too many to list.
+    if base.ends_with("-dkms") || lower.ends_with("-dkms") {
+        return "core".to_string();
     }
     String::new()
 }
@@ -3271,6 +3278,16 @@ mod tests {
     fn test_boot_critical_is_core() {
         assert_eq!(criticality("linux"), "core");
         assert_eq!(criticality("mkinitcpio"), "core");
+    }
+
+    #[test]
+    fn test_dkms_modules_are_core() {
+        for name in ["dkms", "nvidia-dkms", "virtualbox-host-dkms", "zfs-dkms", "zfs-dkms-git", "Broadcom-WL-DKMS"] {
+            assert_eq!(criticality(name), "core", "{name}");
+        }
+        // only the suffix: a name that merely mentions dkms is not a module
+        assert_eq!(criticality("dkms-tools-doc"), "");
+        assert_eq!(criticality("nvidia-utils"), "");
     }
 
     #[test]

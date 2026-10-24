@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 18:46-0700\n"
+"POT-Creation-Date: 2026-10-23 19:07-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -41,122 +41,126 @@ msgstr ""
 msgid "changed since it was reviewed"
 msgstr ""
 
-#: src/ui/actions.rs:883 src/ui/actions.rs:1635 src/ui/ai.rs:894
+#: src/ui/actions.rs:867
+msgid "Open the release"
+msgstr ""
+
+#: src/ui/actions.rs:897 src/ui/actions.rs:1649 src/ui/ai.rs:894
 #: src/ui/packages.rs:1253 src/ui/plugins.rs:1587 src/ui/shell.rs:2227
 #: src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
 
-#: src/ui/actions.rs:908
+#: src/ui/actions.rs:922
 msgid "Almanac was not updated"
 msgstr ""
 
-#: src/ui/actions.rs:914
+#: src/ui/actions.rs:928
 msgid "Almanac updated — restart to use the new version"
 msgstr ""
 
-#: src/ui/actions.rs:955
+#: src/ui/actions.rs:969
 msgid ""
 "A catalogue of everything installed on this machine: where each thing came "
 "from, how old it is, whether it still has a maintainer, and what needs "
 "attention."
 msgstr ""
 
-#: src/ui/actions.rs:1159
+#: src/ui/actions.rs:1173
 msgid "Nothing changed"
 msgstr ""
 
-#: src/ui/actions.rs:1215
+#: src/ui/actions.rs:1229
 msgid ""
 "\n"
 "\n"
 "Give them back to what opened them before?"
 msgstr ""
 
-#: src/ui/actions.rs:1220
+#: src/ui/actions.rs:1234
 msgid "Some files now open in a different app"
 msgstr ""
 
-#: src/ui/actions.rs:1223
+#: src/ui/actions.rs:1237
 msgid "Keep the new app"
 msgstr ""
 
-#: src/ui/actions.rs:1225
+#: src/ui/actions.rs:1239
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions.rs:1269
+#: src/ui/actions.rs:1283
 msgid "Install from a link"
 msgstr ""
 
-#: src/ui/actions.rs:1271
+#: src/ui/actions.rs:1285
 msgid ""
 "Paste a GitHub project link. Every way it is published is compared, and one "
 "is recommended, before anything is downloaded."
 msgstr ""
 
-#: src/ui/actions.rs:1276 src/ui/actions.rs:1388 src/ui/actions.rs:1836
+#: src/ui/actions.rs:1290 src/ui/actions.rs:1402 src/ui/actions.rs:1850
 #: src/ui/plugins.rs:1478
 msgid "Cancel"
 msgstr ""
 
-#: src/ui/actions.rs:1277
+#: src/ui/actions.rs:1291
 msgid "Look it up"
 msgstr ""
 
-#: src/ui/actions.rs:1290
+#: src/ui/actions.rs:1304
 msgid "That is not a GitHub repository link"
 msgstr ""
 
-#: src/ui/actions.rs:1293
+#: src/ui/actions.rs:1307
 msgid "Looking it up…"
 msgstr ""
 
-#: src/ui/actions.rs:1352
+#: src/ui/actions.rs:1366
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1389 src/ui/plugins.rs:1777 src/ui/plugins.rs:1820
+#: src/ui/actions.rs:1403 src/ui/plugins.rs:1777 src/ui/plugins.rs:1820
 #: src/ui/plugins.rs:1858 src/ui/store_actions.rs:603
 #: src/ui/store_actions.rs:705 src/ui/store_actions.rs:1118
 #: src/ui/store_actions.rs:1576
 msgid "Install"
 msgstr ""
 
-#: src/ui/actions.rs:1518 src/ui/packages.rs:950 src/ui/shell.rs:1109
+#: src/ui/actions.rs:1532 src/ui/packages.rs:950 src/ui/shell.rs:1109
 msgid "Update all"
 msgstr ""
 
-#: src/ui/actions.rs:1539
+#: src/ui/actions.rs:1553
 msgid ""
 "Arch prefers full system upgrades. Updating one package against a database "
 "that has moved on is a partial upgrade, which can break linking. “Update "
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions.rs:1543
+#: src/ui/actions.rs:1557
 msgid "Update anyway"
 msgstr ""
 
-#: src/ui/actions.rs:1786
+#: src/ui/actions.rs:1800
 msgid "Choose an AppImage to track"
 msgstr ""
 
-#: src/ui/actions.rs:1828
+#: src/ui/actions.rs:1842
 msgid ""
 "Another AppImage is already tracked under this name. Adding this one as it "
 "is would replace it: its file, its launcher and what Almanac knows about it."
 msgstr ""
 
-#: src/ui/actions.rs:1831
+#: src/ui/actions.rs:1845
 msgid "Tracked now:"
 msgstr ""
 
-#: src/ui/actions.rs:1832
+#: src/ui/actions.rs:1846
 msgid "Adding:"
 msgstr ""
 
-#: src/ui/actions.rs:1838
+#: src/ui/actions.rs:1852
 msgid "Replace"
 msgstr ""
 
