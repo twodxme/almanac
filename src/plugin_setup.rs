@@ -21,7 +21,11 @@
 //!   (and every path naming one still resolving, through any symlink, to
 //!   the file shown), and every build file the tool would have opened but
 //!   that was absent is checked still absent; either check failing stops
-//!   the run.
+//!   the run. A name with a control character in it (a newline the
+//!   terminal's `$(...)` would drop) is not offered at all, and every
+//!   Python runs with PYTHONSAFEPATH=1, so the plugin's folder is not where
+//!   it finds `logging` or `shutil`. `systemctl --user` only enables,
+//!   disables, starts, stops or restarts units, or reloads the daemon.
 //!
 //!   A line is offered only when bash would read it as plain words, joined
 //!   by `&&` at most: no variables, globs, braces, `;`, pipes, redirections,
@@ -763,6 +767,7 @@ fn step_kind(part: &str) -> Option<Kind> {
         // a file of the plugin's, run as a service with nothing shown. Only
         // units already installed, named without a path, are started.
         "systemctl" if args.iter().any(|a| a.contains('/')) => None,
+        "systemctl" if !service_line(args) => None,
         p if p.contains('/') => Some(Kind::Script),
         "bash" | "sh" | "zsh" | "dash" => Some(Kind::Script),
         "make" | "cmake" | "meson" | "ninja" | "cargo" | "go" | "npm" | "pnpm" | "yarn" | "bun" | "uv" | "pip"
@@ -770,6 +775,25 @@ fn step_kind(part: &str) -> Option<Kind> {
         p if is_python(p) => Some(Kind::Build),
         "systemctl" => Some(Kind::Service),
         _ => None,
+    }
+}
+
+/// A `systemctl --user` line that only turns units already installed on or
+/// off: one of a few verbs, unit names, `--user` and `--now`. Any other verb
+/// or option could do what nothing shown says -- `edit` opens an editor,
+/// `set-environment` changes every later service's environment,
+/// `--root=` or `-H` points it at another tree or machine -- so it is not
+/// offered: being free of a `/` was not enough.
+fn service_line(args: &[String]) -> bool {
+    const VERBS: &[&str] = &["enable", "disable", "start", "stop", "restart", "daemon-reload"];
+    let (opts, words): (Vec<&String>, Vec<&String>) = args.iter().partition(|a| a.starts_with('-'));
+    if !opts.iter().all(|o| *o == "--user" || *o == "--now") || !opts.iter().any(|o| *o == "--user") {
+        return false;
+    }
+    match words.split_first() {
+        Some((verb, units)) if *verb == "daemon-reload" => units.is_empty() && !opts.iter().any(|o| *o == "--now"),
+        Some((verb, units)) => VERBS.contains(&verb.as_str()) && !units.is_empty(),
+        None => false,
     }
 }
 
@@ -826,6 +850,11 @@ fn bun_file(args: &[String], plugin_dir: &Path) -> Option<String> {
     const EXT: &[&str] = &[".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".mts", ".cts"];
     (w.contains('/') || EXT.iter().any(|e| w.ends_with(e)) || plugin_dir.join(w).is_file()).then(|| w.clone())
 }
+
+/// The files uv reads the Python to use from. Shown and checked like any
+/// build file; one that names a path (a `/` in it) rather than a version is
+/// refused outright, since the program it names would run unseen.
+const PYTHON_VERSION_FILES: [&str; 2] = [".python-version", ".python-versions"];
 
 /// The names `just` looks for, in any ASCII case.
 const JUSTFILES: [&str; 2] = ["justfile", ".justfile"];
@@ -1169,6 +1198,11 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             if elsewhere(&["--directory", "--project"]) {
                 return Err(());
             }
+            // What every uv command reads in the folder it runs in: its
+            // config (uv.toml, pyproject's [tool.uv]) and the Python to use
+            // (.python-version(s)), which may name a path -- `./fakepy` made
+            // uv run a program of the plugin's (see `PYTHON_VERSION_FILES`).
+            out.extend(["uv.toml", "pyproject.toml", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
             let words = scan_args(args, "pw", "", &["python", "with", "index-url", "extra-index-url", "find-links", "from"], |_, _| {})?;
             match words.as_slice() {
                 ["pip", ..] | ["tool", ..] => {
@@ -1396,6 +1430,26 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 else {
                     continue;
                 };
+                // A name with a control character in it cannot be checked
+                // in the terminal as surely as here (`$(...)` drops trailing
+                // newlines; see `exact_output`), nor shown as it is: the
+                // step is not offered. The path a step names, the file it
+                // leads to, and every build file held absent.
+                let ctl = |s: &str| s.chars().any(char::is_control);
+                if shown.iter().any(|(f, (key, _, _, target))| ctl(f) || ctl(&esc(key)) || ctl(target))
+                    || missing.iter().any(|f| ctl(f))
+                {
+                    continue;
+                }
+                // A .python-version that names a path, not a version: uv
+                // would run that program as its Python.
+                if shown.iter().any(|(f, (key, body, _, _))| {
+                    let name = Path::new(key).file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                    (PYTHON_VERSION_FILES.contains(&name) || PYTHON_VERSION_FILES.iter().any(|v| f.ends_with(v)))
+                        && body.contains('/')
+                }) {
+                    continue;
+                }
                 if !out.commands.iter().any(|c| c == part) {
                     out.commands.push(part.to_string());
                 }
@@ -1458,6 +1512,32 @@ fn any_case_glob(name: &str) -> String {
         .collect()
 }
 
+/// A check that `cmd` printed exactly `want` and the one newline it ends its
+/// output with, else `fail` is said and the script stops. `$(...)` drops
+/// every trailing newline, so `"$(realpath -e -- ./install)"` read a link
+/// repointed at a file named `real.sh\n` as `real.sh`, the file shown: a `x`
+/// printed after the output keeps them, and only the one newline is taken
+/// off. A command that fails prints no `x`, and nothing then matches.
+fn exact_output(cmd: &str, want: &str, fail: &str) -> String {
+    format!(
+        "got=$({cmd} && printf x) && got=${{got%x}} && got=${{got%$'\\n'}} && test \"$got\" = {} || {{ echo; echo {fail}; exit 1; }}",
+        shlex_quote(want)
+    )
+}
+
+/// sudo clears the environment, PYTHONSAFEPATH with it: a Python step run
+/// through sudo is handed it again by `env`.
+fn sudo_keeps_safepath(words: Vec<Word>) -> Vec<Word> {
+    let python_after_sudo = words.first().is_some_and(|w| w.text == "sudo") && words.get(1).is_some_and(|w| is_python(&w.text));
+    if !python_after_sudo {
+        return words;
+    }
+    let plain = |s: &str| Word { text: s.to_string(), home: None };
+    let mut out = vec![words[0].clone(), plain("env"), plain("PYTHONSAFEPATH=1")];
+    out.extend(words.into_iter().skip(1));
+    out
+}
+
 /// The commands, as one shell script that stops at the first failure. Each
 /// command is preceded by a check that every file shown is still the one
 /// shown, and that every build file absent then is still absent: a step
@@ -1468,25 +1548,24 @@ fn any_case_glob(name: &str) -> String {
 /// is the argv the checks reasoned about. A command that no longer reads as
 /// plain words stops the script there.
 pub fn terminal_script(p: &SetupPlan) -> String {
-    let mut lines = vec![format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))), "set -e".to_string()];
+    let mut lines = vec![
+        format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))),
+        "set -e".to_string(),
+        // Python puts the folder it runs in (or the script's) first on
+        // sys.path, so a plugin's own logging.py or shutil.py would be what
+        // `python3 -m venv`, pip or a shown script imports, unseen. 3.11 and
+        // later leave it off with this; it is in the environment, not a
+        // `-P`, so that the Pythons pip, venv and a build start inherit it.
+        "export PYTHONSAFEPATH=1".to_string(),
+    ];
     let stop = |shown: &str| shlex_quote(&format!("{shown} changed after it was shown -- setup stopped."));
     for cmd in &p.commands {
         for (written, target) in &p.links {
-            lines.push(format!(
-                "test \"$(realpath -e -- {})\" = {} || {{ echo; echo {}; exit 1; }}",
-                shlex_quote(written),
-                shlex_quote(target),
-                stop(written),
-            ));
+            lines.push(exact_output(&format!("realpath -e -- {}", shlex_quote(written)), target, &stop(written)));
         }
         for (name, digest) in &p.digests {
             let shown = esc(name);
-            lines.push(format!(
-                "test \"$(sha256sum < {})\" = {} || {{ echo; echo {}; exit 1; }}",
-                shlex_quote(&shown),
-                shlex_quote(&format!("{digest}  -")),
-                stop(&shown),
-            ));
+            lines.push(exact_output(&format!("sha256sum < {}", shlex_quote(&shown)), &format!("{digest}  -"), &stop(&shown)));
         }
         for name in &p.absent {
             let q = shlex_quote(name);
@@ -1502,7 +1581,7 @@ pub fn terminal_script(p: &SetupPlan) -> String {
         }
         lines.push(format!("echo; echo '$ '{}", shlex_quote(cmd)));
         match literal_words(cmd) {
-            Some(words) if !words.is_empty() => lines.push(argv_line(&words)),
+            Some(words) if !words.is_empty() => lines.push(argv_line(&sudo_keeps_safepath(words))),
             _ => {
                 let msg = shlex_quote(&format!("{cmd} is not plain words -- setup stopped."));
                 lines.push(format!("echo; echo {msg}; exit 1"));
@@ -1838,7 +1917,7 @@ make build
         assert_eq!(unchanged(&p), Ok(()));
         let script = terminal_script(&p);
         let want = hex::encode(Sha256::digest(b"echo fine\n"));
-        let guard = format!("test \"$(sha256sum < install)\" = '{want}  -' || {{");
+        let guard = format!("got=$(sha256sum < install && printf x) && got=${{got%x}} && got=${{got%$'\\n'}} && test \"$got\" = '{want}  -' || {{");
         // Before each command, the make that could rewrite it included.
         assert_eq!(script.matches(&guard).count(), 2, "{script}");
         assert!(script.find(&guard) < script.find("\n'make'\n"));
@@ -1963,7 +2042,10 @@ make build
         assert_eq!(files("pip install pkg").unwrap(), ["pkg/setup.py", "pkg/pyproject.toml", "pkg/setup.cfg"]);
         assert_eq!(files("pip install -r requirements.txt requests").unwrap(), ["requirements.txt"]);
         assert!(files("pip install requests git+https://x/y").unwrap().is_empty());
-        assert_eq!(files("uv tool install .").unwrap(), ["setup.py", "pyproject.toml", "setup.cfg"]);
+        assert_eq!(
+            files("uv tool install .").unwrap(),
+            ["uv.toml", "pyproject.toml", ".python-version", ".python-versions", "setup.py", "pyproject.toml", "setup.cfg"]
+        );
         assert_eq!(files("pipx install --editable .").unwrap(), ["setup.py", "pyproject.toml", "setup.cfg"]);
         assert!(files("yarn").unwrap().contains(&".yarnrc.yml".to_string()));
         assert!(files("pnpm install").unwrap().contains(&".pnpmfile.cjs".to_string()));
@@ -2362,6 +2444,153 @@ make build
         assert_eq!(after, Err("Makefile".to_string()));
         assert_eq!(generated_by("./configure", &["./configure".into()]), ["Makefile"]);
         assert!(generated_by("./tools/configure", &["./tools/configure".into()]).is_empty());
+    }
+
+    /// The third review's probe: `$(realpath -e -- ./install)` drops trailing
+    /// newlines, so `./install` repointed (by an earlier step) at a file
+    /// named `real.sh\n` read as `real.sh`, the digest checked the real.sh
+    /// left alone, and the next command ran the file never shown. The
+    /// terminal's check now keeps every byte; a name with a control
+    /// character is not offered in the first place.
+    #[test]
+    fn test_a_link_repointed_at_a_name_ending_in_a_newline_stops_the_run() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let d = tempdir();
+        let root = plugin_with(&d, "# Install\n```\n./install\n```\n", &[("real.sh", "echo real\n"), ("real.sh\n", "echo unshown\n")]);
+        for f in ["real.sh", "real.sh\n"] {
+            std::fs::set_permissions(root.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        symlink("real.sh", root.join("install")).unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["./install"]);
+        let (ok, out) = run_script(&p, &d);
+        assert!(ok && out.contains("\nreal\n"), "{out}");
+
+        std::fs::remove_file(root.join("install")).unwrap();
+        symlink("real.sh\n", root.join("install")).unwrap();
+        // The check as it was is fooled: the positive control.
+        let old = format!("cd {} && test \"$(realpath -e -- ./install)\" = {}", shlex_quote(&esc(root.as_os_str())), shlex_quote(&p.links[0].1));
+        assert!(std::process::Command::new("bash").arg("-c").arg(&old).status().unwrap().success());
+        // Almanac's own check, and the terminal's, are not.
+        assert_eq!(unchanged(&p), Err("./install".to_string()));
+        let (ok, out) = run_script(&p, &d);
+        assert!(!ok && !out.contains("unshown") && out.contains("./install changed after it was shown"), "{out}");
+
+        // A digest is held to every byte the same way.
+        std::fs::remove_file(root.join("install")).unwrap();
+        symlink("real.sh", root.join("install")).unwrap();
+        assert!(run_script(&p, &d).0);
+        std::fs::write(root.join("real.sh"), "echo edited\n").unwrap();
+        let (ok, out) = run_script(&p, &d);
+        assert!(!ok && !out.contains("edited") && out.contains("real.sh changed after it was shown"), "{out}");
+
+        // Pointing there when the plan is made, it is not offered at all.
+        std::fs::remove_file(root.join("install")).unwrap();
+        symlink("real.sh\n", root.join("install")).unwrap();
+        let refused = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(refused.commands.is_empty() && refused.scripts.is_empty(), "{refused:?}");
+    }
+
+    /// Python puts the folder first on sys.path: `python3 -m venv .venv`
+    /// imported a plugin's own logging.py, unseen. Every step now runs with
+    /// PYTHONSAFEPATH=1, through sudo too.
+    #[test]
+    fn test_python_steps_do_not_import_the_plugins_files() {
+        let d = tempdir();
+        let root = plugin_with(
+            &d,
+            "# Install\n```\npython3 -m venv --help\nsudo python3 -m pip install .\n```\n",
+            &[("logging.py", "print('planted')\nraise SystemExit(3)\n"), ("pyproject.toml", "[project]\n")],
+        );
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["python3 -m venv --help", "sudo python3 -m pip install ."]);
+        let script = terminal_script(&p);
+        assert!(script.find("\nexport PYTHONSAFEPATH=1\n") < script.find("'python3' '-m' 'venv'"), "{script}");
+        assert!(script.contains("\n'sudo' 'env' 'PYTHONSAFEPATH=1' 'python3' '-m' 'pip' 'install' '.'\n"), "{script}");
+        assert_eq!(sudo_keeps_safepath(literal_words("sudo make").unwrap()).len(), 2);
+        // Run for real where there is a Python to run.
+        let python = |safe: bool| {
+            let mut c = std::process::Command::new("python3");
+            c.args(["-m", "venv", "--help"]).current_dir(&root).env_remove("PYTHONSAFEPATH");
+            if safe {
+                c.env("PYTHONSAFEPATH", "1");
+            }
+            c.output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        if let Some(unsafe_out) = python(false) {
+            // The positive control: without it, the planted file runs.
+            assert!(unsafe_out.contains("planted"), "{unsafe_out}");
+            let probe = SetupPlan { commands: vec![p.commands[0].clone()], ..p.clone() };
+            let (ok, out) = run_script(&probe, &d);
+            assert!(ok && !out.contains("planted") && out.contains("usage"), "{out}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `uv sync` with a .python-version of `./fakepy` ran a program of the
+    /// plugin's as Python. uv's config and version files are now shown, and
+    /// one naming a path refuses the step.
+    #[test]
+    fn test_uv_shows_its_python_version_and_refuses_a_path() {
+        let d = tempdir();
+        let readme = "# Install\n```\nuv sync\n```\n";
+        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), (".python-version", "./fakepy\n"), ("fakepy", "#!/bin/sh\n")]);
+        assert!(plan(&root).unwrap().commands.is_empty());
+        std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["uv sync"]);
+        let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
+        assert_eq!(names, ["pyproject.toml", ".python-version"]);
+        for absent in ["uv.toml", ".python-versions", "setup.py"] {
+            assert!(p.absent.contains(&absent.to_string()), "{absent}: {:?}", p.absent);
+        }
+        // Repointed at a path after the plan: a changed file.
+        std::fs::write(root.join(".python-version"), "./fakepy\n").unwrap();
+        let after = unchanged(&p);
+        std::fs::write(root.join("uv.toml"), "python-preference = \"only-system\"\n").unwrap();
+        std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
+        let appeared = unchanged(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(after, Err(".python-version".to_string()));
+        assert_eq!(appeared, Err("uv.toml".to_string()));
+    }
+
+    /// `systemctl --user` took any verb or option without a `/`: `edit`,
+    /// `set-environment`, `--root=`. Only turning installed units on and off.
+    #[test]
+    fn test_systemctl_takes_only_a_few_verbs() {
+        for ok in [
+            "systemctl --user enable --now x.service",
+            "systemctl --user disable x.service",
+            "systemctl --user start x",
+            "systemctl --user stop x y",
+            "systemctl --user restart x.timer",
+            "systemctl --user daemon-reload",
+            "systemctl --user --now enable x",
+        ] {
+            assert_eq!(step_kind(ok), Some(Kind::Service), "{ok}");
+        }
+        for bad in [
+            "systemctl --user edit x",
+            "systemctl --user set-environment PATH=x",
+            "systemctl --user import-environment",
+            "systemctl --user --root=x enable y",
+            "systemctl --user -H host start x",
+            "systemctl --user enable",
+            "systemctl --user daemon-reload x",
+            "systemctl --user mask x",
+            "systemctl --user enable -- x",
+            "systemctl --user link x.service",
+            "systemctl --user start --no-block x",
+        ] {
+            assert_eq!(step_kind(bad), None, "{bad}");
+        }
+        let d = tempdir();
+        let root = plugin_with(&d, "# Install\n```\nsystemctl --user edit x\nsystemctl --user start x\n```\n", &[]);
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(p.commands, ["systemctl --user start x"]);
     }
 
     #[test]
