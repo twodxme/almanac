@@ -1193,6 +1193,118 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     }
 }
 
+/// Whether a build tool's line uses only options that cannot point it at a
+/// program or config of the plugin's that is not shown: its plain flags, and
+/// the options whose file the arm for it shows (make's -f, cmake's -S/-C/-P,
+/// cargo's --manifest-path ...). Anything else is refused -- `cargo
+/// --config f` (a rustc wrapper), `gcc @args` or `-specs=` or `-wrapper`,
+/// `cmake --toolchain`, `meson --native-file`, `go -toolexec`, an
+/// assignment (`make CC=./x`, `-DCMAKE_TOOLCHAIN_FILE=tc.cmake`) naming a
+/// file of the plugin's -- for the same reason the package tools take an
+/// allowlist: each tool has more such options than a list of them would
+/// keep up with.
+fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
+    // Flags that take no value, flags whose value follows (as the next word
+    // or after `=`), and patterns a whole word may match.
+    let (flags, valued, patterns): (&[&str], &[&str], &str) = match prog {
+        "make" => (&["-k", "-s", "--silent", "-B", "--always-make", "-n", "--dry-run"], &["-C", "--directory", "-f", "--file", "--makefile", "-j", "--jobs"], r"^-j[0-9]*$"),
+        "ninja" => (&["-v", "--verbose", "-n"], &["-C", "-f", "-j", "-k", "-l"], r"^-j[0-9]+$"),
+        "meson" => (&["--wipe", "--reconfigure", "-v", "--verbose", "--no-rebuild"], &["-C", "--prefix", "--buildtype", "--libdir", "--bindir", "--destdir", "-j"], r"^-D[A-Za-z0-9_:.-]+=[^/]*$|^-j[0-9]+$"),
+        "cmake" => (
+            &["--build", "--install", "--fresh", "--verbose", "-v", "--parallel"],
+            &["-S", "-B", "-H", "-G", "-A", "-T", "-C", "-P", "--config", "-j", "--target", "-t", "--preset", "--prefix", "--component"],
+            r"^-D[A-Za-z0-9_]+(:[A-Z]+)?=[^/]*$|^-DCMAKE_(BUILD_TYPE|INSTALL_PREFIX)=.*$|^-j[0-9]+$",
+        ),
+        "cargo" => (
+            &["--release", "-r", "--locked", "--frozen", "--offline", "--all-features", "--no-default-features", "--force", "-f", "-q", "--quiet", "-v", "--verbose", "--workspace", "--all-targets", "--bins", "--"],
+            &["-j", "--jobs", "-p", "--package", "-F", "--features", "--bin", "--example", "--path", "--manifest-path", "--root", "--target", "--profile"],
+            r"^\+[A-Za-z0-9._-]+$|^-j[0-9]+$",
+        ),
+        "go" => (&["-v", "-x", "-trimpath", "-race", "-buildvcs=false", "-mod=readonly", "-mod=vendor", "-mod=mod"], &["-o", "-tags", "-ldflags"], ""),
+        "just" => (&["-q", "--quiet", "--yes"], &[], ""),
+        _ => (&["-c", "-g", "-s", "-pthread", "-shared", "-static", "-fPIC", "-fpic"], &["-o", "-I", "-L"], r"^-(O[0-3sz]?|W[a-z][a-z0-9-]*(=[a-z0-9]+)?|std=[a-z0-9+]+|l[A-Za-z0-9_+.-]+|[IL][A-Za-z0-9_./-]+|D[A-Za-z0-9_]+(=[A-Za-z0-9_.]*)?|march=[a-z0-9-]+|mtune=[a-z0-9-]+)$"),
+    };
+    // The options whose file or folder the arm for the tool shows; any other
+    // value must not name something of the plugin's (`cargo --target
+    // ./x.json`, a target spec that sets the linker).
+    let shown: &[&str] = match prog {
+        "make" => &["-C", "--directory", "-f", "--file", "--makefile"],
+        "ninja" => &["-C", "-f"],
+        "meson" => &["-C"],
+        "cmake" => &["-S", "-B", "-H", "-C", "-P"],
+        "cargo" => &["--path", "--manifest-path"],
+        // What a compiler writes, and the folders it reads headers and
+        // libraries from: none of them run.
+        "go" => &["-o"],
+        "gcc" | "cc" => &["-o", "-I", "-L"],
+        _ => &[],
+    };
+    let pattern = (!patterns.is_empty()).then(|| Regex::new(patterns).expect("constant regex"));
+    // A value or an assignment naming something of the plugin's is what
+    // would be run or read without being shown.
+    // (An absolute path is the system's, such as an install prefix: a README
+    // cannot know where the plugin's folder is.)
+    let names_file = |v: &str| {
+        v.starts_with("./") || v.starts_with("../") || (!v.is_empty() && !v.starts_with('/') && std::fs::symlink_metadata(plugin_dir.join(v)).is_ok())
+    };
+    let mut after_dashes = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        i += 1;
+        if after_dashes {
+            continue;
+        }
+        if a.starts_with('@') {
+            return false;
+        }
+        if a == "--" && prog == "cargo" {
+            // What follows is the program's own arguments (`cargo run -- x`).
+            after_dashes = true;
+            continue;
+        }
+        // A definition (cmake's or meson's -D, a compiler's macro) is a value
+        // like any other: `-DCMAKE_TOOLCHAIN_FILE=tc.cmake` names a file.
+        if a.starts_with("-D") && a.split_once('=').is_some_and(|(_, v)| names_file(v)) {
+            return false;
+        }
+        if flags.contains(&a) || pattern.as_ref().is_some_and(|r| r.is_match(a)) {
+            continue;
+        }
+        let valued_ok = |k: &str, v: &str| !v.is_empty() && !ldflags_bad(k, v) && (shown.contains(&k) || !names_file(v));
+        if let Some((k, v)) = a.split_once('=').filter(|(k, _)| k.starts_with('-')) {
+            if valued.contains(&k) && valued_ok(k, v) {
+                continue;
+            }
+            return false;
+        }
+        if valued.contains(&a) {
+            if !args.get(i).is_some_and(|v| valued_ok(a, v)) {
+                return false;
+            }
+            i += 1;
+            continue;
+        }
+        if a.starts_with('-') {
+            return false;
+        }
+        // A make variable on the line (`PREFIX=~/.local`): an install
+        // destination is fine, a program of the plugin's (`CC=./x`) is not.
+        if let Some((_, v)) = a.split_once('=') {
+            if names_file(v) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// go's -ldflags other than stripping and -X values: `-extld=./x` names the
+/// linker to run.
+fn ldflags_bad(opt: &str, v: &str) -> bool {
+    opt == "-ldflags" && !v.split_whitespace().all(|f| matches!(f, "-s" | "-w") || f.starts_with("-X"))
+}
+
 /// The names of the scripts the plugin's package.json defines (`package_scripts` shows them).
 fn package_script_names(plugin_dir: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(plugin_dir.join("package.json")) else { return Vec::new() };
@@ -1234,6 +1346,9 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
         }
     }
     if matches!(prog, "npm" | "pnpm" | "yarn" | "bun" | "pip" | "pipx" | "uv") && !package_line(prog, args, plugin_dir) {
+        return Err(());
+    }
+    if matches!(prog, "make" | "ninja" | "meson" | "cmake" | "cargo" | "go" | "just" | "gcc" | "cc") && !build_line(prog, args, plugin_dir) {
         return Err(());
     }
     // Options that point a tool at another folder or file than the one
@@ -1318,6 +1433,11 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // package from the registry, code that is not even in the plugin.
             const RUNNERS: &[&str] = &["exec", "x", "dlx", "create", "init"];
             if args.first().is_some_and(|a| a.starts_with('-') || RUNNERS.contains(&a.as_str())) {
+                return Err(());
+            }
+            // A node_modules the plugin ships is what scripts and installs
+            // run from (`tsc` is its node_modules/.bin/tsc): not shown.
+            if std::fs::symlink_metadata(plugin_dir.join("node_modules")).is_ok() {
                 return Err(());
             }
             // bun's preload and config options name files to run or read.
@@ -2686,6 +2806,84 @@ make build
             assert!(ok && !out.contains("planted") && out.contains("usage"), "{out}");
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The tenth review's probes: options that point a build tool at a
+    /// program or config of the plugin's it does not show; and the common
+    /// lines that must still be offered.
+    #[test]
+    fn build_tools_take_only_options_whose_files_are_shown() {
+        let d = tempdir();
+        let bad = [
+            "cargo build --config cfg/evil.toml",
+            "cargo build --config=cfg/evil.toml",
+            "cargo build -Zunstable-options",
+            "cargo build --target ./x.json",
+            "gcc @args -o x x.c",
+            "gcc -specs=evil.specs -o x x.c",
+            "gcc -B. -o x x.c",
+            "gcc -wrapper ./w.sh -o x x.c",
+            "gcc -fplugin=./p.so -o x x.c",
+            "gcc -Wl,--plugin=./p.so -o x x.c",
+            "cmake -B build --toolchain tc.cmake",
+            "cmake -B build -DCMAKE_TOOLCHAIN_FILE=tc.cmake",
+            "cmake -B build -DCMAKE_PROJECT_INCLUDE=./tc.cmake",
+            "meson setup build --native-file n.ini",
+            "meson setup build --cross-file=n.ini",
+            "make CC=./w.sh",
+            "make --eval=x",
+            "go build -toolexec ./w.sh",
+            "go build -ldflags=-extld=./w.sh",
+            "go build -ldflags \"-extld ./w.sh\"",
+            "go build -overlay o.json",
+            "just --justfile other",
+            "ninja -t commands",
+        ];
+        let good = [
+            "make",
+            "make -j4",
+            "make PREFIX=~/.local install",
+            "make -C src",
+            "ninja -C build",
+            "meson setup build --prefix=/usr",
+            "meson setup build -Dfoo=true",
+            "meson compile -C build",
+            "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release",
+            "cmake --build build --parallel",
+            "cmake --install build --prefix /usr/local",
+            "cargo build --release",
+            "cargo install --path . --locked",
+            "cargo +nightly build",
+            "cargo run --release -- --help",
+            "go build -o bin/x .",
+            "go build -ldflags \"-s -w\" .",
+            "go install ./...",
+            "just",
+            "just install",
+            "gcc -O2 -Wall -Iinclude -o x x.c -lm",
+        ];
+        let files = [("cfg/evil.toml", "\n"), ("x.json", "{}\n"), ("args", "-wrapper ./w.sh\n"), ("evil.specs", "\n"), ("w.sh", "#!/bin/sh\n"), ("tc.cmake", "\n"), ("n.ini", "\n"), ("o.json", "{}\n"), ("Cargo.toml", "[package]\n"), ("CMakeLists.txt", "\n"), ("meson.build", "\n"), ("Makefile", "all:\n"), ("go.mod", "module x\n"), ("justfile", "install:\n"), ("x.c", "\n"), ("src/Makefile", "all:\n"), ("include/x.h", "\n")];
+        let readme = format!("# Install\n```\n{}\n```\n", bad.join("\n"));
+        let root = plugin_with(&d, &readme, &files);
+        assert!(plan(&root).unwrap().commands.is_empty(), "{:?}", plan(&root).unwrap().commands);
+        std::fs::write(root.join("README.md"), format!("# Install\n```\n{}\n```\n", good.join("\n"))).unwrap();
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(p.commands, good);
+    }
+
+    /// A node_modules the plugin ships is what npm's scripts run from
+    /// (`tsc` is its node_modules/.bin/tsc), so npm is not offered.
+    #[test]
+    fn a_shipped_node_modules_stops_npm() {
+        let d = tempdir();
+        let root = plugin_with(&d, "# Install\n```\nnpm run build\n```\n", &[("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n")]);
+        assert_eq!(plan(&root).unwrap().commands, ["npm run build"]);
+        std::fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+        std::fs::write(root.join("node_modules/.bin/tsc"), "#!/bin/sh\n").unwrap();
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(p.commands.is_empty());
     }
 
     /// The ninth review's probes: a lockfile that links a dependency to a
