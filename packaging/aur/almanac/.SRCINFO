@@ -1,6 +1,6 @@
 pkgbase = almanac
 	pkgdesc = See everything installed, where it came from, and what needs you
-	pkgver = 2.1.1
+	pkgver = 2.1.4
 	pkgrel = 1
 	url = https://github.com/twodxme/almanac
 	arch = x86_64
@@ -33,7 +33,7 @@ pkgbase = almanac
 	optdepends = webp-pixbuf-loader: marketplace card artwork
 	conflicts = almanac-git
 	options = !lto
-	source = almanac-2.1.1.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v2.1.1.tar.gz
-	sha256sums = 40d48f0c10383cf446415aa83c92caa1d92a1bfd44918d5eeb4c9e6d20511fb0
+	source = almanac-2.1.4.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v2.1.4.tar.gz
+	sha256sums = f64122b3178bc91ab077348e9f83180986bf0cd6b1ff9644da785b2a2658fa9a
 
 pkgname = almanac
