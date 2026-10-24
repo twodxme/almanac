@@ -1244,9 +1244,57 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     // would be run or read without being shown.
     // (An absolute path is the system's, such as an install prefix: a README
     // cannot know where the plugin's folder is.)
+    // cmake looks a relative file up in the build and source folders too
+    // (`-B build -DCMAKE_TOOLCHAIN_FILE=tc.cmake` ran build/tc.cmake), so
+    // every folder the line names is a place it could be.
+    let mut dirs = vec![String::from(".")];
+    for (j, a) in args.iter().enumerate() {
+        if let Some(v) = shown.iter().find_map(|o| a.strip_prefix(o).map(|r| r.trim_start_matches('='))) {
+            let v = if v.is_empty() { args.get(j + 1).map_or("", String::as_str) } else { v };
+            if !v.is_empty() && !v.starts_with('/') {
+                dirs.push(v.to_string());
+            }
+        }
+    }
     let names_file = |v: &str| {
-        v.starts_with("./") || v.starts_with("../") || (!v.is_empty() && !v.starts_with('/') && std::fs::symlink_metadata(plugin_dir.join(v)).is_ok())
+        v.starts_with("./")
+            || v.starts_with("../")
+            || (!v.is_empty() && !v.starts_with('/') && dirs.iter().any(|d| std::fs::symlink_metadata(plugin_dir.join(d).join(v)).is_ok()))
     };
+    // A build folder the plugin ships holds what cmake, meson and ninja
+    // then run (a CMakeCache.txt naming a compiler, a generated Makefile,
+    // meson's pickled state): the folder a build is pointed at must not be
+    // there yet. An earlier step that makes it is shown like any other.
+    let build_dir = |d: &str| d != "." && !d.starts_with('/') && std::fs::symlink_metadata(plugin_dir.join(d)).is_ok();
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    let dir_after = |opts: &[&str]| -> Vec<&str> {
+        words
+            .iter()
+            .enumerate()
+            .filter_map(|(j, a)| {
+                opts.iter().find_map(|o| match a.strip_prefix(o) {
+                    Some("") => words.get(j + 1).copied(),
+                    Some(r) if r.starts_with('=') || !o.starts_with("--") => Some(r.trim_start_matches('=')),
+                    _ => None,
+                })
+            })
+            .collect()
+    };
+    match prog {
+        "cmake" if dir_after(&["-B", "--build", "--install"]).iter().any(|d| build_dir(d)) => return false,
+        "meson" => {
+            let setup_dir = match words.as_slice() {
+                ["setup", rest @ ..] => rest.iter().find(|w| !w.starts_with('-')).copied().into_iter().collect(),
+                _ => Vec::new(),
+            };
+            if dir_after(&["-C"]).iter().chain(&setup_dir).any(|d| build_dir(d)) {
+                return false;
+            }
+        }
+        // `just sub/x` runs the recipe from sub's justfile, which is not shown.
+        "just" if words.iter().any(|w| w.contains('/')) => return false,
+        _ => {}
+    }
     let mut after_dashes = false;
     let mut i = 0;
     while i < args.len() {
@@ -1397,6 +1445,10 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // Presets can set the compiler, or any cache variable, to a
             // program of the plugin's.
             out.extend(["CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json"].map(|n| under(&src, n)));
+            // Built in place (no -B), the cache it reads is the folder's own.
+            if !args.iter().any(|a| a.starts_with("-B")) {
+                out.push("CMakeCache.txt".into());
+            }
         }
         "cargo" => {
             if elsewhere(&["-C"]) {
@@ -2870,6 +2922,47 @@ make build
         let p = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(p.commands, good);
+    }
+
+    /// The eleventh review's probes: a build folder the plugin ships (cmake
+    /// and meson run what is in it), a toolchain file found in the build or
+    /// source folder, and a recipe run from another justfile.
+    #[test]
+    fn a_shipped_build_folder_or_a_file_in_another_folder_is_not_used() {
+        let d = tempdir();
+        let bad = [
+            "cmake --build build",
+            "cmake --install build",
+            "cmake -B build",
+            "cmake -B build -DCMAKE_TOOLCHAIN_FILE=tc.cmake",
+            "cmake -S sub -B b2 -DCMAKE_TOOLCHAIN_FILE=tc.cmake",
+            "meson compile -C bdir",
+            "meson setup bdir",
+            "just sub/install",
+        ];
+        let files = [
+            ("CMakeLists.txt", "\n"),
+            ("build/CMakeCache.txt", "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n"),
+            ("build/Makefile", "all:\n"),
+            ("build/tc.cmake", "\n"),
+            ("sub/CMakeLists.txt", "\n"),
+            ("sub/tc.cmake", "\n"),
+            ("sub/justfile", "install:\n"),
+            ("meson.build", "\n"),
+            ("bdir/meson-private/coredata.dat", "x"),
+            ("justfile", "install:\n"),
+        ];
+        let readme = format!("# Install\n```\n{}\n```\n", bad.join("\n"));
+        let root = plugin_with(&d, &readme, &files);
+        let p = plan(&root).unwrap();
+        // Built in place, the folder's own cache is shown with the step.
+        std::fs::write(root.join("README.md"), "# Install\n```\ncmake .\n```\n").unwrap();
+        std::fs::write(root.join("CMakeCache.txt"), "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n").unwrap();
+        let q = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(p.commands.is_empty(), "{:?}", p.commands);
+        assert_eq!(q.commands, ["cmake ."]);
+        assert!(q.scripts.iter().any(|(k, _)| esc(k) == "CMakeCache.txt"));
     }
 
     /// A node_modules the plugin ships is what npm's scripts run from
