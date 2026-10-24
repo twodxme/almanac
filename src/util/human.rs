@@ -120,7 +120,9 @@ fn decode_text(codec: &str) -> String {
     }
 }
 
-fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> String {
+/// `after` is the text from the start of `strerror` to the end of the error,
+/// as written.
+fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>, after: &str) -> String {
     let path = path.map(unquote);
     let to = to.map(unquote);
     let with = |text: String| match (&path, &to) {
@@ -130,9 +132,14 @@ fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> S
     };
     // Only the OS's own words are replaced: with no path to end it, the
     // match runs to the end of the text, and what follows them there
-    // ("; continuing without one") is someone else's sentence.
+    // ("; continuing without one") is someone else's sentence. A path is
+    // the OS's only when it follows those words directly (`No such file or
+    // directory: 'p'`); after anything else ("; extra: 'p'") it is part of
+    // that sentence and stays where it was, as written -- it used to be
+    // moved in front of it ("No such file: p; extra").
     let stock = |own: &str, plain: &str| match strerror.strip_prefix(own) {
-        Some(tail) => format!("{}{tail}", with(tr(plain))),
+        Some("") => with(tr(plain)),
+        Some(_) => format!("{}{}", tr(plain), human_line(&after[own.len()..])),
         None => with(tr(plain)),
     };
     match n {
@@ -140,7 +147,7 @@ fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> S
         13 => stock("Permission denied", "Permission denied"),
         // The OS's own wording is plain enough; the brackets and quotes go.
         _ if strerror.is_empty() || strerror == "None" => with(tr("The system refused")),
-        _ => with(strerror.to_string()),
+        _ => with(human_line(strerror)),
     }
 }
 
@@ -148,7 +155,8 @@ fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> S
 fn known(text: &str) -> Option<String> {
     if let Some(c) = ERRNO.captures(text) {
         let n = c[1].parse().unwrap_or(0);
-        return Some(errno_text(n, &c[2], c.get(3).map(|m| m.as_str()), c.get(4).map(|m| m.as_str())));
+        let after = &text[c.get(2).map_or(text.len(), |m| m.start())..];
+        return Some(errno_text(n, &c[2], c.get(3).map(|m| m.as_str()), c.get(4).map(|m| m.as_str()), after));
     }
     if let Some(c) = URLOPEN.captures(text) {
         return Some(human_line(&c[1]));
@@ -199,8 +207,10 @@ fn known(text: &str) -> Option<String> {
         _ if detail.is_empty() => tr("Something went wrong"),
         // ValueError, OSError, URLError, HTTPError, RuntimeError, ...: what
         // follows the class is already a sentence ("HTTP Error 404: Not
-        // Found", "Invalid IPv6 URL").
-        _ => detail.to_string(),
+        // Found", "Invalid IPv6 URL"). It is read as a line of its own, so
+        // an error inside it ("one (two: KeyError: 'z') three") is reworded
+        // in the same pass, not left for a second one to find.
+        _ => human_line(detail),
     })
 }
 
@@ -208,7 +218,13 @@ fn known(text: &str) -> Option<String> {
 /// "(" left open in `before` ("no snapshot was taken ([Errno 13] ...);
 /// continuing"), else before Almanac's own " — " ("x: TypeError —
 /// skipped"), else at the end of the line.
+///
+/// A quoted key or path the error starts with (`KeyError: ' — '`,
+/// `[Errno 2] ...: 'a (b'`) is one unit: neither end is looked for inside
+/// it. Cut at the " — " in `KeyError: ' — ' — skipped`, the error was
+/// `KeyError: '` and the rest of the key was left behind as a fragment.
 fn extent(before: &str, rest: &str) -> usize {
+    let from = QUOTED_LEAD.find(rest).map_or(0, |m| m.end());
     let open = before.chars().fold(0usize, |d, c| match c {
         '(' => d + 1,
         ')' => d.saturating_sub(1),
@@ -216,17 +232,27 @@ fn extent(before: &str, rest: &str) -> usize {
     });
     if open > 0 {
         let mut depth = 0usize;
-        for (i, c) in rest.char_indices() {
+        for (i, c) in rest[from..].char_indices() {
             match c {
                 '(' => depth += 1,
-                ')' if depth == 0 => return i,
+                ')' if depth == 0 => return from + i,
                 ')' => depth -= 1,
                 _ => {}
             }
         }
     }
-    rest.find(" — ").unwrap_or(rest.len())
+    rest[from..].find(" — ").map_or(rest.len(), |i| from + i)
 }
+
+/// The start of an error that ends in a Python repr: a `KeyError`'s key,
+/// an `[Errno N]`'s path (and its ` -> ` target), behind any classes.
+static QUOTED_LEAD: LazyLock<Regex> = LazyLock::new(|| {
+    let repr = r#"(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"#;
+    Regex::new(&format!(
+        r"^(?:(?:{CLASSES}): )*(?:KeyError: {repr}|\[Errno (?:-?\d+|None)\] [^:]*?: {repr}(?: -> {repr})?)"
+    ))
+    .unwrap()
+});
 
 /// One line: the first place, from the start or after a separator ("X
 /// failed: ...", "skipped — ..."), where a recognised error begins; what
@@ -273,12 +299,48 @@ pub fn human_error(text: &str) -> String {
     {
         return text.to_string();
     }
-    text.split('\n').map(human_line).collect::<Vec<_>>().join("\n")
+    let pass = |t: &str| t.split('\n').map(human_line).collect::<Vec<_>>().join("\n");
+    // A display point may pass a text through here twice (a toast of a task
+    // log line), and the second pass must change nothing. One pass reads
+    // what an error keeps (its sentence, the rest of the line) as well, so
+    // it is normally the last; the next ones make sure, a few at most.
+    let mut out = pass(text);
+    for _ in 0..4 {
+        let next = pass(&out);
+        if next == out {
+            break;
+        }
+        out = next;
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::human_error as h;
+    /// `human_error`, held to idempotence on every input any test gives it:
+    /// what it returns, passed through again, comes back the same.
+    fn h(s: &str) -> String {
+        let once = super::human_error(s);
+        assert_eq!(super::human_error(&once), once, "not idempotent for {s:?}");
+        once
+    }
+
+    /// The third review's probes, with the exact text each now gives.
+    #[test]
+    fn nested_quoted_and_trailing_paths() {
+        // An error inside a kept sentence is reworded in the first pass.
+        assert_eq!(h("a: ValueError: one (two: KeyError: 'z') three"), "a: one (two: Unexpected data) three");
+        // A key holding Almanac's own separator is one unit.
+        assert_eq!(h("x: KeyError: ' — ' — skipped"), "x: Unexpected data — skipped");
+        assert_eq!(h("a (KeyError: ')') b"), "a (Unexpected data) b");
+        assert_eq!(h("x: [Errno 2] No such file or directory: 'a — b' — skipped"), "x: No such file: a — b — skipped");
+        // A path is the OS's only right after its words.
+        assert_eq!(h("[Errno 2] No such file or directory; extra: 'p'"), "No such file; extra: 'p'");
+        assert_eq!(h("[Errno 13] Permission denied; then: 'q'"), "Permission denied; then: 'q'");
+        assert_eq!(h("[Errno 2] No such file or directory: 'p'"), "No such file: p");
+        // An errno's own wording is read for errors too.
+        assert_eq!(h("[Errno 5] x (TypeError) y"), "x (Unexpected data) y");
+    }
 
     #[test]
     fn errno_with_a_path() {

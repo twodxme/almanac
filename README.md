@@ -309,7 +309,9 @@ opens (`Makefile`, `package.json`'s scripts, `pyproject.toml`, `Cargo.toml`,
 has changed (or a symlink to it now points elsewhere) or a build file that was
 absent has appeared. A line is offered only when the shell would read it as
 plain words (no variables, globs, `;`, pipes, redirections or `cd`), and each
-step runs as exactly those words. The checks are made as each step starts:
+step runs as exactly those words; Python steps never import modules from the
+plugin's folder in place of the standard library's, and `systemctl --user`
+lines only turn units on or off. The checks are made as each step starts:
 something an earlier step left running in the background is not watched.
 What those files go on to run (a recipe's script, a postinstall, the sources a
 build compiles) is not shown, and the confirmation says so for every build.
