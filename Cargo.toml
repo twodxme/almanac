@@ -2,7 +2,7 @@
 name = "almanac"
 version = "2.1.4"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.92"
 description = "One window for everything installed on this machine"
 license = "MIT"
 repository = "https://github.com/twodxme/almanac"

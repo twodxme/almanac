@@ -416,7 +416,7 @@ replace itself while it runs, so it says so and tells you to pull and run
 
 | | |
 |---|---|
-| **Required** | GTK 4, libadwaita 1.9+, OpenSSL (building it: `cargo`, Rust 1.87+) |
+| **Required** | GTK 4, libadwaita 1.9+, OpenSSL (building it: `cargo`, Rust 1.92+) |
 | **Full experience** | Arch or Omarchy — `pacman`, `yay`, `checkupdates` |
 | **Optional** | `omarchy` (plugins, themes, system updates) · `flatpak` · `mise` · `gh` · `snapper` (undoable updates) · `xdg-utils` · `xdg-terminal-exec` |
 
