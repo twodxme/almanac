@@ -73,10 +73,18 @@ on any thread.
   `util::with_stack(util::DEEP_STACK, ...)`; walks that may go very deep
   through serde use `util::JSON_STACK` (`util::with_stack_named` when the
   thread must not take the caller's name).
-- `ui::shell::spawn_bg` runs background work on a `JSON_STACK` thread. Still
-  needed: `ghcache::try_get_json` and its siblings hand deep
-  `serde_json::Value`s to store.rs, sources.rs, agents.rs and verify.rs,
-  which clone, convert and drop them recursively.
+- A value that leaves a module for code that walks it recursively is bounded
+  at the boundary: `ghcache::try_get_json` and its siblings refuse a body
+  nested past `ghcache::VALUE_DEPTH` (512) with Python's RecursionError, so
+  store.rs, sources.rs, agents.rs and picks.rs never see a deep one;
+  verify.rs converts an app's `extra` only `EXTRA_DEPTH` (64) levels down.
+- `ui::shell::spawn_bg` runs background work on an 8 MiB thread
+  (`BG_STACK`): Python's own thread stack, which the depth limits copied from
+  it (sources 2000, security 1000, inventory 900) were measured on.
+  `util::JSON_STACK` is left where code still recurses as deep as Python's
+  json reads: ghcache's cache writer and conversions (`ghcache::deep`),
+  agents (`agents::deep`, its pool workers), picks (`picks::_deep`) and the
+  inventory collector threads. New code that needs it starts its own.
 
 ## UI (`src/ui/`)
 

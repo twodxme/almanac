@@ -1853,6 +1853,25 @@ mod tests {
     use serde_json::json;
     use super::*;
 
+    #[test]
+    fn the_deepest_answer_fits_a_background_stack() {
+        // What `loads` lets through (2000 levels) is cloned, compared,
+        // written and dropped recursively: it must fit spawn_bg's 8 MiB.
+        let text = "[".repeat(2000) + "1" + &"]".repeat(2000);
+        assert!(loads(("[".repeat(2001) + "1" + &"]".repeat(2001)).as_bytes()).is_err());
+        std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let v = loads(text.as_bytes()).unwrap();
+                assert_eq!(v.clone(), v);
+                assert_eq!(serde_json::to_string(&v).unwrap(), text);
+                assert_eq!(Py::from_value(&serde_json::from_str::<Value>("[[1]]").unwrap()), loads(b"[[1]]").unwrap());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     // InstallFromLink
     #[test]
     fn test_links_are_recognised() {

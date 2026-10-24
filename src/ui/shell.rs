@@ -595,6 +595,17 @@ pub fn exc_str(e: &str) -> String {
 // Background work
 // ---------------------------------------------------------------------------
 
+/// The stack [`spawn_bg`] runs its jobs on: 8 MiB, what a Python thread had
+/// (glibc's default) and what the depth limits copied from Python were
+/// measured on -- sources' 2000 levels, security's 1000, inventory's 900,
+/// which those modules walk recursively. Nothing deeper reaches a job's own
+/// frames: ghcache refuses a body past `ghcache::VALUE_DEPTH`, the readers
+/// that keep Python's 52 000 levels clone, compare, convert and drop
+/// without recursion, and the few that still recurse that deep (agents,
+/// picks, ghcache's printer, the inventory collectors) start a
+/// `util::JSON_STACK` thread of their own. Reserved, not used.
+const BG_STACK: usize = 8 << 20;
+
 /// `threading.Thread(target=work) + GLib.idle_add(done, result)`: run `work`
 /// off the main thread, then `done` with its result on the main thread. If
 /// `work` panics, `done` is not called (as a Python thread that raised never
@@ -603,10 +614,9 @@ pub fn spawn_bg<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(T) + 'static,
 ) {
-    // On a stack of its own, sized for values as deep as Python's json
-    // reads (a cache or registry nested 52000 levels): the pool thread's
-    // is whatever `ulimit -s` gave, and an overflow there aborts the app.
-    let handle = gio::spawn_blocking(move || crate::util::with_stack(crate::util::JSON_STACK, work));
+    // On a stack of its own, so its size does not hang on `ulimit -s` (the
+    // pool thread's, and an overflow there aborts the app).
+    let handle = gio::spawn_blocking(move || crate::util::with_stack(BG_STACK, work));
     glib::spawn_future_local(async move {
         if let Ok(value) = handle.await {
             done(value);
