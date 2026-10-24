@@ -62,6 +62,15 @@ const LOADS_DEPTH: usize = 52_100;
 const DUMPS_BUDGET: u64 = 52_090 * 28_939;
 const DUMPS_LIST: u64 = 28_939;
 const DUMPS_DICT: u64 = 52_090;
+
+/// How many arrays/objects deep a body [`try_get_json`] hands out may nest.
+/// Python's json reads 52 000 levels, and the code downstream (store,
+/// sources, agents: conversions, clones, drops) recurses once per level, so
+/// a body that deep would need a 512 MiB stack on every thread that touches
+/// it. No GitHub answer comes near this (serde_json itself stops at 128); a
+/// deeper one is refused here, the RecursionError a deeper cache file
+/// already is, and nothing past this boundary ever sees a deep value.
+pub const VALUE_DEPTH: usize = 512;
 /// Python's `sys.get_int_max_str_digits()` default.
 const INT_MAX_STR_DIGITS: usize = 4300;
 /// urllib's `timeout=25`: every socket operation, not the whole request.
@@ -289,8 +298,8 @@ impl PyValue {
 }
 
 /// Runs `f` on a thread with a [`crate::util::JSON_STACK`] stack: the
-/// printer and conversions are recursive, and Python's json goes about
-/// 52 000 levels deep before it gives up. (Only reserved address space; the
+/// printer (writing a cache entry) and conversions are recursive, and the
+/// cache holds whatever Python's json reads, about 52 000 levels deep. (Only reserved address space; the
 /// pages are touched as used.) The thread is unnamed, a worker wherever
 /// this is called from.
 fn deep<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
@@ -1046,10 +1055,12 @@ fn _stale(entry: &PyValue, allow_stale: bool) -> PyValue {
     }
 }
 
-fn _some(v: PyValue) -> Option<Value> {
+/// The body as a serde value, Err past [`VALUE_DEPTH`].
+fn _some(v: PyValue) -> Result<Option<Value>, String> {
     match v {
-        PyValue::None => None,
-        v => Some(v.to_value()),
+        PyValue::None => Ok(None),
+        v if crate::util::tree::depth(&v, PyValue::tree_shape) > VALUE_DEPTH => Err(RECURSION.into()),
+        v => Ok(Some(v.to_value())),
     }
 }
 
@@ -1062,14 +1073,18 @@ fn _some(v: PyValue) -> Option<Value> {
 /// `accept=ACCEPT`. A JSON `null` body comes back as `None`. The body is a
 /// `serde_json::Value` (see [`PyValue::to_value`] for what that cannot
 /// hold; [`try_get_json_py`] has the exact value). Err where the Python
-/// raises (a cache or rate file of the wrong shape, a URL with no scheme).
+/// raises (a cache or rate file of the wrong shape, a URL with no scheme),
+/// and for a body nested deeper than [`VALUE_DEPTH`]: what comes back is
+/// shallow enough to clone, convert and drop on any thread's stack.
 pub fn try_get_json(url: &str, ttl: impl Into<Ttl>, allow_stale: bool, accept: &str) -> Result<Option<Value>, String> {
     let ttl = ttl.into();
-    deep(|| _get_json(url, ttl, allow_stale, accept).map(_some))
+    deep(|| _get_json(url, ttl, allow_stale, accept).and_then(_some))
 }
 
 /// `get_json`, raising where the Python does, with the body exactly as
-/// Python's json reads it (ints of any size, inf/nan, lone surrogates).
+/// Python's json reads it (ints of any size, inf/nan, lone surrogates), as
+/// deep as Python reads it too: `PyValue` clones, compares and drops without
+/// recursion, but its conversions and printers recurse.
 pub fn try_get_json_py(url: &str, ttl: impl Into<Ttl>, allow_stale: bool, accept: &str) -> Result<PyValue, String> {
     let ttl = ttl.into();
     deep(|| _get_json(url, ttl, allow_stale, accept))
@@ -2920,6 +2935,68 @@ mod tests {
             let dicts = "{\"a\": ".repeat(30_000) + "1" + &"}".repeat(30_000);
             assert_eq!(dumps(&loads(&dicts).unwrap()), Err(JsonError::Recursion));
         });
+    }
+
+    #[test]
+    fn deep_bodies_stop_at_the_boundary() {
+        // A cache file nested far deeper than any GitHub answer, read through
+        // ghcache and the modules downstream of it, on a thread with Rust's
+        // default 2 MiB stack (smaller than spawn_bg's): an Err, never a
+        // stack overflow, and nothing deep comes out to clone or drop.
+        let _env = Env::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let old: Vec<_> = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
+            .into_iter()
+            .map(|k| {
+                let was = std::env::var_os(k);
+                std::env::set_var(k, tmp.path().join(k));
+                (k, was)
+            })
+            .collect();
+        fn plant(url: &str, depth: usize) {
+            std::fs::create_dir_all(dir()).unwrap();
+            let body = "[".repeat(depth) + &"]".repeat(depth);
+            let text = format!(r#"{{"at": {}, "body": {body}, "etag": "", "modified": ""}}"#, crate::util::now());
+            std::fs::write(_path(url), text).unwrap();
+        }
+        fn small(f: impl FnOnce() + Send + 'static) {
+            std::thread::Builder::new().stack_size(2 << 20).spawn(f).unwrap().join().unwrap();
+        }
+        // 50 000 levels: within what Python's json reads, so the cache keeps
+        // it; 100 000: past that, unreadable already.
+        for depth in [50_000, 100_000] {
+            plant(&format!("{API}/repos/o/r"), depth);
+            plant(&format!("{API}/repos/o/r/releases/latest"), depth);
+            small(move || {
+                assert_eq!(try_repo("o/r", DEFAULT_TTL), Err(RECURSION.into()));
+                assert_eq!(try_latest_release("o/r", DEFAULT_TTL), Err(RECURSION.into()));
+                assert!(crate::sources::try_resolve("https://github.com/o/r").is_err());
+                assert!(crate::agents::github_latest("o/r").is_err());
+                let rows = crate::store::_theme_rows_with(&|url| {
+                    plant(url, depth);
+                    try_get_json(url, DEFAULT_TTL, true, ACCEPT)
+                });
+                assert!(rows.is_err());
+            });
+        }
+        // At the limit the body comes through whole, and converts, clones
+        // and drops on that stack.
+        let url = "http://127.0.0.1:1/at-limit";
+        plant(url, VALUE_DEPTH);
+        small(move || {
+            let v = try_get_json(url, DEFAULT_TTL, true, ACCEPT).unwrap().unwrap();
+            assert_eq!(crate::util::tree::value_depth(&v), VALUE_DEPTH);
+            assert_eq!(v.clone(), v);
+            assert!(crate::agents::Py::from_value(&v).truthy());
+        });
+        plant(url, VALUE_DEPTH + 1);
+        assert_eq!(try_get_json(url, DEFAULT_TTL, true, ACCEPT), Err(RECURSION.into()));
+        for (k, was) in old {
+            match was {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
     }
 
     #[test]

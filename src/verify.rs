@@ -646,6 +646,14 @@ pub fn recheck(finding_id: &str) -> Option<crate::maintenance::Finding> {
 
 // ---- Python values ProbeValue and the typed structs cannot hold -------------
 
+/// How many containers deep an app's `extra` value is converted. An agent's
+/// row can carry a value as deep as Python's json reads (52 000 levels, from
+/// `mise outdated --json`), and the conversion and this `Py`'s drop recurse
+/// once per level, on whatever thread judges the update (the main one
+/// included). The judging reads only an extra value's type, truthiness and
+/// text.
+const EXTRA_DEPTH: usize = 64;
+
 /// A Python value as the parity cases build it from JSON, for the comparable
 /// answers `ProbeValue` has no variant for (a dict of ints, a tuple of
 /// floats, a set of numbers) and for dataclass fields holding something other
@@ -665,15 +673,26 @@ enum Py {
 }
 
 impl Py {
-    /// A dict of JSON values (an app's `extra`) as `json.loads` gives it.
+    /// A dict of JSON values (an app's `extra`) as `json.loads` gives it,
+    /// down to [`EXTRA_DEPTH`] levels.
     fn plain_dict(m: &serde_json::Map<String, serde_json::Value>) -> Py {
-        Py::Dict(m.iter().map(|(k, v)| (k.clone(), Py::plain(v))).collect())
+        Py::Dict(m.iter().map(|(k, v)| (k.clone(), Py::plain_to(v, EXTRA_DEPTH))).collect())
     }
 
     /// A JSON value as `json.loads` gives it.
+    #[cfg(test)]
     fn plain(v: &serde_json::Value) -> Py {
+        Py::plain_to(v, usize::MAX)
+    }
+
+    /// A JSON value as `json.loads` gives it, down to `depth` containers: one
+    /// deeper keeps its type and whether it is empty (a `None` stands in for
+    /// what it held), which is all the judging reads of an `extra` value.
+    fn plain_to(v: &serde_json::Value, depth: usize) -> Py {
         use serde_json::Value;
         match v {
+            Value::Array(a) if depth == 0 => Py::List(a.iter().take(1).map(|_| Py::None).collect()),
+            Value::Object(o) if depth == 0 => Py::Dict(o.keys().take(1).map(|k| (k.clone(), Py::None)).collect()),
             Value::Null => Py::None,
             Value::Bool(b) => Py::Bool(*b),
             Value::Number(n) => match (n.as_i64(), n.as_u64()) {
@@ -692,8 +711,8 @@ impl Py {
                 }
             },
             Value::String(s) => Py::Str(s.clone()),
-            Value::Array(a) => Py::List(a.iter().map(Py::plain).collect()),
-            Value::Object(o) => Py::Dict(o.iter().map(|(k, x)| (k.clone(), Py::plain(x))).collect()),
+            Value::Array(a) => Py::List(a.iter().map(|x| Py::plain_to(x, depth - 1)).collect()),
+            Value::Object(o) => Py::Dict(o.iter().map(|(k, x)| (k.clone(), Py::plain_to(x, depth - 1))).collect()),
         }
     }
 
@@ -962,6 +981,32 @@ mod tests {
 
     fn set(v: &[&str]) -> ProbeValue {
         ProbeValue::Set(v.iter().map(|x| x.to_string()).collect())
+    }
+
+    #[test]
+    fn deep_extra_values_are_judged_on_a_small_stack() {
+        // An agent row's extra can hold a value as deep as Python's json
+        // reads; judging it reads only the top, on whatever thread it runs.
+        let mut deep = serde_json::Value::Null;
+        for _ in 0..52_000 {
+            deep = serde_json::Value::Array(vec![deep]);
+        }
+        let mut app = inventory::App { update: "2.0".into(), ..inventory::App::new("tool", "1.0", "mise") };
+        app.extra.insert("binary".into(), deep);
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let probe = for_app_try(&app).expect("a probe");
+                assert_eq!(
+                    probe().err().as_deref(),
+                    Some("TypeError: expected str, bytes or os.PathLike object, not list")
+                );
+                let judged = judge_app(&app, Some(&s("1.0")), Some(&s("2.0")));
+                assert_eq!(judged.changed, Some(true));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     // class ActionsAreVerified: a command that exits 0 and changes nothing is
