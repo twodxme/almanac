@@ -929,27 +929,30 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The plugin's own file a setup command names to execute, which must be
 /// Whether a file run by path names the system's interpreter, if it names
-/// one: an absolute path (`#!/bin/sh`), or `env` and a plain program name
+/// one: an absolute path (`#!/bin/sh`), or `env` and one plain program name
 /// (`#!/usr/bin/env python3`). The kernel finds a relative one from the
 /// folder it runs in -- `#!bin/sh` ran the plugin's own bin/sh, unseen --
-/// and `env -S` or a path after `env` would do the same.
+/// and so does a path through /proc (`/proc/self/cwd/sh`). The kernel hands
+/// env the rest of the line as one word, so `env python3 ./x` names a
+/// relative path too, and `env -S` splits it again: one word only.
 fn shebang_is_systems(file: &Path) -> bool {
     let Ok(bytes) = std::fs::read(file) else { return true };
     let Some(line) = bytes.strip_prefix(b"#!") else { return true };
     let line = String::from_utf8_lossy(line.split(|&b| b == b'\n').next().unwrap_or_default());
     let mut words = line.split_whitespace();
     let Some(interp) = words.next() else { return false };
-    if !interp.starts_with('/') || interp.split('/').any(|c| c == "..") {
+    if !interp.starts_with('/') || interp.split('/').any(|c| c == "..") || interp.starts_with("/proc/") || interp.starts_with("/dev/") {
         return false;
     }
     if interp.rsplit('/').next() == Some("env") {
-        return words.next().is_some_and(|w| !w.starts_with('-') && !w.contains('/'));
+        let rest: Vec<&str> = words.collect();
+        return matches!(rest.as_slice(), [w] if !w.starts_with('-') && !w.contains(['/', '=']));
     }
     true
 }
 
+/// The plugin's own file a setup command names to execute, which must be
 /// there and shown: a program given by path (`./install`, `sudo ./x.sh`),
 /// the script a shell is handed (`bash x.sh`, `sh -e x.sh`), the one Python
 /// is (`python3 setup.py`; `python3 -m pkg.tool` loads what
@@ -1446,16 +1449,7 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // and SCCS files checked out) and then reads that: a file of
             // that kind beside one is refused, since what it becomes is not
             // shown.
-            let folder = plugin_dir.join(&dir);
-            if ["RCS", "SCCS"].iter().any(|d| folder.join(d).exists())
-                || std::fs::read_dir(&folder).into_iter().flatten().flatten().any(|e| {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    files.iter().any(|f| {
-                        let f = Path::new(f).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-                        n != f && (n.starts_with(&format!("{f}.")) || n.starts_with(&format!("{f},")) || n == format!("s.{f}"))
-                    })
-                })
-            {
+            if make_remakes(plugin_dir, &dir, &files) {
                 return Err(());
             }
             out.extend(files.iter().map(|f| under(&dir, f)));
@@ -1622,6 +1616,42 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
         _ => return Err(()),
     }
     Ok(out)
+}
+
+/// Whether make could remake one of these makefiles, or a file one of them
+/// includes, from a source its built-in rules know -- `x.sh` is copied into
+/// place, RCS (`x,v`, `RCS/`) and SCCS (`s.x`, `SCCS/`) files are checked
+/// out -- and then read what that becomes, which is not shown. It does so
+/// even over a makefile that is there when the source is newer. Includes
+/// are followed as make reads them (from `dir`); one whose name is made of
+/// variables cannot be told and is left to the disclosed limit.
+fn make_remakes(plugin_dir: &Path, dir: &str, makefiles: &[String]) -> bool {
+    let mut todo: Vec<String> = makefiles.iter().map(|f| under(dir, f)).collect();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(rel) = todo.pop() {
+        if !seen.insert(rel.clone()) || seen.len() > 64 {
+            continue;
+        }
+        let path = plugin_dir.join(&rel);
+        let folder = path.parent().unwrap_or(plugin_dir).to_path_buf();
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if ["RCS", "SCCS"].iter().any(|d| folder.join(d).exists())
+            || [format!("{name}.sh"), format!("{name},v"), format!("s.{name}")].iter().any(|s| folder.join(s).exists())
+        {
+            return true;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        for line in text.lines() {
+            let line = line.trim_start();
+            let Some(rest) = ["include ", "-include ", "sinclude "].iter().find_map(|k| line.strip_prefix(k)) else { continue };
+            for w in rest.split('#').next().unwrap_or_default().split_whitespace() {
+                if !w.contains(['$', '*', '?', '[']) {
+                    todo.push(under(dir, w));
+                }
+            }
+        }
+    }
+    false
 }
 
 /// One file a command runs, as the confirmation will show it: its path in
@@ -2601,6 +2631,10 @@ make build
             ("#!/usr/bin/env -S ./sh\n", false),
             ("#!/usr/bin/env ./sh\n", false),
             ("#!/bin/../tmp/sh\n", false),
+            ("#!/proc/self/cwd/bin/sh\n", false),
+            ("#!/dev/fd/3\n", false),
+            ("#!/usr/bin/env python3 ./evil\n", false),
+            ("#!/usr/bin/env FOO=1\n", false),
             ("#!/bin/sh\necho x\n", true),
             ("#!/usr/bin/env python3\n", true),
             ("echo no shebang\n", true),
@@ -2614,7 +2648,20 @@ make build
             assert!(plan(&root).unwrap().commands.is_empty(), "{source}");
             let _ = std::fs::remove_dir_all(&root);
         }
-        let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[("Makefile", "all:\n")]);
+        // A makefile in another folder, a newer source beside a shown one,
+        // and a file a makefile includes.
+        for (line, files) in [
+            ("make -f sub/x.mk", &[("sub/x.mk.sh", "all:\n")][..]),
+            ("make", &[("Makefile", "all:\n"), ("Makefile.sh", "all:\n")][..]),
+            ("make", &[("Makefile", "include config.mk\nall:\n"), ("config.mk.sh", "x:\n")][..]),
+            ("make -C src", &[("src/Makefile", "-include sub/c.mk\n"), ("src/sub/c.mk.sh", "x:\n")][..]),
+        ] {
+            let root = plugin_with(&d, &format!("# Install\n```\n{line}\n```\n"), files);
+            assert!(plan(&root).unwrap().commands.is_empty(), "{line} {files:?}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        // An autotools project's templates are not sources make remakes from.
+        let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[("Makefile", "all:\n"), ("Makefile.in", "\n"), ("Makefile.am", "\n")]);
         assert_eq!(plan(&root).unwrap().commands, ["make"]);
         let _ = std::fs::remove_dir_all(&d);
     }
