@@ -2439,14 +2439,33 @@ fn main_with(args: &[PyStr]) -> i32 {
 /// booting), one per
 /// core package, in the order given. Each line is `name old -> new`, what
 /// both `checkupdates` and `yay -Qua` print, so the repository and AUR
-/// lists are read alike; blank lines are skipped.
-pub fn core_holds(pending: &str) -> Vec<String> {
-    pending
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|name| inventory::criticality(name) == "core")
-        .map(str::to_owned)
-        .collect()
+/// lists are read alike; blank lines, colour codes and trailing marks
+/// (pacman's `[ignored]`, yay's age of the update, `[1d9h]`) are skipped.
+///
+/// Fails closed: the script installs whatever this does not name, so a line
+/// in any other shape (a warning, a changed output format) is an `Err`, not
+/// a line with nothing core in it.
+pub fn core_holds(pending: &str) -> Result<Vec<String>, String> {
+    static ANSI: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap());
+    static LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^([a-zA-Z0-9@_+][a-zA-Z0-9@._+-]*) \S+ -> \S+( \[[^\]\s]*\])*$").unwrap()
+    });
+    let mut names = Vec::new();
+    for raw in pending.lines() {
+        let line = ANSI.replace_all(raw, "");
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            continue;
+        }
+        let Some(m) = LINE.captures(&line) else {
+            return Err(format!("not a pending-update line: {line:?}"));
+        };
+        if inventory::criticality(&m[1]) == "core" {
+            names.push(m[1].to_owned());
+        }
+    }
+    Ok(names)
 }
 
 /// [`core_holds`] of what `checkupdates` printed, failing closed: the
@@ -2462,7 +2481,7 @@ pub fn core_holds_checked(out: &crate::util::Output) -> Result<Vec<String>, Stri
         return Err("checkupdates timed out".into());
     }
     match out.code {
-        Some(0) => Ok(core_holds(&out.stdout)),
+        Some(0) => core_holds(&out.stdout),
         Some(2) => Ok(Vec::new()),
         Some(code) => Err(format!("checkupdates failed (exit {code}): {}", out.stderr.trim())),
         None => Err("checkupdates was killed by a signal".into()),
@@ -2491,12 +2510,26 @@ mod tests {
     fn core_holds_reads_repo_and_aur_lines() {
         let repo = "linux 6.11.1.arch1-1 -> 6.11.2.arch1-1\nfirefox 131.0-1 -> 131.0.2-1\n\n";
         let aur = "  \nlinux-firmware-git 20240909-1 -> 20241010-1\nyay-bin 12.3.5-1 -> 12.4.2-1\n";
-        assert_eq!(core_holds(&format!("{repo}{aur}")), vec!["linux", "linux-firmware-git"]);
-        assert!(core_holds("").is_empty());
-        assert!(core_holds("\n\n   \n").is_empty());
-        assert!(core_holds("firefox 1 -> 2").is_empty());
+        assert_eq!(core_holds(&format!("{repo}{aur}")).unwrap(), vec!["linux", "linux-firmware-git"]);
+        assert!(core_holds("").unwrap().is_empty());
+        assert!(core_holds("\n\n   \n").unwrap().is_empty());
+        assert!(core_holds("firefox 1 -> 2").unwrap().is_empty());
         // a DKMS module is rebuilt against the next kernel: held like one
-        assert_eq!(core_holds("nvidia-dkms 560.35-1 -> 565.57-1\nzfs-dkms 2.2.6-1 -> 2.2.7-1\n"), vec!["nvidia-dkms", "zfs-dkms"]);
+        assert_eq!(core_holds("nvidia-dkms 560.35-1 -> 565.57-1\nzfs-dkms 2.2.6-1 -> 2.2.7-1\n").unwrap(), vec!["nvidia-dkms", "zfs-dkms"]);
+        // yay's colours and pacman's [ignored] mark are read through
+        assert_eq!(core_holds("\x1b[1mlinux\x1b[0m \x1b[31m1-1\x1b[0m -> \x1b[32m2-1\x1b[0m\n").unwrap(), vec!["linux"]);
+        assert_eq!(core_holds("linux 1-1 -> 2-1 [ignored]\n").unwrap(), vec!["linux"]);
+        assert_eq!(core_holds("sidra-bin 1.2.0-1 -> 1.2.1-1 [1d9h]\nlinux-zen 1 -> 2 [3h]\n").unwrap(), vec!["linux-zen"]);
+    }
+
+    /// Whatever cannot be read is not "nothing core": the script would
+    /// install a kernel unattended on it.
+    #[test]
+    fn core_holds_refuses_lines_it_cannot_read() {
+        for bad in ["warning: linux: local (2-1) is newer than core (1-1)", "linux", ":: linux 1 -> 2",
+                    "linux 1 → 2", "-> linux 1 2", "error: failed to synchronize all databases"] {
+            assert!(core_holds(&format!("firefox 1 -> 2\n{bad}\n")).is_err(), "{bad:?}");
+        }
     }
 
     /// checkupdates' exit 2 is "nothing to update"; every other failure is
