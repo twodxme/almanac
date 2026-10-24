@@ -2496,7 +2496,8 @@ fn main_with(args: &[PyStr]) -> i32 {
 // --- --core-holds -----------------------------------------------------------------
 
 /// The names among pending-update lines that Almanac counts as core (the
-/// kernel, boot, firmware -- what can stop the machine booting), one per
+/// kernel, boot, firmware, DKMS modules -- what can stop the machine
+/// booting), one per
 /// core package, in the order given. Each line is `name old -> new`, what
 /// both `checkupdates` and `yay -Qua` print, so the repository and AUR
 /// lists are read alike; blank lines are skipped.
@@ -2553,6 +2554,8 @@ mod tests {
         assert!(core_holds("").is_empty());
         assert!(core_holds("\n\n   \n").is_empty());
         assert!(core_holds("firefox 1 -> 2").is_empty());
+        // a DKMS module is rebuilt against the next kernel: held like one
+        assert_eq!(core_holds("nvidia-dkms 560.35-1 -> 565.57-1\nzfs-dkms 2.2.6-1 -> 2.2.7-1\n"), vec!["nvidia-dkms", "zfs-dkms"]);
     }
 
     /// checkupdates' exit 2 is "nothing to update"; every other failure is

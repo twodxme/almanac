@@ -2,8 +2,8 @@
 //! omarchy-auto-update to call.
 //!
 //! `--core-holds` answers the script's other question: which pending
-//! updates Almanac counts as core (the kernel, boot, firmware -- what can
-//! stop the machine booting). It prints one name per line, so the script
+//! updates Almanac counts as core (the kernel, boot, firmware, DKMS
+//! modules -- what can stop the machine booting). It prints one name per line, so the script
 //! holds exactly what the app's own Updates page marks critical, rather
 //! than keeping a second list that drifts from it.
 //!
