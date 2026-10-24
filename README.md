@@ -306,10 +306,15 @@ installed copy: packages it installs for you, build steps and setup scripts it
 shows — the file a line names to run, in full, and the build files a build tool
 opens (`Makefile`, `package.json`'s scripts, `pyproject.toml`, `Cargo.toml`,
 `go.mod` …) — and runs in a terminal you can watch, stopping if a file shown
-has changed or a build file that was absent has appeared. What those files go
-on to run (a recipe's script, a postinstall, the sources a build compiles) is
-not shown, and the confirmation says so for every build. Anything only you can
-do — credentials, config edits — it lists with the section to read. Only
+has changed (or a symlink to it now points elsewhere) or a build file that was
+absent has appeared. A line is offered only when the shell would read it as
+plain words (no variables, globs, `;`, pipes, redirections or `cd`), and each
+step runs as exactly those words. The checks are made as each step starts:
+something an earlier step left running in the background is not watched.
+What those files go on to run (a recipe's script, a postinstall, the sources a
+build compiles) is not shown, and the confirmation says so for every build.
+Anything only you can do — credentials, config edits — it lists with the
+section to read. Only
 install, setup and configuration sections are read; development, testing and
 uninstall instructions are never offered. Plugins whose install itself cannot
 be done safely (a failed compatibility check, a version-matched helper, a
