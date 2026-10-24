@@ -1544,35 +1544,6 @@ fn _rounded(ctx: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 
 use gtk::cairo;
 
-/// `os.path.splitext` on a file name: leading dots belong to the stem.
-fn splitext(name: &[u8]) -> (&[u8], &[u8]) {
-    let lead = name.iter().take_while(|&&c| c == b'.').count();
-    match name[lead..].iter().rposition(|&c| c == b'.') {
-        Some(i) => name.split_at(lead + i),
-        None => (name, b""),
-    }
-}
-
-/// `Path.parent` and `Path.with_suffix(suffix)` of a pathlib-normalised path;
-/// with_suffix raises (None here) when the path has no name ("." or "/").
-fn parent_and_with_suffix(p: &[u8], suffix: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
-    let (dir, name) = match p.iter().rposition(|&c| c == b'/') {
-        Some(i) => (&p[..i + 1], &p[i + 1..]),
-        None => (&b""[..], p),
-    };
-    let trimmed = &dir[..dir.iter().rposition(|&c| c != b'/').map_or(0, |i| i + 1)];
-    let parent = match trimmed {
-        b"" if dir.is_empty() => b".".to_vec(),
-        b"" => dir.to_vec(),
-        d => d.to_vec(),
-    };
-    if name.is_empty() || name == b"." {
-        return (parent, None);
-    }
-    let (stem, _) = splitext(name);
-    (parent, Some([dir, stem, suffix].concat()))
-}
-
 /// Draw a miniature desktop in the theme's colours.
 ///
 /// Err is the exception Python lets out: the base colours are worked out
@@ -1692,13 +1663,12 @@ pub fn render(palette: &Palette, dest: &Path) -> Result<Option<PathBuf>, String>
             }
         }
 
-        let (parent, tmp) = parent_and_with_suffix(&dest, b".tmp.png");
-        std::fs::create_dir_all(to_path(parent))?;
-        let tmp = to_path(tmp.ok_or("path has an empty name")?);
-        // surface.write_to_png: cairo's own encoder, as pycairo uses it.
-        surface.write_to_png(&mut std::fs::File::create(&tmp)?)?;
+        // surface.write_to_png: cairo's own encoder, as pycairo uses it,
+        // into memory and then atomically into place.
+        let mut png = Vec::new();
+        surface.write_to_png(&mut png)?;
         let dest = to_path(dest.clone());
-        std::fs::rename(&tmp, &dest)?;
+        crate::util::atomic_write(&dest, &png)?;
         Ok(dest)
     };
     Ok(draw().ok())
@@ -1764,19 +1734,6 @@ mod tests {
         assert_eq!(py_join(b".", b"almanac"), b"almanac");
         assert_eq!(py_join(b"/", b"x"), b"/x");
         assert_eq!(py_join(b"/tmp/\xff", b"almanac"), b"/tmp/\xff/almanac");
-        let sfx = |p: &str, s: &str| {
-            let (a, b) = parent_and_with_suffix(p.as_bytes(), s.as_bytes());
-            (String::from_utf8(a).unwrap(), b.map(|b| String::from_utf8(b).unwrap()))
-        };
-        for (name, want) in [("x.", "x.tmp.png"), ("a.b.png", "a.b.tmp.png"), (".png", ".png.tmp.png"),
-                             ("x", "x.tmp.png"), ("..", "...tmp.png"), ("a..png", "a..tmp.png"),
-                             (".a.b", ".a.tmp.png"), ("x.png.", "x.png.tmp.png")] {
-            assert_eq!(sfx(name, ".tmp.png"), (".".to_string(), Some(want.to_string())));
-        }
-        assert_eq!(sfx("/a/b.png", ".t"), ("/a".to_string(), Some("/a/b.t".to_string())));
-        assert_eq!(sfx("//b.png", ".t"), ("//".to_string(), Some("//b.t".to_string())));
-        assert_eq!(sfx(".", ".t").1, None);
-        assert_eq!(sfx("/", ".t").1, None);
     }
 
     #[test]

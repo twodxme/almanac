@@ -843,16 +843,12 @@ fn _read(url: &str) -> Result<Option<PyValue>, String> {
     }
 }
 
-/// `DIR.mkdir(...)`, `json.dumps(entry)` into `<sha>.tmp`, then replace.
-/// OSError is ignored; Err is json.dumps's RecursionError.
+/// `json.dumps(entry)` written atomically (`util::atomic_write`: the window
+/// and the scheduled run may write one entry at once). OSError is ignored;
+/// Err is json.dumps's RecursionError.
 fn _write(url: &str, entry: &PyValue) -> Result<(), String> {
-    let _ = std::fs::create_dir_all(dir());
     let text = dumps(entry).map_err(|_| RECURSION.to_string())?;
-    let p = _path(url);
-    let tmp = p.with_extension("tmp");
-    if std::fs::write(&tmp, text).is_ok() {
-        let _ = std::fs::rename(&tmp, &p);
-    }
+    let _ = crate::util::atomic_write(&_path(url), text.as_bytes());
     Ok(())
 }
 
@@ -906,7 +902,7 @@ fn _note_limits_with(get: impl Fn(&str) -> Option<PyStr>) {
         (ps("at"), PyValue::Float(crate::util::now())),
     ]);
     if let Ok(text) = dumps(&state) {
-        let _ = std::fs::write(state_file(), text);
+        let _ = crate::util::atomic_write(state_file(), text);
     }
 }
 

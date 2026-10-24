@@ -682,7 +682,7 @@ fn _save_miss(key: &str) -> Result<(), String> {
         return Ok(());
     }
     let text = py_dumps(&doc).map_err(|_| RECURSION_DUMPS.to_string())?;
-    let _ = std::fs::write(misses(), text);
+    let _ = crate::util::atomic_write(misses(), text);
     Ok(())
 }
 
@@ -2429,9 +2429,7 @@ pub fn fetch_checked(key: &str, url: &str, domain: &str) -> Result<Option<PathBu
             let dir = icons();
             std::fs::create_dir_all(&dir)?;
             let dest = dir.join(format!("{}{ext}", _safe(key)));
-            let tmp = dir.join(format!("{}{ext}.tmp", _safe(key)));
-            std::fs::write(&tmp, &data)?;
-            std::fs::rename(&tmp, &dest)?;
+            crate::util::atomic_write(&dest, &data)?;
             Ok(dest)
         };
         return Ok(save().ok());

@@ -164,7 +164,7 @@ fn enable_with(start_now: bool, launcher: &[OsString]) -> Result<(), String> {
          X-GNOME-Autostart-enabled=true\n",
     ));
     match pystr_to_string(&text) {
-        Some(text) => std::fs::write(&path, text).map_err(|e| format!("OSError: {e}"))?,
+        Some(text) => crate::util::atomic_write(&path, text).map_err(|e| format!("OSError: {e}"))?,
         None => {
             // write_text opens (and so truncates) the file, then fails to
             // encode a surrogate: the entry is left empty.
@@ -934,7 +934,7 @@ fn save_reported(seen: &Seen) -> Result<(), String> {
         }
     }
     let text = seen.dumps()?;
-    let _ = std::fs::write(&path, text);
+    let _ = crate::util::atomic_write(&path, text);
     Ok(())
 }
 
@@ -1208,7 +1208,7 @@ pub fn main() -> i32 {
                     return;
                 }
             }
-            let _ = std::fs::write(&p, dumps_set(&seen));
+            let _ = crate::util::atomic_write(&p, dumps_set(&seen));
         });
         glib::ControlFlow::Continue // keep the timer
     }

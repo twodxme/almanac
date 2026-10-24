@@ -2851,11 +2851,7 @@ pub fn fetch_thumb(p: &Plugin, detail: bool) -> Option<PathBuf> {
     if data.is_empty() {
         return None;
     }
-    let mut tmp = dest.clone().into_os_string();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, &data).ok()?;
-    std::fs::rename(&tmp, &dest).ok()?;
+    crate::util::atomic_write(&dest, &data).ok()?;
     Some(dest)
 }
 

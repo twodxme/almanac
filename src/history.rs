@@ -855,6 +855,9 @@ pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, ite
             None,
             false,
         );
+        // The window, the guard and the scheduled run all append here: a
+        // line appended between the trim's read and its write was lost.
+        let _lock = util::lock_file(&path.with_extension("lock"))?;
         let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
         fh.write_all(format!("{line}\n").as_bytes())?;
         drop(fh);
@@ -866,7 +869,7 @@ pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, ite
             };
             let lines = splitlines(&text);
             let lines = &lines[lines.len().saturating_sub(KEEP)..];
-            std::fs::write(&path, lines.join("\n") + "\n")?;
+            crate::util::atomic_write(&path, lines.join("\n") + "\n")?;
         }
         Ok(Ok(()))
     })();

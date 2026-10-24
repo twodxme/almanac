@@ -399,7 +399,7 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&path, py_dumps(&Value::Object(cache.clone()), Some(2)))
+            crate::util::atomic_write(&path, py_dumps(&Value::Object(cache.clone()), Some(2)))
         };
         let _ = write(); // a lost cache only costs a refetch
     }

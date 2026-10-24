@@ -758,7 +758,7 @@ fn loads_output(text: &str) -> Result<Option<Py>, String> {
 /// an OSError ignored as the Python ignores it.
 fn write_json_file(path: &std::path::Path, v: &Py) {
     if std::fs::create_dir_all(cache()).is_ok() {
-        let _ = std::fs::write(path, json_dumps(v));
+        let _ = crate::util::atomic_write(path, json_dumps(v));
     }
 }
 

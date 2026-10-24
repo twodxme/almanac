@@ -453,7 +453,14 @@ pub fn write_json(path: &Path, value: &serde_json::Value, indent: Option<usize>,
 /// over. Creates the parent directory and keeps an existing file's mode. A
 /// symlink (a dotfiles checkout) is written through to its target, so the
 /// link stays a link.
-pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    atomic_write_mode(path.as_ref(), bytes.as_ref(), None)
+}
+
+/// `atomic_write` in `mode`; with None an existing file keeps its own mode
+/// and a new one is private to this user.
+pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     let target = match std::fs::symlink_metadata(path) {
         Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
         _ => path.to_path_buf(),
@@ -465,12 +472,32 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::create_dir_all(parent)?;
     let mut tmp = tempfile::Builder::new().prefix(".").suffix(".tmp").tempfile_in(parent)?;
     tmp.write_all(bytes)?;
-    if let Ok(m) = std::fs::metadata(&target) {
-        tmp.as_file().set_permissions(m.permissions())?;
+    match (mode, std::fs::metadata(&target)) {
+        (Some(mode), _) => tmp.as_file().set_permissions(std::fs::Permissions::from_mode(mode))?,
+        (None, Ok(m)) => tmp.as_file().set_permissions(m.permissions())?,
+        (None, Err(_)) => {}
     }
     tmp.as_file().sync_all()?;
     tmp.persist(&target).map_err(|e| e.error)?;
     Ok(())
+}
+
+/// An exclusive flock on `path` (created if missing), held until the file
+/// is dropped: one read-modify-write of a file that the window, the guard
+/// and the scheduled run all change.
+pub fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use rustix::fs::{flock, FlockOperation};
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path)?;
+    loop {
+        match flock(&file, FlockOperation::LockExclusive) {
+            Ok(()) => return Ok(file),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// The checkout this binary was compiled in, when it is still there and only

@@ -1353,15 +1353,7 @@ pub fn advisories(ttl: i64) -> Result<Option<PyValue>, String> {
     let mut text = format!("{{\"at\": {}, \"groups\": ", crate::util::py_float_repr(crate::util::now()));
     _py_dumps(&groups, &mut text);
     text.push('}');
-    let write = || -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, &text)?;
-        std::fs::rename(&tmp, &path)
-    };
-    let _ = write();
+    let _ = crate::util::atomic_write(&path, text.as_bytes());
     Ok(Some(groups).filter(|v| !matches!(v, J::Null)))
 }
 

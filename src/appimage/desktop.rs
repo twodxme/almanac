@@ -324,7 +324,7 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
             std::fs::File::create(&entry).map_err(io)?;
             return Err("UnicodeEncodeError: 'utf-8' codec can't encode characters: surrogates not allowed".into());
         }
-        std::fs::write(entry, lines.join("\n") + "\n").map_err(io)?;
+        crate::util::atomic_write(entry, lines.join("\n") + "\n").map_err(io)?;
         Ok(true)
     };
     let r = inside();

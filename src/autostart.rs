@@ -14,8 +14,7 @@
 //! Port of `autostart.py`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::{OsStr, OsString};
-use std::io::Write;
+use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -347,12 +346,11 @@ fn py_encode_error(cs: &str, chars: &[char], pos: usize) -> String {
     }
 }
 
-/// `Path.write_text(text)`: the file is opened (created, emptied) first, so
-/// a text the locale cannot encode leaves it empty, and the error is the
-/// UnicodeEncodeError's text.
+/// `text` in the locale's encoding, replacing `path` atomically
+/// (`util::atomic_write`): a crash or a text the locale cannot encode leaves
+/// the old file as it was. The error is the UnicodeEncodeError's text.
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
     use gtk::glib::{self, CvtError};
-    let mut f = std::fs::File::create(path).map_err(|x| os_err(path, x))?;
     let encoded: Vec<u8> = match locale_codeset() {
         None => text.as_bytes().to_vec(),
         Some(cs) => match glib::convert(text.as_bytes(), cs.as_str(), "UTF-8") {
@@ -368,7 +366,7 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
             Err(e) => return Err(e.to_string()),
         },
     };
-    f.write_all(&encoded).map_err(|x| os_err(path, x))
+    crate::util::atomic_write(path, &encoded).map_err(|x| os_err(path, x))
 }
 
 fn get<'a>(d: &'a BTreeMap<String, String>, k: &str, default: &'a str) -> &'a str {
@@ -737,14 +735,6 @@ fn os_err(path: &Path, e: std::io::Error) -> String {
     }
 }
 
-/// `str(OSError)` for a call on two paths (os.replace): `... : '/a' -> '/b'`.
-fn os_err2(src: &Path, dst: &Path, e: std::io::Error) -> String {
-    match errno_text(&e) {
-        Some(t) => format!("{t}: {} -> {}", repr_path(src), repr_path(dst)),
-        None => e.to_string(),
-    }
-}
-
 /// `Path.mkdir(parents=True, exist_ok=True)`, with the error naming the
 /// directory that failed, as Python's does.
 fn mkdir_parents(p: &Path) -> Result<(), String> {
@@ -779,50 +769,45 @@ pub fn set_enabled(e: &Entry, on: bool) -> Result<(), String> {
     // pathlib: `user_dir() / e.filename` is normalised ("" and "." are the
     // directory itself, a trailing slash goes)
     let target = py_norm(&user_dir().join(raw_filename(e)));
+    let source = py_norm(e.system.as_ref().unwrap_or(&e.path));
     if on {
         if target.exists() && py_lower(get(&parse(&target), MARK, "")) == "true" {
             // our override: just remove it
             std::fs::remove_file(&target).map_err(|x| os_err(&target, x))?;
-            return Ok(());
+        } else if target.exists() {              // the user's own: edit in place
+            return set_keys(&target, &[("Hidden", "false"), ("X-GNOME-Autostart-enabled", "true")]);
         }
-        if target.exists() {                     // the user's own: edit in place
-            set_key(&target, "Hidden", "false")?;
-            set_key(&target, "X-GNOME-Autostart-enabled", "true")?;
+        // With no copy of the user's left, the system's file decides; one
+        // that is itself switched off needs an override switching it on.
+        if !target.exists() && source != target && !self::on(&parse(&source)) {
+            let text = read_text(&source).map_err(|x| os_err(&source, x))?;
+            mkdir_parents(&user_dir())?;
+            let text = with_keys(&text, &[("Hidden", "false"), ("X-GNOME-Autostart-enabled", "true"), (MARK, "true")]);
+            write_text(&target, &text)?;
         }
         return Ok(());
     }
     if target.exists() {
-        set_key(&target, "Hidden", "true")?;
-        return Ok(());
+        return set_keys(&target, &[("Hidden", "true")]);
     }
     mkdir_parents(&user_dir())?;
-    let source = py_norm(e.system.as_ref().unwrap_or(&e.path));
     let text = read_text(&source).map_err(|x| os_err(&source, x))?;
-    write_text(&target, &text)?;
-    set_key(&target, "Hidden", "true")?;
-    set_key(&target, MARK, "true")?;
-    Ok(())
+    // One write: a copy without Hidden would still start, and one without
+    // the mark would shadow the system file for good.
+    write_text(&target, &with_keys(&text, &[("Hidden", "true"), (MARK, "true")]))
 }
 
-/// `path.with_suffix(suffix)`: the stem is the name up to its last dot, but
-/// only when what comes before that dot is not all dots (`..desktop` keeps
-/// its whole name as the stem). `Err` where Python raises ValueError.
-fn with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, String> {
-    let name = path.file_name().map(OsStr::as_bytes).unwrap_or_default();
-    let stem = match name.iter().rposition(|&b| b == b'.') {
-        Some(i) if name[..i].iter().any(|&b| b != b'.') => &name[..i],
-        _ => name,
-    };
-    if stem.is_empty() {
-        return Err(format!("PosixPath({}) has an empty name", repr_path(path)));
-    }
-    let mut new = stem.to_vec();
-    new.extend_from_slice(suffix.as_bytes());
-    Ok(path.with_file_name(OsString::from_vec(new)))
-}
-
-fn set_key(path: &Path, key: &str, value: &str) -> Result<(), String> {
+fn set_keys(path: &Path, keys: &[(&str, &str)]) -> Result<(), String> {
     let text = read_text(path).map_err(|x| os_err(path, x))?;
+    write_text(path, &with_keys(&text, keys))
+}
+
+/// `text` with each key set in its [Desktop Entry] group.
+fn with_keys(text: &str, keys: &[(&str, &str)]) -> String {
+    keys.iter().fold(text.to_string(), |t, (k, v)| with_key(&t, k, v))
+}
+
+fn with_key(text: &str, key: &str, value: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut group = String::new();
     let mut done = false;
@@ -848,10 +833,7 @@ fn set_key(path: &Path, key: &str, value: &str) -> Result<(), String> {
     if !done {
         out.push(format!("{key}={value}"));
     }
-    let tmp = with_suffix(path, ".tmp")?;
-    write_text(&tmp, &(out.join("\n") + "\n"))?;
-    std::fs::rename(&tmp, path).map_err(|x| os_err2(&tmp, path, x))?;
-    Ok(())
+    out.join("\n") + "\n"
 }
 
 
@@ -930,6 +912,24 @@ mod tests {
     }
 
     #[test]
+    fn a_system_entry_that_is_itself_off_can_be_switched_on() {
+        let t = StartupApps::set_up();
+        std::fs::write(t.sysdir.join("off.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Off\nExec=o\nHidden=true\n").unwrap();
+        assert!(!t.entry("off.desktop").enabled);
+        set_enabled(&t.entry("off.desktop"), true).unwrap();
+        assert!(t.entry("off.desktop").enabled, "switched on, it is on");
+        set_enabled(&t.entry("off.desktop"), false).unwrap();
+        assert!(!t.entry("off.desktop").enabled);
+        set_enabled(&t.entry("off.desktop"), true).unwrap();
+        assert!(t.entry("off.desktop").enabled, "and on again after that");
+        // The off override is written whole: hidden and marked as Almanac's.
+        set_enabled(&t.entry("keys.desktop"), false).unwrap();
+        let over = std::fs::read_to_string(user_dir().join("keys.desktop")).unwrap();
+        assert!(over.contains("Hidden=true") && over.contains(&format!("{MARK}=true")), "{over}");
+    }
+
+    #[test]
     fn test_a_users_own_entry_is_edited_never_deleted() {
         let t = StartupApps::set_up();
         let mine = user_dir().join("mine.desktop");
@@ -949,19 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn with_suffix_follows_pathlib() {
-        let w = |n: &str| with_suffix(&Path::new("/r").join(n), ".tmp").unwrap();
-        assert_eq!(w("a.desktop"), Path::new("/r/a.tmp"));
-        assert_eq!(w("..desktop"), Path::new("/r/..desktop.tmp"));
-        assert_eq!(w("...desktop"), Path::new("/r/...desktop.tmp"));
-        assert_eq!(w(".hidden"), Path::new("/r/.hidden.tmp"));
-        assert_eq!(w("x.tar.gz"), Path::new("/r/x.tar.tmp"));
-        assert_eq!(w("..a.b"), Path::new("/r/..a.tmp"));
-        assert_eq!(w("a.."), Path::new("/r/a..tmp"));
-        assert!(with_suffix(Path::new("/"), ".tmp").is_err());
-    }
-
-    #[test]
     fn lower_uses_pythons_unicode_tables() {
         // Unicode 17 additions are unassigned to Python 3.14: unchanged
         assert_eq!(py_lower("\u{a7d2}\u{16ea0}"), "\u{a7d2}\u{16ea0}");
@@ -978,9 +965,6 @@ mod tests {
     fn os_errors_read_like_pythons() {
         let e = std::io::Error::from_raw_os_error(2);
         assert_eq!(os_err(Path::new("/p"), e), "[Errno 2] No such file or directory: '/p'");
-        let e = std::io::Error::from_raw_os_error(13);
-        assert_eq!(os_err2(Path::new("/a.tmp"), Path::new("/a"), e),
-            "[Errno 13] Permission denied: '/a.tmp' -> '/a'");
         let odd = PathBuf::from(OsString::from_vec(b"/it's/caf\xe9\n".to_vec()));
         assert_eq!(repr_path(&odd), "\"/it's/caf\\udce9\\n\"");
     }
