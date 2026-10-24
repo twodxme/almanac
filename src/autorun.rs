@@ -1619,14 +1619,16 @@ pub fn update_plugins() -> Result<usize, String> {
 /// the caller's `except Exception: trust = {}` holds every plugin back, as
 /// the Python does. (`store::catalog` instead skips the market or the row
 /// and keeps the rest, and `Plugin::trust` cannot fail.)
-fn catalog_trust() -> Result<BTreeMap<String, String>, String> {
+fn catalog_trust() -> Result<BTreeMap<String, plugins::Listing>, String> {
     trust_map(store::try_catalog(false)?)
 }
 
 /// The dict comprehension over the plugins: the key (`p.id`) must be
 /// hashable; an id that is not a str is kept by the Python but can never
-/// equal a plugin directory's name, so it is left out here.
-fn trust_map(plugins: Vec<store::Plugin>) -> Result<BTreeMap<String, String>, String> {
+/// equal a plugin directory's name, so it is left out here. Each id keeps
+/// its listing's repository and reviewed commit beside the key: the key only
+/// counts for a checkout of that repository (`plugins::listed_trust`).
+fn trust_map(plugins: Vec<store::Plugin>) -> Result<BTreeMap<String, plugins::Listing>, String> {
     let mut out = BTreeMap::new();
     for p in plugins {
         // the fields as the Python object holds them, wrong types included
@@ -1636,8 +1638,9 @@ fn trust_map(plugins: Vec<store::Plugin>) -> Result<BTreeMap<String, String>, St
             return Err(format!("TypeError: unhashable type: '{}'", py_type(&id)));
         }
         let key = trust_key(&v)?;
+        let text = |f: &str| v.get(f).and_then(Value::as_str).unwrap_or_default().to_string();
         if let Value::String(id) = id {
-            out.insert(id, key);
+            out.insert(id, plugins::Listing { key, repo: text("repo"), validated_commit: text("validated_commit") });
         }
     }
     Ok(out)
@@ -1680,7 +1683,8 @@ fn trust_key(v: &Value) -> Result<String, String> {
         };
         let parts: Vec<&str> = repo.split('/').filter(|x| !x.is_empty()).collect();
         let owner = if parts.len() > 2 { parts[2] } else { "" };
-        if owner == m.first_party_owner {
+        let host = if parts.len() > 1 { parts[1] } else { "" };
+        if owner == m.first_party_owner && host.eq_ignore_ascii_case("github.com") {
             return Ok("first-party".into());
         }
     }
@@ -1744,7 +1748,7 @@ fn classify(d: &Path) -> plugins::State {
 
 /// `update_plugins` with the plugins directory, the scope and the
 /// marketplace's trust keys (`{id: trust.key}`) passed in.
-pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, String>) -> Result<usize, String> {
+pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, plugins::Listing>) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
     let mut done = 0;
     let dirs = if pdir.is_dir() { glob_star(pdir) } else { Vec::new() };
@@ -1761,9 +1765,14 @@ pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, Stri
         // lossily, so it is taken from the path here.
         let id: PyStr = d.file_name().map(|n| fsdecode(n.as_bytes())).unwrap_or_default();
         let key = String::from_utf8(d.file_name().map(|n| n.as_bytes().to_vec()).unwrap_or_default()).ok();
-        let trust_key = key.as_ref().and_then(|k| trust.get(k)).map(String::as_str);
+        let listing = key.as_ref().and_then(|k| trust.get(k));
+        let trust_key = plugins::listed_trust(&st.url, listing);
         if !plugins::in_scope(trust_key, scope) {
             log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" held back by the update scope ({scope})"))]))?;
+            continue;
+        }
+        if let Some(why) = plugins::pin_hold(&st, listing.filter(|_| trust_key.is_some()), scope) {
+            log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" held back: {why}"))]))?;
             continue;
         }
         log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" ({} commits)", st.behind))]))?;
@@ -1776,6 +1785,12 @@ pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, Stri
         if run_py(&argv, 300)? {
             done += 1;
             updated(format!("{} ({} commits)", render(&id), st.behind));
+            // `omarchy plugin update` takes no commit: upstream may have
+            // moved again between the check and the pull.
+            let pinned = scope == "verified" && listing.is_some_and(|l| !l.validated_commit.trim().is_empty());
+            if pinned && !plugins::checkout_head(&d).eq_ignore_ascii_case(&st.remote) {
+                log_py(&cat(&[&pystr("plugins: "), &id, &pystr(" is past the reviewed commit: upstream changed during the update")]))?;
+            }
         }
     }
     if done == 0 {
@@ -2811,7 +2826,7 @@ mod tests {
             store::Plugin::from_row(m.as_object().unwrap()).unwrap()
         };
         let ok = row(json!({"upstream_status": "failed", "upstream_checked_at": "2026-01-01"}));
-        assert_eq!(trust_map(vec![ok]).unwrap().get("p").map(String::as_str), Some("unreachable"));
+        assert_eq!(trust_map(vec![ok]).unwrap().get("p").map(|l| l.key.as_str()), Some("unreachable"));
         let bad = row(json!({"upstream_status": "failed", "upstream_checked_at": null}));
         assert!(trust_map(vec![bad]).is_err());
     }

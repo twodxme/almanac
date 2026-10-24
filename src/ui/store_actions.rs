@@ -236,6 +236,27 @@ pub fn install_detail(p: &Plugin, argv: &[String]) -> Result<String, String> {
     ))
 }
 
+/// What to tell the user after a store install that did not land on the
+/// commit the marketplace reviewed: `omarchy plugin add` clones whatever
+/// upstream has now, and the listing's trust label is about the reviewed
+/// commit only. None when it is that commit, or the listing records none.
+pub fn install_pin_warning(p: &Plugin, head: &str) -> Option<String> {
+    let (reviewed, head) = (p.validated_commit.trim(), head.trim());
+    if reviewed.is_empty() || head.eq_ignore_ascii_case(reviewed) {
+        return None;
+    }
+    let short = |s: &str| s.chars().take(7).collect::<String>();
+    Some(format!(
+        "{}: {} ({} {}, {} {})",
+        p.name,
+        tr("this is not the commit that was reviewed, so its trust label does not cover it"),
+        tr("installed"),
+        if head.is_empty() { "?".to_string() } else { short(head) },
+        tr("reviewed"),
+        short(reviewed)
+    ))
+}
+
 /// The steps of a plugin removal: the plugin, then its shortcut.
 pub fn plugin_remove_steps(p: &Plugin) -> Vec<Step> {
     vec![
@@ -493,6 +514,8 @@ pub trait Host: Clone + 'static {
     fn apply_theme_now(&self, p: &Plugin);
     fn install_store_appimage(&self, p: &Plugin);
     fn remove_store_appimage(&self, p: &Plugin);
+    /// The commit the installed plugin's checkout is at ("" if unknown).
+    fn installed_head(&self, p: &Plugin) -> String;
 }
 
 impl Host for WeakWin {
@@ -539,6 +562,12 @@ impl Host for WeakWin {
             win.remove_store_appimage(p);
         }
     }
+    fn installed_head(&self, p: &Plugin) -> String {
+        match self.upgrade().map(|win| win.plugin_dir(p)) {
+            Some(Ok(Some(folder))) => crate::plugins::checkout_head(&folder),
+            _ => String::new(),
+        }
+    }
 }
 
 /// `on_plugin_install`: install from the store, without leaving the app.
@@ -564,6 +593,7 @@ pub fn plugin_install<H: Host>(h: &H, p: &Plugin) {
     };
     let detail = or_log!(install_detail(p, &argv));
     let body = install_body(p);
+    let adds = argv.get(2).is_some_and(|a| a == "add");
 
     let (host, p) = (h.clone(), p.clone());
     h.confirm(
@@ -578,6 +608,11 @@ pub fn plugin_install<H: Host>(h: &H, p: &Plugin) {
                 // `_store_after` raising ends `after` there, before setup.
                 if !after_h.store_after(ok, &after_p, "installed") {
                     return;
+                }
+                if ok && adds {
+                    if let Some(warning) = install_pin_warning(&after_p, &after_h.installed_head(&after_p)) {
+                        after_h.say(&warning, 15);
+                    }
                 }
                 if ok && after_p.needs_setup {
                     after_h.offer_setup(&after_p);
@@ -890,6 +925,14 @@ impl Win {
             let plan = plan.clone();
             move || {
                 if plan.commands.is_empty() {
+                    return;
+                }
+                // What runs must be what was shown: a file edited since the
+                // confirmation was built is not run unseen.
+                if let Err(name) = setup_mod::unchanged(&plan) {
+                    if let Some(win) = w.upgrade() {
+                        win.say(&format!("{}: {name}", tr("Setup was not run — a file changed after it was shown")), 10);
+                    }
                     return;
                 }
                 let script = setup_mod::terminal_script(&plan)
@@ -1612,6 +1655,8 @@ mod tests {
         offer_setup: Vec<Plugin>,
         theme_installed: Vec<(bool, String)>,
         applied: Vec<String>,
+        /// What `installed_head` answers.
+        head: String,
     }
 
     /// The window, with `tasks.confirm` / `tasks.run` mocked as `_Confirmed`
@@ -1675,6 +1720,9 @@ mod tests {
         }
         fn remove_store_appimage(&self, _p: &Plugin) {
             unreachable!("not an AppImage");
+        }
+        fn installed_head(&self, _p: &Plugin) -> String {
+            self.0.borrow().head.clone()
         }
     }
 
@@ -1875,6 +1923,37 @@ mod tests {
     }
 
     #[test]
+    fn an_install_past_the_reviewed_commit_is_flagged() {
+        let sha = "1111111111111111111111111111111111111111";
+        let p = Plugin {
+            install_cmd: "omarchy plugin add https://github.com/a/x --enable".into(),
+            validated_commit: sha.into(),
+            ..plugin("x", "X")
+        };
+        assert_eq!(install_pin_warning(&p, sha), None);
+        assert_eq!(install_pin_warning(&p, &sha.to_uppercase()), None);
+        let w = install_pin_warning(&p, "2222222222222222222222222222222222222222").expect("warned");
+        assert!(w.contains("not the commit that was reviewed") && w.contains("2222222") && w.contains("1111111"), "{w}");
+        assert!(install_pin_warning(&p, "").is_some(), "an unreadable head is not the reviewed one");
+        let unreviewed = Plugin { validated_commit: String::new(), ..p.clone() };
+        assert_eq!(install_pin_warning(&unreviewed, "2222222"), None);
+
+        // And the install says so, after the usual "installed".
+        let fake = Fake::default();
+        fake.0.borrow_mut().head = "2222222222222222222222222222222222222222".into();
+        plugin_install(&fake, &p);
+        fake.say_yes();
+        fake.finish(true);
+        assert!(fake.0.borrow().said.iter().any(|m| m.contains("not the commit that was reviewed")));
+        let fake = Fake::default();
+        fake.0.borrow_mut().head = sha.into();
+        plugin_install(&fake, &p);
+        fake.say_yes();
+        fake.finish(true);
+        assert!(fake.0.borrow().said.is_empty());
+    }
+
+    #[test]
     fn setup_is_not_offered_when_store_after_raises() {
         // `_store_after` raising aborts `after` before `_offer_setup`.
         #[derive(Clone, Default)]
@@ -1906,6 +1985,9 @@ mod tests {
             }
             fn remove_store_appimage(&self, p: &Plugin) {
                 self.0.remove_store_appimage(p)
+            }
+            fn installed_head(&self, p: &Plugin) -> String {
+                self.0.installed_head(p)
             }
         }
         let fake = Raising::default();
