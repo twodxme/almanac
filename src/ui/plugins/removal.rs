@@ -375,7 +375,25 @@ impl Win {
     /// no --noconfirm here, deliberately.
     pub fn on_remove(&self, app: &inventory::App) {
         if app.source == inventory::APPIMAGE {
-            self.remove_appimage(app);
+            // The file and its rollback copy are deleted outright, so the
+            // row menu's "Remove…" asks first, as the App Store does.
+            let path = std::path::PathBuf::from(&app.exec_path);
+            let detail = format!("{}\n{}", path.display(), path.with_extension("previous").display());
+            let (w, app) = (self.downgrade(), app.clone());
+            tasks::confirm(
+                &self.window,
+                &format!("Remove {}?", app.name),
+                &tr("The AppImage, its rollback copy and its launcher entry are \
+                     deleted. Documents you created with it are untouched."),
+                &detail,
+                &tr("Remove"),
+                true,
+                move || {
+                    if let Some(win) = w.upgrade() {
+                        win.remove_appimage(&app);
+                    }
+                },
+            );
             return;
         }
         if app.source == inventory::FLATPAK {

@@ -287,8 +287,9 @@ fn step_text(step: &Step) -> Option<String> {
 }
 
 impl Win {
-    /// AppImages are ours, so remove them directly -- no package manager
-    /// is involved and there is nothing to confirm against.
+    /// AppImages are ours, so remove them directly -- no package manager is
+    /// involved. Every caller has asked first: the file and its rollback
+    /// copy are gone for good.
     pub fn remove_appimage(&self, app: &App) {
         // Its read and its write of the registry as one, under the lock;
         // let go before anything (the reload) reads the registry again.

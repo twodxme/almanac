@@ -315,11 +315,9 @@ impl Win {
         if let Some(act) = self.win_action("clean") {
             act.set_enabled(removable > 0);
         }
-        self.update_btn.set_label(&if updates != 0 {
-            format!("Update all ({updates})")
-        } else {
-            tr("Update all")
-        });
+        // The header button's label is sync_primary's alone: it belongs to
+        // the page on show, and a scan finishing under Health or Plugins must
+        // not relabel their button "Update all" while it still runs theirs.
         Ok(())
     }
 

@@ -108,6 +108,14 @@ mod tests {
         include_str!("packages/filtering.rs"),
         include_str!("packages/chrome.rs"),
     ];
+
+    #[test]
+    fn only_the_page_on_show_labels_the_header_button() {
+        // A scan finishing under Health once relabelled its button "Update
+        // all (N)" while the button still ran Reclaim space.
+        let writers: usize = SRC.iter().map(|s| s.matches("update_btn.set_label(").count()).sum();
+        assert_eq!(writers, 1, "sync_primary is the one place the label is set");
+    }
     const CSS: &str = include_str!("../../data/style.css");
 
     /// The code part of this section's files, without their tests.
