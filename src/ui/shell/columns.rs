@@ -596,9 +596,11 @@ impl Win {
 /// Click handlers for recycled buttons: one permanent handler per button,
 /// running whatever closure the button's current row put in its slot.
 type ClickFn = Rc<dyn Fn(&gtk::Button)>;
+/// One button's slot: the closure its current row put there, if any.
+type ClickSlot = Rc<RefCell<Option<ClickFn>>>;
 
 #[derive(Clone, Default)]
-struct ClickSlots(Rc<RefCell<HashMap<usize, Rc<RefCell<Option<ClickFn>>>>>>);
+struct ClickSlots(Rc<RefCell<HashMap<usize, ClickSlot>>>);
 
 impl ClickSlots {
     fn key(btn: &gtk::Button) -> usize {
@@ -607,7 +609,7 @@ impl ClickSlots {
 
     /// Give a freshly made button its slot and its one handler.
     fn attach(&self, btn: &gtk::Button) {
-        let slot: Rc<RefCell<Option<ClickFn>>> = Rc::default();
+        let slot: ClickSlot = Rc::default();
         let mine = slot.clone();
         btn.connect_clicked(move |b| {
             let f = mine.borrow().clone();

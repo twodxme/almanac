@@ -111,14 +111,7 @@ fn at(s: &[char], i: usize) -> R<char> {
 }
 
 fn starts(s: &[char], i: usize, lit: &str) -> bool {
-    let mut j = i;
-    for c in lit.chars() {
-        if s.get(j) != Some(&c) {
-            return false;
-        }
-        j += 1;
-    }
-    true
+    lit.chars().enumerate().all(|(k, c)| s.get(i + k) == Some(&c))
 }
 
 fn eq_ci(a: &str, b: &str) -> bool {
@@ -1131,7 +1124,10 @@ impl Parser {
     fn attr_value(&mut self, raw: &[char], l1: bool, cdata: bool) -> R<String> {
         let mut out = String::new();
         let skip_space = |out: &String| !cdata && (out.is_empty() || out.ends_with(' '));
-        let mut frames: Vec<(Rc<[char]>, usize, bool, Option<String>)> = vec![(Rc::from(raw), 0, l1, None)];
+        // Text being expanded: its characters, the position in them, whether
+        // it is Latin-1, and the entity it came from (open until it ends).
+        type Frame = (Rc<[char]>, usize, bool, Option<String>);
+        let mut frames: Vec<Frame> = vec![(Rc::from(raw), 0, l1, None)];
         while let Some(top) = frames.len().checked_sub(1) {
             let (text, pos, fl1) = (frames[top].0.clone(), frames[top].1, frames[top].2);
             if pos >= text.len() {

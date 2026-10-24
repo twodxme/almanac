@@ -181,7 +181,8 @@ pub fn collect() -> Vec<App> {
     // Almanac lists itself. An app whose job is telling you what is stale
     // should not be the one thing that silently is.
     // An Err is a collector that raised, like a panic.
-    let sources: Vec<fn() -> Result<Vec<App>, String>> = vec![
+    type Collector = fn() -> Result<Vec<App>, String>;
+    let sources: Vec<Collector> = vec![
         packages,
         || appimages(true),
         flatpaks,

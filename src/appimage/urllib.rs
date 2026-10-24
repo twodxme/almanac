@@ -931,7 +931,10 @@ impl rustls::client::danger::ServerCertVerifier for TrustStore {
 }
 
 /// One DER element: tag, the whole element, its contents, what follows.
-fn der_next(b: &[u8]) -> Option<(u8, &[u8], &[u8], &[u8])> {
+type DerElement<'a> = (u8, &'a [u8], &'a [u8], &'a [u8]);
+
+/// The first DER element of `b`.
+fn der_next(b: &[u8]) -> Option<DerElement<'_>> {
     let tag = *b.first()?;
     let first = *b.get(1)? as usize;
     let (len, head) = if first < 0x80 {

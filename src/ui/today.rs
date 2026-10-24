@@ -21,8 +21,11 @@ pub const HERO_HEIGHT: i32 = 120;
 pub const PICK_HEIGHT: i32 = 176;
 pub const PICK_ART: i32 = 196;
 
+/// Where a shelf's link goes: (button label, page, sort on that page).
+pub type ShelfLink = (&'static str, &'static str, Option<&'static str>);
+
 // Each shelf is a sample of a bigger list; this says where the rest is.
-pub const SHELF_TARGET: &[(&str, (&str, &str, Option<&str>))] = &[
+pub const SHELF_TARGET: &[(&str, ShelfLink)] = &[
     ("attention", ("Open Health check", "maintenance", None)),
     ("new", ("Show all", "discover", Some("new"))),
     ("trending", ("Show all", "discover", Some("trending"))),

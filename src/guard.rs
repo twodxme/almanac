@@ -928,10 +928,8 @@ fn ids(doc: &Doc, max: usize) -> Result<Vec<PyStr>, String> {
 fn lost(current: &Path, backup: &Path, at: PyStack) -> Result<Vec<PyStr>, String> {
     let (a, b) = (normal(backup, Some(current), at)?, normal(current, None, at)?);
     let max = PyStack::ids_depth(at.frames + 1);
-    let container = |n: &Option<Normal>| match n {
-        Some(Normal::Json(d)) if matches!(d.top(), Node::Dict(_) | Node::List(_)) => true,
-        _ => false,
-    };
+    let container =
+        |n: &Option<Normal>| matches!(n, Some(Normal::Json(d)) if matches!(d.top(), Node::Dict(_) | Node::List(_)));
     if let (true, true, Some(Normal::Json(a)), Some(Normal::Json(b))) = (container(&a), container(&b), &a, &b) {
         let kept: HashSet<PyStr> = ids(b, max)?.into_iter().collect();
         let mut seen = HashSet::new();

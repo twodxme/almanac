@@ -33,8 +33,11 @@ pub fn active() -> bool {
 
 pub const HOME: &str = "/home/user";
 
-// (name, version, update, source, description, size_mb, extra)
-const _PACKAGES: &[(&str, &str, &str, &str, &str, f64, &[(&str, &str)])] = &[
+/// (name, version, update, source, description, size_mb, extra)
+type DemoPackage = (&'static str, &'static str, &'static str, &'static str, &'static str, f64,
+                    &'static [(&'static str, &'static str)]);
+
+const _PACKAGES: &[DemoPackage] = &[
     ("chromium", "151.0.7620.9-1", "152.0.7700.1-1", "repo",
      "A web browser built for speed, simplicity, and security", 312.4,
      &[("critical", "security")]),

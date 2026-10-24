@@ -518,9 +518,7 @@ fn parse_nested(text: &str) -> Option<Value> {
                 // Find the bracket that closes this one.
                 let (mut j, mut d, mut s) = (i, 0usize, false);
                 let end = loop {
-                    let Some(&x) = b.get(j) else {
-                        return None;
-                    };
+                    let &x = b.get(j)?;
                     if s {
                         match x {
                             b'\\' => j += 1,

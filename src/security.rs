@@ -913,6 +913,8 @@ fn _py_set<'a>(items: &[&'a J]) -> Vec<&'a J> {
                 return;
             }
             if i + LINEAR_PROBES <= mask {
+                // Slot indices, as setobject.c's set_insert_clean probes them.
+                #[allow(clippy::needless_range_loop)]
                 for j in i + 1..=i + LINEAR_PROBES {
                     if table[j].is_none() {
                         table[j] = Some((h, key));
@@ -933,6 +935,8 @@ fn _py_set<'a>(items: &[&'a J]) -> Vec<&'a J> {
         let mut i = (h as u64 as usize) & mask;
         let slot = 'probe: loop {
             let probes = if i + LINEAR_PROBES <= mask { LINEAR_PROBES } else { 0 };
+            // The slot index is the result (set_add_entry's probe), not just a cursor.
+            #[allow(clippy::needless_range_loop)]
             for j in i..=i + probes {
                 match table[j] {
                     None => break 'probe Some(j),

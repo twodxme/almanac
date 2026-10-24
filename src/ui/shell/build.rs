@@ -401,7 +401,8 @@ impl Win {
         name(&menu_btn, &tr("More actions"));
         header.pack_end(&menu_btn);
 
-        let handlers: [(&str, fn(&Win)); 10] = [
+        type Handler = fn(&Win);
+        let handlers: [(&str, Handler); 10] = [
             ("install", |w| w.on_install()),
             ("track", |w| w.on_add_appimage()),
             // on_install_link(None): no link yet, so it asks for one.
@@ -552,7 +553,8 @@ impl Win {
         // row widgets themselves are recycled as the list scrolls. The
         // marketplace, findings, survey and shelves start empty (`Shared`).
         let group = gio::SimpleActionGroup::new();
-        let row_handlers: [(&str, fn(&Win, &str)); 10] = [
+        type RowHandler = fn(&Win, &str);
+        let row_handlers: [(&str, RowHandler); 10] = [
             ("visit", |w, n| w.row_visit(n)),
             ("remove", |w, n| w.row_remove(n)),
             ("notes", |w, n| w.row_notes(n)),
