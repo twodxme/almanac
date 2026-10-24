@@ -276,15 +276,114 @@ pub fn try_check(fetch: bool) -> Result<Info, String> {
 pub const RELEASES_URL: &str = "https://github.com/twodxme/almanac/releases/latest";
 const RELEASE_REPO: &str = "twodxme/almanac";
 
-/// What the note says for a copy pacman owns. There is no repository
-/// package yet, so it may have come from a repository (or the AUR) or from
-/// the package on the releases page, which nothing updates by itself.
-pub fn package_note(pkg: &str) -> String {
-    format!(
-        "Installed as the {pkg} package. Update it with your package manager; \
-         if you installed the package downloaded from GitHub, download the \
-         latest one from {RELEASES_URL} and install it with sudo pacman -U."
-    )
+/// Where pacman's copy of Almanac came from, as far as can be told without
+/// guessing. It decides what the note promises: only a package something
+/// keeps updating may be said to update with the rest of the system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageOrigin {
+    /// A sync repository has a package of this name, so `pacman -Syu`
+    /// replaces it with each new one.
+    Repo,
+    /// No repository has it (`pacman -Qm` lists it): the package downloaded
+    /// from GitHub, one built with makepkg, or one from the AUR. `aur` is
+    /// whether the AUR lists this project under that name -- `None` when it
+    /// was not asked or did not answer, which is never taken as a yes.
+    Foreign { aur: Option<bool> },
+    /// pacman could not say (no owner, or `pacman -Qm` failed).
+    Unknown,
+}
+
+/// What the note says for a copy pacman owns, by where the package came
+/// from. An AUR helper updates a foreign package only when the AUR has one
+/// by that name, and a package installed with `pacman -U` from the releases
+/// page is updated by nothing at all: the note says so rather than implying
+/// an update will come.
+pub fn package_note(pkg: &str, origin: PackageOrigin) -> String {
+    match origin {
+        PackageOrigin::Repo => format!(
+            "Installed as the {pkg} package from your distribution's repositories, \
+             so it updates with the rest of the system."
+        ),
+        PackageOrigin::Foreign { aur: Some(true) } => format!(
+            "Installed as the {pkg} package, which no repository carries but the AUR does, \
+             so an AUR helper such as yay or paru updates it with the rest of the system."
+        ),
+        PackageOrigin::Foreign { .. } => format!(
+            "Installed as the {pkg} package from outside your repositories (the package \
+             downloaded from GitHub, or one built with makepkg), so nothing updates it by \
+             itself. Download the latest one from {RELEASES_URL} and install it with \
+             sudo pacman -U."
+        ),
+        PackageOrigin::Unknown => format!(
+            "Installed as the {pkg} package. Update it with your package manager; \
+             if you installed the package downloaded from GitHub, download the \
+             latest one from {RELEASES_URL} and install it with sudo pacman -U."
+        ),
+    }
+}
+
+/// `pacman -Qmq <pkg>` read as a [`PackageOrigin`]. Local and quick: no
+/// network. The AUR is asked separately (`aur_listed`).
+fn package_origin(pkg: &str) -> PackageOrigin {
+    if pkg.is_empty() {
+        return PackageOrigin::Unknown;
+    }
+    let argv: Vec<OsString> = vec!["pacman".into(), "-Qmq".into(), pkg.into()];
+    match run_capture(&argv, Some(20)) {
+        Ok(out) => origin_from(out.code, &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr)),
+        Err(_) => PackageOrigin::Unknown,
+    }
+}
+
+/// The decision part of [`package_origin`], on what pacman printed. The
+/// package is known to be installed (it owns the running binary), so exit 1
+/// with nothing said means "not foreign"; anything else pacman says (an
+/// error, a timeout) is `Unknown` rather than a guess.
+fn origin_from(code: i32, stdout: &str, stderr: &str) -> PackageOrigin {
+    match (code, stdout.trim().is_empty(), stderr.trim().is_empty()) {
+        (0, false, _) => PackageOrigin::Foreign { aur: None },
+        (1, true, true) => PackageOrigin::Repo,
+        _ => PackageOrigin::Unknown,
+    }
+}
+
+/// Whether an AUR answer (`/rpc/v5/info`) lists `pkg` as this project: that
+/// name, with this repository as its upstream. A package of the same name
+/// pointing somewhere else is not Almanac, and an AUR helper "updating" to
+/// it would not be an update, so it counts as not listed. `None` for an
+/// answer with no results list (an RPC error): that is no answer at all.
+fn aur_lists(answer: &serde_json::Value, pkg: &str) -> Option<bool> {
+    let home = crate::sources::norm(&format!("https://github.com/{RELEASE_REPO}"));
+    let results = answer.get("results")?.as_array()?;
+    Some(results.iter().any(|r| {
+        r.get("Name").and_then(|n| n.as_str()) == Some(pkg)
+            && r.get("URL").and_then(|u| u.as_str()).is_some_and(|u| crate::sources::norm(u) == home)
+    }))
+}
+
+/// What the AUR said about a package name, as last asked by this process.
+static AUR_LISTED: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+
+/// Whether the AUR carries `pkg` as this project. With `fetch`, ask it (one
+/// RPC request); without, use what this process last heard, so the About
+/// window does not wait on the network. `None` when nobody knows.
+fn aur_listed(pkg: &str, fetch: bool) -> Option<bool> {
+    if !fetch {
+        let seen = AUR_LISTED.lock().ok()?;
+        return seen.as_ref().filter(|(name, _)| name == pkg).map(|(_, listed)| *listed);
+    }
+    // pacman names are [a-z0-9@._+-]; only '+' needs escaping in a query,
+    // and anything else is not a name to send.
+    if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c)) {
+        return None;
+    }
+    let url = format!("https://aur.archlinux.org/rpc/v5/info?arg[]={}", pkg.replace('+', "%2B"));
+    let answer = crate::sources::get(&url, 20).ok()?;
+    let listed = aur_lists(&serde_json::from_slice(&answer).ok()?, pkg)?;
+    if let Ok(mut seen) = AUR_LISTED.lock() {
+        *seen = Some((pkg.to_string(), listed));
+    }
+    Some(listed)
 }
 
 /// The newest release tag GitHub lists, as last fetched by this process.
@@ -347,7 +446,11 @@ fn check_as(
 
     if kind == PACKAGE {
         let pkg = owner()?;
-        info.note = package_note(&pkg);
+        let origin = match package_origin(&pkg) {
+            PackageOrigin::Foreign { .. } => PackageOrigin::Foreign { aur: aur_listed(&pkg, fetch) },
+            other => other,
+        };
+        info.note = package_note(&pkg, origin);
         return Ok(info);
     }
 
@@ -423,7 +526,9 @@ fn check_as(
 // compiled build never updates itself:
 //
 // * installed by pacman (the binary itself is owned by a package) -- it
-//   defers to pacman exactly as the Python package does;
+//   defers to pacman exactly as the Python package does, and says what
+//   will actually update it (`PackageOrigin`): the repositories, the AUR,
+//   or nothing but the next download from the releases page;
 // * built in a git checkout -- everything `check` reports still applies,
 //   but where the Python would offer a pull, this says to pull and rebuild;
 // * anything else -- nothing to update from, as for a plain directory.
@@ -2772,8 +2877,44 @@ mod tests {
     }
 
     #[test]
+    fn a_package_install_is_told_what_updates_it() {
+        // pacman -Qmq: foreign prints the name; a repository package exits 1
+        // silently; anything else is not taken as either.
+        assert_eq!(origin_from(0, "almanac\n", ""), PackageOrigin::Foreign { aur: None });
+        assert_eq!(origin_from(1, "", ""), PackageOrigin::Repo);
+        assert_eq!(origin_from(1, "", "error: package 'almanac' was not found\n"), PackageOrigin::Unknown);
+        assert_eq!(origin_from(-1, "", ""), PackageOrigin::Unknown);
+        assert_eq!(origin_from(0, "  \n", ""), PackageOrigin::Unknown);
+        assert_eq!(package_origin(""), PackageOrigin::Unknown);
+
+        // Only a repository (or an AUR that has it) updates with the system.
+        let repo = package_note("almanac", PackageOrigin::Repo);
+        assert!(repo.contains("rest of the system") && !repo.contains("AUR"));
+        let aur = package_note("almanac", PackageOrigin::Foreign { aur: Some(true) });
+        assert!(aur.contains("AUR") && aur.contains("rest of the system"));
+        for unlisted in [None, Some(false)] {
+            let note = package_note("almanac", PackageOrigin::Foreign { aur: unlisted });
+            assert!(!note.contains("rest of the system") && !note.contains("AUR"), "{note}");
+            assert!(note.contains("nothing updates it") && note.contains(RELEASES_URL) && note.contains("sudo pacman -U"));
+        }
+        let unknown = package_note("almanac", PackageOrigin::Unknown);
+        assert!(!unknown.contains("rest of the system") && unknown.contains(RELEASES_URL));
+
+        // The AUR counts only for this name pointing at this project.
+        let ours = serde_json::json!({"results": [{"Name": "almanac", "URL": "https://github.com/twodxme/almanac"}]});
+        assert_eq!(aur_lists(&ours, "almanac"), Some(true));
+        assert_eq!(aur_lists(&ours, "almanac-git"), Some(false));
+        let other = serde_json::json!({"results": [{"Name": "almanac", "URL": "https://example.org/almanac"}]});
+        assert_eq!(aur_lists(&other, "almanac"), Some(false));
+        assert_eq!(aur_lists(&serde_json::json!({"results": []}), "almanac"), Some(false));
+        assert_eq!(aur_lists(&serde_json::json!({"type": "error", "error": "x"}), "almanac"), None);
+        // Without fetching, nothing heard is nothing known.
+        assert_eq!(aur_listed("almanac-never-asked", false), None);
+    }
+
+    #[test]
     fn a_package_install_hears_of_a_newer_release() {
-        let note = package_note("almanac");
+        let note = package_note("almanac", PackageOrigin::Unknown);
         assert!(note.contains("package manager") && note.contains(RELEASES_URL) && note.contains("sudo pacman -U"));
         let info = |version: &str| Info { kind: PACKAGE.into(), version: version.into(), note: note.clone(), ..Default::default() };
         let mut i = info("2.1.2");

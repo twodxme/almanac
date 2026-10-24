@@ -860,6 +860,20 @@ impl Win {
     }
 
     fn offer_self_update(&self, info: selfupdate::Info) {
+        if !info.can_update && info.kind == selfupdate::PACKAGE && !info.latest.is_empty() {
+            // A newer release than this package: pacman installs it, not
+            // Almanac, but the download is one click away.
+            let toast = adw::Toast::builder().title(info.note.as_str()).use_markup(false).timeout(0).build();
+            toast.set_button_label(Some(&tr("Open the release")));
+            let w = self.downgrade();
+            toast.connect_button_clicked(move |_| {
+                if let Some(w) = w.upgrade() {
+                    w.open_url(selfupdate::RELEASES_URL);
+                }
+            });
+            self.toasts.add_toast(toast);
+            return;
+        }
         if !info.can_update {
             let note = if info.note.is_empty() { "Almanac is up to date".to_string() } else { info.note };
             self.say(&note, 8);
