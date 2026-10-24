@@ -11,6 +11,7 @@ comment explains *why*, keep it when you change the code beside it.
 | | |
 |---|---|
 | `src/<module>.rs` | the logic: `inventory`, `store`, `maintenance`, `agents`, `plugins`, `theming`, … one module per concern |
+| `src/inventory.rs` + `src/inventory/` | the inventory: `collect`, criticality and duplicates at the top; one file per source (`pacman`, `appimages`, `flatpak`, `local`), the row type (`app`), staleness (`health`), search (`discover`, `plugin_registry`) and Python's str/json (`py`). Everything public is re-exported, so callers say `inventory::x` |
 | `src/ui/*.rs` | the window, one file per section (see UI below) |
 | `src/util.rs` | subprocess with timeout, rounding and title-casing that match what users saw in 1.x, ISO dates, atomic JSON — **use it, do not re-implement** |
 | `src/main.rs` | the `almanac` binary |
