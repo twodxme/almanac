@@ -1112,21 +1112,33 @@ const PACKAGE_FLAGS: &[&str] = &[
 const PIP_SHOWN_VALUES: &[&str] = &["-r", "--requirement", "-e", "--editable", "-c", "--constraint"];
 
 /// A package name, not a path or a URL: `left-pad`, `@scope/pkg`,
-/// `pkg@1.2`, `requests`, `black==24.1`, `rich[jupyter]`.
-fn package_name(word: &str) -> bool {
+/// `pkg@1.2`, `requests`, `black==24.1`, `rich[jupyter]`. Not anything the
+/// tools read as a local file instead: a version that is a folder (npm reads
+/// `foo@..` as the parent directory), an archive name (`evil.tgz`,
+/// `evil.tar.gz`, `x.whl`: npm, pip and uv install the file of that name),
+/// or any word naming something in the plugin's folder.
+fn package_name(word: &str, plugin_dir: &Path) -> bool {
     static NAME: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?(?:(?:@|==|~=|!=)[A-Za-z0-9.*+^~_-]+)?$")
+        Regex::new(r"^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?(?:(?:@|==|~=|!=)[A-Za-z0-9*+^~_-][A-Za-z0-9.*+^~_-]*)?$")
             .expect("constant regex")
     });
+    const ARCHIVES: &[&str] = &[".tgz", ".tar", ".gz", ".bz2", ".xz", ".zst", ".zip", ".whl", ".egg"];
+    let lower = word.to_ascii_lowercase();
     NAME.is_match(word)
+        && !word.contains("..")
+        && !word.ends_with("@~")
+        && !ARCHIVES.iter().any(|e| lower.ends_with(e))
+        && std::fs::symlink_metadata(plugin_dir.join(word)).is_err()
 }
 
 /// Whether a line of npm, pnpm, yarn, bun, pip, pipx or uv only sets the
 /// plugin up: a known installing command named first, `PACKAGE_FLAGS` and
 /// nothing else for options, and package names or the plugin's own folder
 /// (whose project files are shown) for arguments. What a package.json
-/// script runs is in the package.json shown; a script is run by name only
-/// when that file has one by that name.
+/// script runs is in the package.json shown; a script is run only through
+/// `run`, and only when that file has one by that name -- never bare
+/// (`pnpm rebuild`, `yarn node`), where the tool's own command of that name
+/// would win.
 fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     let python = matches!(prog, "pip" | "pipx" | "uv");
     let mut words: Vec<&str> = Vec::new();
@@ -1147,9 +1159,13 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         }
         i += 1;
     }
-    // The plugin's own folder, or one inside it: pip_files shows its project.
-    let local = |w: &str| w == "." || (w.starts_with("./") && !w.split('/').any(|c| c == ".."));
-    let specs = |s: &[&str]| s.iter().all(|w| package_name(w) || (python && local(w)));
+    // The plugin's own folder, or one inside it (`.`, `./sub`, `sub`):
+    // pip_files shows its project. Not a file in it, such as an archive.
+    let local = |w: &str| {
+        let dir = w.split_once('[').map_or(w, |(d, _)| d);
+        !dir.starts_with('/') && !dir.split('/').any(|c| c == "..") && plugin_dir.join(dir).is_dir()
+    };
+    let specs = |s: &[&str]| s.iter().all(|w| package_name(w, plugin_dir) || (python && local(w)));
     let scripts = || package_script_names(plugin_dir);
     match (prog, words.as_slice()) {
         ("npm", ["install" | "i" | "ci" | "add" | "update", rest @ ..]) => specs(rest),
@@ -1158,7 +1174,6 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         ("yarn", ["install" | "add", rest @ ..]) => specs(rest),
         ("bun", ["install" | "i" | "add", rest @ ..]) => specs(rest),
         ("npm" | "pnpm" | "yarn" | "bun", ["run" | "run-script", s]) => scripts().iter().any(|n| n == s) || (prog == "bun" && bun_file(args, plugin_dir).is_some()),
-        ("pnpm" | "yarn", [s]) => scripts().iter().any(|n| n == s),
         ("bun", [_]) => bun_file(args, plugin_dir).is_some(),
         ("pip", ["install", rest @ ..]) => specs(rest),
         ("pipx", ["install" | "upgrade" | "reinstall", rest @ ..]) => specs(rest),
@@ -2660,8 +2675,8 @@ make build
     #[test]
     fn test_runners_folders_and_unit_globs_are_not_offered() {
         let d = tempdir();
-        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\nnpm exe cowsay\nnpm innit foo\nnpm crea foo\nnpm install --script-shell ./evil.sh\nnpm install --userconfig ./evil.npmrc\npnpm install --config.script-shell=./evil.sh\nnpm run build --node-options=--require=./evil.js\nuv sync --python ./fakepy\nuv pip install --python ./fakepy .\npipx install --python ./fakepy .\nyarn node evil.js\nnpm explore x -- ./run\nuv tool install --from=./sub x\nuv sync --config-file ./c.toml\nnpm install ./local-pkg\nyarn missing-script\n```\n";
-        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n"), ("evil.sh", "#!/bin/sh\necho PWNED\n"), ("evil.js", "\n"), ("evil.npmrc", "\n"), ("fakepy", "#!/bin/sh\n"), ("c.toml", "\n"), ("sub/pyproject.toml", "[project]\n"), ("local-pkg/package.json", "{}\n")]);
+        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\nnpm exe cowsay\nnpm innit foo\nnpm crea foo\nnpm install --script-shell ./evil.sh\nnpm install --userconfig ./evil.npmrc\npnpm install --config.script-shell=./evil.sh\nnpm run build --node-options=--require=./evil.js\nuv sync --python ./fakepy\nuv pip install --python ./fakepy .\npipx install --python ./fakepy .\nyarn node evil.js\nnpm explore x -- ./run\nuv tool install --from=./sub x\nuv sync --config-file ./c.toml\nnpm install ./local-pkg\nyarn missing-script\nyarn build\npnpm build\nnpm install foo@..\npnpm add foo@.\nyarn add foo@..\nbun add foo@..\nnpm install evil.tgz\npip install evil.tar.gz\nuv pip install evil.zip\npipx install evil.whl\npip install ./evil.tar.gz\nuv pip install ./evil.zip\nnpm install later.tgz\npip install later.whl\npython3 -m pip install evil.tar.gz\nuv tool install evil.tar.gz\nnpm install foo@~\nnpm install evil-dir\n```\n";
+        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n"), ("evil.sh", "#!/bin/sh\necho PWNED\n"), ("evil.js", "\n"), ("evil.npmrc", "\n"), ("fakepy", "#!/bin/sh\n"), ("c.toml", "\n"), ("sub/pyproject.toml", "[project]\n"), ("local-pkg/package.json", "{}\n"), ("evil.tgz", "x"), ("evil.tar.gz", "x"), ("evil.zip", "x"), ("evil.whl", "x"), ("evil-dir/package.json", "{}\n")]);
         let p = plan(&root).unwrap();
         assert!(p.commands.is_empty(), "{:?}", p.commands);
 
@@ -2682,7 +2697,7 @@ make build
         assert_eq!(plan(&root).unwrap().commands, ["uv sync"]);
 
         // What a README actually writes is still offered.
-        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "pnpm install", "yarn", "yarn build", "bun install", "pipx install ."];
+        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "npm install left-pad@1.3.0 @scope/pkg", "pnpm install", "yarn", "yarn run build", "bun install", "pip install requests black==24.1", "pipx install ."];
         let readme = format!("# Install\n```\n{}\n```\n", legit.join("\n"));
         let root = plugin_with(&d, &readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n")]);
         let _ = std::fs::remove_file(root.join(".python-version"));
