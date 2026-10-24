@@ -162,9 +162,10 @@ pub fn duplicates(apps: &[App]) -> Vec<(String, Vec<String>)> {
 /// could free a value nested as deep as Python's json reads; none can now.
 /// GitHub answers stop at `ghcache::VALUE_DEPTH` (512) levels, the registry
 /// and git cache at [`py_loads`]' 900, AUR answers at serde's 128, and agents
-/// drop their raw cache values on their own deep threads (`strip_raw`), so
-/// the deepest thing a collector clones, writes or drops here is 900 levels
-/// of `serde_json::Value` (`collector_stack_holds_the_deepest_value`).
+/// drop their raw cache values on their own deep threads (`strip_raw`) and
+/// keep a cached release url only when it is a str (`agents::url_value`),
+/// so the deepest thing a collector clones, writes or drops here is 900
+/// levels of `serde_json::Value` (`collector_stack_holds_the_deepest_value`).
 /// Reserved, not used, like every stack.
 const COLLECTOR_STACK: usize = 8 << 20;
 

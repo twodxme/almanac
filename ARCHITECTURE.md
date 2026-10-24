@@ -85,6 +85,12 @@ on any thread.
   nested past `ghcache::VALUE_DEPTH` (512) with Python's RecursionError, so
   store.rs, sources.rs, agents.rs and picks.rs never see a deep one;
   verify.rs converts an app's `extra` only `EXTRA_DEPTH` (64) levels down.
+- A value taken from a file into an app's `extra` has the type its readers
+  expect, or is dropped: an agent's or mise tool's cached `release_url` is
+  kept only when it is a str (`agents::url_value`). The UI's `repr()` of an
+  `extra` value (the details sheet, actions, plugins) is
+  `util::tree::repr_value`, which does not recurse: it runs on the window's
+  thread.
 - `ui::shell::spawn_bg` runs background work on an 8 MiB thread
   (`BG_STACK`): Python's own thread stack, which the depth limits copied from
   it (sources 2000, security 1000, inventory 900) were measured on.
@@ -94,7 +100,7 @@ on any thread.
   code that needs it starts its own. The inventory collector threads are
   back on 8 MiB (`inventory::COLLECTOR_STACK`): nothing they hold is deeper
   than 900 levels, since agents drop their raw cache values on their own
-  deep threads.
+  deep threads and keep only a str release url.
 
 ## UI (`src/ui/`)
 

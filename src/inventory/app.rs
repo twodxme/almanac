@@ -24,11 +24,12 @@ pub struct App {
     pub extra: Extra,
 }
 
-/// [`App::extra`]: per-source details, some straight from a file (the
-/// release url in an agent cache), so a value can be nested as deep as
-/// Python's json reads (52000 levels). serde's own clone and drop recurse
-/// once per level; these do not, so a row can be cloned and dropped on any
-/// thread -- the window's, or a worker's 2 MiB stack.
+/// [`App::extra`]: per-source details, some straight from a file (an
+/// AppImage registry entry, a marketplace listing). The collectors keep
+/// those 900 levels deep at most (an agent's cached release url only when it
+/// is a str), which is still past a 2 MiB stack for serde's own clone and
+/// drop, which recurse once per level. These do not, so a row can be cloned
+/// and dropped on any thread -- the window's, or a worker's 2 MiB stack.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Extra(pub Map<String, Value>);

@@ -778,6 +778,59 @@ pub mod tree {
         deepest
     }
 
+    /// Python's `repr()` of a serde value as `json.loads` gives it, without
+    /// recursion: an `extra` value can be as deep as a cache file holds, and
+    /// the details sheet and the actions repr one on the window's thread.
+    /// `text` is the module's `repr(str)` (keys and strings), `scalar` its
+    /// `str()` of a null, bool or number; lists and dicts are built here.
+    pub fn repr_value(
+        v: &serde_json::Value,
+        text: impl Fn(&str) -> String,
+        scalar: impl Fn(&serde_json::Value) -> String,
+    ) -> String {
+        use serde_json::Value;
+        enum Job<'a> {
+            Value(&'a Value),
+            Key(&'a str),
+            Lit(&'static str),
+        }
+        let mut out = String::new();
+        let mut work = vec![Job::Value(v)];
+        while let Some(job) = work.pop() {
+            match job {
+                Job::Lit(s) => out.push_str(s),
+                Job::Key(k) => {
+                    out.push_str(&text(k));
+                    out.push_str(": ");
+                }
+                Job::Value(Value::String(s)) => out.push_str(&text(s)),
+                Job::Value(Value::Array(a)) => {
+                    out.push('[');
+                    work.push(Job::Lit("]"));
+                    for (i, x) in a.iter().enumerate().rev() {
+                        work.push(Job::Value(x));
+                        if i > 0 {
+                            work.push(Job::Lit(", "));
+                        }
+                    }
+                }
+                Job::Value(Value::Object(m)) => {
+                    out.push('{');
+                    work.push(Job::Lit("}"));
+                    for (i, (k, x)) in m.iter().enumerate().rev() {
+                        work.push(Job::Value(x));
+                        work.push(Job::Key(k));
+                        if i > 0 {
+                            work.push(Job::Lit(", "));
+                        }
+                    }
+                }
+                Job::Value(leaf) => out.push_str(&scalar(leaf)),
+            }
+        }
+        out
+    }
+
     /// Structural equality, as a derived `PartialEq` decides it: the same
     /// variant, the same keys in the same order, equal leaves (`leaf_eq`,
     /// called only for two leaves of one variant).

@@ -219,11 +219,7 @@ impl Win {
             Win::detail_row(&og, &tr("Files"), &py_format_thousands(&extra["files"])?);
         }
         if has("url") {
-            // subtitle=extra["url"]: a GObject string property takes only a str.
-            let url = match &extra["url"] {
-                Value::String(u) => u.clone(),
-                other => return Err(format!("TypeError: url must be a str: {}", py_repr(other))),
-            };
+            let url = url_text(&extra["url"])?;
             // Plain text: a query string's `&` is not markup.
             let r: adw::ActionRow = Win::plain(&tr("Project page"), &url);
             r.set_subtitle_selectable(true);
@@ -381,5 +377,67 @@ impl Win {
         } else {
             self.on_update_one(&item.app);
         }
+    }
+}
+
+/// `subtitle=extra["url"]`: a GObject string property takes only a str;
+/// anything else is the TypeError Python raised, printed without recursion
+/// (this runs on the window's thread).
+fn url_text(v: &Value) -> Result<String, String> {
+    match v {
+        Value::String(u) => Ok(u.clone()),
+        other => Err(format!("TypeError: url must be a str: {}", py_repr(other))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::{mise_tools_from, Py};
+
+    // A cached release_url 50000 levels deep (Python's json reads 52000):
+    // the tool's row gets its fallback url, and the details sheet prints a
+    // value that deep without overflowing a 2 MiB thread (the window's size).
+    #[test]
+    fn a_deep_release_url_never_reaches_the_window_deep() {
+        const LEVELS: usize = 50_000;
+        let s = |t: &str| Py::Str(t.to_string());
+        // Py drops recursively: built and dropped on a deep stack.
+        let outdated = crate::util::with_stack(crate::util::JSON_STACK, || {
+            let mut url = s("https://example.com");
+            for _ in 0..LEVELS {
+                url = Py::List(vec![url]);
+            }
+            Py::Dict(vec![(s("uv"), Py::Dict(vec![(s("latest"), s("0.13.1")), (s("release_url"), url)]))])
+        });
+        let have = vec![("uv".to_string(), s("0.12.0"))];
+        let (url, repr_len, str_len) = std::thread::scope(|sc| {
+            std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn_scoped(sc, || {
+                    let tools = mise_tools_from(&have, &outdated).unwrap();
+                    let url = url_text(&tools[0].extra["url"]);
+                    // The walk itself, on a value as deep as the cache held.
+                    let mut v = Value::String("x".into());
+                    for _ in 0..LEVELS {
+                        v = Value::Array(vec![v]);
+                    }
+                    let repr_len = url_text(&v).unwrap_err().len();
+                    let str_len = super::super::extra::py_str(&v).len();
+                    crate::util::tree::drop_value(v);
+                    (url, repr_len, str_len)
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        });
+        crate::util::with_stack(crate::util::JSON_STACK, move || drop(outdated));
+        assert_eq!(url.as_deref(), Ok("https://astral.sh"));
+        assert_eq!(str_len, 2 * LEVELS + 3);
+        assert_eq!(repr_len, "TypeError: url must be a str: ".len() + str_len);
+        assert_eq!(
+            url_text(&serde_json::json!([["a", {"b": 1, "c": "it's"}]])).unwrap_err(),
+            "TypeError: url must be a str: [['a', {'b': 1, 'c': \"it's\"}]]"
+        );
     }
 }
