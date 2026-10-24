@@ -1075,6 +1075,57 @@ pub fn try_get_json_py(url: &str, ttl: impl Into<Ttl>, allow_stale: bool, accept
     deep(|| _get_json(url, ttl, allow_stale, accept))
 }
 
+/// `(scheme, host, port)` of a URL: the host lowercased, without userinfo,
+/// the port defaulted from the scheme. None for a URL with no host, or one
+/// that is neither http nor https.
+fn _origin(url: &str) -> Option<(String, String, u16)> {
+    let s = _urlsplit(url).ok()?;
+    let scheme = s.scheme?;
+    let netloc = s.netloc?;
+    let hostport = netloc.rsplit_once('@').map_or(netloc.as_str(), |(_, h)| h);
+    let (host, port) = match hostport.strip_prefix('[') {
+        Some(v6) => {
+            let (h, rest) = v6.split_once(']')?;
+            (h, rest.strip_prefix(':'))
+        }
+        None => match hostport.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (hostport, None),
+        },
+    };
+    let default = match scheme.as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let port = match port.filter(|p| !p.is_empty()) {
+        Some(p) => p.parse().ok()?,
+        None => default,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    Some((scheme, host, port))
+}
+
+/// Whether a request to `url` may carry the user's GitHub token: only one
+/// to `https://api.github.com` itself.
+fn _sends_token(url: &str) -> bool {
+    _origin(url).is_some_and(|(s, h, p)| s == "https" && h == "api.github.com" && p == 443)
+}
+
+/// Whether a redirect from `from` to `to` may carry the Authorization header
+/// along. urllib carries every header; a token is a credential for one
+/// origin, so it goes only where it was first sent: same scheme, host and
+/// port (which also rules out an https -> http downgrade).
+fn _keeps_auth(from: &str, to: &str) -> bool {
+    match (_origin(from), _origin(to)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 fn _get_json(url: &str, ttl: Ttl, allow_stale: bool, accept: &str) -> Result<PyValue, String> {
     let _guard = _LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut entry = _read(url)?.unwrap_or(PyValue::None);
@@ -1098,7 +1149,9 @@ fn _get_json(url: &str, ttl: Ttl, allow_stale: bool, accept: &str) -> Result<PyV
         ("Accept".into(), PyValue::str(accept)),
         ("X-GitHub-Api-Version".into(), PyValue::str("2022-11-28")),
     ];
-    let tok = try_token()?;
+    // The token is for GitHub's API and nothing else: a URL elsewhere (or
+    // over plain http) is fetched anonymously.
+    let tok = if _sends_token(url) { try_token()? } else { String::new() };
     if !tok.is_empty() {
         headers.push(("Authorization".into(), PyValue::str(&format!("Bearer {tok}"))));
     }
@@ -2486,11 +2539,14 @@ fn _http_open(mut req: Req) -> Fetched {
         let Ok(newurl) = _urljoin(&req.full_url(), &quoted) else {
             return Fetched::Failed;
         };
-        // redirect_request: the headers go along, minus the content ones.
+        // redirect_request: the headers go along, minus the content ones,
+        // and minus the token when the redirect leaves its origin.
+        let keep_auth = _keeps_auth(&req.full_url(), &newurl);
         let carried: Vec<(String, PyValue)> = req
             .headers
             .iter()
             .filter(|(k, _)| !["content-length", "content-type"].contains(&k.to_lowercase().as_str()))
+            .filter(|(k, _)| keep_auth || !k.eq_ignore_ascii_case("authorization"))
             .cloned()
             .collect();
         let Ok(new) = _request(&newurl.replace(' ', "%20"), carried) else {
@@ -2742,6 +2798,33 @@ fn restore(cache_home: Option<std::ffi::OsString>, state_home: Option<std::ffi::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_only_goes_to_the_api() {
+        assert!(_sends_token("https://api.github.com/repos/o/r"));
+        assert!(_sends_token("https://API.GitHub.com:443/x"));
+        assert!(!_sends_token("http://api.github.com/repos/o/r"));
+        assert!(!_sends_token("https://api.github.com:8443/x"));
+        assert!(!_sends_token("https://github.com/o/r"));
+        assert!(!_sends_token("https://api.github.com.evil.example/x"));
+        assert!(!_sends_token("https://api.github.com@evil.example/x"));
+        assert!(!_sends_token("https://objects.githubusercontent.com/x"));
+        assert!(!_sends_token("not a url"));
+    }
+
+    #[test]
+    fn redirects_keep_auth_only_within_the_origin() {
+        let api = "https://api.github.com/repos/o/r";
+        assert!(_keeps_auth(api, "https://api.github.com/repositories/1"));
+        assert!(_keeps_auth(api, "https://API.github.com:443/x"));
+        assert!(!_keeps_auth(api, "http://api.github.com/x"));
+        assert!(!_keeps_auth(api, "https://api.github.com:444/x"));
+        assert!(!_keeps_auth(api, "https://objects.githubusercontent.com/x"));
+        assert!(!_keeps_auth(api, "https://evil.example/x"));
+        assert!(!_keeps_auth(api, "ftp://api.github.com/x"));
+        assert!(!_keeps_auth("http://h/x", "https://h/x"));
+        assert!(_keeps_auth("http://[::1]:8080/a", "http://[::1]:8080/b"));
+    }
 
     // Tests share the process environment; one at a time.
 
