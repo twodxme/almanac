@@ -148,7 +148,7 @@ upstream URL, which `pacman` already records.
 | Local builds | git checkouts under `~/.config/omarchy/plugins` | `git pull --ff-only` |
 | Dev tools | `mise ls` — `gh`, `uv`, `node` and friends | `mise upgrade` |
 | AI agents | `mise`, or each agent's own updater | whichever owns it |
-| Almanac | its own checkout | `git pull --ff-only` |
+| Almanac | its own checkout, or GitHub's latest release for a package | `git pull --ff-only`, or the release's package |
 
 How a thing updates is **detected, not assumed**. A shimmed `mise` binary
 resolves to `/usr/bin/mise`, which looks nothing like a mise install path — so
@@ -303,7 +303,10 @@ README asks for more than the install — an API key, a package, a build step.
 Almanac installs them like any other (`omarchy plugin add`, validated by
 Omarchy), says up front that setup follows, and then reads the README from the
 installed copy: packages it installs for you, build steps and setup scripts it
-shows in full and runs in a terminal you can watch, and anything only you can
+shows in full — every file a step would run, and the build files (`Makefile`,
+`package.json`'s scripts, `pyproject.toml`, `Cargo.toml` …) a build tool reads —
+and runs in a terminal you can watch, refusing any file that changed after you
+saw it, and anything only you can
 do — credentials, config edits — it lists with the section to read. Only
 install, setup and configuration sections are read; development, testing and
 uninstall instructions are never offered. Plugins whose install itself cannot
@@ -328,7 +331,10 @@ rolls back a plugin that fails.
 
 **☰ → Update plugins** updates every clean pending update at once, within a
 scope set in Preferences — verified only, verified and changed since review,
-or all — and lists what it held back and why. Scheduled runs honour the same
+or all — and lists what it held back and why. *Verified* means the plugin you
+have: its checkout must come from the repository the marketplace lists, and
+upstream must still be at the commit that was checked — a fork under the same
+name, or a push made after the check, is held. Scheduled runs honour the same
 scope, and each plugin is checked again at the moment it is updated. A plugin
 with a panel can be given a **keyboard shortcut**: checked against every
 binding Hyprland has, written to its own block in `bindings.lua`, put back if
@@ -399,7 +405,7 @@ a checkout can be pulled and rebuilt without fighting its own state.
 ### Updating
 
 Installed from the download above, update by running the same two commands
-again. A package built with `makepkg` updates by pulling and running
+again; Almanac's own row says when a newer release is out and links to it. A package built with `makepkg` updates by pulling and running
 `makepkg -si` again in the clone. A build from a checkout cannot
 replace itself while it runs, so it says so and tells you to pull and run
 `cargo build --release` instead.
@@ -410,13 +416,14 @@ replace itself while it runs, so it says so and tells you to pull and run
 
 | | |
 |---|---|
-| **Required** | GTK 4, libadwaita 1.9+, OpenSSL (building it: `cargo`) |
+| **Required** | GTK 4, libadwaita 1.9+, OpenSSL (building it: `cargo`, Rust 1.87+) |
 | **Full experience** | Arch or Omarchy — `pacman`, `yay`, `checkupdates` |
 | **Optional** | `omarchy` (plugins, themes, system updates) · `flatpak` · `mise` · `gh` · `snapper` (undoable updates) · `xdg-utils` · `xdg-terminal-exec` |
 
 `gh` is worth having: Almanac uses your existing `gh auth token` to raise the
-GitHub API ceiling from 60 requests an hour to 5,000. It is never written to
-disk and never logged.
+GitHub API ceiling from 60 requests an hour to 5,000. It is sent only to
+`api.github.com` — never along a redirect to another host, never over plain
+http — and never written to disk or logged.
 
 Almanac degrades rather than breaks. Without `omarchy` you lose the plugin and
 theme catalogues, and full upgrades run through `yay`, `paru` or `pacman`
@@ -478,8 +485,16 @@ card) is lifted only as far as it needs to go.
 | <kbd>Ctrl</kbd>+<kbd>U</kbd> | Update all |
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> | Close |
 
-`almanac --page store|updates|ai|health|featured` opens straight to a page,
-which makes it scriptable from a keybinding or a bar widget.
+`almanac --page today|store|updates|ai|health|history|plugins|switchboard`
+opens straight to a page, which makes it scriptable from a keybinding or a bar
+widget.
+
+For an update script, `almanac-autorun --core-holds --stdin` reads pending
+updates as `checkupdates` and `yay -Qua` print them (`name old -> new`) and
+prints the ones Almanac counts as core — the kernel, boot, firmware, DKMS
+modules — one per line, so the script can hold exactly what the Updates page
+marks. When it cannot tell, it exits non-zero rather than printing nothing, so
+a script holds instead of guessing.
 
 ---
 
