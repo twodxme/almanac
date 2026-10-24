@@ -285,10 +285,14 @@ impl Win {
     ///
     /// `timeout` defaulted to 5 in Python (`SAY_TIMEOUT`).
     pub fn say(&self, message: &str, timeout: u32) {
+        // The Python spelling of an error ("IndexError: ...") put in plain words.
+        self.toast(&crate::util::human_error(message), timeout);
+    }
+
+    /// `say` for text already in plain words (`try_notify`'s fallback).
+    pub(in crate::ui) fn toast(&self, message: &str, timeout: u32) {
         // Messages carry names and error text from outside the app, so they
-        // are shown as written rather than parsed as markup -- but with the
-        // Python spelling of an error ("IndexError: ...") put in plain words.
-        let message = crate::util::human_error(message);
+        // are shown as written rather than parsed as markup.
         let toast = adw::Toast::builder().title(message).use_markup(false).timeout(timeout).build();
         self.toasts.add_toast(toast);
     }

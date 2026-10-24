@@ -179,8 +179,15 @@ mod tests {
             .unwrap_or("");
         assert!(details.contains("\"Dependencies\""), "the split found the dialog");
         assert!(!details.contains("ActionRow::builder()"), "a row built with markup on");
+        let toast = code().split("fn toast(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
+        assert!(toast.contains(".use_markup(false)"));
         let say = code().split("pub fn say(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
-        assert!(say.contains(".use_markup(false)"));
+        assert!(say.contains("self.toast("), "say shows its toast through toast");
+        // A notification's text is put in plain words once: its fallback to
+        // the status line is `toast`, not `say`, which would do it again.
+        let notify = code().split("pub fn try_notify(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
+        assert!(notify.contains("human_error(title)") && notify.contains("self.toast("), "the split found try_notify");
+        assert!(!notify.contains("self.say("));
 
         // A package build's check() has no display: adw::init can still
         // answer Ok there, and building a row then crashes the test binary.

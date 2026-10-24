@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 20:30-0700\n"
+"POT-Creation-Date: 2026-10-23 20:59-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -111,8 +111,8 @@ msgstr ""
 msgid "Open the release"
 msgstr ""
 
-#: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:895
-#: src/ui/packages/details.rs:281 src/ui/plugins/updates.rs:262
+#: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:897
+#: src/ui/packages/details.rs:281 src/ui/plugins/updates.rs:263
 #: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
@@ -151,7 +151,7 @@ msgstr ""
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions/update.rs:336 src/ui/packages/loading.rs:319
+#: src/ui/actions/update.rs:336 src/ui/packages/loading.rs:321
 #: src/ui/shell/build.rs:79
 msgid "Update all"
 msgstr ""
@@ -187,15 +187,15 @@ msgstr ""
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: src/ui/ai.rs:489 src/ui/history.rs:509
+#: src/ui/ai.rs:491 src/ui/history.rs:509
 msgid "manual"
 msgstr ""
 
-#: src/ui/ai.rs:858
+#: src/ui/ai.rs:860
 msgid "Held back (major release, update it on its own): "
 msgstr ""
 
-#: src/ui/ai.rs:893
+#: src/ui/ai.rs:895
 msgid ""
 "Each replaces its own binary. None of this needs root, and none of it "
 "touches your agent configuration."
@@ -430,11 +430,11 @@ msgstr ""
 msgid "Scanning…"
 msgstr ""
 
-#: src/ui/packages/loading.rs:208
+#: src/ui/packages/loading.rs:210
 msgid "Software no longer maintained"
 msgstr ""
 
-#: src/ui/packages/loading.rs:220
+#: src/ui/packages/loading.rs:222
 msgid "Duplicate software installed"
 msgstr ""
 
@@ -558,23 +558,23 @@ msgstr ""
 msgid "The Flatpak and its data are removed."
 msgstr ""
 
-#: src/ui/plugins/updates.rs:108
+#: src/ui/plugins/updates.rs:109
 msgid "updated past the reviewed commit — upstream changed during the update"
 msgstr ""
 
-#: src/ui/plugins/updates.rs:124
+#: src/ui/plugins/updates.rs:125
 msgid "not the listed repository"
 msgstr ""
 
-#: src/ui/plugins/updates.rs:203
+#: src/ui/plugins/updates.rs:204
 msgid "Checking plugins…"
 msgstr ""
 
-#: src/ui/plugins/updates.rs:231
+#: src/ui/plugins/updates.rs:232
 msgid "No plugin updates to install"
 msgstr ""
 
-#: src/ui/plugins/updates.rs:319
+#: src/ui/plugins/updates.rs:320
 msgid "Updating plugins"
 msgstr ""
 
@@ -1335,58 +1335,54 @@ msgstr ""
 msgid "Some updates failed — see the log"
 msgstr ""
 
-#: src/util/human.rs:121
-msgid "No such file"
-msgstr ""
-
-#: src/util/human.rs:122
-msgid "Permission denied"
-msgstr ""
-
-#: src/util/human.rs:124
-msgid "The system refused"
-msgstr ""
-
-#: src/util/human.rs:139 src/util/human.rs:166
-msgid "The data is nested too deeply to read"
-msgstr ""
-
-#: src/util/human.rs:142 src/util/human.rs:167
+#: src/util/human.rs:117 src/util/human.rs:185
 msgid "The file is not valid UTF-8"
 msgstr ""
 
-#: src/util/human.rs:145
+#: src/util/human.rs:119
+msgid "The text could not be decoded"
+msgstr ""
+
+#: src/util/human.rs:142
+msgid "The system refused"
+msgstr ""
+
+#: src/util/human.rs:157 src/util/human.rs:184
+msgid "The data is nested too deeply to read"
+msgstr ""
+
+#: src/util/human.rs:163
 msgid "The text has characters that cannot be written out"
 msgstr ""
 
-#: src/util/human.rs:148 src/util/human.rs:168
+#: src/util/human.rs:166 src/util/human.rs:186
 msgid "The data is not valid JSON"
 msgstr ""
 
-#: src/util/human.rs:151
+#: src/util/human.rs:169
 msgid "A name contains a NUL character"
 msgstr ""
 
-#: src/util/human.rs:154 src/util/human.rs:176
+#: src/util/human.rs:172 src/util/human.rs:195 src/util/human.rs:198
 msgid "Unexpected data"
 msgstr ""
 
-#: src/util/human.rs:157 src/util/human.rs:171
+#: src/util/human.rs:175 src/util/human.rs:189
 msgid "The connection timed out"
 msgstr ""
 
-#: src/util/human.rs:169
+#: src/util/human.rs:187
 msgid "A number in the data is out of range"
 msgstr ""
 
-#: src/util/human.rs:170
+#: src/util/human.rs:188
 msgid "Unexpected answer from the server"
 msgstr ""
 
-#: src/util/human.rs:173
+#: src/util/human.rs:191
 msgid "Unknown text encoding"
 msgstr ""
 
-#: src/util/human.rs:177
+#: src/util/human.rs:199
 msgid "Something went wrong"
 msgstr ""

@@ -40,6 +40,18 @@ pub type StepFn = Arc<dyn Fn(LogFn<'_>) -> Result<(), String> + Send + Sync>;
 /// type as `maintenance::LogFn`.
 pub type LogFn<'a> = &'a (dyn Fn(&str) + Send + Sync);
 
+/// Marks a line a `Call` step logs as a command's own output, see `output`.
+const OUTPUT: char = '\u{1}';
+
+/// `line`, a command's own output that a `Call` step passes on to its log
+/// (`log(&tasks::output(line))`): shown as the command printed it, as an
+/// `Argv` step's is, where the step's own lines have their errors put in
+/// plain English. A command can print "TypeError: ..." of its own; that is
+/// its text, not ours to reword.
+pub fn output(line: &str) -> String {
+    format!("{OUTPUT}{line}")
+}
+
 /// What one step does: run a command (`argv`), or call a function.
 #[derive(Clone)]
 pub enum StepAction {
@@ -1073,7 +1085,10 @@ fn work(
             StepAction::Call(f) => {
                 // What a step of ours logs is ours to word (its errors in
                 // plain English); a command's output below is shown as is.
-                let own = |line: &str| log(&human_error(line));
+                let own = |line: &str| match line.strip_prefix(OUTPUT) {
+                    Some(printed) => log(printed),
+                    None => log(&human_error(line)),
+                };
                 if let Err(exc) = f(&own) {
                     log(&format!("failed: {}", human_error(&exc)));
                     ok = false;
@@ -1361,6 +1376,30 @@ mod tests {
         assert!(lines.lock().unwrap().contains(&"failed: b broke".to_string()));
         assert_eq!(run(false), Ok(false));
         assert_eq!(*ran.lock().unwrap(), vec!["a", "b"]);
+    }
+
+    /// A step's own lines are put in plain English; what it passes on
+    /// from a command it ran is shown as printed.
+    #[test]
+    fn a_steps_own_lines_are_humanized_a_commands_are_not() {
+        let steps = vec![Step::call("x", Arc::new(|log: LogFn<'_>| {
+            log("x: skipped — KeyError: 'k'");
+            log(&output("TypeError: bad (from the plugin's own script)"));
+            log(&output("[Errno 2] No such file or directory: 'hook'"));
+            Ok(())
+        }))];
+        let lines = Mutex::new(Vec::new());
+        let log = |l: &str| lines.lock().unwrap().push(l.to_string());
+        assert_eq!(work(&steps, &AtomicBool::new(false), &Mutex::new(None), &|_| {}, &log, false), Ok(true));
+        assert_eq!(
+            *lines.lock().unwrap(),
+            [
+                "x: skipped — Unexpected data",
+                "TypeError: bad (from the plugin's own script)",
+                "[Errno 2] No such file or directory: 'hook'",
+                "",
+            ]
+        );
     }
 
     #[test]

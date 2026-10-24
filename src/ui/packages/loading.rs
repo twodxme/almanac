@@ -111,11 +111,13 @@ impl Win {
     /// to the caller and skipped the rest of it. Only a failed spawn (the
     /// OSError) falls back to the status line.
     pub fn try_notify(&self, title: &str, body: &str, urgency: &str) -> Result<(), String> {
+        // In plain words once, here: the status line below is `toast`, not
+        // `say`, which would put them in plain words again.
         let (title, body) = (&crate::util::human_error(title), &crate::util::human_error(body));
         let tool = crate::util::which("omarchy-notification-send")
             .or_else(|| crate::util::which("notify-send"));
         let Some(tool) = tool else {
-            self.say(&format!("{title}: {body}"), SAY_TIMEOUT);
+            self.toast(&format!("{title}: {body}"), SAY_TIMEOUT);
             return Ok(());
         };
         if [urgency, title, body].iter().any(|a| a.contains('\0'))
@@ -154,7 +156,7 @@ impl Win {
             })),
         );
         if spawned.is_err() {
-            self.say(&format!("{title}: {body}"), SAY_TIMEOUT);
+            self.toast(&format!("{title}: {body}"), SAY_TIMEOUT);
         }
         Ok(())
     }

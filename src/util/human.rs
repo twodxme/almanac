@@ -74,7 +74,7 @@ static DEEP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:maximum recursion depth exceeded.*|Stack overflow \(used \d+ kB\) while .*)$").unwrap()
 });
 
-static DECODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^'[^']+' codec can't decode .*$").unwrap());
+static DECODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^'([^']+)' codec can't decode .*$").unwrap());
 static ENCODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^'[^']+' codec can't encode .*$").unwrap());
 static JSON: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?:Expecting .*|Extra data|Unterminated string .*|Invalid .*): line \d+ column \d+ \(char \d+\)$").unwrap());
@@ -109,6 +109,17 @@ fn unquote(repr: &str) -> String {
     out
 }
 
+/// What a failed decode says, by codec: only UTF-8 is worth naming, every
+/// other one ("'ascii' codec can't decode ...") is not about UTF-8 at all.
+fn decode_text(codec: &str) -> String {
+    let norm = codec.to_ascii_lowercase().replace(['-', '_'], "");
+    if norm == "utf8" {
+        tr("The file is not valid UTF-8")
+    } else {
+        tr("The text could not be decoded")
+    }
+}
+
 fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> String {
     let path = path.map(unquote);
     let to = to.map(unquote);
@@ -117,9 +128,16 @@ fn errno_text(n: i64, strerror: &str, path: Option<&str>, to: Option<&str>) -> S
         (Some(p), None) => format!("{text}: {p}"),
         _ => text,
     };
+    // Only the OS's own words are replaced: with no path to end it, the
+    // match runs to the end of the text, and what follows them there
+    // ("; continuing without one") is someone else's sentence.
+    let stock = |own: &str, plain: &str| match strerror.strip_prefix(own) {
+        Some(tail) => format!("{}{tail}", with(tr(plain))),
+        None => with(tr(plain)),
+    };
     match n {
-        2 => with(tr("No such file")),
-        13 => with(tr("Permission denied")),
+        2 => stock("No such file or directory", "No such file"),
+        13 => stock("Permission denied", "Permission denied"),
         // The OS's own wording is plain enough; the brackets and quotes go.
         _ if strerror.is_empty() || strerror == "None" => with(tr("The system refused")),
         _ => with(strerror.to_string()),
@@ -138,8 +156,8 @@ fn known(text: &str) -> Option<String> {
     if DEEP.is_match(text) {
         return Some(tr("The data is nested too deeply to read"));
     }
-    if DECODE.is_match(text) {
-        return Some(tr("The file is not valid UTF-8"));
+    if let Some(c) = DECODE.captures(text) {
+        return Some(decode_text(&c[1]));
     }
     if ENCODE.is_match(text) {
         return Some(tr("The text has characters that cannot be written out"));
@@ -172,8 +190,12 @@ fn known(text: &str) -> Option<String> {
         "LookupError" if detail.starts_with("unknown encoding: ") => {
             format!("{}: {}", tr("Unknown text encoding"), &detail["unknown encoding: ".len()..])
         }
-        "IndexError" | "KeyError" | "TypeError" | "AttributeError" | "StopIteration" | "AssertionError"
-        | "LookupError" => tr("Unexpected data"),
+        // What follows these is Python's own wording (a key's repr, "'x'
+        // object is not ..."): it says nothing to a user.
+        "IndexError" | "KeyError" | "TypeError" | "AttributeError" | "LookupError" => tr("Unexpected data"),
+        // Python raises these bare; a message is the code's own sentence
+        // (`assert ok, "x: no loader"`) and stays, as ValueError's does.
+        "StopIteration" | "AssertionError" if detail.is_empty() => tr("Unexpected data"),
         _ if detail.is_empty() => tr("Something went wrong"),
         // ValueError, OSError, URLError, HTTPError, RuntimeError, ...: what
         // follows the class is already a sentence ("HTTP Error 404: Not
@@ -182,16 +204,42 @@ fn known(text: &str) -> Option<String> {
     })
 }
 
+/// Where an error that starts `rest` can end: before the ")" closing a
+/// "(" left open in `before` ("no snapshot was taken ([Errno 13] ...);
+/// continuing"), else before Almanac's own " — " ("x: TypeError —
+/// skipped"), else at the end of the line.
+fn extent(before: &str, rest: &str) -> usize {
+    let open = before.chars().fold(0usize, |d, c| match c {
+        '(' => d + 1,
+        ')' => d.saturating_sub(1),
+        _ => d,
+    });
+    if open > 0 {
+        let mut depth = 0usize;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => return i,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    rest.find(" — ").unwrap_or(rest.len())
+}
+
 /// One line: the first place, from the start or after a separator ("X
 /// failed: ...", "skipped — ..."), where a recognised error begins; what
-/// precedes it is the app's own wording and stays.
+/// precedes it is the app's own wording and stays, and so does what
+/// follows it (see `extent`), which is read the same way.
 fn human_line(line: &str) -> String {
     let mut at = 0;
     loop {
-        if let Some(plain) = known(&line[at..]) {
-            return format!("{}{plain}", &line[..at]);
-        }
         let rest = &line[at..];
+        let end = extent(&line[..at], rest);
+        if let Some(plain) = known(&rest[..end]) {
+            return format!("{}{plain}{}", &line[..at], human_line(&rest[end..]));
+        }
         let next = [": ", " — ", "("]
             .iter()
             .filter_map(|sep| rest.find(sep).map(|i| i + sep.len()))
@@ -305,6 +353,74 @@ mod tests {
         assert_eq!(h("RuntimeError: can't start new thread"), "can't start new thread");
         assert_eq!(h("OSError"), "Something went wrong");
         assert_eq!(h("pkg: skipped — KeyError: 'x'"), "pkg: skipped — Unexpected data");
+    }
+
+    #[test]
+    fn what_surrounds_an_error_stays() {
+        // snapshots.rs: the error in brackets, the app's sentence after it.
+        assert_eq!(
+            h("no snapshot was taken ([Errno 13] Permission denied); continuing without one"),
+            "no snapshot was taken (Permission denied); continuing without one"
+        );
+        assert_eq!(
+            h("no snapshot was taken ([Errno 2] No such file or directory: 'snapper'); continuing without one"),
+            "no snapshot was taken (No such file: snapper); continuing without one"
+        );
+        let timed_out = "no snapshot was taken (Command '['pkexec', 'snapper']' timed out after 120 seconds); continuing without one";
+        assert_eq!(h(timed_out), timed_out);
+        assert_eq!(h("pkg 'x' (TypeError: bad) — skipped"), "pkg 'x' (Unexpected data) — skipped");
+        assert_eq!(h("x (ValueError: f(1) failed) y"), "x (f(1) failed) y");
+        assert_eq!(h("x: KeyError: 'a' — skipped"), "x: Unexpected data — skipped");
+        // Unbracketed, only the OS's words go.
+        assert_eq!(h("[Errno 13] Permission denied; retrying"), "Permission denied; retrying");
+        // Two errors on one line.
+        assert_eq!(
+            h("a (KeyError: 'k') then b: IndexError: list index out of range"),
+            "a (Unexpected data) then b: Unexpected data"
+        );
+    }
+
+    #[test]
+    fn a_message_of_the_codes_own_is_kept() {
+        assert_eq!(h("AssertionError: gridcraft: no mapper or loader"), "gridcraft: no mapper or loader");
+        assert_eq!(h("StopIteration: the list ran out"), "the list ran out");
+        assert_eq!(h("AssertionError"), "Unexpected data");
+        assert_eq!(h("StopIteration"), "Unexpected data");
+        assert_eq!(h("failed: AssertionError: x is not ready"), "failed: x is not ready");
+        // Python's own wording still goes, whichever class carries it.
+        assert_eq!(h("AssertionError: list index out of range"), "Unexpected data");
+        assert_eq!(h("KeyError: 'k'"), "Unexpected data");
+    }
+
+    #[test]
+    fn a_decode_names_no_codec_it_was_not() {
+        assert_eq!(
+            h("'ascii' codec can't decode byte 0xc3 in position 4: ordinal not in range(128)"),
+            "The text could not be decoded"
+        );
+        assert_eq!(
+            h("UnicodeDecodeError: 'latin-1' codec can't decode byte 0x81 in position 0: x"),
+            "The text could not be decoded"
+        );
+        assert_eq!(h("'UTF8' codec can't decode byte 0xff in position 0: invalid start byte"), "The file is not valid UTF-8");
+    }
+
+    #[test]
+    fn idempotent() {
+        for s in [
+            "[Errno 2] No such file or directory: '/tmp/x'",
+            "no snapshot was taken ([Errno 13] Permission denied); continuing without one",
+            "pkg 'x' (TypeError: bad) — skipped",
+            "AssertionError: gridcraft: no mapper or loader",
+            "'ascii' codec can't decode byte 0xc3 in position 4: ordinal not in range(128)",
+            "URLError: <urlopen error timed out>",
+            "OSError: [Errno 18] Invalid cross-device link: 'a' -> 'b'",
+            "Updated 2\nfailed: IndexError: list index out of range",
+            "LookupError: unknown encoding: klingon",
+        ] {
+            let once = h(s);
+            assert_eq!(h(&once), once, "{s}");
+        }
     }
 
     #[test]

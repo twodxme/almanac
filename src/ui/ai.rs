@@ -452,14 +452,16 @@ impl Win {
             // label asked for 724px, pushed the page wider than the window
             // and squeezed the sidebar to its minimum. Short, ellipsized,
             // with the full text a hover away.
-            let status = crate::util::human_error(&e.status);
-            let st = gtk::Label::new(Some(&status));
+            // The server's own text, not a Python error of ours: shown as
+            // it came.
+            let status = e.status.as_str();
+            let st = gtk::Label::new(Some(status));
             st.set_valign(gtk::Align::Center);
             st.set_ellipsize(pango::EllipsizeMode::End);
             st.set_max_width_chars(28);
             st.set_xalign(1.0);
-            st.set_tooltip_text(Some(&status));
-            st.update_property(&[gtk::accessible::Property::Description(&status)]);
+            st.set_tooltip_text(Some(status));
+            st.update_property(&[gtk::accessible::Property::Description(status)]);
             st.add_css_class("dim-label");
             st.add_css_class("caption");
             row.add_suffix(&st);

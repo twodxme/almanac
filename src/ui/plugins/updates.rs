@@ -93,8 +93,9 @@ pub(in crate::ui) fn plugin_step(pid: String, pin: Option<String>) -> tasks::Ste
         let r = run_checked(&plugins_mod::update_argv(&pid), 300)?;
         let both = r.stdout.clone() + &r.stderr;
         let lines: Vec<&str> = py_splitlines(&both);
+        // The command's own words, shown as it printed them.
         for line in &lines[lines.len().saturating_sub(6)..] {
-            log(line);
+            log(&tasks::output(line));
         }
         if !r.ok() {
             return Err(format!("{pid} was not updated"));
