@@ -100,7 +100,7 @@ on any thread.
 | `packages.rs` + `packages/` | data loading and filtering: Updates, Applications, Everything, Orphans tables, the details sheet — `extra` (reading the `extra` dict as Python did), `decisions` (pure matching, grouping, sorting), `loading`, `details`, `counts` (badges, stats, sidebar counts), `filtering` (sort menu, filter, search, sidebar selection), `chrome` (page chrome, primary action, theme, status line) |
 | `store.rs` | App Store and Themes pages: grid, cards, marketplace data |
 | `store_actions.rs` | install/remove from the store, setup after install, themes, AppImages |
-| `plugins.rs` | Plugins page; on/off, shortcuts, bulk updates, the shell |
+| `plugins.rs` + `plugins/` | Plugins page; on/off, shortcuts, bulk updates, the shell — `page` (pills, filter, rows, logos, menus, switches), `updates` (bulk update planning and its confirmation), `controls` (on/off, shortcuts, restarting the shell), `removal` (install, remove, orphan cleanup), `pyisms` |
 | `switchboard.rs` | Switchboard |
 | `history.rs` | Health check glue and History |
 | `ai.rs` | AI page |

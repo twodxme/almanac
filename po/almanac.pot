@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 19:36-0700\n"
+"POT-Creation-Date: 2026-10-23 19:40-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -37,7 +37,7 @@ msgstr ""
 msgid "no reviewed commit to compare with"
 msgstr ""
 
-#: src/plugins.rs:1695 src/ui/plugins.rs:224
+#: src/plugins.rs:1695 src/ui/plugins/updates.rs:89
 msgid "changed since it was reviewed"
 msgstr ""
 
@@ -46,7 +46,7 @@ msgid "Open the release"
 msgstr ""
 
 #: src/ui/actions.rs:857 src/ui/actions.rs:1609 src/ui/ai.rs:894
-#: src/ui/packages/details.rs:285 src/ui/plugins.rs:1587
+#: src/ui/packages/details.rs:285 src/ui/plugins/updates.rs:262
 #: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
@@ -100,7 +100,7 @@ msgid ""
 msgstr ""
 
 #: src/ui/actions.rs:1250 src/ui/actions.rs:1362 src/ui/actions.rs:1810
-#: src/ui/plugins.rs:1478
+#: src/ui/plugins/controls.rs:142
 msgid "Cancel"
 msgstr ""
 
@@ -120,10 +120,10 @@ msgstr ""
 msgid "Recommended"
 msgstr ""
 
-#: src/ui/actions.rs:1363 src/ui/plugins.rs:1777 src/ui/plugins.rs:1820
-#: src/ui/plugins.rs:1858 src/ui/store_actions.rs:603
-#: src/ui/store_actions.rs:705 src/ui/store_actions.rs:1118
-#: src/ui/store_actions.rs:1576
+#: src/ui/actions.rs:1363 src/ui/plugins/removal.rs:238
+#: src/ui/plugins/removal.rs:281 src/ui/plugins/removal.rs:319
+#: src/ui/store_actions.rs:603 src/ui/store_actions.rs:705
+#: src/ui/store_actions.rs:1118 src/ui/store_actions.rs:1576
 msgid "Install"
 msgstr ""
 
@@ -432,143 +432,144 @@ msgstr ""
 msgid "Duplicate software installed"
 msgstr ""
 
-#: src/ui/plugins.rs:243
-msgid "updated past the reviewed commit — upstream changed during the update"
-msgstr ""
-
-#: src/ui/plugins.rs:259
-msgid "not the listed repository"
-msgstr ""
-
-#: src/ui/plugins.rs:409
-msgid ""
-"These are installed as dependencies but nothing needs them any more. "
-"Everything that would go is listed below."
-msgstr ""
-
-#: src/ui/plugins.rs:572
-msgid "Omarchy did not change it"
-msgstr ""
-
-#: src/ui/plugins.rs:858
-msgid "Reading plugins…"
-msgstr ""
-
-#: src/ui/plugins.rs:950
-msgid "Your plugins"
-msgstr ""
-
-#: src/ui/plugins.rs:951
-msgid ""
-"Added from the marketplace or by hand. Updated through omarchy plugin "
-"update; a development link never is."
-msgstr ""
-
-#: src/ui/plugins.rs:956 src/ui/store_actions.rs:1572
-msgid "Built in"
-msgstr ""
-
-#: src/ui/plugins.rs:957
-msgid "Ship with Omarchy and update with it. They can be switched on and off."
-msgstr ""
-
-#: src/ui/plugins.rs:991
-msgid "No plugins found"
-msgstr ""
-
-#: src/ui/plugins.rs:992
-msgid "The omarchy command did not list any plugins."
-msgstr ""
-
-#: src/ui/plugins.rs:1051
-msgid "Keyboard shortcut"
-msgstr ""
-
-#: src/ui/plugins.rs:1079
-msgid "Omarchy needs this one; it cannot be switched off"
-msgstr ""
-
-#: src/ui/plugins.rs:1242
-msgid "Removing its keyboard shortcut"
-msgstr ""
-
-#: src/ui/plugins.rs:1307
-msgid ""
-"Deletes the plugin's folder and takes it off the bar. Its settings in "
-"shell.json are removed with it."
-msgstr ""
-
-#: src/ui/plugins.rs:1310 src/ui/plugins.rs:1736 src/ui/plugins.rs:1938
-#: src/ui/store.rs:970 src/ui/store_actions.rs:646 src/ui/store_actions.rs:730
-#: src/ui/store_actions.rs:1223 src/ui/store_actions.rs:1478
-#: src/ui/store_actions.rs:1491
-msgid "Remove"
-msgstr ""
-
-#: src/ui/plugins.rs:1434
+#: src/ui/plugins/controls.rs:98
 msgid "Press the keys, e.g. Super + Alt + V"
 msgstr ""
 
-#: src/ui/plugins.rs:1473
+#: src/ui/plugins/controls.rs:137
 msgid ""
 "Opens the plugin's panel. Checked against every binding Hyprland has now; "
 "written to its own block in bindings.lua, and put back if Hyprland rejects "
 "it."
 msgstr ""
 
-#: src/ui/plugins.rs:1480
+#: src/ui/plugins/controls.rs:144
 msgid "Remove shortcut"
 msgstr ""
 
-#: src/ui/plugins.rs:1483
+#: src/ui/plugins/controls.rs:147
 msgid "Save"
 msgstr ""
 
-#: src/ui/plugins.rs:1528
-msgid "Checking plugins…"
-msgstr ""
-
-#: src/ui/plugins.rs:1556
-msgid "No plugin updates to install"
-msgstr ""
-
-#: src/ui/plugins.rs:1644
-msgid "Updating plugins"
-msgstr ""
-
-#: src/ui/plugins.rs:1673
+#: src/ui/plugins/controls.rs:208
 msgid "Restart the shell?"
 msgstr ""
 
-#: src/ui/plugins.rs:1674
+#: src/ui/plugins/controls.rs:209
 msgid ""
 "Restarts the Omarchy shell and clears its compiled QML cache. Use it when a "
 "plugin behaves as if it had not been updated. Your bar and settings are not "
 "touched."
 msgstr ""
 
-#: src/ui/plugins.rs:1678
+#: src/ui/plugins/controls.rs:213
 msgid "Restart"
 msgstr ""
 
-#: src/ui/plugins.rs:1774
+#: src/ui/plugins/page.rs:227
+msgid "Omarchy did not change it"
+msgstr ""
+
+#: src/ui/plugins/page.rs:276
+msgid "Reading plugins…"
+msgstr ""
+
+#: src/ui/plugins/page.rs:368
+msgid "Your plugins"
+msgstr ""
+
+#: src/ui/plugins/page.rs:369
+msgid ""
+"Added from the marketplace or by hand. Updated through omarchy plugin "
+"update; a development link never is."
+msgstr ""
+
+#: src/ui/plugins/page.rs:374 src/ui/store_actions.rs:1572
+msgid "Built in"
+msgstr ""
+
+#: src/ui/plugins/page.rs:375
+msgid "Ship with Omarchy and update with it. They can be switched on and off."
+msgstr ""
+
+#: src/ui/plugins/page.rs:409
+msgid "No plugins found"
+msgstr ""
+
+#: src/ui/plugins/page.rs:410
+msgid "The omarchy command did not list any plugins."
+msgstr ""
+
+#: src/ui/plugins/page.rs:469
+msgid "Keyboard shortcut"
+msgstr ""
+
+#: src/ui/plugins/page.rs:497
+msgid "Omarchy needs this one; it cannot be switched off"
+msgstr ""
+
+#: src/ui/plugins/page.rs:660
+msgid "Removing its keyboard shortcut"
+msgstr ""
+
+#: src/ui/plugins/page.rs:725
+msgid ""
+"Deletes the plugin's folder and takes it off the bar. Its settings in "
+"shell.json are removed with it."
+msgstr ""
+
+#: src/ui/plugins/page.rs:728 src/ui/plugins/removal.rs:197
+#: src/ui/plugins/removal.rs:399 src/ui/store.rs:970
+#: src/ui/store_actions.rs:646 src/ui/store_actions.rs:730
+#: src/ui/store_actions.rs:1223 src/ui/store_actions.rs:1478
+#: src/ui/store_actions.rs:1491
+msgid "Remove"
+msgstr ""
+
+#: src/ui/plugins/removal.rs:93
+msgid ""
+"These are installed as dependencies but nothing needs them any more. "
+"Everything that would go is listed below."
+msgstr ""
+
+#: src/ui/plugins/removal.rs:235
 msgid ""
 "Omarchy shell plugins run inside the shell process with your permissions — "
 "there is no sandbox."
 msgstr ""
 
-#: src/ui/plugins.rs:1838
+#: src/ui/plugins/removal.rs:299
 msgid "Type what to search for, then press Install"
 msgstr ""
 
-#: src/ui/plugins.rs:1855
+#: src/ui/plugins/removal.rs:316
 msgid ""
 "This installs a package by exact name. To browse what matches first, use the "
 "App Store and search there."
 msgstr ""
 
-#: src/ui/plugins.rs:1936
+#: src/ui/plugins/removal.rs:397
 msgid "The Flatpak and its data are removed."
+msgstr ""
+
+#: src/ui/plugins/updates.rs:108
+msgid "updated past the reviewed commit — upstream changed during the update"
+msgstr ""
+
+#: src/ui/plugins/updates.rs:124
+msgid "not the listed repository"
+msgstr ""
+
+#: src/ui/plugins/updates.rs:203
+msgid "Checking plugins…"
+msgstr ""
+
+#: src/ui/plugins/updates.rs:231
+msgid "No plugin updates to install"
+msgstr ""
+
+#: src/ui/plugins/updates.rs:319
+msgid "Updating plugins"
 msgstr ""
 
 #: src/ui/preferences.rs:73
