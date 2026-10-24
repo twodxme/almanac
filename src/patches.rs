@@ -92,7 +92,7 @@ fn preferred_encoding() -> &'static str {
             .unwrap_or_else(|| "C".to_string());
         let out = crate::util::run_with(&["locale", "charmap"], &crate::util::RunOpts {
             timeout: Some(std::time::Duration::from_secs(5)),
-            env: vec![("LC_ALL".to_string(), name.clone())],
+            env: vec![("LC_ALL".into(), name.clone().into())],
             ..Default::default()
         });
         let charmap = out.stdout.trim().to_string();
@@ -193,71 +193,36 @@ fn gettempdir() -> Option<&'static std::path::Path> {
 
 /// `git -C repo <args>` with an optional environment and stdin, as `_git`.
 ///
-/// Run here rather than through `util::run_with` because Python's text mode
-/// has to be reproduced exactly (see `text_mode`), and like
+/// Through `util::run_bytes` rather than `util::run_with` because Python's
+/// text mode has to be reproduced exactly (see `text_mode`), and like
 /// `subprocess.run(input=None)` the child inherits our stdin when there is
 /// no input.
 fn git(repo: &str, args: &[&str], env: &[(String, String)], input_text: Option<&str>,
        timeout: u64) -> Result<GitOutput, GitError> {
-    use std::io::{Read, Write};
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-
     // subprocess refuses an argument with a NUL in it before starting
     // anything: ValueError, which `analyze` does not catch.
     if repo.contains('\0') || args.iter().any(|a| a.contains('\0')) {
         return Err(GitError::Raised("ValueError: embedded null byte".to_string()));
     }
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(args)
-        .stdin(if input_text.is_some() { Stdio::piped() } else { Stdio::inherit() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (k, v) in env {
-        cmd.env(k, v);
+    let mut argv = vec!["git", "-C", repo];
+    argv.extend_from_slice(args);
+    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout)),
+        stdin: match input_text {
+            Some(text) => crate::util::Stdin::Input(text.as_bytes()),
+            None => crate::util::Stdin::Inherit,
+        },
+        env: env.iter().map(|(k, v)| (k.into(), v.into())).collect(),
+        ..Default::default()
+    });
+    // OSError, or TimeoutExpired (a SubprocessError).
+    if out.failed_to_start || out.timed_out {
+        return Err(GitError::Caught);
     }
-    let mut child = crate::util::spawn_group(&mut cmd).map_err(|_| GitError::Caught)?;
-    if let (Some(text), Some(mut stdin)) = (input_text, child.stdin.take()) {
-        let text = text.to_owned();
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(text.as_bytes());
-        });
-    }
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out_t = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = Instant::now();
-    let limit = Duration::from_secs(timeout);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) => {
-                if start.elapsed() >= limit {
-                    // TimeoutExpired, a SubprocessError.
-                    crate::util::kill_group(&mut child);
-                    return Err(GitError::Caught);
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => return Err(GitError::Caught),
-        }
-    };
-    let out = out_t.join().unwrap_or_default();
-    let err = err_t.join().unwrap_or_default();
     // communicate() decodes stdout, then stderr; either can raise.
-    let stdout = text_mode(&out).map_err(GitError::Raised)?;
-    text_mode(&err).map_err(GitError::Raised)?;
-    Ok(GitOutput { code: status.code(), stdout })
+    let stdout = text_mode(&out.stdout).map_err(GitError::Raised)?;
+    text_mode(&out.stderr).map_err(GitError::Raised)?;
+    Ok(GitOutput { code: out.code, stdout })
 }
 
 /// Python's `str.splitlines()`: every line boundary it knows, not just `\n`.

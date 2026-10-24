@@ -814,7 +814,7 @@ fn preferred_encoding() -> &'static str {
         }
         let out = crate::util::run_with(&["locale", "charmap"], &crate::util::RunOpts {
             timeout: Some(Duration::from_secs(5)),
-            env: vec![("LC_ALL".to_string(), name.clone())],
+            env: vec![("LC_ALL".into(), name.clone().into())],
             ..Default::default()
         });
         let charmap = out.stdout.trim().to_string();

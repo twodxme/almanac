@@ -21,7 +21,7 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use num_bigint::BigInt;
 use regex::Regex;
@@ -634,65 +634,26 @@ fn fnmatch_translate(pat: &str) -> String {
 /// `subprocess.run(argv, capture_output=True, timeout=secs, cwd=cwd).stdout`
 /// as bytes (`util::run` decodes, and this module must strip NULs before
 /// decoding). `None` is the OSError / TimeoutExpired the Python catches.
-/// No `stdin=` is given in the Python, so the child inherits ours (util's
-/// runners give it /dev/null). The argv is raw OS text, as Python passes
-/// a str path's own bytes.
+/// No `stdin=` is given in the Python, so the child inherits ours. The argv
+/// is raw OS text, as Python passes a str path's own bytes.
 ///
 /// `communicate(timeout=...)` bounds the whole exchange: the child's exit
 /// *and* the end of its output. A helper the child leaves running that
-/// keeps the pipes open runs the clock out too; the child's whole process
-/// group is then killed and the child reaped, so the readers end.
+/// keeps the pipes open runs the clock out too; `util::run_bytes` then
+/// kills the child's whole process group.
 fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -> Option<Vec<u8>> {
     run_bytes_within(argv, Duration::from_secs(timeout_secs), cwd)
 }
 
 /// `run_bytes` with any timeout (the tests use a fraction of a second).
 fn run_bytes_within(argv: &[&std::ffi::OsStr], timeout: Duration, cwd: Option<&Path>) -> Option<Vec<u8>> {
-    use std::process::{Command, Stdio};
-    let (prog, args) = argv.split_first()?;
-    let mut cmd = Command::new(prog);
-    cmd.args(args).stdin(Stdio::inherit()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    let mut child = crate::util::spawn_group(&mut cmd).ok()?;
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-        s
+    let out = crate::util::run_bytes(argv, &crate::util::RunOpts {
+        timeout: Some(timeout),
+        stdin: crate::util::Stdin::Inherit,
+        cwd,
+        ..Default::default()
     });
-    let err_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-    });
-    let start = Instant::now();
-    let mut exited = false;
-    loop {
-        if !exited {
-            match child.try_wait() {
-                Ok(Some(_)) => exited = true,
-                Ok(None) => {}
-                Err(_) => return None,
-            }
-        }
-        if exited && out_t.is_finished() && err_t.is_finished() {
-            break;
-        }
-        if start.elapsed() >= timeout {
-            crate::util::kill_group(&mut child);
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let out = out_t.join().unwrap_or_default();
-    let _ = err_t.join();
-    Some(out)
+    (!out.failed_to_start && !out.timed_out).then_some(out.stdout)
 }
 
 // ---------------------------------------------------------------------------
@@ -3583,6 +3544,7 @@ pub(crate) fn test_elf(tail: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
     use serde_json::json;
 
     fn latest(version: &str, url: &str) -> LatestRelease {

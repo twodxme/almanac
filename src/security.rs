@@ -1540,35 +1540,12 @@ fn _split1(l: &str) -> Vec<&str> {
 /// (util::run decodes lossily, and here the bytes decide): None where it
 /// raises, the program missing (OSError) or too slow (TimeoutExpired).
 fn _run_bytes(argv: &[&str], timeout_secs: u64) -> Option<Vec<u8>> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let (prog, args) = argv.split_first()?;
-    let mut child = crate::util::spawn_group(Command::new(prog)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null()))
-        .ok()?;
-    let mut pipe = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = pipe.read_to_end(&mut b);
-        b
+    let out = crate::util::run_bytes(argv, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout_secs)),
+        discard_stderr: true,
+        ..Default::default()
     });
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < std::time::Duration::from_secs(timeout_secs) => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            _ => {
-                crate::util::kill_group(&mut child);
-                return None;
-            }
-        }
-    }
-    reader.join().ok()
+    (!out.failed_to_start && !out.timed_out).then_some(out.stdout)
 }
 
 /// `str(UnicodeDecodeError)` of a strict UTF-8 decode of `b`, CPython's words.

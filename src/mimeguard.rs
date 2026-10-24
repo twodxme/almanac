@@ -19,10 +19,8 @@
 //! Port of `mimeguard.py`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Read;
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gtk::gio::prelude::*;
 
@@ -94,9 +92,8 @@ pub fn snapshot() -> Option<BTreeMap<String, String>> {
 ///
 /// Like `communicate()`, the timeout covers reading both pipes to EOF, not
 /// just the child's exit: a descendant that keeps a pipe open past it is a
-/// timeout. On a timeout the child's whole process group is killed (not
-/// only the child, as `subprocess.run` does), so a descendant holding a
-/// pipe dies and its reader ends; the child is reaped. stdin is inherited
+/// timeout. On a timeout `util::run_bytes` kills the child's whole process
+/// group (not only the child, as `subprocess.run` does). stdin is inherited
 /// (no `stdin=` argument in the Python).
 fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
     run_bytes_within(argv, Duration::from_secs(timeout_secs))
@@ -104,48 +101,12 @@ fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, 
 
 /// `run_bytes` with any timeout (the tests use a fraction of a second).
 fn run_bytes_within(argv: &[&str], timeout: Duration) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
-    let (prog, args) = argv.split_first()?;
-    let mut child =
-        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
-    let deadline = Instant::now() + timeout;
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it. Each hands its bytes back at EOF.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut s);
-            }
-            let _ = tx.send(s);
-        });
-        rx
-    };
-    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    // The child's whole process group, so whatever still holds a pipe dies
-    // and its reader ends.
-    let timed_out = crate::util::kill_group;
-    let recv = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| {
-        let left = deadline.saturating_duration_since(Instant::now());
-        rx.recv_timeout(left).ok()
-    };
-    let Some(stdout) = recv(&out_rx) else { timed_out(&mut child); return None };
-    let Some(stderr) = recv(&err_rx) else { timed_out(&mut child); return None };
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    timed_out(&mut child);
-                    return None;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => return None,
-        }
-    };
-    Some((status.code(), stdout, stderr))
+    let out = util::run_bytes(argv, &util::RunOpts {
+        timeout: Some(timeout),
+        stdin: util::Stdin::Inherit,
+        ..Default::default()
+    });
+    (!out.failed_to_start && !out.timed_out).then_some((out.code, out.stdout, out.stderr))
 }
 
 /// What a type's old id can be: a string, or (from a caller passing a map
@@ -687,6 +648,7 @@ fn guess_extension(type_: &str, strict: bool) -> Result<Option<String>, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn m(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()

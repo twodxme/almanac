@@ -812,61 +812,30 @@ fn _write(raw: &str, mode: u32) -> Result<(), String> {
 /// newlines. Err with the message of what Python would raise: the OSError
 /// of a failed exec, TimeoutExpired, or UnicodeDecodeError.
 fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String), String> {
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    let mut child = crate::util::spawn_group(Command::new(argv[0])
-        .args(&argv[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-        .map_err(|e| os_error(&e, Some(Path::new(argv[0])), None))?;
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let out_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-        s
-    });
-    let err_t = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = p.read_to_end(&mut s);
-        }
-        s
-    });
     // communicate(timeout=...): read both pipes to EOF and reap the child,
-    // all within the one deadline.
-    let start = Instant::now();
-    let mut status = None;
-    let mut reaped = false;
-    loop {
-        if !reaped {
-            match child.try_wait() {
-                Ok(Some(st)) => (status, reaped) = (Some(st), true),
-                Ok(None) => {}
-                Err(_) => reaped = true,
-            }
-        }
-        if reaped && out_t.is_finished() && err_t.is_finished() {
-            break;
-        }
-        if start.elapsed() >= Duration::from_secs(timeout) {
-            // run(): process.kill(); process.wait(); raise -- TimeoutExpired,
-            // without decoding what was read and without waiting for the
-            // pipes, which a grandchild may still hold open. The reader
-            // threads end on their own when it lets go.
-            crate::util::kill_group(&mut child);
-            let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
-            return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
-        }
-        std::thread::sleep(Duration::from_millis(10));
+    // all within the one deadline. stdin is ours, as run() leaves it.
+    let out = crate::util::run_bytes(argv, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout)),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    if out.failed_to_start {
+        return Err(match out.start_errno {
+            Some(n) => os_error(&std::io::Error::from_raw_os_error(n), argv.first().map(Path::new), None),
+            None => out.start_error,
+        });
+    }
+    if out.timed_out {
+        // run(): process.kill(); process.wait(); raise -- TimeoutExpired,
+        // without decoding what was read.
+        let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
+        return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
     }
     // Text mode decodes stdout, then stderr.
-    let stdout = universal_newlines(&decode_utf8(out_t.join().unwrap_or_default())?);
-    let stderr = universal_newlines(&decode_utf8(err_t.join().unwrap_or_default())?);
+    let stdout = universal_newlines(&decode_utf8(out.stdout)?);
+    let stderr = universal_newlines(&decode_utf8(out.stderr)?);
     // A signal is a negative returncode in Python: not 0 either way.
-    Ok((status.and_then(|s| s.code()), stdout, stderr))
+    Ok((out.code, stdout, stderr))
 }
 
 /// `hyprctl *args`, stripped stdout; Err with its message when it fails.

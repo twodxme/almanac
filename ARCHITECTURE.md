@@ -34,8 +34,13 @@ comment explains *why*, keep it when you change the code beside it.
   versions. Change a format only with a migration. `housekeeping` prunes
   what only grows (month-old thumbnails and GitHub answers, rollback copies
   of AppImages no longer registered) once a day in the background.
-- **Subprocesses** go through `util::run` / `util::run_with` (timeouts,
-  never panic). GitHub goes through `ghcache` (token, ETags, budget guard).
+- **Subprocesses** go through `util::run` / `util::run_with` (timeouts
+  that cover the output, the whole process group killed, never panic), or
+  `util::run_bytes` where the bytes matter (strict decoding as Python's
+  `text=True` does, OS-string arguments). `RunOpts` covers stdin (null,
+  inherited, input, a file), env, cwd, argv[0] and discarding stderr; a
+  failed start keeps its errno, an exit its signal. Do not write another
+  runner: add the option. GitHub goes through `ghcache` (token, ETags, budget guard).
 - **Demo mode** (`ALMANAC_DEMO=1`) swaps every machine reader for fixtures in
   `demo.rs`; screenshots depend on it, and it must never show anything from
   the real machine.

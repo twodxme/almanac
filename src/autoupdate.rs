@@ -14,13 +14,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
-use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{mpsc, Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use num_bigint::BigInt;
 use serde::{Serialize, Serializer};
@@ -856,7 +853,7 @@ static LOCALE_CODEC: LazyLock<Codec> = LazyLock::new(|| {
             &["locale", "charmap"],
             &crate::util::RunOpts {
                 timeout: Some(Duration::from_secs(5)),
-                env: vec![("LC_ALL".to_owned(), name.clone())],
+                env: vec![("LC_ALL".into(), name.clone().into())],
                 ..Default::default()
             },
         );
@@ -1072,19 +1069,23 @@ enum Ran {
     TimedOut,
 }
 
-/// Start `argv` with stdout and stderr piped, finding the program the way
-/// `_posixsubprocess` does rather than `execvp`: every `$PATH` entry
-/// (`os.defpath` when unset; an empty entry is the current directory) is
-/// tried in turn with a plain execve, and an entry that fails for any reason
-/// other than ENOENT / ENOTDIR (ENOEXEC from a file with no `#!`, EACCES)
-/// does not end the search. If none starts, the first such error is the one
-/// reported, else the last.
-fn spawn_piped(argv: &[&str]) -> std::io::Result<std::process::Child> {
-    spawn_piped_in(argv, std::env::var_os("PATH").map(OsString::into_vec))
+/// `subprocess.run(argv, capture_output=True, timeout=t)` in bytes, through
+/// `util::run_bytes`: the timeout covers both pipes reaching EOF (a forked
+/// child still holding stdout keeps it waiting, as `communicate` does) and
+/// the exit; on expiry the child's process group is killed and the child
+/// reaped. stdin is inherited.
+///
+/// The program is found the way `_posixsubprocess` does rather than
+/// `execvp`: every `$PATH` entry (`os.defpath` when unset; an empty entry is
+/// the current directory) is tried in turn with a plain execve, and an entry
+/// that fails for any reason other than ENOENT / ENOTDIR (ENOEXEC from a
+/// file with no `#!`, EACCES) does not end the search. If none starts, the
+/// first such error is the one reported, else the last.
+fn run_capture(argv: &[&str], timeout: Duration) -> std::io::Result<Ran> {
+    run_capture_in(argv, timeout, std::env::var_os("PATH").map(OsString::into_vec))
 }
 
-fn spawn_piped_in(argv: &[&str], path: Option<Vec<u8>>) -> std::io::Result<std::process::Child> {
-    use std::os::unix::process::CommandExt;
+fn run_capture_in(argv: &[&str], timeout: Duration, path: Option<Vec<u8>>) -> std::io::Result<Ran> {
     let prog = argv[0];
     let candidates: Vec<PathBuf> = if prog.contains('/') {
         vec![PathBuf::from(prog)]
@@ -1099,82 +1100,37 @@ fn spawn_piped_in(argv: &[&str], path: Option<Vec<u8>>) -> std::io::Result<std::
             })
             .collect()
     };
+    let opts = crate::util::RunOpts {
+        timeout: Some(timeout),
+        stdin: crate::util::Stdin::Inherit,
+        arg0: Some(std::ffi::OsStr::new(prog)),
+        ..Default::default()
+    };
     let mut first: Option<std::io::Error> = None;
     let mut last: Option<std::io::Error> = None;
     for exe in candidates {
-        let spawned = crate::util::spawn_group(Command::new(&exe)
-            .arg0(prog)
-            .args(&argv[1..])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()));
-        match spawned {
-            Ok(child) => return Ok(child),
-            Err(e) => {
-                let soft = matches!(e.raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR));
-                if !soft && first.is_none() {
-                    first = Some(e);
-                } else {
-                    last = Some(e);
-                }
+        let mut full: Vec<&std::ffi::OsStr> = vec![exe.as_os_str()];
+        full.extend(argv[1..].iter().map(std::ffi::OsStr::new));
+        let out = crate::util::run_bytes(&full, &opts);
+        if !out.failed_to_start {
+            if out.timed_out {
+                return Ok(Ran::TimedOut);
             }
+            let code = out.code.or(out.signal.map(|s| -s)).unwrap_or(-1);
+            return Ok(Ran::Exited { code, stdout: out.stdout, stderr: out.stderr });
+        }
+        let e = match out.start_errno {
+            Some(n) => std::io::Error::from_raw_os_error(n),
+            None => std::io::Error::other(out.start_error),
+        };
+        let soft = matches!(e.raw_os_error(), Some(libc::ENOENT) | Some(libc::ENOTDIR));
+        if !soft && first.is_none() {
+            first = Some(e);
+        } else {
+            last = Some(e);
         }
     }
     Err(first.or(last).unwrap_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT)))
-}
-
-/// `subprocess.run(argv, capture_output=True, timeout=t)` in bytes: the
-/// timeout covers both pipes reaching EOF (a forked child still holding
-/// stdout keeps it waiting, as `communicate` does) and the exit; on expiry
-/// the process is killed and reaped, the pipes are left to whoever holds them.
-fn run_capture(argv: &[&str], timeout: Duration) -> std::io::Result<Ran> {
-    let mut child = spawn_piped(argv)?;
-    let deadline = Instant::now() + timeout;
-    let (tx, rx) = mpsc::channel::<(usize, Vec<u8>)>();
-    let pipes: [Option<Box<dyn Read + Send>>; 2] = [
-        child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-        child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-    ];
-    for (n, pipe) in pipes.into_iter().enumerate() {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            let _ = tx.send((n, buf));
-        });
-    }
-    drop(tx);
-    let mut got: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
-    let mut timed_out = false;
-    for _ in 0..2 {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok((n, b)) => got[n] = b,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                timed_out = true;
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    let status = loop {
-        if timed_out {
-            break None;
-        }
-        match child.try_wait()? {
-            Some(st) => break Some(st),
-            None if Instant::now() >= deadline => timed_out = true,
-            None => std::thread::sleep(Duration::from_millis(5)),
-        }
-    };
-    let Some(status) = status else {
-        crate::util::kill_group(&mut child);
-        return Ok(Ran::TimedOut);
-    };
-    let code = status.code().or_else(|| status.signal().map(|s| -s)).unwrap_or(-1);
-    let [stdout, stderr] = got;
-    Ok(Ran::Exited { code, stdout, stderr })
 }
 
 /// `text=True`: decode, then universal newlines (`\r\n` and `\r` become `\n`).
@@ -1791,11 +1747,12 @@ mod tests {
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let both = format!("{}:{}", bad.display(), good.display()).into_bytes();
-        let out = spawn_piped_in(&["prog"], Some(both)).unwrap().wait_with_output().unwrap();
-        assert_eq!(out.stdout, b"good\n"); // past the ENOEXEC entry
-        let e = spawn_piped_in(&["prog"], Some(bad.as_os_str().as_bytes().to_vec())).unwrap_err();
+        let run = |path: Vec<u8>| run_capture_in(&["prog"], Duration::from_secs(5), Some(path));
+        let Ok(Ran::Exited { stdout, .. }) = run(both) else { panic!("prog did not run") };
+        assert_eq!(stdout, b"good\n"); // past the ENOEXEC entry
+        let Err(e) = run(bad.as_os_str().as_bytes().to_vec()) else { panic!("ran") };
         assert_eq!(e.raw_os_error(), Some(libc::ENOEXEC));
-        let e = spawn_piped_in(&["prog"], Some(b"/nonexistent".to_vec())).unwrap_err();
+        let Err(e) = run(b"/nonexistent".to_vec()) else { panic!("ran") };
         assert_eq!(e.raw_os_error(), Some(libc::ENOENT));
         assert_eq!(systemctl(&["is-enabled", "a\0b"], 5).unwrap_err(), "embedded null byte");
     }
