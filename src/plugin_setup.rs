@@ -45,7 +45,11 @@
 //!   postinstall's `node gen.js`, the sources a compiler builds and a build
 //!   script or `go generate` runs -- is not followed. Every build step (and
 //!   Python or JavaScript program) runs such code, and the confirmation says
-//!   so in as many words.
+//!   so in as many words. A Python script's own folder stays first on its
+//!   path, as Python puts it there, so a module beside it (even one named
+//!   like the standard library's) is part of what it runs. Runners whose
+//!   whole job is to run some program rather than install one -- `uv run`,
+//!   `uv tool run`, `pipx run` -- are not offered at all.
 //! * **by hand**   what cannot be done for the user: API keys and logins,
 //!   config and keybinding edits. Listed, with the README heading to read.
 //!
@@ -778,6 +782,15 @@ fn step_kind(part: &str) -> Option<Kind> {
     }
 }
 
+/// Every line of a .python-version(s) file a version request and nothing
+/// else: `3.12`, `3.12.1`, `3.13t`, `pypy3.10`, `cpython-3.12`,
+/// `cpython@3.12`, blank lines and `#` comments. A path or a bare word (a
+/// folder of the plugin's with a bin/python in it) is not.
+fn python_versions_only(body: &str) -> bool {
+    let request = regex::Regex::new(r"^(?:[A-Za-z]+[-@]?)?[0-9]+(?:\.[0-9]+){0,2}[a-z0-9+]*$").expect("constant regex");
+    body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).all(|l| request.is_match(l))
+}
+
 /// A `systemctl --user` line that only turns units already installed on or
 /// off: one of a few verbs, unit names, `--user` and `--now`. Any other verb
 /// or option could do what nothing shown says -- `edit` opens an editor,
@@ -792,7 +805,10 @@ fn service_line(args: &[String]) -> bool {
     }
     match words.split_first() {
         Some((verb, units)) if *verb == "daemon-reload" => units.is_empty() && !opts.iter().any(|o| *o == "--now"),
-        Some((verb, units)) => VERBS.contains(&verb.as_str()) && !units.is_empty(),
+        // A quoted glob is plain words, and `stop '*'` matches every unit.
+        Some((verb, units)) => {
+            VERBS.contains(&verb.as_str()) && !units.is_empty() && units.iter().all(|u| !u.contains(['*', '?', '[', ']']))
+        }
         None => false,
     }
 }
@@ -1193,6 +1209,10 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
                 .map(|s| s.to_string()),
             );
         }
+        // `pipx run` runs a program rather than installing one: whatever it
+        // names (a script of the plugin's, a package's entry point) is not a
+        // setup step, and nothing here could show what it runs.
+        "pipx" if args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| a == "run") => return Err(()),
         "pip" | "pipx" => out.extend(pip_files(args, plugin_dir)?),
         "uv" => {
             if elsewhere(&["--directory", "--project"]) {
@@ -1205,18 +1225,15 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             out.extend(["uv.toml", "pyproject.toml", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
             let words = scan_args(args, "pw", "", &["python", "with", "index-url", "extra-index-url", "find-links", "from"], |_, _| {})?;
             match words.as_slice() {
+                // `uv run` and `uv tool run` run a program -- `uv run python
+                // evil.py`, `uv run python -m venv` importing the plugin's own
+                // venv.py -- rather than install anything: not offered.
+                ["run", ..] | ["tool", "run", ..] => return Err(()),
                 ["pip", ..] | ["tool", ..] => {
                     let at = args.iter().position(|a| a == words[0]).map_or(args.len(), |i| i + 1);
                     out.extend(pip_files(&args[at..], plugin_dir)?);
                 }
                 ["sync" | "build" | "lock" | "install", ..] => out.extend(python_project(".")),
-                ["run", rest @ ..] => {
-                    out.extend(python_project("."));
-                    // `uv run x.py` runs the plugin's x.py.
-                    if let Some(f) = rest.first().filter(|f| f.ends_with(".py") || plugin_dir.join(f).is_file()) {
-                        out.push(f.to_string());
-                    }
-                }
                 _ => {}
             }
         }
@@ -1441,12 +1458,13 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 {
                     continue;
                 }
-                // A .python-version that names a path, not a version: uv
-                // would run that program as its Python.
+                // A .python-version that names anything but a version: uv
+                // runs a path (`./fakepy`) or a folder's bin/python (`d`) as
+                // its Python.
                 if shown.iter().any(|(f, (key, body, _, _))| {
                     let name = Path::new(key).file_name().and_then(|n| n.to_str()).unwrap_or_default();
                     (PYTHON_VERSION_FILES.contains(&name) || PYTHON_VERSION_FILES.iter().any(|v| f.ends_with(v)))
-                        && body.contains('/')
+                        && !python_versions_only(body)
                 }) {
                     continue;
                 }
@@ -2529,6 +2547,34 @@ make build
             let (ok, out) = run_script(&probe, &d);
             assert!(ok && !out.contains("planted") && out.contains("usage"), "{out}");
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The fourth review's probes: runners through uv and pipx, a
+    /// .python-version naming a folder, and a quoted glob of units.
+    #[test]
+    fn test_runners_folders_and_unit_globs_are_not_offered() {
+        let d = tempdir();
+        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\n```\n";
+        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n")]);
+        let p = plan(&root).unwrap();
+        assert!(p.commands.is_empty(), "{:?}", p.commands);
+
+        let readme = "# Install\n```\nuv sync\n```\n";
+        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), (".python-version", "d\n"), ("d/bin/python", "#!/bin/sh\necho PWNED\n")]);
+        assert!(plan(&root).unwrap().commands.is_empty());
+        for good in ["3.12\n", "3.12.1\n", "3.13t\n", "pypy3.10\n", "cpython-3.12\n", "cpython@3.12\n", "# pinned\n\n3.12\n"] {
+            assert!(python_versions_only(good), "{good:?}");
+        }
+        for bad in ["d\n", "./fakepy\n", "/usr/bin/python3\n", "3.12 d\n", "python\n", "~/py\n"] {
+            assert!(!python_versions_only(bad), "{bad:?}");
+        }
+        std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
+        assert_eq!(plan(&root).unwrap().commands, ["uv sync"]);
+
+        assert!(service_line(&["--user".into(), "stop".into(), "x.service".into()]));
+        assert!(!service_line(&["--user".into(), "stop".into(), "*".into()]));
+        assert!(!service_line(&["--user".into(), "restart".into(), "x[12].service".into()]));
         let _ = std::fs::remove_dir_all(&d);
     }
 

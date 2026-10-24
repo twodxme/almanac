@@ -279,6 +279,9 @@ fn human_line(line: &str) -> String {
 
 /// `text` with every Python-style error in it put in plain English (see
 /// the module comment). Text with none is returned unchanged.
+/// Past this length a line is shown as it is (see `human_error`).
+const LONGEST_ERROR_LINE: usize = 4096;
+
 pub fn human_error(text: &str) -> String {
     if !text.contains("Error")
         && !text.contains('\'')
@@ -299,7 +302,12 @@ pub fn human_error(text: &str) -> String {
     {
         return text.to_string();
     }
-    let pass = |t: &str| t.split('\n').map(human_line).collect::<Vec<_>>().join("\n");
+    // A line longer than any error message is someone's data, not an error to
+    // reword -- and reading one nested thousands of brackets deep would recurse
+    // that deep.
+    let pass = |t: &str| {
+        t.split('\n').map(|l| if l.len() > LONGEST_ERROR_LINE { l.to_string() } else { human_line(l) }).collect::<Vec<_>>().join("\n")
+    };
     // A display point may pass a text through here twice (a toast of a task
     // log line), and the second pass must change nothing. One pass reads
     // what an error keeps (its sentence, the rest of the line) as well, so
@@ -502,5 +510,12 @@ mod tests {
         }
         // Each line on its own.
         assert_eq!(h("Updated 2\nfailed: IndexError: list index out of range"), "Updated 2\nfailed: Unexpected data");
+    }
+
+    #[test]
+    fn a_line_longer_than_any_error_is_left_alone() {
+        let deep = format!("TypeError: {}{}", "(".repeat(20_000), ")".repeat(20_000));
+        let out = std::thread::Builder::new().stack_size(2 << 20).spawn(move || super::human_error(&deep)).unwrap().join().unwrap();
+        assert!(out.starts_with("TypeError: ((("));
     }
 }
