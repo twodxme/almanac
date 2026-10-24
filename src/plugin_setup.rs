@@ -1108,6 +1108,13 @@ const PACKAGE_FLAGS: &[&str] = &[
     "--no-build-isolation", "--break-system-packages", "-g", "--global",
 ];
 
+/// A path inside the plugin's folder, as `-r`, `-c` and `-e` must name: not
+/// a URL (`-r https://…` fetches a list nothing here shows), not absolute,
+/// and not climbing out with `..`.
+fn plugin_relative(v: &str) -> bool {
+    !v.is_empty() && !v.starts_with(['-', '/', '~']) && !v.contains(':') && !v.split('/').any(|c| c == "..")
+}
+
 /// pip's options whose value is a file `pip_files` shows.
 const PIP_SHOWN_VALUES: &[&str] = &["-r", "--requirement", "-e", "--editable", "-c", "--constraint"];
 
@@ -1148,10 +1155,10 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         if PACKAGE_FLAGS.contains(&a) {
         } else if python && PIP_SHOWN_VALUES.contains(&a) {
             i += 1;
-            if args.get(i).is_none_or(|v| v.starts_with('-')) {
+            if !args.get(i).is_some_and(|v| plugin_relative(v)) {
                 return false;
             }
-        } else if python && a.split_once('=').is_some_and(|(k, _)| PIP_SHOWN_VALUES.contains(&k)) {
+        } else if python && a.split_once('=').is_some_and(|(k, v)| PIP_SHOWN_VALUES.contains(&k) && plugin_relative(v)) {
         } else if a.starts_with('-') {
             return false;
         } else {
@@ -1165,7 +1172,9 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         let dir = w.split_once('[').map_or(w, |(d, _)| d);
         !dir.starts_with('/') && !dir.split('/').any(|c| c == "..") && plugin_dir.join(dir).is_dir()
     };
-    let specs = |s: &[&str]| s.iter().all(|w| package_name(w, plugin_dir) || (python && local(w)));
+    // In a Python spec `@` is a direct reference -- `foo@evil-dir` is
+    // `foo @ evil-dir`, a folder uv builds -- so a name there has none.
+    let specs = |s: &[&str]| s.iter().all(|w| (package_name(w, plugin_dir) && !(python && w.contains('@'))) || (python && local(w)));
     let scripts = || package_script_names(plugin_dir);
     match (prog, words.as_slice()) {
         ("npm", ["install" | "i" | "ci" | "add" | "update", rest @ ..]) => specs(rest),
@@ -2675,7 +2684,7 @@ make build
     #[test]
     fn test_runners_folders_and_unit_globs_are_not_offered() {
         let d = tempdir();
-        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\nnpm exe cowsay\nnpm innit foo\nnpm crea foo\nnpm install --script-shell ./evil.sh\nnpm install --userconfig ./evil.npmrc\npnpm install --config.script-shell=./evil.sh\nnpm run build --node-options=--require=./evil.js\nuv sync --python ./fakepy\nuv pip install --python ./fakepy .\npipx install --python ./fakepy .\nyarn node evil.js\nnpm explore x -- ./run\nuv tool install --from=./sub x\nuv sync --config-file ./c.toml\nnpm install ./local-pkg\nyarn missing-script\nyarn build\npnpm build\nnpm install foo@..\npnpm add foo@.\nyarn add foo@..\nbun add foo@..\nnpm install evil.tgz\npip install evil.tar.gz\nuv pip install evil.zip\npipx install evil.whl\npip install ./evil.tar.gz\nuv pip install ./evil.zip\nnpm install later.tgz\npip install later.whl\npython3 -m pip install evil.tar.gz\nuv tool install evil.tar.gz\nnpm install foo@~\nnpm install evil-dir\n```\n";
+        let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\nnpm exe cowsay\nnpm innit foo\nnpm crea foo\nnpm install --script-shell ./evil.sh\nnpm install --userconfig ./evil.npmrc\npnpm install --config.script-shell=./evil.sh\nnpm run build --node-options=--require=./evil.js\nuv sync --python ./fakepy\nuv pip install --python ./fakepy .\npipx install --python ./fakepy .\nyarn node evil.js\nnpm explore x -- ./run\nuv tool install --from=./sub x\nuv sync --config-file ./c.toml\nnpm install ./local-pkg\nyarn missing-script\nyarn build\npnpm build\nnpm install foo@..\npnpm add foo@.\nyarn add foo@..\nbun add foo@..\nnpm install evil.tgz\npip install evil.tar.gz\nuv pip install evil.zip\npipx install evil.whl\npip install ./evil.tar.gz\nuv pip install ./evil.zip\nnpm install later.tgz\npip install later.whl\nuv pip install foo@evil-dir\nuv tool install foo@evil-dir\npip install foo@evil-dir\npipx install foo@evil-dir\npip install -r https://example.com/r.txt\npip install --requirement=https://example.com/r.txt\npip install -c https://example.com/c.txt .\nuv pip install -r http://127.0.0.1:8765/r.txt\npip install -r /etc/x\npip install -e ../x\npython3 -m pip install evil.tar.gz\nuv tool install evil.tar.gz\nnpm install foo@~\nnpm install evil-dir\n```\n";
         let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n"), ("evil.sh", "#!/bin/sh\necho PWNED\n"), ("evil.js", "\n"), ("evil.npmrc", "\n"), ("fakepy", "#!/bin/sh\n"), ("c.toml", "\n"), ("sub/pyproject.toml", "[project]\n"), ("local-pkg/package.json", "{}\n"), ("evil.tgz", "x"), ("evil.tar.gz", "x"), ("evil.zip", "x"), ("evil.whl", "x"), ("evil-dir/package.json", "{}\n")]);
         let p = plan(&root).unwrap();
         assert!(p.commands.is_empty(), "{:?}", p.commands);
@@ -2697,9 +2706,9 @@ make build
         assert_eq!(plan(&root).unwrap().commands, ["uv sync"]);
 
         // What a README actually writes is still offered.
-        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "npm install left-pad@1.3.0 @scope/pkg", "pnpm install", "yarn", "yarn run build", "bun install", "pip install requests black==24.1", "pipx install ."];
+        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "npm install left-pad@1.3.0 @scope/pkg", "pnpm install", "yarn", "yarn run build", "bun install", "pip install requests black==24.1", "pip install -r requirements.txt", "pip install -e .", "pip install --user .", "uv pip install -e .", "python3 -m pip install --user -r requirements.txt", "pipx install ."];
         let readme = format!("# Install\n```\n{}\n```\n", legit.join("\n"));
-        let root = plugin_with(&d, &readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n")]);
+        let root = plugin_with(&d, &readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("requirements.txt", "requests\n")]);
         let _ = std::fs::remove_file(root.join(".python-version"));
         assert_eq!(plan(&root).unwrap().commands, legit);
 
