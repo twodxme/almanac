@@ -1136,10 +1136,8 @@ impl Win {
         };
 
         // Checked against the asset's published sha256 when it has one.
-        crate::appimage::download_verified(&p.download_url, dest, Some(&progress), &p.sha256)?;
-        if !p.sha256.is_empty() {
-            log("checksum verified");
-        }
+        let got = crate::appimage::download_verified(&p.download_url, dest, Some(&progress), &p.sha256)?;
+        log(if got.checksum_verified { "checksum verified" } else { "unverified (no checksum published)" });
         log("downloaded, registering");
 
         // Read and written under the registry's lock, so an entry another

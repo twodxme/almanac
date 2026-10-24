@@ -1306,7 +1306,9 @@ pub fn update_appimages() -> Result<usize, String> {
         &mut |_key, rec| check_record(rec),
         &mut |url, dest, sha256| {
             // `Request(url)` reads a non-string url as `str(url)`
-            appimage::download_verified(&py_str(url), dest, None, sha256).map(|_| ()).map_err(|e| py_net_error(&e))
+            appimage::download_verified(&py_str(url), dest, None, sha256)
+                .map(|d| d.checksum_verified)
+                .map_err(|e| py_net_error(&e))
         },
         &mut |dest, key| appimage::install_desktop_entry(dest, key).map(|_| ()).map_err(|e| py_net_error(&e)),
         &mut save_updated,
@@ -1516,14 +1518,15 @@ fn check_record(rec: &Value) -> Result<Value, String> {
 
 /// `update_appimages` with the registry and the four calls it makes passed
 /// in (`check(key, record)` giving the dict `appimage.check` returns,
-/// `download(url, dest, sha256)`, `install_desktop_entry(dest, key)`, and
+/// `download(url, dest, sha256)`, true when the download was checked against
+/// a published sha256, `install_desktop_entry(dest, key)`, and
 /// `save(key, version, dest)`, which records one entry's update, see
 /// `save_updated`). Errors are the `"Type: message"` strings the ported
 /// modules return; `Err` is an exception the Python lets out.
 pub fn update_appimages_with(
     mut reg: PyJson,
     check: &mut dyn FnMut(&str, &Value) -> Result<Value, String>,
-    download: &mut dyn FnMut(&Value, &Path, &str) -> Result<(), String>,
+    download: &mut dyn FnMut(&Value, &Path, &str) -> Result<bool, String>,
     install: &mut dyn FnMut(&Path, &str) -> Result<(), String>,
     save: &mut dyn FnMut(&PyStr, &Value, &Path) -> Result<(), String>,
 ) -> Result<usize, String> {
@@ -1575,7 +1578,11 @@ pub fn update_appimages_with(
         let sha256 = latest.get("sha256").and_then(Value::as_str).unwrap_or_default();
         let attempt = (|| -> Result<(), String> {
             let dest = record_path(&reg, rec)?;
-            download(&url, &dest, sha256)?;
+            // Without a digest the build is only as trusted as TLS and the
+            // ELF check: the log says so rather than passing it over.
+            if !download(&url, &dest, sha256)? {
+                log("  unverified (no checksum published)");
+            }
             mark_updated(&mut reg, rec, &version);
             save(&key, &version, &dest)?;
             install(&dest, &key_s)?;
@@ -2624,11 +2631,28 @@ mod tests {
         let (r, _) = capture_log(|| {
             update_appimages_with(reg, &mut check, &mut |_, _, sha| {
                 seen.push(sha.to_string());
-                Ok(())
+                Ok(true)
             }, &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(seen, vec![hex.clone()]);
+        take_updated();
+    }
+
+    /// A build with no published checksum is installed, and the log says
+    /// it was not verified; a checked one gets no such line.
+    #[test]
+    fn an_unverified_download_is_logged() {
+        take_updated();
+        for (verified, want) in [(false, true), (true, false)] {
+            let mut check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
+            let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+            let (r, lines) = capture_log(|| {
+                update_appimages_with(reg, &mut check, &mut |_, _, _| Ok(verified), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            });
+            assert_eq!(r, Ok(1));
+            assert_eq!(lines.iter().any(|l| l == "  unverified (no checksum published)"), want, "{lines:?}");
+        }
         take_updated();
     }
 
@@ -2638,7 +2662,7 @@ mod tests {
         let mut no_check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
         let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
         let (r, _) = capture_log(|| {
-            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(take_updated(), vec!["wordcraft 0.7.0 → 0.8.0".to_string()]);
@@ -2783,7 +2807,7 @@ mod tests {
     #[test]
     fn a_registry_that_is_not_a_dict_is_an_error() {
         let mut no = |_: &str, _: &Value| -> Result<Value, String> { Ok(json!({})) };
-        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
+        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
         assert_eq!(r, Err("AttributeError: 'list' object has no attribute 'items'".into()));
         assert_eq!(check_record(&json!("x")), Err("AttributeError: 'str' object has no attribute 'get'".into()));
     }
