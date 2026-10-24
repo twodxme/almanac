@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 20:21-0700\n"
+"POT-Creation-Date: 2026-10-23 20:30-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -112,7 +112,7 @@ msgid "Open the release"
 msgstr ""
 
 #: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:895
-#: src/ui/packages/details.rs:285 src/ui/plugins/updates.rs:262
+#: src/ui/packages/details.rs:281 src/ui/plugins/updates.rs:262
 #: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
 msgid "Update"
 msgstr ""
@@ -414,11 +414,11 @@ msgstr ""
 msgid "Files"
 msgstr ""
 
-#: src/ui/packages/details.rs:228
+#: src/ui/packages/details.rs:224
 msgid "Project page"
 msgstr ""
 
-#: src/ui/packages/details.rs:248
+#: src/ui/packages/details.rs:244
 msgid "Dependencies"
 msgstr ""
 
