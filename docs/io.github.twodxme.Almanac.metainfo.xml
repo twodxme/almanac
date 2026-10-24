@@ -96,6 +96,12 @@
   </requires>
 
   <releases>
+    <release version="2.1.6" date="2026-10-24">
+      <description>
+        <p>Building the package no longer fails now and then on a test that
+        timed how soon GTK frees a closed window. Nothing else changes.</p>
+      </description>
+    </release>
     <release version="2.1.5" date="2026-10-23">
       <description>
         <p>Scheduled updates hold more of what can stop a boot: every kernel
