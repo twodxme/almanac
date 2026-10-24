@@ -17,9 +17,24 @@
 //!   tool opens in the plugin (`make`'s Makefile, `npm install`'s
 //!   package.json, `pip install .`'s pyproject.toml, `cargo build`'s
 //!   build.rs, `go run`'s go.mod). A line whose file cannot be shown is not
-//!   offered. Before every command the shown files are checked unchanged,
-//!   and every build file the tool would have opened but that was absent is
-//!   checked still absent; either check failing stops the run.
+//!   offered. Before every command the shown files are checked unchanged
+//!   (and every path naming one still resolving, through any symlink, to
+//!   the file shown), and every build file the tool would have opened but
+//!   that was absent is checked still absent; either check failing stops
+//!   the run.
+//!
+//!   A line is offered only when bash would read it as plain words, joined
+//!   by `&&` at most: no variables, globs, braces, `;`, pipes, redirections,
+//!   subshells or comments (`literal_words`), and no `cd`. Each step then
+//!   runs as exactly the words read from it, quoted, not as the README's
+//!   text, so the shell cannot expand it into anything other than what the
+//!   checks reasoned about.
+//!
+//!   The checks are made as each command starts; nothing watches files while
+//!   it runs. Work an earlier step left running in the background (a daemon,
+//!   a forked helper, a service `systemctl --user --now` started) can change
+//!   a file after its check and before, or while, the next command reads it.
+//!   Nothing here can stop that, short of not running the earlier step.
 //!
 //!   That is all it guarantees. What a shown file goes on to run -- another
 //!   script, a module it imports, a Makefile recipe's `./x.sh`, a
@@ -233,6 +248,13 @@ pub struct SetupPlan {
     /// puts in front of every command).
     #[serde(with = "ordered_map")]
     pub digests: Vec<(OsString, String)>,
+    /// (path as a step names it, the absolute file it resolved to): `scripts`
+    /// and `digests` are keyed by the file symlinks lead to, so a symlink
+    /// (`./install`, or a folder on the way, `tools/`) repointed after the
+    /// plan at another file of the plugin's would leave every digest true
+    /// while the step runs the other file. Both checks resolve each path
+    /// again and stop when it lands anywhere else.
+    pub links: Vec<(String, String)>,
     /// Build files a step's tool would open but that were not there when the
     /// plan was made (paths relative to the plugin): a step before it (a
     /// postinstall, a build script) could write one -- a GNUmakefile, which
@@ -553,6 +575,111 @@ fn shlex_split(s: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// One word of a setup step as bash reads it: its text, and where bash puts
+/// `$HOME` for an unquoted tilde (`PREFIX=~/.local`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Word {
+    text: String,
+    home: Option<usize>,
+}
+
+static ASSIGN_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z_][A-Za-z0-9_]*=\z").unwrap());
+
+/// The words of one step (a line, or one side of its `&&`) when bash would
+/// read it as nothing but plain words -- the words `shlex_split` gives, which
+/// is what every check here reasons about -- or None. The planner splits
+/// words; the terminal runs bash, which also expands `$x`, `${x}`,
+/// backticks, globs and braces, and reads `;`, `|`, `&`, redirections,
+/// subshells and comments. A step that leans on any of that could run what
+/// was never shown (`bash ${a}x.sh` shows a file named `${a}x.sh` and runs
+/// `x.sh`), so it is not offered at all. Allowed: plain characters, single
+/// quotes (nothing inside is special to bash either), double quotes with no
+/// `$`, backtick or backslash in them, and one tilde bash expands that does
+/// not name a file the planner opens: right after the `=` of a word shaped
+/// like an assignment (`make install PREFIX=~/.local`), as bash expands it
+/// there. A bare `~/x` or `~user` is refused: it could be the path a step
+/// runs, and the planner reads paths in the plugin, not the home folder.
+fn literal_words(part: &str) -> Option<Vec<Word>> {
+    #[derive(PartialEq)]
+    enum Q {
+        Plain,
+        Single,
+        Double,
+    }
+    let mut words: Vec<Word> = Vec::new();
+    // The word being read, and whether any of it was quoted so far.
+    let mut cur: Option<(Word, bool)> = None;
+    let mut state = Q::Plain;
+    let chars: Vec<char> = part.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        // Control characters (a `\r` bash keeps in the word, shlex splits
+        // at) and spaces other than ' ' and tab would show one thing and
+        // run another.
+        if (c.is_control() && c != '\t') || (py_isspace(c) && c != ' ' && c != '\t') {
+            return None;
+        }
+        match state {
+            Q::Single => match c {
+                '\'' => state = Q::Plain,
+                _ => cur.as_mut()?.0.text.push(c),
+            },
+            Q::Double => match c {
+                '"' => state = Q::Plain,
+                '$' | '`' | '\\' => return None,
+                _ => cur.as_mut()?.0.text.push(c),
+            },
+            Q::Plain => match c {
+                ' ' | '\t' => {
+                    if let Some((w, _)) = cur.take() {
+                        words.push(w);
+                    }
+                }
+                '\'' | '"' => {
+                    cur.get_or_insert_with(|| (Word { text: String::new(), home: None }, false)).1 = true;
+                    state = if c == '\'' { Q::Single } else { Q::Double };
+                }
+                '~' => {
+                    let (w, quoted) = cur.as_mut()?;
+                    // The tilde prefix runs to the first unquoted slash; one
+                    // with anything after it (`~user`, `~"/x"`) is not taken.
+                    let ends = matches!(chars.get(i + 1), None | Some('/' | ' ' | '\t'));
+                    if *quoted || w.home.is_some() || !ends || !ASSIGN_NAME.is_match(&w.text) {
+                        return None;
+                    }
+                    w.home = Some(w.text.len());
+                    w.text.push('~');
+                }
+                '$' | '`' | '*' | '?' | '[' | ']' | '{' | '}' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '!'
+                | '#' | '\\' => return None,
+                _ => cur.get_or_insert_with(|| (Word { text: String::new(), home: None }, false)).0.text.push(c),
+            },
+        }
+    }
+    if state != Q::Plain {
+        return None;
+    }
+    words.extend(cur.map(|(w, _)| w));
+    // Every check reads the line through shlex_split: the two must agree.
+    let split = shlex_split(part).ok()?;
+    (split.len() == words.len() && split.iter().zip(&words).all(|(s, w)| *s == w.text)).then_some(words)
+}
+
+/// A step's words, quoted for bash so that it runs exactly them: each in
+/// single quotes (always: an unquoted `a=b` first would be an assignment,
+/// an `if` a keyword), the tilde `literal_words` allows as `"$HOME"`, which
+/// is what bash would have put there.
+fn argv_line(words: &[Word]) -> String {
+    let sq = |s: &str| format!("'{}'", s.replace('\'', "'\"'\"'"));
+    words
+        .iter()
+        .map(|w| match w.home {
+            Some(at) => format!("{}\"$HOME\"{}", sq(&w.text[..at]), sq(&w.text[at + 1..])),
+            None => sq(&w.text),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Code-block lines, with backslash continuations joined and prompts cut.
 fn _logical_lines(block: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -630,8 +757,12 @@ fn program(words: &[String]) -> Option<(&str, &[String])> {
 /// is not offered at all, rather than run with nothing shown for it.
 fn step_kind(part: &str) -> Option<Kind> {
     let words = shlex_split(part).ok()?;
-    let (prog, _) = program(&words)?;
+    let (prog, args) = program(&words)?;
     match prog {
+        // `systemctl --user enable ./x.service` links a unit file by path:
+        // a file of the plugin's, run as a service with nothing shown. Only
+        // units already installed, named without a path, are started.
+        "systemctl" if args.iter().any(|a| a.contains('/')) => None,
         p if p.contains('/') => Some(Kind::Script),
         "bash" | "sh" | "zsh" | "dash" => Some(Kind::Script),
         "make" | "cmake" | "meson" | "ninja" | "cargo" | "go" | "npm" | "pnpm" | "yarn" | "bun" | "uv" | "pip"
@@ -704,7 +835,15 @@ const JUSTFILES: [&str; 2] = ["justfile", ".justfile"];
 /// Makefile. A later `ninja -C DIR` or `make` reads one that was not there
 /// when the plan was made, and that is no file appearing unseen: it is the
 /// output of a step shown, from build files shown. (Normalised paths.)
+///
+/// `./configure` counts only as the plugin's top-level one, which writes the
+/// top-level Makefile: any script that happens to be named `configure`
+/// (`./tools/configure`) used to excuse ./Makefile and ./build.ninja, so a
+/// file nothing shown writes could appear unchecked before `make`.
 fn generated_by(part: &str, files: &[String]) -> Vec<String> {
+    if files.iter().any(|f| py_path_str(Path::new(f)) == "configure") {
+        return vec!["Makefile".to_string()];
+    }
     let dir = (|| {
         let words = shlex_split(part).ok()?;
         let (prog, args) = program(&words)?;
@@ -730,7 +869,6 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
                 // Without -B, cmake configures into the folder it runs in.
                 Some(b.unwrap_or_else(|| ".".into()))
             }
-            _ if files.iter().any(|f| Path::new(f).file_name().is_some_and(|n| n == "configure")) => Some(".".into()),
             _ => None,
         }
     })();
@@ -1087,11 +1225,12 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
 }
 
 /// One file a command runs, as the confirmation will show it: its path in
-/// the plugin, its text and the SHA-256 of its bytes. None for a file that
-/// is not the plugin's own (missing, a folder, outside it once symlinks are
-/// followed), cannot be read, or is not text (a NUL byte: a binary cannot be
-/// shown, so it is not run either).
-fn shown_file(plugin_dir: &Path, rel: &str) -> Option<(OsString, String, String)> {
+/// the plugin, its text, the SHA-256 of its bytes, and the absolute path it
+/// resolved to (`SetupPlan::links`). None for a file that is not the
+/// plugin's own (missing, a folder, outside it once symlinks are followed),
+/// cannot be read, or is not text (a NUL byte: a binary cannot be shown, so
+/// it is not run either).
+fn shown_file(plugin_dir: &Path, rel: &str) -> Option<(OsString, String, String, String)> {
     use sha2::{Digest, Sha256};
     let target = resolve(&plugin_dir.join(rel));
     let base = resolve(plugin_dir);
@@ -1106,7 +1245,7 @@ fn shown_file(plugin_dir: &Path, rel: &str) -> Option<(OsString, String, String)
     // As `read_text` reads it: all of it, since it runs in full (see
     // `describe` for the one limit on showing it).
     let body = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n");
-    Some((key, body, hex::encode(Sha256::digest(&bytes))))
+    Some((key, body, hex::encode(Sha256::digest(&bytes)), esc(target.as_os_str())))
 }
 
 /// The SHA-256 of a file of the plugin's, as `shown_file` takes it; None
@@ -1139,6 +1278,12 @@ fn any_case_present(plugin_dir: &Path, name: &str) -> bool {
 /// made -- or a build file that was absent and is now there. Checked again
 /// in the terminal before every command.
 pub fn unchanged(p: &SetupPlan) -> Result<(), String> {
+    // Each path a step names still leads to the file that was shown.
+    for (written, target) in &p.links {
+        if esc(resolve(&p.plugin_dir.join(written)).as_os_str()) != *target {
+            return Err(written.clone());
+        }
+    }
     for (name, _) in &p.scripts {
         let want = p.digests.iter().find(|(k, _)| k == name).map(|(_, d)| d.as_str());
         if want.is_none() || digest_now(&p.plugin_dir, name).as_deref() != want {
@@ -1201,6 +1346,14 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 if step_kind(part).is_none() {
                     continue;
                 }
+                // Only a step bash reads as plain words, which the terminal
+                // then runs as exactly those words (`literal_words`).
+                let Some(words) = literal_words(part) else { continue };
+                // A `cd` (bare, `pushd`, `popd`, anywhere) would move every
+                // later check and command out of the plugin's folder.
+                if words.iter().any(|w| matches!(w.text.as_str(), "cd" | "pushd" | "popd")) {
+                    continue;
+                }
                 // The file of the plugin's the command names to run is shown
                 // in full, or the command is not offered: only a file the
                 // plugin itself ships, never outside it.
@@ -1235,8 +1388,11 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                     Some(("just", _)) => JUSTFILES.iter().copied().filter(|j| !any_case_present(plugin_dir, j)).collect(),
                     _ => Vec::new(),
                 };
-                let Some(shown) =
-                    files.iter().chain(&present).map(|f| shown_file(plugin_dir, f)).collect::<Option<Vec<_>>>()
+                let Some(shown) = files
+                    .iter()
+                    .chain(&present)
+                    .map(|f| shown_file(plugin_dir, f).map(|s| (f, s)))
+                    .collect::<Option<Vec<_>>>()
                 else {
                     continue;
                 };
@@ -1254,7 +1410,10 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                         out.absent_any_case.push(f.to_string());
                     }
                 }
-                for (key, body, digest) in shown {
+                for (written, (key, body, digest, target)) in shown {
+                    if !out.links.iter().any(|(w, _)| w == written) {
+                        out.links.push((written.clone(), target));
+                    }
                     if let Some(slot) = out.scripts.iter_mut().find(|(k, _)| *k == key) {
                         slot.1 = body;
                     } else {
@@ -1303,10 +1462,23 @@ fn any_case_glob(name: &str) -> String {
 /// command is preceded by a check that every file shown is still the one
 /// shown, and that every build file absent then is still absent: a step
 /// before it (a Makefile, a build script, a postinstall) could write one.
+///
+/// A command runs as the words `literal_words` read from it, each quoted, not
+/// as the README's text: bash then has nothing left to expand, so what runs
+/// is the argv the checks reasoned about. A command that no longer reads as
+/// plain words stops the script there.
 pub fn terminal_script(p: &SetupPlan) -> String {
     let mut lines = vec![format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))), "set -e".to_string()];
     let stop = |shown: &str| shlex_quote(&format!("{shown} changed after it was shown -- setup stopped."));
     for cmd in &p.commands {
+        for (written, target) in &p.links {
+            lines.push(format!(
+                "test \"$(realpath -e -- {})\" = {} || {{ echo; echo {}; exit 1; }}",
+                shlex_quote(written),
+                shlex_quote(target),
+                stop(written),
+            ));
+        }
         for (name, digest) in &p.digests {
             let shown = esc(name);
             lines.push(format!(
@@ -1329,7 +1501,13 @@ pub fn terminal_script(p: &SetupPlan) -> String {
             ));
         }
         lines.push(format!("echo; echo '$ '{}", shlex_quote(cmd)));
-        lines.push(cmd.clone());
+        match literal_words(cmd) {
+            Some(words) if !words.is_empty() => lines.push(argv_line(&words)),
+            _ => {
+                let msg = shlex_quote(&format!("{cmd} is not plain words -- setup stopped."));
+                lines.push(format!("echo; echo {msg}; exit 1"));
+            }
+        }
     }
     lines.push("echo; echo 'Setup finished.'".to_string());
     lines.join("\n")
@@ -1663,7 +1841,7 @@ make build
         let guard = format!("test \"$(sha256sum < install)\" = '{want}  -' || {{");
         // Before each command, the make that could rewrite it included.
         assert_eq!(script.matches(&guard).count(), 2, "{script}");
-        assert!(script.find(&guard) < script.find("make\n"));
+        assert!(script.find(&guard) < script.find("\n'make'\n"));
         std::fs::write(root.join("install"), "echo evil\n").unwrap();
         assert_eq!(unchanged(&p), Err("install".to_string()));
         std::fs::remove_file(root.join("install")).unwrap();
@@ -1953,6 +2131,237 @@ make build
         assert!(describe(&build).contains(&format!("  $ ./install\n{line}")), "{}", describe(&build));
         let script = SetupPlan { commands: vec!["./install".into(), "systemctl --user enable x".into()], ..Default::default() };
         assert!(!describe(&script).contains(line));
+    }
+
+    /// A plugin folder with this README and these files.
+    fn plugin_with(d: &Path, readme: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = d.join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), readme).unwrap();
+        for (name, body) in files {
+            if let Some(parent) = Path::new(name).parent() {
+                std::fs::create_dir_all(root.join(parent)).unwrap();
+            }
+            std::fs::write(root.join(name), body).unwrap();
+        }
+        root
+    }
+
+    /// The terminal script with `commands` in place of the plan's, run for
+    /// real: (succeeded, what it printed).
+    fn run_script(p: &SetupPlan, home: &Path) -> (bool, String) {
+        let out = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(terminal_script(p))
+            .env("HOME", home)
+            .output()
+            .unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// The reviewer's probes: the planner split words while bash expanded
+    /// them, so `bash ${a}x.sh` showed a harmless file literally named
+    /// `${a}x.sh` and ran the unshown `x.sh`. Every line bash reads as more
+    /// than plain words is now refused, `cd` in any form with it.
+    #[test]
+    fn test_a_line_bash_would_expand_is_not_offered() {
+        let d = tempdir();
+        let probes = [
+            "bash ${a}x.sh",
+            "python3 ${a}x.py",
+            "bash $HOME/x.sh",
+            "bash *.sh",
+            "bash x?.sh",
+            "bash [x].sh",
+            "bash {x,y}.sh",
+            "bash ~/x.sh",
+            "make install; ./evil.sh",
+            "make x `./evil.sh`",
+            "make x $(./evil.sh)",
+            "make all; cd",
+            "make all;cd",
+            "make | sh",
+            "make & ./evil.sh",
+            "make > Makefile.new",
+            "make < in",
+            "(make)",
+            "make # comment",
+            "make \"$(./evil.sh)\"",
+            "make \"`./evil.sh`\"",
+            "make \"\\$x\"",
+            "make a\\ b",
+            "make 'open",
+            "make cd",
+            "sudo make PREFIX=~user/x",
+            "make PREFIX=a:~/b",
+            "make ~/x",
+        ];
+        let readme = format!("# Install\n```\n{}\n```\n", probes.join("\n"));
+        let files: Vec<(&str, &str)> = vec![
+            ("${a}x.sh", "echo harmless\n"),
+            ("${a}x.py", "print('harmless')\n"),
+            ("x.sh", "echo evil\n"),
+            ("x.py", "print('evil')\n"),
+            ("evil.sh", "echo evil\n"),
+            ("Makefile", "all:\n\techo make\n"),
+        ];
+        let root = plugin_with(&d, &readme, &files);
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(p.commands.is_empty(), "offered: {:?}", p.commands);
+        assert!(p.scripts.is_empty(), "shown: {:?}", p.scripts);
+        // And each is refused on its own terms, not by some other rule.
+        // (`\r` cannot reach a step through a README, which splits lines at
+        // it, but bash would keep it in a word that shlex splits.)
+        for probe in probes.iter().filter(|l| !l.contains("cd")).chain(&["make install\rnow"]) {
+            assert!(literal_words(probe).is_none(), "{probe} read as plain words");
+        }
+    }
+
+    /// What legitimate setup lines look like still reads as plain words, and
+    /// runs as exactly those words: quotes as bash takes them, the one tilde
+    /// bash expands as `$HOME`.
+    #[test]
+    fn test_a_step_runs_as_exactly_the_words_shown() {
+        let d = tempdir();
+        let readme = concat!(
+            "# Install\n```\n",
+            "make && sudo make install\n",
+            "npm install\n",
+            "pip install -e .\n",
+            "make install PREFIX=~/.local\n",
+            "./show.sh 'a b' \"c d\" e'f'g PREFIX=~ X=~/y\n",
+            "```\n"
+        );
+        let show = "for a in \"$@\"; do printf '[%s]' \"$a\"; done; echo\n";
+        let root = plugin_with(
+            &d,
+            readme,
+            &[("Makefile", "all:\n"), ("package.json", "{}\n"), ("pyproject.toml", "[project]\n"), ("show.sh", show)],
+        );
+        std::fs::set_permissions(root.join("show.sh"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(
+            p.commands,
+            [
+                "make",
+                "sudo make install",
+                "npm install",
+                "pip install -e .",
+                "make install PREFIX=~/.local",
+                "./show.sh 'a b' \"c d\" e'f'g PREFIX=~ X=~/y",
+            ]
+        );
+        let script = terminal_script(&p);
+        assert!(script.contains("\n'sudo' 'make' 'install'\n"), "{script}");
+        assert!(script.contains("\n'make' 'install' 'PREFIX='\"$HOME\"'/.local'\n"), "{script}");
+        // Run for real, with only the stand-in script as a command.
+        let home = d.join("home");
+        let probe = SetupPlan { commands: vec![p.commands[5].clone()], ..p.clone() };
+        let (ok, out) = run_script(&probe, &home);
+        let _ = std::fs::remove_dir_all(&d);
+        let h = home.display();
+        assert!(ok, "{out}");
+        assert!(out.contains(&format!("[a b][c d][efg][PREFIX={h}][X={h}/y]\n")), "{out}");
+    }
+
+    /// Shown files were kept under the file a symlink leads to, and both
+    /// checks hashed only that: repointing `./install` (or a folder on the
+    /// way) at another file of the plugin's after the plan passed. Each path
+    /// is now resolved again, by Almanac and by the terminal.
+    #[test]
+    fn test_a_symlink_repointed_after_the_plan_stops_the_run() {
+        use std::os::unix::fs::symlink;
+        let d = tempdir();
+        let root = plugin_with(
+            &d,
+            "# Install\n```\n./install\nbash tools/x.sh\n```\n",
+            &[("real.sh", "echo real\n"), ("evil.sh", "echo evil\n"), ("t1/x.sh", "echo one\n"), ("t2/x.sh", "echo two\n")],
+        );
+        symlink("real.sh", root.join("install")).unwrap();
+        symlink("t1", root.join("tools")).unwrap();
+        std::fs::set_permissions(root.join("real.sh"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["./install", "bash tools/x.sh"]);
+        let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
+        assert_eq!(names, ["real.sh", "t1/x.sh"]);
+        let base = resolve(&root);
+        assert_eq!(
+            p.links,
+            [
+                ("./install".to_string(), esc(base.join("real.sh").as_os_str())),
+                ("tools/x.sh".to_string(), esc(base.join("t1/x.sh").as_os_str())),
+            ]
+        );
+        let probe = SetupPlan { commands: vec!["./install".into()], ..p.clone() };
+        assert_eq!(unchanged(&p), Ok(()));
+        let (ok, out) = run_script(&probe, &d);
+        assert!(ok && out.contains("\nreal\n"), "{out}");
+
+        // The file a symlink names, repointed.
+        std::fs::remove_file(root.join("install")).unwrap();
+        symlink("evil.sh", root.join("install")).unwrap();
+        assert_eq!(unchanged(&p), Err("./install".to_string()));
+        let (ok, out) = run_script(&probe, &d);
+        assert!(!ok && !out.contains("evil") && out.contains("./install changed after it was shown"), "{out}");
+        std::fs::remove_file(root.join("install")).unwrap();
+        symlink("real.sh", root.join("install")).unwrap();
+        assert_eq!(unchanged(&p), Ok(()));
+
+        // A folder on the way, repointed.
+        std::fs::remove_file(root.join("tools")).unwrap();
+        symlink("t2", root.join("tools")).unwrap();
+        let after = unchanged(&p);
+        let (ok, out) = run_script(&probe, &d);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(after, Err("tools/x.sh".to_string()));
+        assert!(!ok && out.contains("tools/x.sh changed after it was shown"), "{out}");
+    }
+
+    /// `systemctl --user enable --now ./x.service` links and starts a unit
+    /// file of the plugin's by path, with nothing shown: not offered.
+    #[test]
+    fn test_a_unit_given_by_path_is_not_offered() {
+        let d = tempdir();
+        let root = plugin_with(
+            &d,
+            concat!(
+                "# Install\n```\n",
+                "systemctl --user enable --now ./x.service\n",
+                "systemctl --user link /tmp/x.service\n",
+                "systemctl --user enable --now x.service\n",
+                "```\n"
+            ),
+            &[("x.service", "[Service]\nExecStart=/bin/true\n")],
+        );
+        let p = plan(&root).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(p.commands, ["systemctl --user enable --now x.service"]);
+        assert_eq!(step_kind("systemctl --user enable ./x.service"), None);
+    }
+
+    /// Any script named `configure` (`./tools/configure`) used to excuse
+    /// ./Makefile and ./build.ninja from being held absent. Only the
+    /// plugin's top-level configure, which writes ./Makefile, does now.
+    #[test]
+    fn test_only_the_top_level_configure_excuses_its_makefile() {
+        let d = tempdir();
+        let root = plugin_with(
+            &d,
+            "# Install\n```\n./tools/configure && make\nninja\n```\n",
+            &[("tools/configure", "echo configuring\n")],
+        );
+        let p = plan(&root).unwrap();
+        assert_eq!(p.commands, ["./tools/configure", "make", "ninja"]);
+        for held in ["Makefile", "build.ninja"] {
+            assert!(p.absent.contains(&held.to_string()), "{held}: {:?}", p.absent);
+        }
+        std::fs::write(root.join("Makefile"), "all:\n\techo unseen\n").unwrap();
+        let after = unchanged(&p);
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(after, Err("Makefile".to_string()));
+        assert_eq!(generated_by("./configure", &["./configure".into()]), ["Makefile"]);
+        assert!(generated_by("./tools/configure", &["./tools/configure".into()]).is_empty());
     }
 
     #[test]
