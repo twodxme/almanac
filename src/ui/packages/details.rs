@@ -354,7 +354,9 @@ impl Win {
             row.set_title(title);
         }
         if !subtitle.is_empty() {
-            row.put_subtitle(subtitle);
+            // Subtitles carry error text (a failed check, a History entry):
+            // shown in plain words, not Python's.
+            row.put_subtitle(&crate::util::human_error(subtitle));
         }
         row
     }

@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
+use crate::util::human_error;
 
 /// A step that is work done in this process rather than a command --
 /// downloading and registering an AppImage, say. It takes the log function
@@ -366,7 +367,7 @@ impl TaskDialog {
                     // called, so the dialog pulsed on and could not be
                     // closed. It is in the log now, and the task fails.
                     eprintln!("Exception in thread Thread-{n} (_work):\nTraceback (most recent call last):\n{exc}");
-                    idle_append(&guard, &format!("failed: {exc}"));
+                    idle_append(&guard, &format!("failed: {}", human_error(&exc)));
                     glib::idle_add_once(move || guard.get_ref().finish(false));
                 }
             }
@@ -1070,8 +1071,11 @@ fn work(
             // downloading and registering an AppImage, say. It takes the log
             // function and raises to fail.
             StepAction::Call(f) => {
-                if let Err(exc) = f(log) {
-                    log(&format!("failed: {exc}"));
+                // What a step of ours logs is ours to word (its errors in
+                // plain English); a command's output below is shown as is.
+                let own = |line: &str| log(&human_error(line));
+                if let Err(exc) = f(&own) {
+                    log(&format!("failed: {}", human_error(&exc)));
                     ok = false;
                     if !keep_going {
                         break;
@@ -1088,7 +1092,7 @@ fn work(
         let proc = match spawn(&cmd) {
             Ok(p) => Arc::new(p),
             Err(SpawnError::Os(exc)) => {
-                log(&format!("could not start: {exc}"));
+                log(&format!("could not start: {}", human_error(&exc)));
                 ok = false;
                 if !keep_going {
                     break;
@@ -1105,7 +1109,7 @@ fn work(
             // Nobody reads its output any more: stop it (it leads a session
             // of its own, so its group is its pid) rather than leave it to
             // block on a full pipe, and still reap it below.
-            log(&format!("could not read its output: {exc}"));
+            log(&format!("could not read its output: {}", human_error(exc)));
             let _ = nix::sys::signal::killpg(proc.pid, nix::sys::signal::Signal::SIGKILL);
         }
         let code = proc.wait();
@@ -1162,7 +1166,8 @@ pub fn confirm(
     destructive: bool,
     on_yes: impl Fn() + 'static,
 ) {
-    let dialog = adw::AlertDialog::new(Some(c_str(heading)), Some(c_str(body)));
+    let body = crate::util::human_error(body);
+    let dialog = adw::AlertDialog::new(Some(c_str(heading)), Some(c_str(&body)));
     if !detail.is_empty() {
         let buf = gtk::TextBuffer::new(None);
         buf.set_text(c_str(detail));

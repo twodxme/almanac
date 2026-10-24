@@ -28,6 +28,10 @@ comment explains *why*, keep it when you change the code beside it.
   falls back. No panics in non-test code on anything that can fail at run
   time (I/O, parsing, subprocesses, network). Several modules keep a lenient
   function beside a `try_` / `_checked` one; UI code uses the fallible one.
+  `Err` texts keep Python's spelling (`TypeError: ...`, `[Errno 2] ...`),
+  which the tests pin; the display points (`say`, `notify`, `Win::plain`
+  subtitles, the task log) pass them through `util::human_error`, which
+  puts them in plain English. Show errors through those, not around them.
 - **No `unsafe`**, with one documented exception: `icons.rs` turns on TLS
   post-handshake authentication through `openssl-sys`, because some vendors'
   sites (openai.com, gnome.org) refuse a TLS hello without it.

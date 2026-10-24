@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 19:44-0700\n"
+"POT-Creation-Date: 2026-10-23 20:11-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -18,18 +18,18 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
-#: src/i18n.rs:1731 src/i18n.rs:1734 src/i18n.rs:1782 src/i18n.rs:1789
-#: src/i18n.rs:1794
+#: src/i18n.rs:1729 src/i18n.rs:1732 src/i18n.rs:1780 src/i18n.rs:1787
+#: src/i18n.rs:1792
 msgid "History"
 msgstr ""
 
-#: src/i18n.rs:1750 src/i18n.rs:1834 src/i18n.rs:1835
+#: src/i18n.rs:1748 src/i18n.rs:1832 src/i18n.rs:1833
 msgid "one"
 msgid_plural "many"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/i18n.rs:1828
+#: src/i18n.rs:1826
 msgid "No string anyone has translated"
 msgstr ""
 
@@ -105,7 +105,7 @@ msgstr ""
 msgid "Open the release"
 msgstr ""
 
-#: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:894
+#: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:453 src/ui/ai.rs:895
 #: src/ui/packages/details.rs:285 src/ui/plugins/updates.rs:262
 #: src/ui/shell/columns.rs:580 src/ui/update_all.rs:331
 msgid "Update"
@@ -145,7 +145,7 @@ msgstr ""
 msgid "Give them back"
 msgstr ""
 
-#: src/ui/actions/update.rs:336 src/ui/packages/loading.rs:318
+#: src/ui/actions/update.rs:336 src/ui/packages/loading.rs:319
 #: src/ui/shell/build.rs:79
 msgid "Update all"
 msgstr ""
@@ -181,131 +181,131 @@ msgstr ""
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: src/ui/ai.rs:488 src/ui/history.rs:501
+#: src/ui/ai.rs:489 src/ui/history.rs:509
 msgid "manual"
 msgstr ""
 
-#: src/ui/ai.rs:857
+#: src/ui/ai.rs:858
 msgid "Held back (major release, update it on its own): "
 msgstr ""
 
-#: src/ui/ai.rs:892
+#: src/ui/ai.rs:893
 msgid ""
 "Each replaces its own binary. None of this needs root, and none of it "
 "touches your agent configuration."
 msgstr ""
 
-#: src/ui/history.rs:70
+#: src/ui/history.rs:73
 msgid "Everything is up to date"
 msgstr ""
 
-#: src/ui/history.rs:71
+#: src/ui/history.rs:74
 msgid "Nothing installed has a newer version waiting."
 msgstr ""
 
-#: src/ui/history.rs:75
+#: src/ui/history.rs:78
 msgid "No orphans"
 msgstr ""
 
-#: src/ui/history.rs:76
+#: src/ui/history.rs:79
 msgid ""
 "Every installed package is either asked for directly or needed by something "
 "that is."
 msgstr ""
 
-#: src/ui/history.rs:80
+#: src/ui/history.rs:83
 msgid "No Flatpaks"
 msgstr ""
 
-#: src/ui/history.rs:81
+#: src/ui/history.rs:84
 msgid "Nothing is installed through Flatpak on this machine."
 msgstr ""
 
-#: src/ui/history.rs:85
+#: src/ui/history.rs:88
 msgid "No AppImages tracked"
 msgstr ""
 
-#: src/ui/history.rs:86
+#: src/ui/history.rs:89
 msgid ""
 "Install one from the App Store, or add an existing file with ☰ → Track an "
 "AppImage."
 msgstr ""
 
-#: src/ui/history.rs:90
+#: src/ui/history.rs:93
 msgid "No local builds"
 msgstr ""
 
-#: src/ui/history.rs:91
+#: src/ui/history.rs:94
 msgid "Nothing here is running from a git checkout."
 msgstr ""
 
-#: src/ui/history.rs:95
+#: src/ui/history.rs:98
 msgid "No AUR packages"
 msgstr ""
 
-#: src/ui/history.rs:96
+#: src/ui/history.rs:99
 msgid "Nothing foreign is installed."
 msgstr ""
 
-#: src/ui/history.rs:124
+#: src/ui/history.rs:130
 msgid "Critical"
 msgstr ""
 
-#: src/ui/history.rs:125
+#: src/ui/history.rs:131
 msgid "Attention"
 msgstr ""
 
-#: src/ui/history.rs:126
+#: src/ui/history.rs:132
 msgid "Optional"
 msgstr ""
 
-#: src/ui/history.rs:127
+#: src/ui/history.rs:133
 msgid "OK"
 msgstr ""
 
-#: src/ui/history.rs:224
+#: src/ui/history.rs:230
 msgid ""
 "Each check reads the system and offers the one command that acts on what it "
 "found. Nothing here runs until you ask it to."
 msgstr ""
 
-#: src/ui/history.rs:258
+#: src/ui/history.rs:264
 msgid "Reading the last 30 days…"
 msgstr ""
 
-#: src/ui/history.rs:283
+#: src/ui/history.rs:289
 msgid "Nothing recorded yet"
 msgstr ""
 
-#: src/ui/history.rs:284
+#: src/ui/history.rs:290
 msgid ""
 "Package changes, snapshots and settings resets from the last 30 days appear "
 "here."
 msgstr ""
 
-#: src/ui/history.rs:287
+#: src/ui/history.rs:293
 msgid "Nothing in the last 30 days"
 msgstr ""
 
-#: src/ui/history.rs:295
+#: src/ui/history.rs:301
 msgid "In the last 24 hours"
 msgstr ""
 
-#: src/ui/history.rs:353
+#: src/ui/history.rs:361
 msgid "Checking the system…"
 msgstr ""
 
-#: src/ui/history.rs:604
+#: src/ui/history.rs:612
 msgid "Nothing to reclaim"
 msgstr ""
 
-#: src/ui/history.rs:611
+#: src/ui/history.rs:619
 msgid ""
 "These free cached downloads, build artefacts and old logs. Nothing you "
 "created is touched, and nothing installed is removed."
 msgstr ""
 
-#: src/ui/history.rs:613
+#: src/ui/history.rs:621
 msgid "Reclaim"
 msgstr ""
 
@@ -424,11 +424,11 @@ msgstr ""
 msgid "Scanning…"
 msgstr ""
 
-#: src/ui/packages/loading.rs:207
+#: src/ui/packages/loading.rs:208
 msgid "Software no longer maintained"
 msgstr ""
 
-#: src/ui/packages/loading.rs:219
+#: src/ui/packages/loading.rs:220
 msgid "Duplicate software installed"
 msgstr ""
 
@@ -466,59 +466,59 @@ msgstr ""
 msgid "Restart"
 msgstr ""
 
-#: src/ui/plugins/page.rs:227
+#: src/ui/plugins/page.rs:230
 msgid "Omarchy did not change it"
 msgstr ""
 
-#: src/ui/plugins/page.rs:276
+#: src/ui/plugins/page.rs:279
 msgid "Reading plugins…"
 msgstr ""
 
-#: src/ui/plugins/page.rs:368
+#: src/ui/plugins/page.rs:371
 msgid "Your plugins"
 msgstr ""
 
-#: src/ui/plugins/page.rs:369
+#: src/ui/plugins/page.rs:372
 msgid ""
 "Added from the marketplace or by hand. Updated through omarchy plugin "
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins/page.rs:374 src/ui/store_actions.rs:1572
+#: src/ui/plugins/page.rs:377 src/ui/store_actions.rs:1572
 msgid "Built in"
 msgstr ""
 
-#: src/ui/plugins/page.rs:375
+#: src/ui/plugins/page.rs:378
 msgid "Ship with Omarchy and update with it. They can be switched on and off."
 msgstr ""
 
-#: src/ui/plugins/page.rs:409
+#: src/ui/plugins/page.rs:412
 msgid "No plugins found"
 msgstr ""
 
-#: src/ui/plugins/page.rs:410
+#: src/ui/plugins/page.rs:413
 msgid "The omarchy command did not list any plugins."
 msgstr ""
 
-#: src/ui/plugins/page.rs:469
+#: src/ui/plugins/page.rs:472
 msgid "Keyboard shortcut"
 msgstr ""
 
-#: src/ui/plugins/page.rs:497
+#: src/ui/plugins/page.rs:500
 msgid "Omarchy needs this one; it cannot be switched off"
 msgstr ""
 
-#: src/ui/plugins/page.rs:660
+#: src/ui/plugins/page.rs:663
 msgid "Removing its keyboard shortcut"
 msgstr ""
 
-#: src/ui/plugins/page.rs:725
+#: src/ui/plugins/page.rs:728
 msgid ""
 "Deletes the plugin's folder and takes it off the bar. Its settings in "
 "shell.json are removed with it."
 msgstr ""
 
-#: src/ui/plugins/page.rs:728 src/ui/plugins/removal.rs:197
+#: src/ui/plugins/page.rs:731 src/ui/plugins/removal.rs:197
 #: src/ui/plugins/removal.rs:399 src/ui/store.rs:970
 #: src/ui/store_actions.rs:646 src/ui/store_actions.rs:730
 #: src/ui/store_actions.rs:1223 src/ui/store_actions.rs:1478
@@ -742,7 +742,7 @@ msgstr ""
 msgid "security.archlinux.org — the whole advisory list, matched here"
 msgstr ""
 
-#: src/ui/preferences.rs:349 src/ui/today.rs:75
+#: src/ui/preferences.rs:349 src/ui/today.rs:78
 msgid "Today's picks"
 msgstr ""
 
@@ -855,7 +855,7 @@ msgstr ""
 msgid "More actions"
 msgstr ""
 
-#: src/ui/shell/build.rs:442
+#: src/ui/shell/build.rs:443
 msgid "Return to the plugin marketplace"
 msgstr ""
 
@@ -1286,26 +1286,26 @@ msgstr ""
 msgid "What runs and how often: Preferences → Updates"
 msgstr ""
 
-#: src/ui/today.rs:77
+#: src/ui/today.rs:80
 msgid ""
 "Standouts today among what you can install here: stars and forks in the last "
 "24 hours, downloads, and how much people are talking about it this week — "
 "measured on GitHub, and each figure says what it counts."
 msgstr ""
 
-#: src/ui/today.rs:190
+#: src/ui/today.rs:193
 msgid "App"
 msgstr ""
 
-#: src/ui/today.rs:190
+#: src/ui/today.rs:193
 msgid "Plugin"
 msgstr ""
 
-#: src/ui/today.rs:456
+#: src/ui/today.rs:459
 msgid "Working out what needs you…"
 msgstr ""
 
-#: src/ui/today.rs:591
+#: src/ui/today.rs:594
 msgid "Nothing needs you right now"
 msgstr ""
 
@@ -1327,4 +1327,60 @@ msgstr ""
 
 #: src/ui/update_all.rs:343
 msgid "Some updates failed — see the log"
+msgstr ""
+
+#: src/util/human.rs:121
+msgid "No such file"
+msgstr ""
+
+#: src/util/human.rs:122
+msgid "Permission denied"
+msgstr ""
+
+#: src/util/human.rs:124
+msgid "The system refused"
+msgstr ""
+
+#: src/util/human.rs:139 src/util/human.rs:166
+msgid "The data is nested too deeply to read"
+msgstr ""
+
+#: src/util/human.rs:142 src/util/human.rs:167
+msgid "The file is not valid UTF-8"
+msgstr ""
+
+#: src/util/human.rs:145
+msgid "The text has characters that cannot be written out"
+msgstr ""
+
+#: src/util/human.rs:148 src/util/human.rs:168
+msgid "The data is not valid JSON"
+msgstr ""
+
+#: src/util/human.rs:151
+msgid "A name contains a NUL character"
+msgstr ""
+
+#: src/util/human.rs:154 src/util/human.rs:176
+msgid "Unexpected data"
+msgstr ""
+
+#: src/util/human.rs:157 src/util/human.rs:171
+msgid "The connection timed out"
+msgstr ""
+
+#: src/util/human.rs:169
+msgid "A number in the data is out of range"
+msgstr ""
+
+#: src/util/human.rs:170
+msgid "Unexpected answer from the server"
+msgstr ""
+
+#: src/util/human.rs:173
+msgid "Unknown text encoding"
+msgstr ""
+
+#: src/util/human.rs:177
+msgid "Something went wrong"
 msgstr ""

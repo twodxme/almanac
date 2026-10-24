@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+pub mod human;
 pub mod pyjson;
+
+pub use human::human_error;
 
 /// The outcome of `subprocess.run(..., capture_output=True, text=True)`;
 /// `Output<Vec<u8>>` ([`run_bytes`]) is the same without `text=True`.

@@ -328,8 +328,10 @@ impl Win {
     pub fn history_row(&self, e: &history::Event) -> Option<adw::PreferencesRow> {
         let when = clock_text(e.ts)?;
         let subtitle = &e.detail;
+        // An entry's title can be an outcome that carries an error.
+        let title = &crate::util::human_error(&e.title);
         let row = if !e.items.is_empty() {
-            let row: adw::ExpanderRow = Win::plain(&e.title, subtitle);
+            let row: adw::ExpanderRow = Win::plain(title, subtitle);
             for item in e.items.iter().take(80) {
                 let entry: adw::ActionRow = Win::plain(item, "");
                 entry.add_css_class("property");
@@ -337,7 +339,7 @@ impl Win {
             }
             Row::Expander(row)
         } else {
-            Row::Action(Win::plain(&e.title, subtitle))
+            Row::Action(Win::plain(title, subtitle))
         };
         let icon = gtk::Image::from_icon_name(if e.severity == "warn" {
             "dialog-warning-symbolic"
@@ -465,7 +467,7 @@ impl Win {
         };
         // A problem gets room to explain itself; a pass gets one line.
         row.set_subtitle_lines(if f.severity == maintenance::OK { 1 } else { 3 });
-        row.row().set_tooltip_text(Some(&f.detail));
+        row.row().set_tooltip_text(Some(&crate::util::human_error(&f.detail)));
 
         let pill = gtk::Label::builder().label(label).valign(gtk::Align::Center).build();
         pill.add_css_class(css);

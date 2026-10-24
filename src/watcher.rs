@@ -1045,7 +1045,9 @@ fn notify(title: &str, body: &str, page: &str, urgency: &str) {
         return;
     };
     let tool = tool.to_string_lossy().into_owned();
-    let (title, body, page, urgency) = (title.to_owned(), body.to_owned(), page.to_owned(), urgency.to_owned());
+    // What the user reads: a failed check's Python error in plain words.
+    let (title, body) = (crate::util::human_error(title), crate::util::human_error(body));
+    let (page, urgency) = (page.to_owned(), urgency.to_owned());
     std::thread::spawn(move || {
         let res = crate::util::run(
             &[&tool, "-u", &urgency, "-i", "io.github.twodxme.Almanac",

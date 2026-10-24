@@ -645,7 +645,7 @@ impl Win {
     pub fn feat_row(&self, item: &Item) -> Result<adw::ActionRow, String> {
         let row: adw::ActionRow = Win::plain(&item.title, &item.detail);
         row.set_subtitle_lines(1);
-        row.set_tooltip_text(Some(&item.detail));
+        row.set_tooltip_text(Some(&crate::util::human_error(&item.detail)));
 
         if !item.severity.is_empty() {
             let (label, css) = severity_css(if item.severity == "crit" {
