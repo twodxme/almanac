@@ -104,6 +104,10 @@ pub const CRITICAL: &[(&str, &[&str])] = &[
         &[
             "linux", "linux-lts", "linux-zen", "linux-firmware", "glibc", "systemd",
             "mkinitcpio", "limine", "grub", "mesa", "pacman", "btrfs-progs", "dkms",
+            // What builds the initramfs or unlocks and assembles the root
+            // before it is mounted: a bad update here fails at the next boot.
+            "dracut", "booster", "limine-mkinitcpio-hook", "plymouth", "cryptsetup",
+            "lvm2", "mdadm", "efibootmgr", "refind",
         ],
     ),
 ];
@@ -363,6 +367,9 @@ mod tests {
     fn test_boot_critical_is_core() {
         assert_eq!(criticality("linux"), "core");
         assert_eq!(criticality("mkinitcpio"), "core");
+        for name in ["dracut", "booster", "cryptsetup", "lvm2", "mdadm", "plymouth", "limine-mkinitcpio-hook"] {
+            assert_eq!(criticality(name), "core", "{name}");
+        }
     }
 
     #[test]
