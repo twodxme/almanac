@@ -724,14 +724,14 @@ impl crate::util::pyjson::Build for Py {
 fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
     let bad = |e: &str| format!("UnicodeDecodeError: {e}");
     let utf16 = |b: &[u8], be: bool| -> Result<String, String> {
-        if b.len() % 2 != 0 {
+        if !b.len().is_multiple_of(2) {
             return Err(bad("utf-16: truncated data"));
         }
         let units = b.chunks(2).map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) });
         char::decode_utf16(units).collect::<Result<String, _>>().map_err(|e| bad(&e.to_string()))
     };
     let utf32 = |b: &[u8], be: bool| -> Result<String, String> {
-        if b.len() % 4 != 0 {
+        if !b.len().is_multiple_of(4) {
             return Err(bad("utf-32: truncated data"));
         }
         b.chunks(4)

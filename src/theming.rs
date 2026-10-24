@@ -1200,7 +1200,7 @@ mod tomllib {
     /// Whether Python's `date(year, month, day)` accepts it (month and day
     /// are already in 1..=12 and 1..=31 by the pattern).
     fn valid_date(year: u32, month: u32, day: u32) -> bool {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let days = match month {
             2 if leap => 29,
             2 => 28,
@@ -1668,7 +1668,7 @@ fn try_theme_name_at(current: &Path, lenient: bool) -> Result<String, String> {
                     // The file holds the slug ("apple-dark"); the display name is
                     // what the theme picker shows ("Apple Dark").
                     return Ok(if py_islower(name) {
-                        py_title(&name.replace('-', " ").replace('_', " "))
+                        py_title(&name.replace(['-', '_'], " "))
                     } else {
                         name.to_string()
                     });

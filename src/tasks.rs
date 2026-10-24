@@ -807,11 +807,10 @@ fn preferred_encoding() -> &'static str {
         }
         let name = var("LC_ALL").or_else(|| var("LC_CTYPE")).or_else(|| var("LANG"))
             .unwrap_or_else(|| "C".to_string());
-        if name == "C" || name == "POSIX" {
-            if utf8_mode.as_deref() != Some("0") {
+        if (name == "C" || name == "POSIX")
+            && utf8_mode.as_deref() != Some("0") {
                 return "UTF-8".to_string();
             }
-        }
         let out = crate::util::run_with(&["locale", "charmap"], &crate::util::RunOpts {
             timeout: Some(Duration::from_secs(5)),
             env: vec![("LC_ALL".into(), name.clone().into())],

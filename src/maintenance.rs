@@ -590,7 +590,7 @@ fn _thousands(n: i128) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -644,7 +644,7 @@ fn _thousands_big(n: &num_bigint::BigUint) -> Result<String, String> {
     }
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -2372,13 +2372,13 @@ mod tests {
         assert_eq!(_thousands(999), "999");
         assert_eq!(fmt_size(f64::NAN), "nan KB");
         assert_eq!(_py_repr_bytes(b"it's"), "\"it's\"");
-        assert_eq!(_py_repr_bytes(&b"a'b\"\n\xff".to_vec()), "'a\\'b\"\\n\\udcff'");
+        assert_eq!(_py_repr_bytes(b"a'b\"\n\xff".as_ref()), "'a\\'b\"\\n\\udcff'");
         assert_eq!(_pathlib_str("/tmp/x//rt/./"), "/tmp/x/rt");
         assert_eq!(_pathlib_str("//a"), "//a");
         assert_eq!(_pathlib_str("///a/.."), "/a/..");
         assert_eq!(_py_float("١٢.٥"), Ok(12.5));
         assert_eq!(
-            _py_decode(&b"\xe2\x82A".to_vec()).unwrap_err(),
+            _py_decode(b"\xe2\x82A".as_ref()).unwrap_err(),
             "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"
         );
         assert_eq!(_py_decode(b"a\r\nb\rc").unwrap(), "a\nb\nc");

@@ -423,7 +423,7 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
         let behind = if remote.is_empty() { 0 } else { count(d, &head, &remote)? };
         return Ok(State::new(pid, LOCAL_CHANGES, "modified", behind, &url));
     }
-    let remote = remote_head(d, cache.as_deref_mut(), fetch)?;
+    let remote = remote_head(d, cache, fetch)?;
     if remote.is_empty() {
         return Ok(if fetch {
             State::new(pid, ERROR, "fetch failed", 0, &url)
@@ -1500,7 +1500,7 @@ fn _words(texts: &[&str]) -> String {
     let parts: Vec<String> = texts
         .iter()
         .filter(|t| !t.is_empty())
-        .map(|t| t.to_lowercase().replace('.', " ").replace('-', " ").replace('_', " "))
+        .map(|t| t.to_lowercase().replace(['.', '-', '_'], " "))
         .collect();
     format!(" {} ", parts.join(" "))
 }

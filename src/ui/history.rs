@@ -743,7 +743,8 @@ mod tests {
     fn every_css_class_used_here_is_defined_or_stock() {
         // Classes libadwaita itself styles.
         let stock = ["dim-label", "caption", "numeric", "property", "suggested-action"];
-        for class in ["store-verified"] {
+        {
+            let class = "store-verified";
             assert!(css().contains(&format!(".{class}")), "{class} is never styled");
         }
         for class in stock {
@@ -760,11 +761,10 @@ mod tests {
         for (i, line) in lines.iter().enumerate() {
             if line.contains("Button::builder()") || line.contains("Button::from_icon_name(") {
                 let window = lines[i..(i + 12).min(lines.len())].join("\n");
-                if window.contains(".icon_name(") || line.contains("from_icon_name(") {
-                    if !window.contains("name(&") && !window.contains("AccessibleProperty::Label") {
+                if (window.contains(".icon_name(") || line.contains("from_icon_name("))
+                    && !window.contains("name(&") && !window.contains("AccessibleProperty::Label") {
                         unnamed.push(i + 1);
                     }
-                }
             }
         }
         assert!(unnamed.is_empty(), "unnamed icon buttons at lines {unnamed:?}");

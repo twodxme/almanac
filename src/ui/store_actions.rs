@@ -271,7 +271,7 @@ pub fn plugin_remove_steps(p: &Plugin) -> Vec<Step> {
 /// `p.install_cmd.split()[-1]`: the theme's URL. None where the Python's
 /// index raises (an empty command).
 pub fn theme_url(install_cmd: &str) -> Option<String> {
-    install_cmd.split(py_isspace).filter(|s| !s.is_empty()).last().map(str::to_string)
+    install_cmd.split(py_isspace).rfind(|s| !s.is_empty()).map(str::to_string)
 }
 
 /// `str.isspace()` on one character: Unicode White_Space, plus the four

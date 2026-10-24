@@ -349,7 +349,7 @@ fn py_repr_py(s: &[u32]) -> String {
                 out.push('\\');
                 out.push(ch);
             }
-            Some(ch) if c < 0x7f && c >= 0x20 => out.push(ch),
+            Some(ch) if (0x20..0x7f).contains(&c) => out.push(ch),
             Some(ch) if c > 0x7f && py_isprintable(c) => out.push(ch),
             _ if c < 0x100 => out.push_str(&format!("\\x{c:02x}")),
             _ if c < 0x10000 => out.push_str(&format!("\\u{c:04x}")),
@@ -1919,10 +1919,9 @@ fn py_int(text: &str) -> Option<i64> {
             ascii.push(' ');
         } else if c.is_ascii() {
             ascii.push(c);
-        } else if let Some(d) = crate::util::decimal_value(c) {
-            ascii.push(char::from_digit(d, 10)?);
         } else {
-            return None;
+            let d = crate::util::decimal_value(c)?;
+            ascii.push(char::from_digit(d, 10)?);
         }
     }
     let s = ascii.trim_matches(|c: char| " \t\n\x0b\x0c\r".contains(c));

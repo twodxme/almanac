@@ -196,7 +196,7 @@ impl Win {
             &plan.detail,
             &tr("Remove"),
             plan.destructive,
-            move || yes(),
+            yes,
         );
     }
 

@@ -1252,7 +1252,7 @@ pub fn shlex_quote(s: &str) -> String {
 }
 
 /// `e.get(...)` on something that is not a dict raises AttributeError.
-fn as_dict<'a>(e: &'a Value) -> Result<&'a Row, String> {
+fn as_dict(e: &Value) -> Result<&Row, String> {
     e.as_object()
         .ok_or_else(|| format!("AttributeError: '{}' object has no attribute 'get'", py_type(e)))
 }
@@ -2789,7 +2789,7 @@ fn browse_idx<P: std::borrow::Borrow<Plugin>>(
 
 /// `Path(rel).suffix`, as Python 3.14 computes it.
 fn py_suffix(rel: &str) -> String {
-    let name = rel.split('/').filter(|c| !c.is_empty() && *c != ".").last().unwrap_or("");
+    let name = rel.split('/').rfind(|c| !c.is_empty() && *c != ".").unwrap_or("");
     let name = name.trim_start_matches('.');
     match name.rfind('.') {
         Some(i) => name[i..].to_string(),
@@ -2936,7 +2936,7 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
                 None => (slug.as_str(), ""),
             };
             let pretty = PRETTY.replace_all(body, "").into_owned() + nl;
-            let pretty = py_title(py_strip(&pretty.replace('-', " ").replace('_', " ")));
+            let pretty = py_title(py_strip(&pretty.replace(['-', '_'], " ")));
             let shown = if pretty.is_empty() { slug.clone() } else { pretty.clone() };
             let topics = or_(rd, "topics", json!([]));
             let mut tags = vec![json!("theme")];

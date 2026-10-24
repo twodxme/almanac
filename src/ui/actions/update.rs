@@ -40,7 +40,7 @@ pub fn update_all_script(command: &str) -> String {
 pub fn needs_full_upgrade(app: &App, synced: impl FnOnce(&str) -> String) -> bool {
     app.source != inventory::AUR && {
         let s = synced(&app.name);
-        s != "" && s != app.update
+        !s.is_empty() && s != app.update
     }
 }
 

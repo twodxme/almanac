@@ -1107,17 +1107,17 @@ impl IsoDt {
                 let a = _local(t)? - t;
                 let u1 = t - a;
                 let t1 = _local(u1)?;
-                let b;
-                if t1 == t {
+                
+                let b = if t1 == t {
                     let u2 = u1 - DAY;
                     let bb = _local(u2)? - u2;
                     if a == bb {
                         return Some(u1 as f64 + f64::from(self.us) / 1e6);
                     }
-                    b = bb;
+                    bb
                 } else {
-                    b = t1 - u1;
-                }
+                    t1 - u1
+                };
                 let u2 = t - b;
                 let secs = if _local(u2)? == t {
                     u2
@@ -1139,7 +1139,7 @@ fn _local_day(now: f64) -> Result<String, String> {
         return Err("ValueError: Invalid value NaN (not a number)".into());
     }
     let f = now.floor();
-    if !(-9.223372036854775808e18..9.223372036854775808e18).contains(&f) {
+    if !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&f) {
         return Err("OverflowError: timestamp out of range for platform time_t".into());
     }
     let d = chrono::Local
@@ -1169,7 +1169,7 @@ fn _utc_stamp(t: f64) -> Result<String, String> {
     } else if us < 0.0 {
         int -= 1.0;
     }
-    if !(-9.223372036854775808e18..9.223372036854775808e18).contains(&int) {
+    if !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&int) {
         return Err("OverflowError: timestamp out of range for platform time_t".into());
     }
     let d = chrono::DateTime::from_timestamp(int as i64, 0)

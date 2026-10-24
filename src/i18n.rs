@@ -605,7 +605,7 @@ pub fn normalize(localename: &str) -> String {
     // First lookup: fullname (possibly with encoding and modifier)
     let mut lang_enc = langname.clone();
     if !encoding.is_empty() {
-        let norm_encoding = encoding.replace('-', "").replace('_', "");
+        let norm_encoding = encoding.replace(['-', '_'], "");
         lang_enc += ".";
         lang_enc += &norm_encoding;
     }
@@ -680,7 +680,7 @@ fn replace_encoding(code: &str, encoding: &str) -> String {
     if let Some(e) = LOCALE_ENCODING_ALIAS_MAP.get(norm_encoding.as_str()) {
         encoding = e.to_string();
     } else {
-        let norm_encoding = norm_encoding.replace('_', "").replace('-', "");
+        let norm_encoding = norm_encoding.replace(['_', '-'], "");
         if let Some(e) = LOCALE_ENCODING_ALIAS_MAP.get(norm_encoding.as_str()) {
             encoding = e.to_string();
         }

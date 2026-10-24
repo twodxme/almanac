@@ -499,7 +499,7 @@ fn py_bytes_strip(raw: &[u8]) -> Vec<u8> {
 /// where that raises (UnicodeDecodeError, a ValueError).
 fn py_json_decode(b: &[u8]) -> Option<PyStr> {
     let utf16 = |data: &[u8], be: bool| -> Option<PyStr> {
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             return None;
         }
         let units: Vec<u32> = data
@@ -522,7 +522,7 @@ fn py_json_decode(b: &[u8]) -> Option<PyStr> {
         Some(out)
     };
     let utf32 = |data: &[u8], be: bool| -> Option<PyStr> {
-        if data.len() % 4 != 0 {
+        if !data.len().is_multiple_of(4) {
             return None;
         }
         let mut out = Vec::with_capacity(data.len() / 4);

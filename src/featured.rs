@@ -515,28 +515,6 @@ pub fn build(apps: &[App], findings: &[Finding], plugins: &[Plugin]) -> Vec<Shel
     shelves
 }
 
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Featured and the AI page carry differently-shaped collections.
-    ///
-    /// Featured yields Shelf objects; the AI survey yields
-    /// (title, description, entries) tuples. Unpacking one as the other raised
-    /// only at runtime, on a page that had already rendered.
-    #[test]
-    fn test_featured_build_returns_shelf_objects() {
-        let shelves = build(&[], &[], &[]);
-        assert!(!shelves.is_empty());
-        for shelf in &shelves {
-            // a shelf must expose .items, not unpack as a tuple
-            let _items: &Vec<Item> = &shelf.items;
-            let _title: &String = &shelf.title;
-        }
-    }
-}
-
 /// Code points `str.isprintable()` rejects (Python 3.14.7, Unicode 16.0.0), as
 /// inclusive ranges, generated from `unicodedata`.
 #[rustfmt::skip]
@@ -665,3 +643,25 @@ const NONPRINTABLE: &[(u32, u32)] = &[
     (0x1fbfa, 0x1ffff), (0x2a6e0, 0x2a6ff), (0x2b73a, 0x2b73f), (0x2b81e, 0x2b81f), (0x2cea2, 0x2ceaf), (0x2ebe1, 0x2ebef),
     (0x2ee5e, 0x2f7ff), (0x2fa1e, 0x2ffff), (0x3134b, 0x3134f), (0x323b0, 0xe00ff), (0xe01f0, 0x10ffff),
 ];
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Featured and the AI page carry differently-shaped collections.
+    ///
+    /// Featured yields Shelf objects; the AI survey yields
+    /// (title, description, entries) tuples. Unpacking one as the other raised
+    /// only at runtime, on a page that had already rendered.
+    #[test]
+    fn test_featured_build_returns_shelf_objects() {
+        let shelves = build(&[], &[], &[]);
+        assert!(!shelves.is_empty());
+        for shelf in &shelves {
+            // a shelf must expose .items, not unpack as a tuple
+            let _items: &Vec<Item> = &shelf.items;
+            let _title: &String = &shelf.title;
+        }
+    }
+}

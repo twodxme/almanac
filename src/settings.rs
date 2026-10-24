@@ -629,8 +629,7 @@ mod tests {
         assert_eq!(get("hold_majors").unwrap(), Value::Bool(false));
         set("start_page", Value::String("plugins".into())).unwrap();
         let text = std::fs::read_to_string(path()).unwrap();
-        assert!(text.starts_with(concat!(
-            "{\n  \"big\": -123456789012345678901234567890,\n  \"deep\": [\n    [\n")));
+        assert!(text.starts_with("{\n  \"big\": -123456789012345678901234567890,\n  \"deep\": [\n    [\n"));
         assert!(text.contains("\"f\": [\n    Infinity,\n    NaN,\n    -Infinity,\n    2.225073858507201e-308,\n    9007199254740992.0\n  ],"));
         assert!(text.contains("\"s\": \"\\udc00\\ud800\\ud83d\\ude00\","));
         assert!(text.ends_with("\"start_page\": \"plugins\",\n  \"z\": 0\n}"));

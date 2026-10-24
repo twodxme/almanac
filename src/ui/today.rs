@@ -809,7 +809,7 @@ mod tests {
                 .find_map(|l| {
                     let l = l.trim_start();
                     l.strip_prefix("let ")
-                        .and_then(|r| r.split(|c: char| c == ' ' || c == ':').next())
+                        .and_then(|r| r.split([' ', ':']).next())
                 })
                 .unwrap_or("");
             let end = (i + 12).min(lines.len());

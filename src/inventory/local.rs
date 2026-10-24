@@ -72,7 +72,7 @@ pub(super) fn git_behind_raw(repo: &Path, cache: &mut Map<String, Value>) -> Res
     // Text mode also turns a "\r" in a subject into "\n".
     let git = |args: &[&str], timeout: u64| -> Result<RunResult, ()> {
         let mut v: Vec<&std::ffi::OsStr> = vec!["git".as_ref(), "-C".as_ref(), repo.as_os_str()];
-        v.extend(args.iter().map(|a| std::ffi::OsStr::new(a)));
+        v.extend(args.iter().map(std::ffi::OsStr::new));
         subprocess_run(&v, timeout).map_err(|_| ())
     };
 

@@ -927,9 +927,7 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
 
     let heading_at = |pos: usize| -> Vec<String> {
         sections
-            .iter()
-            .filter(|(start, _)| *start <= pos)
-            .next_back()
+            .iter().rfind(|(start, _)| *start <= pos)
             .map(|(_, p)| p.clone())
             .unwrap_or_default()
     };

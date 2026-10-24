@@ -272,7 +272,7 @@ mod tests {
         let f = dir.join("omarchy");
         std::fs::write(&f, "#!/bin/sh\n").unwrap();
         let prog = f.display().to_string();
-        let err = run_checked(&[prog.clone()], 5).unwrap_err();
+        let err = run_checked(std::slice::from_ref(&prog), 5).unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(err, format!("[Errno 13] Permission denied: '{prog}'"));
         let err = run_checked(&["/nonexistent/almanac-test".to_string()], 5).unwrap_err();

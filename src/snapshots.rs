@@ -1733,11 +1733,10 @@ fn fromisoformat_ts(text: &str) -> Option<f64> {
     let offset_us = match offset {
         Some((s, u)) => {
             let total = s * 1_000_000 + u;
-            if s != 0 || u != 0 {
-                if !(-86_400_000_000 + 1..86_400_000_000).contains(&total) {
+            if (s != 0 || u != 0)
+                && !(-86_400_000_000 + 1..86_400_000_000).contains(&total) {
                     return None;
                 }
-            }
             Some(total)
         }
         None => None,

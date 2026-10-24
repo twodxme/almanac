@@ -494,12 +494,11 @@ fn prolog_tok(s: &[char], i: &mut usize, l1: bool) -> R<Option<Tok>> {
         ',' => one(i, Tok::Comma),
         '[' => one(i, Tok::OpenBracket),
         ']' => {
-            if s.get(*i + 1) == Some(&']') {
-                if at(s, *i + 2)? == '>' {
+            if s.get(*i + 1) == Some(&']')
+                && at(s, *i + 2)? == '>' {
                     *i += 3;
                     return Ok(Some(Tok::CondClose));
                 }
-            }
             one(i, Tok::CloseBracket)
         }
         '(' => one(i, Tok::OpenParen),

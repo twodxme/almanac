@@ -351,7 +351,7 @@ mod tests {
         let b = vkey(&format!("1.2{}", "0".repeat(42))).unwrap();
         assert!(a < b);
         assert!(vkey(&format!("1.{}", "1".repeat(5000))).is_err());
-        assert!(vkey(&"1_".repeat(4300).trim_end_matches('_').to_string()).is_ok());
+        assert!(vkey("1_".repeat(4300).trim_end_matches('_')).is_ok());
     }
 
     #[test]
