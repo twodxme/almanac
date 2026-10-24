@@ -34,12 +34,10 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gtk::gio;
 
@@ -1732,72 +1730,31 @@ fn py_access_check(name: &Path) -> bool {
 /// text=True, timeout=10)`: `Ok(None)` where it raises OSError or
 /// TimeoutExpired (both caught by the caller), `Err` for the
 /// UnicodeDecodeError strict decoding raises on output that is not UTF-8
-/// (not caught), else the return code and stdout. Not `util::run`, which
-/// decodes lossily and gives the child /dev/null as stdin: this keeps the
-/// raw bytes and, like `subprocess.run` without `stdin=`, the parent's stdin.
+/// (not caught), else the return code and stdout. `util::run_bytes`, not
+/// `util::run`, which decodes lossily: this keeps the raw bytes and, like
+/// `subprocess.run` without `stdin=`, the parent's stdin.
 ///
 /// The 10 seconds cover the output as well as the process, as
 /// `communicate(timeout=10)` does: a child that exits but leaves something
 /// holding its stdout (a background job) times out too.
 fn omarchy_theme_current() -> Result<Option<(Option<i32>, String)>, String> {
-    let mut child = match crate::util::spawn_group(
-        Command::new("omarchy")
-            .args(["theme", "current"])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
-    ) {
-        Ok(c) => c,
-        Err(_) => return Ok(None),
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    // Both pipes drained on their own threads, so a chatty child cannot fill
-    // one and block while it is waited on. When time runs out the child's
-    // whole process group is killed, so a reader blocked on a pipe something
-    // it started still held ends too.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            let _ = tx.send(buf);
-        });
-        rx
-    };
-    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    // TimeoutExpired: subprocess.run kills the child and waits for it; the
-    // whole group goes here.
-    let timed_out = |child: &mut std::process::Child| {
-        crate::util::kill_group(child);
-        Ok(None)
-    };
-    let left = || deadline.saturating_duration_since(Instant::now());
-    let Ok(stdout) = out_rx.recv_timeout(left()) else {
-        return timed_out(&mut child);
-    };
-    let Ok(stderr) = err_rx.recv_timeout(left()) else {
-        return timed_out(&mut child);
-    };
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) if Instant::now() >= deadline => return timed_out(&mut child),
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => return Ok(None),
-        }
-    };
+    let out = crate::util::run_bytes(&["omarchy", "theme", "current"], &crate::util::RunOpts {
+        timeout: Some(Duration::from_secs(10)),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    if out.failed_to_start || out.timed_out {
+        return Ok(None);
+    }
     // communicate() decodes stdout, then stderr; either can raise.
     let decode = |b: Vec<u8>| {
         String::from_utf8(b)
             .map(|t| universal_newlines(&t))
             .map_err(|_| "UnicodeDecodeError: 'utf-8' codec can't decode `omarchy theme current` output".to_string())
     };
-    let stdout = decode(stdout)?;
-    decode(stderr)?;
-    Ok(Some((status.code(), stdout)))
+    let stdout = decode(out.stdout)?;
+    decode(out.stderr)?;
+    Ok(Some((out.code, stdout)))
 }
 
 /// Text mode's newline translation: "\r\n" and a lone "\r" become "\n".

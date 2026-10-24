@@ -3,6 +3,7 @@
 //! command with a timeout, Python's rounding and title-casing, ISO dates, and
 //! the atomic JSON write every state file uses.
 
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,13 +11,18 @@ use std::time::{Duration, Instant};
 
 pub mod pyjson;
 
-/// The outcome of `subprocess.run(..., capture_output=True, text=True)`.
+/// The outcome of `subprocess.run(..., capture_output=True, text=True)`;
+/// `Output<Vec<u8>>` ([`run_bytes`]) is the same without `text=True`.
 #[derive(Debug, Clone, Default)]
-pub struct Output {
-    /// None when the process could not be started, or timed out.
+pub struct Output<T = String> {
+    /// None when the process could not be started, timed out, or was
+    /// killed by a signal.
     pub code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
+    /// The signal that ended it, when one did (Python's negative
+    /// returncode); None after a timeout, whose kill is ours.
+    pub signal: Option<i32>,
+    pub stdout: T,
+    pub stderr: T,
     pub timed_out: bool,
     /// The process could not be started at all (Python's OSError).
     pub failed_to_start: bool,
@@ -27,39 +33,100 @@ pub struct Output {
     pub start_error: String,
 }
 
-impl Output {
+impl<T> Output<T> {
     /// `returncode == 0`.
     pub fn ok(&self) -> bool {
         self.code == Some(0)
     }
 }
 
-/// Options for [`run_with`]; `Default` is a plain capture with no timeout.
-#[derive(Debug, Clone, Default)]
-pub struct RunOpts<'a> {
-    pub timeout: Option<Duration>,
-    pub input: Option<&'a str>,
-    /// Extra environment variables on top of the inherited ones.
-    pub env: Vec<(String, String)>,
-    pub cwd: Option<&'a Path>,
+/// What the child reads as its stdin.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Stdin<'a> {
+    /// /dev/null.
+    #[default]
+    Null,
+    /// This process's own, as `subprocess.run` leaves it without `stdin=`.
+    Inherit,
+    /// These bytes, then EOF (`input=`).
+    Input(&'a [u8]),
+    /// A file of ours: a duplicate of its descriptor, read from where it is.
+    File(&'a std::fs::File),
 }
 
-/// `subprocess.run(argv, capture_output=True, text=True, timeout=secs)`.
-/// Never panics: a missing binary or a timeout is reported in the result,
-/// the way the Python callers catch OSError and TimeoutExpired.
+/// Options for [`run_with`] / [`run_bytes`]; `Default` is a plain capture
+/// with no timeout and /dev/null as stdin.
+#[derive(Debug, Clone, Default)]
+pub struct RunOpts<'a> {
+    /// Covers reading the output as well as the exit, as `communicate`'s does.
+    pub timeout: Option<Duration>,
+    pub stdin: Stdin<'a>,
+    /// Extra environment variables on top of the inherited ones.
+    pub env: Vec<(OsString, OsString)>,
+    pub cwd: Option<&'a Path>,
+    /// The child's `argv[0]`, when it is not the program as given: a caller
+    /// that searches PATH itself runs the full path under the name it was
+    /// asked for.
+    pub arg0: Option<&'a OsStr>,
+    /// stderr to /dev/null instead of captured.
+    pub discard_stderr: bool,
+}
+
+/// `subprocess.run(argv, capture_output=True, text=True, timeout=secs)`,
+/// decoded lossily. Never panics: a missing binary or a timeout is reported
+/// in the result, the way the Python callers catch OSError and
+/// TimeoutExpired.
 pub fn run(argv: &[&str], timeout_secs: u64) -> Output {
     run_with(argv, &RunOpts { timeout: Some(Duration::from_secs(timeout_secs)), ..Default::default() })
 }
 
+/// [`run`] with options.
 pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
+    let out = run_bytes(argv, opts);
+    Output {
+        code: out.code,
+        signal: out.signal,
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        timed_out: out.timed_out,
+        failed_to_start: out.failed_to_start,
+        start_errno: out.start_errno,
+        start_error: out.start_error,
+    }
+}
+
+/// `subprocess.run(argv, capture_output=True, timeout=...)` without
+/// `text=True`: the raw bytes, for a caller that decodes them itself (as
+/// strictly as Python does, or not at all). The arguments are OS strings,
+/// so a path that is not UTF-8 reaches the child as its own bytes. The core
+/// of [`run_with`]; never panics.
+pub fn run_bytes<S: AsRef<OsStr>>(argv: &[S], opts: &RunOpts) -> Output<Vec<u8>> {
     let Some((prog, args)) = argv.split_first() else {
         return Output { failed_to_start: true, ..Default::default() };
     };
+    let not_started = |e: std::io::Error| Output {
+        failed_to_start: true,
+        start_errno: e.raw_os_error(),
+        start_error: e.to_string(),
+        ..Default::default()
+    };
     let mut cmd = Command::new(prog);
     cmd.args(args)
-        .stdin(if opts.input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(if opts.discard_stderr { Stdio::null() } else { Stdio::piped() });
+    match opts.stdin {
+        Stdin::Null => cmd.stdin(Stdio::null()),
+        Stdin::Inherit => cmd.stdin(Stdio::inherit()),
+        Stdin::Input(_) => cmd.stdin(Stdio::piped()),
+        Stdin::File(f) => match f.try_clone() {
+            Ok(f) => cmd.stdin(f),
+            Err(e) => return not_started(e),
+        },
+    };
+    if let Some(name) = opts.arg0 {
+        use std::os::unix::process::CommandExt;
+        cmd.arg0(name);
+    }
     for (k, v) in &opts.env {
         cmd.env(k, v);
     }
@@ -68,19 +135,12 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
     }
     let mut child = match spawn_group(&mut cmd) {
         Ok(c) => c,
-        Err(e) => {
-            return Output {
-                failed_to_start: true,
-                start_errno: e.raw_os_error(),
-                start_error: e.to_string(),
-                ..Default::default()
-            }
-        }
+        Err(e) => return not_started(e),
     };
-    if let (Some(text), Some(mut stdin)) = (opts.input, child.stdin.take()) {
-        let text = text.to_owned();
+    if let (Stdin::Input(bytes), Some(mut stdin)) = (opts.stdin, child.stdin.take()) {
+        let bytes = bytes.to_owned();
         std::thread::spawn(move || {
-            let _ = stdin.write_all(text.as_bytes());
+            let _ = stdin.write_all(&bytes);
         });
     }
     // Drain both pipes on their own threads, or a chatty child fills one and
@@ -127,10 +187,16 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
         }
         rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default()
     };
-    let stdout = String::from_utf8_lossy(&recv(&out_rx)).into_owned();
-    let stderr = String::from_utf8_lossy(&recv(&err_rx)).into_owned();
-    let code = if timed_out { None } else { status.and_then(|s| s.code()) };
-    Output { code, stdout, stderr, timed_out, ..Default::default() }
+    let stdout = recv(&out_rx);
+    let stderr = recv(&err_rx);
+    let (code, signal) = match status {
+        Some(s) if !timed_out => {
+            use std::os::unix::process::ExitStatusExt;
+            (s.code(), s.signal())
+        }
+        _ => (None, None),
+    };
+    Output { code, signal, stdout, stderr, timed_out, ..Default::default() }
 }
 
 /// Start `cmd` as the leader of a process group of its own, so that a
@@ -868,6 +934,39 @@ mod tests {
         let slow = run_with(&["sleep", "5"], &RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() });
         assert!(slow.timed_out);
         assert!(run(&["/nonexistent-binary"], 1).failed_to_start);
+    }
+
+    /// `run_bytes` keeps what `run` cannot: bytes that are not UTF-8, the
+    /// errno of a failed start, the signal that ended the child; and its
+    /// options reach the child.
+    #[test]
+    fn run_bytes_keeps_bytes_errno_and_signal() {
+        let out = run_bytes(&["printf", "a\\377\\r\\n"], &RunOpts::default());
+        assert!(out.ok());
+        assert_eq!(out.stdout, b"a\xff\r\n");
+        let out = run_bytes(&["sh", "-c", "kill -TERM $$"], &RunOpts::default());
+        assert_eq!((out.code, out.signal, out.timed_out), (None, Some(15), false));
+        let out = run_bytes(&["/nonexistent-binary"], &RunOpts::default());
+        assert!(out.failed_to_start);
+        assert_eq!(out.start_errno, Some(2));
+        let dir = tempfile::tempdir().unwrap();
+        let script = "printf '%s|%s|' \"$0\" \"$ALM_T\"; pwd; cat; echo gone >&2";
+        let out = run_bytes(&["sh", "-c", script], &RunOpts {
+            stdin: Stdin::Input(b"in"),
+            env: vec![("ALM_T".into(), "v".into())],
+            cwd: Some(dir.path()),
+            arg0: Some(OsStr::new("named")),
+            discard_stderr: true,
+            ..Default::default()
+        });
+        let want = format!("named|v|{}\nin", dir.path().canonicalize().unwrap().display());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want);
+        assert!(out.stderr.is_empty());
+        let mut f = tempfile::tempfile().unwrap();
+        f.write_all(b"from a file").unwrap();
+        std::io::Seek::rewind(&mut f).unwrap();
+        let out = run_bytes(&["cat"], &RunOpts { stdin: Stdin::File(&f), ..Default::default() });
+        assert_eq!(out.stdout, b"from a file");
     }
 
     /// A timeout stops what the child started too: a grandchild holding the

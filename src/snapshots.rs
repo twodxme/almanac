@@ -541,78 +541,19 @@ fn exec_error(argv: &[String]) -> String {
 /// replacement, after which a real U+FFFD in the output (valid UTF-8, which
 /// Python reads fine) cannot be told from bytes Python's decoder raises on,
 /// so the streams are read here as bytes.
-#[derive(Debug, Clone, Default)]
-struct RawOutput {
-    /// None when the process timed out.
-    code: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    timed_out: bool,
-    /// The process could not be started at all (Python's OSError).
-    failed_to_start: bool,
-}
-
-impl RawOutput {
-    /// `returncode == 0`.
-    fn ok(&self) -> bool {
-        self.code == Some(0)
-    }
-}
+type RawOutput = crate::util::Output<Vec<u8>>;
 
 /// `subprocess.run(argv, capture_output=True, timeout=secs)`, as
 /// `util::run` does it but keeping the bytes. Err(str(ValueError)) where
 /// Python raises before starting anything: an argument with a NUL byte.
 fn run_raw(argv: &[&str], timeout_secs: u64) -> Result<RawOutput, String> {
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
     if argv.iter().any(|a| a.contains('\0')) {
         return Err("embedded null byte".to_string());
     }
-    let Some((prog, args)) = argv.split_first() else {
-        return Ok(RawOutput { failed_to_start: true, ..Default::default() });
-    };
-    let mut child = match crate::util::spawn_group(Command::new(prog)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-    {
-        Ok(c) => c,
-        Err(_) => return Ok(RawOutput { failed_to_start: true, ..Default::default() }),
-    };
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut s);
-            }
-            s
-        })
-    };
-    let out_t = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let start = Instant::now();
-    let timeout = Duration::from_secs(timeout_secs);
-    let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    crate::util::kill_group(&mut child);
-                    timed_out = true;
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break None,
-        }
-    };
-    let stdout = out_t.join().unwrap_or_default();
-    let stderr = err_t.join().unwrap_or_default();
-    Ok(RawOutput { code: status.and_then(|s| s.code()), stdout, stderr, timed_out, failed_to_start: false })
+    Ok(crate::util::run_bytes(argv, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout_secs)),
+        ..Default::default()
+    }))
 }
 
 /// What `subprocess.run(..., text=True)` makes of a stream: decoded

@@ -22,10 +22,8 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -985,10 +983,11 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
 /// is not UTF-8 (`text=True` decodes strictly), a NUL in an argument, an
 /// empty argv.
 ///
-/// Not `util::run`: its `Output` keeps neither the errno of a failed start
-/// nor the signal that ended a process, and `_run` logs both. The timeout
-/// bounds reading the pipes as well as the wait, as `communicate()` does: a
-/// grandchild that keeps them open past it is a timeout, not a hang.
+/// `util::run_bytes`, which keeps the errno of a failed start and the
+/// signal that ended a process (`_run` logs both), decoded here as strictly
+/// as Python does. The timeout bounds reading the pipes as well as the
+/// wait, as `communicate()` does: a grandchild that keeps them open past it
+/// is a timeout, not a hang.
 type Captured = Result<(i64, String, String), String>;
 
 /// What `os.get_exec_path()` and `_execute_child` try for a program name:
@@ -1016,7 +1015,6 @@ fn exec_candidates(prog: &[u8]) -> Vec<Vec<u8>> {
 
 fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::process::CommandExt;
     let Some(prog) = argv.first() else {
         return Err("IndexError: list index out of range".into());
     };
@@ -1050,119 +1048,61 @@ fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
     // nothing else this process inherited. Setting close-on-exec here does
     // that without touching them in this process.
     close_fds::set_fds_cloexec_threadsafe(3, &[]);
+    let opts = crate::util::RunOpts {
+        timeout: Some(Duration::from_secs(timeout)),
+        stdin: match &fed {
+            None => crate::util::Stdin::Inherit,
+            Some(f) => crate::util::Stdin::File(f),
+        },
+        arg0: Some(std::ffi::OsStr::from_bytes(&bytes[0])),
+        ..Default::default()
+    };
     // Python execs each candidate in turn and reports the first error that
     // is not ENOENT/ENOTDIR (else the last one), naming the program as
     // given: an empty name searched along PATH reaches `dir/`, a directory
     // (EACCES), where execvp would stop at once with ENOENT.
     let mut saved: Option<i32> = None;
     let mut last = libc::ENOENT;
-    let mut child = None;
+    let mut ran = None;
     for cand in exec_candidates(&bytes[0]) {
-        let attempt = if cand.is_empty() {
-            Err(std::io::Error::from_raw_os_error(libc::ENOENT))
+        let out = if cand.is_empty() {
+            crate::util::Output { failed_to_start: true, start_errno: Some(libc::ENOENT), ..Default::default() }
         } else {
             // a name without a slash (an empty PATH entry) is exec'd from
             // the cwd, not searched for again
             let cand = if cand.contains(&b'/') { cand } else { [b"./".as_slice(), &cand].concat() };
-            let stdin = match &fed {
-                None => Ok(Stdio::inherit()),
-                Some(f) => f.try_clone().map(Stdio::from),
-            };
-            stdin.and_then(|stdin| {
-                crate::util::spawn_group(Command::new(std::ffi::OsStr::from_bytes(&cand))
-                    .arg0(std::ffi::OsStr::from_bytes(&bytes[0]))
-                    .args(bytes[1..].iter().map(|b| std::ffi::OsStr::from_bytes(b)))
-                    .stdin(stdin)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped()))
-            })
+            let mut full: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::from_bytes(&cand)];
+            full.extend(bytes[1..].iter().map(|b| std::ffi::OsStr::from_bytes(b)));
+            crate::util::run_bytes(&full, &opts)
         };
-        match attempt {
-            Ok(c) => {
-                child = Some(c);
-                break;
-            }
-            Err(e) => match e.raw_os_error() {
-                Some(n) => {
-                    if saved.is_none() && n != libc::ENOENT && n != libc::ENOTDIR {
-                        saved = Some(n);
-                    }
-                    last = n;
+        if !out.failed_to_start {
+            ran = Some(out);
+            break;
+        }
+        match out.start_errno {
+            Some(n) => {
+                if saved.is_none() && n != libc::ENOENT && n != libc::ENOTDIR {
+                    saved = Some(n);
                 }
-                None => return Ok(Err(e.to_string())),
-            },
+                last = n;
+            }
+            None => return Ok(Err(out.start_error)),
         }
     }
-    let Some(mut child) = child else {
+    let Some(out) = ran else {
         let e = std::io::Error::from_raw_os_error(saved.unwrap_or(last));
         return Ok(Err(py_os_error_py(&e, std::slice::from_ref(prog))));
     };
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it. Each reports on the channel when
-    // its pipe reaches EOF; one still blocked at the deadline is left behind.
-    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
-    for (i, pipe) in [
-        child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-        child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut s);
-            }
-            let _ = tx.send((i, s));
-        });
+    if out.timed_out {
+        let cmd: Vec<String> = argv.iter().map(|a| py_repr_py(a)).collect();
+        return Ok(Err(format!(
+            "Command '[{}]' timed out after {timeout} seconds",
+            cmd.join(", ")
+        )));
     }
-    drop(tx);
-    let start = Instant::now();
-    let limit = Duration::from_secs(timeout);
-    let mut bufs: [Option<Vec<u8>>; 2] = [None, None];
-    let mut status = None;
-    loop {
-        if status.is_none() {
-            match child.try_wait() {
-                Ok(Some(st)) => status = Some(st),
-                Ok(None) => {}
-                Err(e) => {
-                    crate::util::kill_group(&mut child);
-                    return Ok(Err(py_os_error(&e, &[])));
-                }
-            }
-        }
-        if status.is_some() && bufs.iter().all(Option::is_some) {
-            break;
-        }
-        let elapsed = start.elapsed();
-        if elapsed >= limit {
-            crate::util::kill_group(&mut child);
-            let cmd: Vec<String> = argv.iter().map(|a| py_repr_py(a)).collect();
-            return Ok(Err(format!(
-                "Command '[{}]' timed out after {timeout} seconds",
-                cmd.join(", ")
-            )));
-        }
-        let step = (limit - elapsed).min(Duration::from_millis(10));
-        match rx.recv_timeout(step) {
-            Ok((i, b)) => bufs[i] = Some(b),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                // both readers have reported
-                for b in bufs.iter_mut() {
-                    b.get_or_insert_with(Vec::new);
-                }
-            }
-        }
-    }
-    let [out, err] = bufs;
-    let stdout = py_decode(out.unwrap_or_default())?;
-    let stderr = py_decode(err.unwrap_or_default())?;
-    use std::os::unix::process::ExitStatusExt;
-    let st = status.unwrap_or_else(|| std::process::ExitStatus::from_raw(0));
-    let code = match (st.code(), st.signal()) {
+    let stdout = py_decode(out.stdout)?;
+    let stderr = py_decode(out.stderr)?;
+    let code = match (out.code, out.signal) {
         (Some(c), _) => c as i64,
         (None, Some(sig)) => -(sig as i64),
         (None, None) => -1,
@@ -2543,6 +2483,8 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use std::time::Instant;
 
     /// Repository and AUR lines read alike; blank and stray lines are
     /// skipped, and only what the Updates page marks core is held.

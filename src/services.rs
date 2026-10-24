@@ -79,14 +79,14 @@ fn which_systemctl() -> bool {
 /// `systemctl --user <args>`'s stdout, or "" when it could not run.
 ///
 /// This is `subprocess.run(..., capture_output=True, text=True,
-/// timeout=timeout)` exactly, rather than `util::run`, which differs from it
-/// in the ways that show here: the child inherits our stdin; the timeout
-/// covers reading the pipes to the end as well as the exit, so a child that
-/// leaves a descendant holding stdout times out (communicate() waits for the
-/// pipes); the output is decoded strictly, in the locale's encoding, so
-/// bytes it cannot decode raise UnicodeDecodeError -- a ValueError, which
-/// the `except` below does not catch -- and text=True's universal newlines
-/// turn \r\n and \r into \n.
+/// timeout=timeout)` exactly, through `util::run_bytes` so the decoding is
+/// Python's: the child inherits our stdin; the timeout covers reading the
+/// pipes to the end as well as the exit, so a child that leaves a
+/// descendant holding stdout times out (communicate() waits for the pipes);
+/// the output is decoded strictly, in the locale's encoding, so bytes it
+/// cannot decode raise UnicodeDecodeError -- a ValueError, which the
+/// `except` below does not catch -- and text=True's universal newlines turn
+/// \r\n and \r into \n.
 ///
 /// The arguments are Python strings (UTF-16 here, so a lone surrogate
 /// survives): subprocess encodes each with os.fsencode, in order, and
@@ -98,12 +98,8 @@ fn which_systemctl() -> bool {
 /// everything std and GLib open is close-on-exec anyway, and systemctl's
 /// output does not depend on it.)
 fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
-    use std::io::Read;
     use std::os::unix::ffi::OsStringExt;
-    use std::process::{Command, Stdio};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
-    let mut argv: Vec<std::ffi::OsString> = Vec::new();
+    let mut argv: Vec<std::ffi::OsString> = vec!["systemctl".into(), "--user".into()];
     for a in args {
         let b = fsencode(a)?;
         if b.contains(&0) {
@@ -111,62 +107,19 @@ fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
         }
         argv.push(std::ffi::OsString::from_vec(b));
     }
-    let deadline = Instant::now() + Duration::from_secs(timeout);
-    let mut child = match crate::util::spawn_group(Command::new("systemctl").arg("--user").args(&argv)
-        .stdin(Stdio::inherit()).stdout(Stdio::piped()).stderr(Stdio::piped()))
-    {
-        Ok(c) => c,
-        // OSError -> "".
-        Err(_) => return Ok(String::new()),
-    };
-    let (tx, rx) = mpsc::channel::<(usize, Vec<u8>)>();
-    let mut pipes: Vec<Box<dyn Read + Send>> = Vec::new();
-    if let Some(p) = child.stdout.take() {
-        pipes.push(Box::new(p));
+    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout)),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    // OSError, and TimeoutExpired (run() kills and reaps the child) -> "".
+    if out.failed_to_start || out.timed_out {
+        return Ok(String::new());
     }
-    if let Some(p) = child.stderr.take() {
-        pipes.push(Box::new(p));
-    }
-    let n = pipes.len();
-    for (i, mut p) in pipes.into_iter().enumerate() {
-        let tx = tx.clone();
-        // Detached: on a timeout a descendant may hold the pipe open for
-        // long after we have given up on it.
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = p.read_to_end(&mut buf);
-            let _ = tx.send((i, buf));
-        });
-    }
-    drop(tx);
-    let mut got: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
-    let timed_out = |child: &mut std::process::Child| -> Result<String, String> {
-        // TimeoutExpired: run() kills and reaps the child, and we return "".
-        crate::util::kill_group(child);
-        Ok(String::new())
-    };
-    for _ in 0..n {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok((i, buf)) => got[i] = buf,
-            Err(mpsc::RecvTimeoutError::Timeout) => return timed_out(&mut child),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() >= deadline => return timed_out(&mut child),
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-            Err(_) => return Ok(String::new()),
-        }
-    }
-    let [out, err] = got;
-    let stdout = py_decode(out)?;
-    py_decode(err)?;
+    let stdout = py_decode(out.stdout)?;
+    py_decode(out.stderr)?;
     Ok(stdout)
 }
-
 /// `os.fsencode` (UTF-8 with surrogateescape): a lone surrogate
 /// \udc80-\udcff becomes the raw byte it stands for; any other lone
 /// surrogate raises UnicodeEncodeError, naming the run of surrogates it is

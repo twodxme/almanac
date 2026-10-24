@@ -12,10 +12,9 @@
 //! `claude plugin list --json`) or from the files they own, never from a list
 //! kept in this module. An agent configured after this was written still shows up.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize, Serializer};
@@ -324,46 +323,12 @@ pub fn run(cmd: &[&str], timeout: u64) -> Result<String, String> {
 /// the pipes to their end, not only the child's exit: a grandchild that keeps
 /// stdout open past it is a timeout too.
 fn run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
-    use std::process::{Command, Stdio};
-    use std::sync::mpsc;
-    let (prog, args) = cmd.split_first()?;
-    let deadline = Instant::now() + Duration::from_secs(timeout);
-    let mut child =
-        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it. When the time is up the child's
-    // whole process group is killed, so a reader blocked on a pipe that a
-    // grandchild held open ends too.
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut v = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut v);
-            }
-            let _ = tx.send(v);
-        });
-        rx
-    };
-    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() >= deadline => {
-                crate::util::kill_group(&mut child);
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => return None,
-        }
-    }
-    let left = || deadline.saturating_duration_since(Instant::now());
-    let (Ok(stdout), Ok(stderr)) = (out_rx.recv_timeout(left()), err_rx.recv_timeout(left())) else {
-        crate::util::kill_group(&mut child);
-        return None;
-    };
-    Some((stdout, stderr))
+    let out = util::run_bytes(cmd, &util::RunOpts {
+        timeout: Some(Duration::from_secs(timeout)),
+        stdin: util::Stdin::Inherit,
+        ..Default::default()
+    });
+    (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
 }
 
 /// `bytes.decode("utf-8")` with universal newlines; Err is the

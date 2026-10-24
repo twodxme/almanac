@@ -722,59 +722,15 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 /// `_run_bytes` with any timeout (the tests use a fraction of a second).
+/// stdin is inherited, as subprocess.run leaves it; the limit covers
+/// reading the output too, as communicate(timeout=...)'s does.
 fn run_bytes_within(cmd: &[&str], timeout: std::time::Duration) -> Option<(Vec<u8>, Vec<u8>)> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let (prog, args) = cmd.split_first()?;
-    // stdin is inherited, as subprocess.run leaves it.
-    let mut child =
-        crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).ok()?;
-    // Each pipe is read to its end on a thread that reports when done.
-    let drain = |p: Option<Box<dyn Read + Send>>| {
-        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        std::thread::spawn(move || {
-            let mut s = Vec::new();
-            if let Some(mut p) = p {
-                let _ = p.read_to_end(&mut s);
-            }
-            let _ = tx.send(s);
-        });
-        rx
-    };
-    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    // communicate(timeout=...): the limit covers reading the output too, so a
-    // grandchild that keeps a pipe open after the child exits does not hold
-    // this up past it. On timeout the child's whole process group is killed
-    // and the child reaped, so a grandchild holding a pipe dies with it and
-    // the reader threads end.
-    let deadline = std::time::Instant::now() + timeout;
-    let (mut out, mut err): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
-    let mut exited = false;
-    loop {
-        if out.is_none() {
-            out = out_rx.try_recv().ok();
-        }
-        if err.is_none() {
-            err = err_rx.try_recv().ok();
-        }
-        if !exited {
-            match child.try_wait() {
-                Ok(Some(_)) => exited = true,
-                Ok(None) => {}
-                Err(_) => return None,
-            }
-        }
-        if exited && out.is_some() && err.is_some() {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            crate::util::kill_group(&mut child);
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    Some((out.unwrap_or_default(), err.unwrap_or_default()))
+    let out = crate::util::run_bytes(cmd, &crate::util::RunOpts {
+        timeout: Some(timeout),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
 }
 
 /// `shutil.which(cmd)` for a bare name: PATH (or, when unset,

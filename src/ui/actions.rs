@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -649,57 +649,17 @@ fn copy_xattr(src: &Path, dst: &Path) -> Result<(), String> {
 /// UnicodeDecodeError it does not. As in `communicate`, the timeout covers
 /// reading both pipes to their end, not only the process exiting.
 fn version_output(dest: &Path) -> Result<Option<String>, String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-
-    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> Option<Receiver<Vec<u8>>> {
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new()
-            .spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut p) = pipe {
-                    let _ = p.read_to_end(&mut buf);
-                }
-                let _ = tx.send(buf);
-            })
-            .ok()?;
-        Some(rx)
-    }
-
-    let Ok(mut child) = crate::util::spawn_group(Command::new(dest)
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()))
-    else {
+    let argv = [dest.as_os_str(), std::ffi::OsStr::new("--version")];
+    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
+        timeout: Some(Duration::from_secs(12)),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    if out.failed_to_start || out.timed_out {
         return Ok(None);
-    };
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let left = || deadline.saturating_duration_since(Instant::now());
-    let timeout = |child: &mut std::process::Child| {
-        crate::util::kill_group(child);
-        Ok(None)
-    };
-    let (Some(out_rx), Some(err_rx)) = (drain(child.stdout.take()), drain(child.stderr.take())) else {
-        return timeout(&mut child);
-    };
-    let mut got = Vec::new();
-    for rx in [out_rx, err_rx] {
-        match rx.recv_timeout(left()) {
-            Ok(buf) => got.push(buf),
-            Err(mpsc::RecvTimeoutError::Disconnected) => got.push(Vec::new()),
-            Err(mpsc::RecvTimeoutError::Timeout) => return timeout(&mut child),
-        }
-    }
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if left().is_zero() => return timeout(&mut child),
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => return Ok(None),
-        }
     }
     let mut texts = Vec::new();
-    for bytes in &got {
+    for bytes in [&out.stdout, &out.stderr] {
         match std::str::from_utf8(bytes) {
             Ok(t) => texts.push(t.replace("\r\n", "\n").replace('\r', "\n")),
             Err(e) => return Err(format!("UnicodeDecodeError: {}", utf8_error(bytes, &e))),

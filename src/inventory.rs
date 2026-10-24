@@ -1277,71 +1277,33 @@ fn py_decode(bytes: &[u8]) -> Result<String, RunError> {
 
 /// `subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)`.
 ///
-/// Built here rather than on `util::run`, which decodes lossily and keeps
-/// "\r": text mode raises on bytes that are not UTF-8 and translates
-/// newlines. The timeout behaves as Python's does: on expiry the call gives
-/// up at once, without waiting for a grandchild that still holds the pipes
-/// open; the child's whole process group is killed (Python kills only the
-/// child) and the child reaped, so that grandchild and the reader threads
-/// end too. stdin is inherited, as subprocess.run leaves it.
+/// `util::run_bytes`, decoded here: text mode raises on bytes that are not
+/// UTF-8 and translates newlines, where `util::run` decodes lossily and
+/// keeps "\r". The timeout behaves as Python's does: on expiry the call
+/// gives up at once, without waiting for a grandchild that still holds the
+/// pipes open; the child's whole process group is killed (Python kills only
+/// the child) and the child reaped. stdin is inherited, as subprocess.run
+/// leaves it.
 fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64) -> Result<RunResult, RunError> {
-    use std::io::Read;
     use std::os::unix::ffi::OsStrExt;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
     // subprocess checks every argument before it forks.
     if cmd.iter().any(|a| a.as_ref().as_bytes().contains(&0)) {
         return Err(RunError::Nul);
     }
-    let Some((prog, args)) = cmd.split_first() else { return Err(RunError::Os) };
-    let mut child = crate::util::spawn_group(Command::new(prog).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()))
-        .map_err(|_| RunError::Os)?;
-    let deadline = Instant::now() + Duration::from_secs(timeout);
-    let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
-    let pipes: [(bool, Option<Box<dyn Read + Send>>); 2] = [
-        (true, child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-        (false, child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>)),
-    ];
-    for (is_out, pipe) in pipes {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            let _ = tx.send((is_out, buf));
-        });
+    let out = crate::util::run_bytes(cmd, &crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout)),
+        stdin: crate::util::Stdin::Inherit,
+        ..Default::default()
+    });
+    if out.failed_to_start {
+        return Err(RunError::Os);
     }
-    drop(tx);
-    let give_up = |child: &mut std::process::Child| {
-        crate::util::kill_group(child);
-        RunError::Timeout
-    };
-    let (mut out, mut err) = (None, None);
-    while out.is_none() || err.is_none() {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok((true, b)) => out = Some(b),
-            Ok((false, b)) => err = Some(b),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Err(give_up(&mut child)),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
+    if out.timed_out {
+        return Err(RunError::Timeout);
     }
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    return Err(give_up(&mut child));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(_) => break None,
-        }
-    };
-    let stdout = py_decode(&out.unwrap_or_default())?;
-    py_decode(&err.unwrap_or_default())?;
-    Ok(RunResult { code: status.and_then(|s| s.code()), stdout })
+    let stdout = py_decode(&out.stdout)?;
+    py_decode(&out.stderr)?;
+    Ok(RunResult { code: out.code, stdout })
 }
 
 /// `_run`: run a command, returning stdout. Never raises: a missing or failing

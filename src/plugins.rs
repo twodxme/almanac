@@ -279,20 +279,16 @@ fn os_error(n: i32, prog: &str) -> String {
 /// `subprocess.run(argv, capture_output=True, text=True, timeout=timeout)`,
 /// with `env` added to the inherited environment.
 ///
-/// util::run does not fit: it hands back output already decoded lossily (so
-/// a genuine U+FFFD cannot be told from bytes that are not UTF-8), gives the
-/// child /dev/null for stdin where Python's child inherits the parent's, and
-/// does not keep the errno. The program is found as `_posixsubprocess` finds
-/// it: each PATH entry tried in turn, the first error other than ENOENT /
-/// ENOTDIR reported if none starts.
+/// `util::run_bytes`, not util::run: that hands back output already decoded
+/// lossily (so a genuine U+FFFD cannot be told from bytes that are not
+/// UTF-8). The child inherits our stdin, as Python's does. The program is
+/// found as `_posixsubprocess` finds it: each PATH entry tried in turn, the
+/// first error other than ENOENT / ENOTDIR reported if none starts.
 ///
 /// The arguments are OS strings, as Python's are once `os.fsencode`d: a
 /// path that is not UTF-8 reaches the child as its own bytes.
 fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], timeout: u64) -> Result<Ran, RunErr> {
-    use std::io::Read;
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
     const ENOENT: i32 = 2;
     const ENOTDIR: i32 = 20;
     let prog = argv[0];
@@ -309,68 +305,41 @@ fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], tim
             .map(|dir| if dir.as_os_str().is_empty() { Path::new(".").join(prog) } else { dir.join(prog) })
             .collect()
     };
+    let opts = crate::util::RunOpts {
+        timeout: Some(std::time::Duration::from_secs(timeout)),
+        stdin: crate::util::Stdin::Inherit,
+        env: env.to_vec(),
+        arg0: Some(prog),
+        ..Default::default()
+    };
     let mut saved: Option<i32> = None;
     let mut last = ENOENT;
-    let mut child = None;
-    for exe in candidates {
-        let mut cmd = Command::new(&exe);
-        cmd.arg0(prog)
-            .args(&argv[1..])
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        match crate::util::spawn_group(&mut cmd) {
-            Ok(c) => {
-                child = Some(c);
-                break;
-            }
-            Err(e) => {
-                let n = e.raw_os_error().unwrap_or(ENOENT);
-                if n != ENOENT && n != ENOTDIR && saved.is_none() {
-                    saved = Some(n);
-                }
-                last = n;
-            }
+    let mut ran = None;
+    for exe in &candidates {
+        let mut full: Vec<&OsStr> = vec![exe.as_os_str()];
+        full.extend_from_slice(&argv[1..]);
+        let out = crate::util::run_bytes(&full, &opts);
+        if !out.failed_to_start {
+            ran = Some(out);
+            break;
         }
+        let n = out.start_errno.unwrap_or(ENOENT);
+        if n != ENOENT && n != ENOTDIR && saved.is_none() {
+            saved = Some(n);
+        }
+        last = n;
     }
-    let Some(mut child) = child else {
+    let Some(out) = ran else {
         // Report the first exec error, not the last.
         return Err(RunErr::Os(os_error(saved.unwrap_or(last), &prog_s)));
     };
-    // Drain both pipes on their own threads, or a chatty child fills one and
-    // blocks forever while we wait on it.
-    let reader = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut p) = pipe {
-                let _ = p.read_to_end(&mut buf);
-            }
-            buf
-        })
-    };
-    let out_t = reader(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_t = reader(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let limit = std::time::Duration::from_secs(timeout);
-    let start = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break Some(st),
-            Ok(None) if start.elapsed() >= limit => {
-                crate::util::kill_group(&mut child);
-                break None;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
-            Err(_) => break None,
-        }
-    };
-    let stdout = out_t.join().unwrap_or_default();
-    let stderr = err_t.join().unwrap_or_default();
-    let Some(status) = status else { return Err(RunErr::Timeout) };
+    if out.timed_out {
+        return Err(RunErr::Timeout);
+    }
     // stdout is decoded first, so its error is the one raised.
-    let stdout = py_decode(stdout).map_err(RunErr::Decode)?;
-    let stderr = py_decode(stderr).map_err(RunErr::Decode)?;
-    Ok(Ran { code: status.code(), stdout, stderr })
+    let stdout = py_decode(out.stdout).map_err(RunErr::Decode)?;
+    let stderr = py_decode(out.stderr).map_err(RunErr::Decode)?;
+    Ok(Ran { code: out.code, stdout, stderr })
 }
 
 /// `git -C d *args` with prompts disabled (GIT_TERMINAL_PROMPT=0, batch-mode ssh).
