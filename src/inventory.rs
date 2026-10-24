@@ -137,29 +137,42 @@ pub fn criticality(name: &str) -> String {
 }
 
 /// Kernel flavours, after `linux-`: Arch's (lts, zen, hardened, rt, rt-lts),
-/// the AUR's and other repos' common ones. A name is only a package name at
+/// the AUR's and other repos' common ones, alone or one after another
+/// (`linux-rt-lts`, `linux-vfio-lts`); `lts` also with the series it
+/// tracks (`linux-lts66`, `linux-lts515`). A name is only a package name at
 /// this point (nothing says whether it ships a vmlinuz), so this is an
 /// allowlist: `linux-wifi-hotspot`, `linux-api-headers`, `linux-tools-meta`,
 /// `linux-atm` and the `-docs` packages are userland and stay ordinary.
 const KERNEL_FLAVOURS: &[&str] = &[
-    "lts", "zen", "hardened", "rt", "rt-lts", "mainline", "next", "libre", "lqx", "ck", "clear", "pf", "g14",
-    "surface", "asahi", "amd", "vfio",
+    "lts", "zen", "hardened", "rt", "mainline", "next", "libre", "lqx", "clear", "pf", "g14", "surface", "asahi",
+    "vfio",
 ];
 
 /// Flavour families with their own variants after a dash
 /// (`linux-cachyos-bore`, `linux-xanmod-edge`, `linux-tkg-pds`,
-/// `linux-omarchy-eevdf`).
-const KERNEL_FAMILIES: &[&str] = &["cachyos", "xanmod", "tkg", "omarchy"];
+/// `linux-omarchy-eevdf`, `linux-amd-znver3`, `linux-ck-generic-v3`):
+/// whatever follows is a build of the same kernel.
+const KERNEL_FAMILIES: &[&str] = &["cachyos", "xanmod", "tkg", "omarchy", "amd", "ck"];
+
+/// One flavour word: a listed one, or `lts` with its series' digits.
+fn is_flavour(word: &str) -> bool {
+    KERNEL_FLAVOURS.contains(&word)
+        || word.strip_prefix("lts").is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// A kernel, its headers (DKMS builds against them, so they move with it)
 /// or its firmware: `linux`, `linux-<flavour>[-headers]`, `linux-firmware`
 /// and its splits (`linux-firmware-amdgpu`, ...: the firmware itself since
 /// `linux-firmware` became a meta package). `-git` and `-bin` are already
-/// stripped.
+/// stripped. Not `linux-firmware-whence`: the licence files, nothing a
+/// boot reads.
 fn is_kernel(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("linux-") else {
         return name == "linux";
     };
+    if rest == "firmware-whence" {
+        return false;
+    }
     if rest == "headers" || rest == "firmware" || rest.starts_with("firmware-") {
         return true;
     }
@@ -167,8 +180,9 @@ fn is_kernel(name: &str) -> bool {
     if flavour.ends_with("-docs") || flavour.ends_with("-dbg") {
         return false;
     }
-    KERNEL_FLAVOURS.contains(&flavour)
-        || KERNEL_FAMILIES.iter().any(|f| flavour == *f || flavour.strip_prefix(f).is_some_and(|v| v.starts_with('-')))
+    let mut words = flavour.split('-');
+    let first = words.next().unwrap_or("");
+    KERNEL_FAMILIES.contains(&first) || (is_flavour(first) && words.all(is_flavour))
 }
 
 /// NVIDIA's kernel module packages and the userspace that must match them
@@ -369,7 +383,11 @@ mod tests {
             "linux-mainline-git", "linux-git", "linux-omarchy", "linux-omarchy-eevdf-headers", "linux-firmware",
             "linux-firmware-amdgpu", "linux-firmware-git", "nvidia", "nvidia-open", "nvidia-lts", "nvidia-open-lts",
             "nvidia-utils", "lib32-nvidia-utils", "nvidia-580xx-utils", "lib32-nvidia-580xx-utils",
-            "nvidia-open-beta", "nvidia-open-dkms", "intel-ucode", "amd-ucode",
+            "nvidia-open-beta", "nvidia-open-dkms", "intel-ucode", "amd-ucode", "linux-vfio-lts",
+            "linux-vfio-lts-headers", "linux-lts66", "linux-lts515", "linux-lts515-headers", "linux-amd",
+            "linux-amd-znver3", "linux-amd-znver2-headers", "linux-ck", "linux-ck-generic-v3",
+            "linux-ck-generic-v3-headers", "linux-vfio", "linux-zen-lts", "linux-firmware-cirrus-dx13260",
+            "linux-firmware-other",
         ] {
             assert_eq!(criticality(name), "core", "{name}");
         }
@@ -379,7 +397,9 @@ mod tests {
             "linux-tools-meta", "linux-atm", "linux-pam", "linuxqq", "util-linux", "nvidia-settings", "nvidia-prime",
             "nvidia-container-toolkit", "nvidia-cg-toolkit", "libnvidia-container", "opencl-nvidia",
             "lib32-opencl-nvidia", "libva-nvidia-driver", "python-nvidia-ml-py", "nvidiax", "lib32-nvidia",
-            "iucode-tool",
+            "iucode-tool", "linux-firmware-whence", "linux-lts-docs", "linux-lts66-docs", "linux-amd-docs",
+            "linux-ck-generic-v3-docs", "linux-lts-foo", "linux-ltsx", "linux-lts6x", "linux-vfio-hotspot",
+            "linux-amdgpu-tools", "linux-cka", "linux-tools", "linux-lts-", "linux-",
         ] {
             assert_eq!(criticality(name), "", "{name}");
         }
