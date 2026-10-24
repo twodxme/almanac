@@ -1306,7 +1306,9 @@ pub fn update_appimages() -> Result<usize, String> {
         &mut |_key, rec| check_record(rec),
         &mut |url, dest, sha256| {
             // `Request(url)` reads a non-string url as `str(url)`
-            appimage::download_verified(&py_str(url), dest, None, sha256).map(|_| ()).map_err(|e| py_net_error(&e))
+            appimage::download_verified(&py_str(url), dest, None, sha256)
+                .map(|d| d.checksum_verified)
+                .map_err(|e| py_net_error(&e))
         },
         &mut |dest, key| appimage::install_desktop_entry(dest, key).map(|_| ()).map_err(|e| py_net_error(&e)),
         &mut save_updated,
@@ -1516,14 +1518,15 @@ fn check_record(rec: &Value) -> Result<Value, String> {
 
 /// `update_appimages` with the registry and the four calls it makes passed
 /// in (`check(key, record)` giving the dict `appimage.check` returns,
-/// `download(url, dest, sha256)`, `install_desktop_entry(dest, key)`, and
+/// `download(url, dest, sha256)`, true when the download was checked against
+/// a published sha256, `install_desktop_entry(dest, key)`, and
 /// `save(key, version, dest)`, which records one entry's update, see
 /// `save_updated`). Errors are the `"Type: message"` strings the ported
 /// modules return; `Err` is an exception the Python lets out.
 pub fn update_appimages_with(
     mut reg: PyJson,
     check: &mut dyn FnMut(&str, &Value) -> Result<Value, String>,
-    download: &mut dyn FnMut(&Value, &Path, &str) -> Result<(), String>,
+    download: &mut dyn FnMut(&Value, &Path, &str) -> Result<bool, String>,
     install: &mut dyn FnMut(&Path, &str) -> Result<(), String>,
     save: &mut dyn FnMut(&PyStr, &Value, &Path) -> Result<(), String>,
 ) -> Result<usize, String> {
@@ -1575,7 +1578,11 @@ pub fn update_appimages_with(
         let sha256 = latest.get("sha256").and_then(Value::as_str).unwrap_or_default();
         let attempt = (|| -> Result<(), String> {
             let dest = record_path(&reg, rec)?;
-            download(&url, &dest, sha256)?;
+            // Without a digest the build is only as trusted as TLS and the
+            // ELF check: the log says so rather than passing it over.
+            if !download(&url, &dest, sha256)? {
+                log("  unverified (no checksum published)");
+            }
             mark_updated(&mut reg, rec, &version);
             save(&key, &version, &dest)?;
             install(&dest, &key_s)?;
@@ -2471,6 +2478,42 @@ fn main_with(args: &[PyStr]) -> i32 {
     code
 }
 
+// --- --core-holds -----------------------------------------------------------------
+
+/// The names among pending-update lines that Almanac counts as core (the
+/// kernel, boot, firmware -- what can stop the machine booting), one per
+/// core package, in the order given. Each line is `name old -> new`, what
+/// both `checkupdates` and `yay -Qua` print, so the repository and AUR
+/// lists are read alike; blank lines are skipped.
+pub fn core_holds(pending: &str) -> Vec<String> {
+    pending
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| inventory::criticality(name) == "core")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// [`core_holds`] of what `checkupdates` printed, failing closed: the
+/// script holds what this returns, so a check that did not finish must not
+/// read as "nothing to hold". checkupdates exits 2 when there is nothing to
+/// update; any other failure, a timeout, or a checkupdates that could not
+/// be started at all is an `Err` for the caller to report.
+pub fn core_holds_checked(out: &crate::util::Output) -> Result<Vec<String>, String> {
+    if out.failed_to_start {
+        return Err("checkupdates could not be started (is pacman-contrib installed?)".into());
+    }
+    if out.timed_out {
+        return Err("checkupdates timed out".into());
+    }
+    match out.code {
+        Some(0) => Ok(core_holds(&out.stdout)),
+        Some(2) => Ok(Vec::new()),
+        Some(code) => Err(format!("checkupdates failed (exit {code}): {}", out.stderr.trim())),
+        None => Err("checkupdates was killed by a signal".into()),
+    }
+}
+
 #[cfg(test)]
 /// A `_run` stand-in that records `[argv, timeout]` and answers `ok`.
 fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
@@ -2484,6 +2527,38 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repository and AUR lines read alike; blank and stray lines are
+    /// skipped, and only what the Updates page marks core is held.
+    #[test]
+    fn core_holds_reads_repo_and_aur_lines() {
+        let repo = "linux 6.11.1.arch1-1 -> 6.11.2.arch1-1\nfirefox 131.0-1 -> 131.0.2-1\n\n";
+        let aur = "  \nlinux-firmware-git 20240909-1 -> 20241010-1\nyay-bin 12.3.5-1 -> 12.4.2-1\n";
+        assert_eq!(core_holds(&format!("{repo}{aur}")), vec!["linux", "linux-firmware-git"]);
+        assert!(core_holds("").is_empty());
+        assert!(core_holds("\n\n   \n").is_empty());
+        assert!(core_holds("firefox 1 -> 2").is_empty());
+    }
+
+    /// checkupdates' exit 2 is "nothing to update"; every other failure is
+    /// an error, never an empty list of holds.
+    #[test]
+    fn core_holds_from_checkupdates_fail_closed() {
+        use crate::util::Output;
+        let ran = |code: Option<i32>, stdout: &str| Output { code, stdout: stdout.into(), ..Default::default() };
+        assert_eq!(core_holds_checked(&ran(Some(0), "linux 1 -> 2\nfirefox 1 -> 2\n")), Ok(vec!["linux".to_owned()]));
+        assert_eq!(core_holds_checked(&ran(Some(2), "")), Ok(vec![]));
+        let err = core_holds_checked(&Output { code: Some(1), stderr: "==> ERROR: Cannot fetch updates\n".into(), ..Default::default() })
+            .unwrap_err();
+        assert_eq!(err, "checkupdates failed (exit 1): ==> ERROR: Cannot fetch updates");
+        // A failure that still printed lines is not trusted either.
+        assert!(core_holds_checked(&ran(Some(1), "linux 1 -> 2\n")).is_err());
+        assert!(core_holds_checked(&Output { timed_out: true, ..Default::default() }).unwrap_err().contains("timed out"));
+        assert!(core_holds_checked(&Output { failed_to_start: true, ..Default::default() })
+            .unwrap_err()
+            .contains("could not be started"));
+        assert!(core_holds_checked(&ran(None, "")).is_err());
+    }
 
     #[test]
     fn a_scheduled_run_is_titled_by_what_it_updated() {
@@ -2556,11 +2631,28 @@ mod tests {
         let (r, _) = capture_log(|| {
             update_appimages_with(reg, &mut check, &mut |_, _, sha| {
                 seen.push(sha.to_string());
-                Ok(())
+                Ok(true)
             }, &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(seen, vec![hex.clone()]);
+        take_updated();
+    }
+
+    /// A build with no published checksum is installed, and the log says
+    /// it was not verified; a checked one gets no such line.
+    #[test]
+    fn an_unverified_download_is_logged() {
+        take_updated();
+        for (verified, want) in [(false, true), (true, false)] {
+            let mut check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
+            let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+            let (r, lines) = capture_log(|| {
+                update_appimages_with(reg, &mut check, &mut |_, _, _| Ok(verified), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            });
+            assert_eq!(r, Ok(1));
+            assert_eq!(lines.iter().any(|l| l == "  unverified (no checksum published)"), want, "{lines:?}");
+        }
         take_updated();
     }
 
@@ -2570,7 +2662,7 @@ mod tests {
         let mut no_check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
         let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
         let (r, _) = capture_log(|| {
-            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
         });
         assert_eq!(r, Ok(1));
         assert_eq!(take_updated(), vec!["wordcraft 0.7.0 → 0.8.0".to_string()]);
@@ -2715,7 +2807,7 @@ mod tests {
     #[test]
     fn a_registry_that_is_not_a_dict_is_an_error() {
         let mut no = |_: &str, _: &Value| -> Result<Value, String> { Ok(json!({})) };
-        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(()), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
+        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
         assert_eq!(r, Err("AttributeError: 'list' object has no attribute 'items'".into()));
         assert_eq!(check_record(&json!("x")), Err("AttributeError: 'str' object has no attribute 'get'".into()));
     }

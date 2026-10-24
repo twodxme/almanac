@@ -1333,8 +1333,8 @@ fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, St
         return Ok((false, "no OnCalendar= line in the timer unit".to_owned()));
     }
 
-    if let Err(e) = std::fs::write(timer_file, out.join("\n") + "\n") {
-        return Ok((false, py_oserror(&e, timer_file)));
+    if let Err(e) = write_unit(timer_file, &(out.join("\n") + "\n")) {
+        return Ok((false, e));
     }
 
     sys(&["daemon-reload"], 30)?;
@@ -1342,6 +1342,37 @@ fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, St
         sys(&["restart", UNIT], 30)?;
     }
     Ok((true, calendar.to_owned()))
+}
+
+/// Replace the unit file at `path` with `text`, as `save_to` does the
+/// config: written beside it, then renamed over it. Writing in place left a
+/// truncated unit, which systemd then refuses, if the write was cut short
+/// (a full disk, a crash). Mode 0644, what systemd units are installed with.
+fn write_unit(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".tmp");
+        PathBuf::from(s)
+    };
+    // A leftover from a cut-short run would keep its own mode: start afresh.
+    let _ = std::fs::remove_file(&tmp);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()).and_then(|()| f.sync_all()));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(py_oserror(&e, &tmp));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        py_oserror2(&e, &tmp, Some(path))
+    })
 }
 
 /// `Err` where the Python raises: a timer unit that is not UTF-8.
@@ -1670,6 +1701,36 @@ mod tests {
         assert_eq!(current_schedule_in(&t).unwrap(), "daily");
         let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
         assert_eq!(set_schedule_with("hourly", &t, &mut none).unwrap(), (false, "unknown schedule 'hourly'".to_owned()));
+    }
+
+    /// The unit is replaced by a rename, not rewritten in place: no
+    /// temporary file is left beside it, and it ends up 0644 whatever the
+    /// file it replaced was.
+    #[test]
+    fn set_schedule_replaces_the_unit_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("sched-atomic");
+        let t = d.join(UNIT);
+        std::fs::write(&t, TIMER).unwrap();
+        std::fs::set_permissions(&t, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ino = |p: &Path| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(p).unwrap());
+        let before = ino(&t);
+        let mut sys = |_a: &[&str], _t: u64| Ok((1, String::new()));
+        assert_eq!(set_schedule_with("daily", &t, &mut sys).unwrap(), (true, "*-*-* 11:00:00".to_owned()));
+        assert_ne!(ino(&t), before, "written in place");
+        assert_eq!(std::fs::metadata(&t).unwrap().permissions().mode() & 0o777, 0o644 & !umask());
+        let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from(UNIT)]);
+        assert_eq!(current_schedule_in(&t).unwrap(), "daily");
+    }
+
+    /// The process umask, read from /proc (0022 when it cannot be).
+    fn umask() -> u32 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Umask:").map(|v| v.trim().to_owned())))
+            .and_then(|v| u32::from_str_radix(&v, 8).ok())
+            .unwrap_or(0o022)
     }
 
     #[test]

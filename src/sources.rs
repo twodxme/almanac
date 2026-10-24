@@ -1979,9 +1979,9 @@ mod tests {
             if let Ok((mut s, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
-                let body = b"\x7fELF new build";
+                let body = crate::appimage::test_elf(b" new build");
                 let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
-                let _ = s.write_all(body);
+                let _ = s.write_all(&body);
             }
         });
         std::env::set_var("XDG_STATE_HOME", d.path());
