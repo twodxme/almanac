@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-23 22:24-0700\n"
+"POT-Creation-Date: 2026-10-23 22:31-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -33,10 +33,10 @@ msgstr[1] ""
 msgid "No string anyone has translated"
 msgstr ""
 
-#: src/plugin_setup.rs:2002
+#: src/plugin_setup.rs:2044
 msgid ""
-"A build, or a Python or JavaScript program, runs code from the repository "
-"beyond the files shown here."
+"A build or a script, and any Python or JavaScript program, runs code from "
+"the repository beyond the files shown here."
 msgstr ""
 
 #: src/plugins.rs:1686

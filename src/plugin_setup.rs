@@ -930,6 +930,26 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
 }
 
 /// The plugin's own file a setup command names to execute, which must be
+/// Whether a file run by path names the system's interpreter, if it names
+/// one: an absolute path (`#!/bin/sh`), or `env` and a plain program name
+/// (`#!/usr/bin/env python3`). The kernel finds a relative one from the
+/// folder it runs in -- `#!bin/sh` ran the plugin's own bin/sh, unseen --
+/// and `env -S` or a path after `env` would do the same.
+fn shebang_is_systems(file: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(file) else { return true };
+    let Some(line) = bytes.strip_prefix(b"#!") else { return true };
+    let line = String::from_utf8_lossy(line.split(|&b| b == b'\n').next().unwrap_or_default());
+    let mut words = line.split_whitespace();
+    let Some(interp) = words.next() else { return false };
+    if !interp.starts_with('/') || interp.split('/').any(|c| c == "..") {
+        return false;
+    }
+    if interp.rsplit('/').next() == Some("env") {
+        return words.next().is_some_and(|w| !w.starts_with('-') && !w.contains('/'));
+    }
+    true
+}
+
 /// there and shown: a program given by path (`./install`, `sudo ./x.sh`),
 /// the script a shell is handed (`bash x.sh`, `sh -e x.sh`), the one Python
 /// is (`python3 setup.py`; `python3 -m pkg.tool` loads what
@@ -941,6 +961,9 @@ fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let words = shlex_split(part).map_err(|_| ())?;
     let Some((prog, args)) = program(&words) else { return Ok(Vec::new()) };
     if prog.contains('/') {
+        if !shebang_is_systems(&plugin_dir.join(prog)) {
+            return Err(());
+        }
         return Ok(vec![prog.to_string()]);
     }
     if prog == "bun" {
@@ -1417,6 +1440,23 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             })?;
             if files.is_empty() {
                 files = ["GNUmakefile", "makefile", "Makefile"].map(String::from).to_vec();
+            }
+            // make remakes a makefile that is missing from a source its
+            // built-in rules know (`Makefile.sh` is copied into place, RCS
+            // and SCCS files checked out) and then reads that: a file of
+            // that kind beside one is refused, since what it becomes is not
+            // shown.
+            let folder = plugin_dir.join(&dir);
+            if ["RCS", "SCCS"].iter().any(|d| folder.join(d).exists())
+                || std::fs::read_dir(&folder).into_iter().flatten().flatten().any(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    files.iter().any(|f| {
+                        let f = Path::new(f).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                        n != f && (n.starts_with(&format!("{f}.")) || n.starts_with(&format!("{f},")) || n == format!("s.{f}"))
+                    })
+                })
+            {
+                return Err(());
             }
             out.extend(files.iter().map(|f| under(&dir, f)));
         }
@@ -1994,12 +2034,14 @@ pub fn describe(p: &SetupPlan) -> String {
             "Run in a terminal, in the plugin's folder\n{}",
             p.commands.iter().map(|c| format!("  $ {c}")).collect::<Vec<_>>().join("\n")
         );
-        // What is shown below is what a build reads first, not all it runs:
-        // say so rather than let the list of files suggest otherwise.
-        if p.commands.iter().any(|c| step_kind(c) == Some(Kind::Build)) {
+        // What is shown below is what a build or a script reads first, not
+        // all it runs (what a script sources or imports, a module beside it
+        // shadowing the standard library's): say so rather than let the
+        // list of files suggest otherwise.
+        if p.commands.iter().any(|c| matches!(step_kind(c), Some(Kind::Build | Kind::Script))) {
             run.push('\n');
             run.push_str(&tr(
-                "A build, or a Python or JavaScript program, runs code from the repository beyond the files shown here.",
+                "A build or a script, and any Python or JavaScript program, runs code from the repository beyond the files shown here.",
             ));
         }
         parts.push(run);
@@ -2532,15 +2574,49 @@ make build
         }
     }
 
-    /// The confirmation says a build runs more than the files it shows; a
-    /// plan of scripts alone does not claim it.
+    /// The confirmation says a build or a script runs more than the files it
+    /// shows (`./install.py` imports a json.py beside it); a plan of
+    /// services alone does not claim it.
     #[test]
     fn test_the_confirmation_says_a_build_runs_more_than_is_shown() {
-        let line = "A build, or a Python or JavaScript program, runs code from the repository beyond the files shown here.";
+        let line = "A build or a script, and any Python or JavaScript program, runs code from the repository beyond the files shown here.";
         let build = SetupPlan { commands: vec!["make install".into(), "./install".into()], ..Default::default() };
         assert!(describe(&build).contains(&format!("  $ ./install\n{line}")), "{}", describe(&build));
-        let script = SetupPlan { commands: vec!["./install".into(), "systemctl --user enable x".into()], ..Default::default() };
-        assert!(!describe(&script).contains(line));
+        let script = SetupPlan { commands: vec!["./install.py".into()], ..Default::default() };
+        assert!(describe(&script).contains(line));
+        let services = SetupPlan { commands: vec!["systemctl --user enable x".into()], ..Default::default() };
+        assert!(!describe(&services).contains(line));
+    }
+
+    /// The twelfth review's probes: a script whose shebang names an
+    /// interpreter of the plugin's (the kernel finds `#!bin/sh` from the
+    /// folder it runs in), and a makefile make would remake from a source
+    /// it was never shown.
+    #[test]
+    fn a_relative_shebang_or_a_remade_makefile_is_not_offered() {
+        let d = tempdir();
+        for (body, offered) in [
+            ("#!bin/sh\necho x\n", false),
+            ("#!./sh\n", false),
+            ("#!/usr/bin/env -S ./sh\n", false),
+            ("#!/usr/bin/env ./sh\n", false),
+            ("#!/bin/../tmp/sh\n", false),
+            ("#!/bin/sh\necho x\n", true),
+            ("#!/usr/bin/env python3\n", true),
+            ("echo no shebang\n", true),
+        ] {
+            let root = plugin_with(&d, "# Install\n```\n./install\n```\n", &[("install", body), ("bin/sh", "echo PWNED\n")]);
+            assert_eq!(plan(&root).unwrap().commands.len(), usize::from(offered), "{body:?}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        for source in ["Makefile.sh", "makefile,v", "s.Makefile", "RCS/Makefile,v"] {
+            let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[(source, "all:\n\techo PWNED\n")]);
+            assert!(plan(&root).unwrap().commands.is_empty(), "{source}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[("Makefile", "all:\n")]);
+        assert_eq!(plan(&root).unwrap().commands, ["make"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// A plugin folder with this README and these files.

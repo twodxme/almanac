@@ -311,13 +311,20 @@ absent has appeared. A line is offered only when the shell would read it as
 plain words (no variables, globs, `;`, pipes, redirections or `cd`), and each
 step runs as exactly those words; Python steps never import modules from the
 plugin's folder in place of the standard library's, and `systemctl --user`
-lines only turn units on or off. The checks are made as each step starts:
+lines only turn units on or off. Package tools (npm, pnpm, yarn, bun, pip,
+pipx, uv) are offered only their installing commands with plain flags and
+package names — not a step that runs a program (`uv run`, `npx`, `npm exec`,
+`dlx`), an option that points the tool at another file or interpreter, or an
+argument that is a path, an archive or a URL; a plugin that ships its own
+`node_modules` or `.venv` gets no npm or uv steps, and lockfiles are shown with
+the rest. Build tools (make, cmake, meson, ninja, cargo, go, just, gcc) take
+only options whose files are shown — not `cargo --config`, a cmake toolchain,
+a meson native file, `gcc @file`, or `make CC=./x`. The checks are made as each step starts:
 something an earlier step left running in the background is not watched.
 What those files go on to run (a recipe's script, a postinstall, the sources a
-build compiles) is not shown, and the confirmation says so for every build.
+build compiles, what a script sources or imports) is not shown, and the confirmation says so for every build or script.
 Anything only you can do — credentials, config edits — it lists with the
-section to read. Only
-install, setup and configuration sections are read; development, testing and
+section to read. Only install, setup and configuration sections are read; development, testing and
 uninstall instructions are never offered. Plugins whose install itself cannot
 be done safely (a failed compatibility check, a version-matched helper, a
 monorepo, a suite with its own installer) still say "Manual setup", and why.
