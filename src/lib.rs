@@ -26,6 +26,7 @@ pub mod patches;
 pub mod picks;
 pub mod plugin_setup;
 pub mod plugins;
+pub mod postupdate;
 pub mod security;
 pub mod selfupdate;
 pub mod services;

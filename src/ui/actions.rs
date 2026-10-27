@@ -25,7 +25,7 @@ pub(in crate::ui) use pyisms::truthy;
 pub use rows::releases_url;
 pub(in crate::ui) use update::{appimage_update_work, popen_new_session, update_cmd};
 pub use update::{
-    delete_appimage_files, needs_full_upgrade, remove_appimage_with, update_all_script, update_one,
+    delete_appimage_files, needs_full_upgrade, remove_appimage_with, update_one,
     with_snapshot, yay_argv, Removal, UpdateOne,
 };
 

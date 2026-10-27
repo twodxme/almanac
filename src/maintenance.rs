@@ -881,16 +881,22 @@ fn _pacman_cache_with(du: (f64, i64), run: RunFn<'_>) -> Result<Finding, String>
         count: n,
         size_mb: free,
         fix_label: "Trim to 2 versions".into(),
-        // -rk2 keeps the two newest of each package; then -ruk0 drops every
-        // cached version of packages no longer installed, which can never be
-        // downgraded to anyway. Two runs: given together, the later -k0 and
-        // -u override -k2, and installed packages are never trimmed.
-        fix: Some(Fix::steps(&[&["paccache", "-rk2"], &["paccache", "-ruk0"]])),
+        fix: Some(paccache_trim_fix()),
         fix_note: "Keeps the 2 most recent versions of installed packages and \
                    removes cached packages that are no longer installed."
             .into(),
         ..Default::default()
     })
+}
+
+/// The package cache trimmed to the two newest versions of what is
+/// installed: the package cache check's fix, also run after Update all.
+pub fn paccache_trim_fix() -> Fix {
+    // -rk2 keeps the two newest of each package; then -ruk0 drops every
+    // cached version of packages no longer installed, which can never be
+    // downgraded to anyway. Two runs: given together, the later -k0 and
+    // -u override -k2, and installed packages are never trimmed.
+    Fix::steps(&[&["paccache", "-rk2"], &["paccache", "-ruk0"]])
 }
 
 pub fn yay_cache() -> Finding {
@@ -920,6 +926,34 @@ fn _yay_cache_at(cache: &Path) -> Finding {
             .into(),
         ..Default::default()
     }
+}
+
+/// The AUR build cache's fix for just `names` (each a package base yay
+/// keeps a folder for), or None when none of them has one. A name that is
+/// not a plain package name is never joined onto the path.
+pub fn yay_cache_fix_for(names: &[String]) -> Option<Fix> {
+    _yay_cache_fix_in(&YAY_CACHE, names)
+}
+
+fn _yay_cache_fix_in(cache: &Path, names: &[String]) -> Option<Fix> {
+    let plain = |n: &str| {
+        !n.is_empty() && !n.starts_with('.') && n.chars().all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c))
+    };
+    let dirs: Vec<PathBuf> = names
+        .iter()
+        .filter(|n| plain(n))
+        .map(|n| cache.join(n))
+        .filter(|d| std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir()))
+        .collect();
+    if dirs.is_empty() {
+        return None;
+    }
+    Some(Fix::func(move |log| {
+        for d in &dirs {
+            _clear_yay_cache_at(d, log)?;
+        }
+        Ok(())
+    }))
 }
 
 fn _clear_yay_cache_at(cache: &Path, log: LogFn<'_>) -> Result<(), String> {
@@ -2327,6 +2361,29 @@ mod tests {
             f.fix.unwrap().commands(),
             vec![vec!["paccache".to_string(), "-rk2".into()], vec!["paccache".to_string(), "-ruk0".into()]]
         );
+    }
+
+    /// After Update all only what was just built goes: the rest of the
+    /// cache is left, and nothing outside it is reachable through a name.
+    #[test]
+    fn the_build_cache_of_just_the_updated_packages_is_cleared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("yay");
+        for d in ["updated", "other"] {
+            std::fs::create_dir_all(cache.join(d).join("src")).unwrap();
+            std::fs::write(cache.join(d).join("src/f"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(tmp.path().join("outside")).unwrap();
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(_yay_cache_fix_in(&cache, &names(&["not-built", "../outside", ".."])).is_none());
+        let Some(Fix::Func(f)) = _yay_cache_fix_in(&cache, &names(&["updated", "../outside", "linux"])) else {
+            panic!("a callable fix")
+        };
+        f(&|_l| {}).unwrap();
+        assert!(!cache.join("updated").exists());
+        assert!(cache.join("other/src/f").exists());
+        assert!(tmp.path().join("outside").exists());
+        assert_eq!(paccache_trim_fix().commands().len(), 2);
     }
 
     #[test]
