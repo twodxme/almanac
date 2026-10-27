@@ -371,9 +371,11 @@ impl Win {
         } else {
             Vec::new()
         };
+        // Arch news first: it can say not to update yet.
+        let news = if filter_key == "updates" && query.is_empty() { self.news_into(&self.update_notes) } else { 0 };
         for note in &notes {
             self.update_notes.append(&Win::note_row(note.icon, &note.title, &note.body));
         }
-        self.update_notes.set_visible(!notes.is_empty());
+        self.update_notes.set_visible(!notes.is_empty() || news > 0);
     }
 }

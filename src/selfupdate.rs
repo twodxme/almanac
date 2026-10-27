@@ -184,7 +184,7 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
 /// parameter entities are never read, so after a reference to one later
 /// declarations are skipped unless standalone="yes"), the namespace rules, and
 /// `tostring(encoding="unicode")` with its recursion limit.
-mod et;
+pub(crate) mod et;
 
 #[cfg(test)]
 mod tests {

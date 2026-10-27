@@ -13,3 +13,4 @@ pub mod today;
 pub mod actions;
 pub mod update_all;
 pub mod update_report;
+pub mod news;

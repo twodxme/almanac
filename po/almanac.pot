@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-26 23:48-0700\n"
+"POT-Creation-Date: 2026-10-26 23:54-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -66,8 +66,8 @@ msgid "Adding:"
 msgstr ""
 
 #: src/ui/actions/appimage_add.rs:215 src/ui/actions/link.rs:37
-#: src/ui/actions/link.rs:149 src/ui/plugins/controls.rs:142
-#: src/ui/update_all.rs:258
+#: src/ui/actions/link.rs:149 src/ui/news.rs:257 src/ui/plugins/controls.rs:142
+#: src/ui/update_all.rs:261
 msgid "Cancel"
 msgstr ""
 
@@ -114,7 +114,7 @@ msgstr ""
 
 #: src/ui/actions/rows.rs:126 src/ui/actions/update.rs:447 src/ui/ai.rs:897
 #: src/ui/packages/details.rs:281 src/ui/plugins/updates.rs:263
-#: src/ui/shell/columns.rs:580 src/ui/update_all.rs:473
+#: src/ui/shell/columns.rs:580 src/ui/update_all.rs:476
 msgid "Update"
 msgstr ""
 
@@ -163,7 +163,7 @@ msgid ""
 "all” is the safer choice."
 msgstr ""
 
-#: src/ui/actions/update.rs:354
+#: src/ui/actions/update.rs:354 src/ui/news.rs:259
 msgid "Update anyway"
 msgstr ""
 
@@ -313,6 +313,78 @@ msgstr ""
 
 #: src/ui/history.rs:617
 msgid "Reclaim"
+msgstr ""
+
+#: src/ui/news.rs:102
+msgid "All news"
+msgstr ""
+
+#: src/ui/news.rs:114
+msgid "Arch news"
+msgstr ""
+
+#: src/ui/news.rs:115
+msgid ""
+"Announcements from archlinux.org you have not read. Updates that need manual "
+"steps are announced here and nowhere else."
+msgstr ""
+
+#: src/ui/news.rs:140 src/ui/news.rs:142
+msgid "Read"
+msgstr ""
+
+#: src/ui/news.rs:141
+msgid "Open the post on archlinux.org"
+msgstr ""
+
+#: src/ui/news.rs:152 src/ui/news.rs:160
+msgid "Mark as read"
+msgstr ""
+
+#: src/ui/news.rs:155
+msgid ""
+"Marks this read here and for the scheduled update, which holds updates while "
+"Arch news is unread"
+msgstr ""
+
+#: src/ui/news.rs:228
+msgid "Checking Arch news…"
+msgstr ""
+
+#: src/ui/news.rs:246
+msgid ""
+"Arch announces updates that need manual steps on its news page. Read these "
+"before updating:"
+msgstr ""
+
+#: src/ui/news.rs:249
+msgid "Arch news since your last update"
+msgstr ""
+
+#: src/ui/news.rs:258
+msgid "Read news"
+msgstr ""
+
+#: src/ui/news.rs:293
+msgid "Restart to finish updating"
+msgstr ""
+
+#: src/ui/news.rs:302 src/ui/news.rs:322
+msgid "Restart now"
+msgstr ""
+
+#: src/ui/news.rs:303
+msgid "Restart the computer, after asking"
+msgstr ""
+
+#: src/ui/news.rs:319
+msgid "Restart now?"
+msgstr ""
+
+#: src/ui/news.rs:320
+msgid ""
+"Everything open closes, and unsaved work in any app is lost. Save your work "
+"first."
 msgstr ""
 
 #: src/ui/packages/chrome.rs:25 src/ui/shell/build.rs:313
@@ -754,55 +826,65 @@ msgstr ""
 msgid "security.archlinux.org — the whole advisory list, matched here"
 msgstr ""
 
-#: src/ui/preferences.rs:349 src/ui/today.rs:78
+#: src/ui/preferences.rs:345
+msgid "Check Arch news"
+msgstr ""
+
+#: src/ui/preferences.rs:346
+msgid ""
+"archlinux.org/news, at most once an hour — where updates that need manual "
+"steps are announced"
+msgstr ""
+
+#: src/ui/preferences.rs:365 src/ui/today.rs:78
 msgid "Today's picks"
 msgstr ""
 
-#: src/ui/preferences.rs:350
+#: src/ui/preferences.rs:366
 msgid ""
 "GitHub: recent stars, forks, downloads and comments for a shortlist of about "
 "ten listings, once a day"
 msgstr ""
 
-#: src/ui/preferences.rs:357
+#: src/ui/preferences.rs:373
 msgid "Logos"
 msgstr ""
 
-#: src/ui/preferences.rs:358
+#: src/ui/preferences.rs:374
 msgid ""
 "Each from its vendor's own site, or GitHub for avatars; logos already saved "
 "still show"
 msgstr ""
 
-#: src/ui/preferences.rs:365
+#: src/ui/preferences.rs:381
 msgid "Use your GitHub sign-in"
 msgstr ""
 
-#: src/ui/preferences.rs:366
+#: src/ui/preferences.rs:382
 msgid ""
 "Your existing gh login raises GitHub's limit from 60 requests an hour to "
 "5,000. Held in memory, never saved or logged."
 msgstr ""
 
-#: src/ui/preferences.rs:375
+#: src/ui/preferences.rs:391
 msgid "Background"
 msgstr ""
 
-#: src/ui/preferences.rs:379
+#: src/ui/preferences.rs:395
 msgid "While Almanac is closed"
 msgstr ""
 
-#: src/ui/preferences.rs:381
+#: src/ui/preferences.rs:397
 msgid ""
 "A small background process with no window. It watches config folders for a "
 "reset to defaults, and checks plugins for updates every few hours."
 msgstr ""
 
-#: src/ui/preferences.rs:386 src/ui/switchboard.rs:531
+#: src/ui/preferences.rs:402 src/ui/switchboard.rs:531
 msgid "Settings watcher"
 msgstr ""
 
-#: src/ui/preferences.rs:387
+#: src/ui/preferences.rs:403
 msgid "Starts with your session, through the standard autostart folder"
 msgstr ""
 
@@ -1311,51 +1393,51 @@ msgstr ""
 msgid "Working out what needs you…"
 msgstr ""
 
-#: src/ui/today.rs:594
+#: src/ui/today.rs:595
 msgid "Nothing needs you right now"
 msgstr ""
 
-#: src/ui/update_all.rs:245
+#: src/ui/update_all.rs:248
 msgid "Before updating"
 msgstr ""
 
-#: src/ui/update_all.rs:245
+#: src/ui/update_all.rs:248
 msgid "The update cannot start yet"
 msgstr ""
 
-#: src/ui/update_all.rs:247
+#: src/ui/update_all.rs:250
 msgid "Starting now would fail part-way."
 msgstr ""
 
-#: src/ui/update_all.rs:249
+#: src/ui/update_all.rs:252
 msgid "The update can go ahead, but this may get in its way."
 msgstr ""
 
-#: src/ui/update_all.rs:260
+#: src/ui/update_all.rs:263
 msgid "Continue anyway"
 msgstr ""
 
-#: src/ui/update_all.rs:263
+#: src/ui/update_all.rs:266
 msgid "Remove it and continue"
 msgstr ""
 
-#: src/ui/update_all.rs:278
+#: src/ui/update_all.rs:281
 msgid "Removing pacman’s lock file"
 msgstr ""
 
-#: src/ui/update_all.rs:285
+#: src/ui/update_all.rs:288
 msgid "The lock file is still there, so the update did not start"
 msgstr ""
 
-#: src/ui/update_all.rs:320 src/ui/update_all.rs:324
+#: src/ui/update_all.rs:323 src/ui/update_all.rs:327
 msgid "No terminal found to run the update in"
 msgstr ""
 
-#: src/ui/update_all.rs:346
+#: src/ui/update_all.rs:349
 msgid "Update running in a terminal — it is checked when it finishes"
 msgstr ""
 
-#: src/ui/update_all.rs:437
+#: src/ui/update_all.rs:440
 msgid "Checking what else needs updating…"
 msgstr ""
 

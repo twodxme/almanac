@@ -2137,6 +2137,10 @@ pub fn known_vulnerabilities() -> Finding {
     crate::security::finding()
 }
 
+pub fn restart_needed() -> Finding {
+    crate::restart::finding()
+}
+
 /// A health check: Python's `CHECKS` holds the bare functions and reads
 /// `check.__name__` when one fails; here each carries that name beside it.
 pub type Check = fn() -> Finding;
@@ -2159,6 +2163,7 @@ pub const CHECKS: &[(&str, Check)] = &[
     ("config_resets", config_resets),
     ("update_snapshots", update_snapshots),
     ("known_vulnerabilities", known_vulnerabilities),
+    ("restart_needed", restart_needed),
 ];
 
 /// Which check produced which finding, so one can be asked again after its fix
@@ -2182,6 +2187,7 @@ pub const CHECK_BY_ID: &[(&str, Check)] = &[
     ("config-reset", config_resets),
     ("snapshot", update_snapshots),
     ("vulnerabilities", known_vulnerabilities),
+    ("restart-needed", restart_needed),
 ];
 
 /// `CHECK_BY_ID.get(finding_id)`.

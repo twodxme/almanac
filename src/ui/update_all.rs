@@ -206,6 +206,9 @@ impl Win {
     /// Everything else follows as one batch, so nothing counted is left
     /// behind.
     pub fn on_update_all(&self) {
+        if self.confirm_news_then(|w| w.on_update_all()) {
+            return;
+        }
         let pending: Vec<App> = self
             .store_objects()
             .iter()

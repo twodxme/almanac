@@ -51,6 +51,7 @@ pub const DEFAULTS: &[(&str, DefaultValue)] = &[
     ("net_market_themes", DefaultValue::Bool(true)),     // the omarchy-theme topic on GitHub
     ("net_gh_token", DefaultValue::Bool(true)),          // use `gh auth token` for GitHub requests
     ("net_daily_picks", DefaultValue::Bool(true)),       // GitHub stats for Today's picks
+    ("net_arch_news", DefaultValue::Bool(true)),         // archlinux.org news feed, hourly
 ];
 
 pub const START_PAGES: &[(&str, &str)] = &[

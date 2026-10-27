@@ -331,6 +331,22 @@ impl Win {
             &tr("security.archlinux.org — the whole advisory list, matched here"),
             None,
         )?;
+        let news_after: After = {
+            let w = self.downgrade();
+            Rc::new(move || {
+                if let Some(w) = w.upgrade() {
+                    w.news_setting_changed();
+                }
+            })
+        };
+        switch(
+            &net,
+            "net_arch_news",
+            &tr("Check Arch news"),
+            &tr("archlinux.org/news, at most once an hour — where updates that need manual \
+                 steps are announced"),
+            Some(news_after),
+        )?;
         let picks_after: After = {
             let w = self.downgrade();
             Rc::new(move || {
