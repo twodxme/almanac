@@ -2260,6 +2260,12 @@ pub fn last_run() -> Option<(std::time::Duration, Vec<Finding>)> {
     LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(at, found)| (at.elapsed(), found.clone()))
 }
 
+/// Drop the kept answer: something just changed the system (an update, a
+/// fix), so the next page to ask runs the checks again.
+pub fn forget_last_run() {
+    *LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// How long a `last_run` answer stands in for a new run.
 pub const FINDINGS_FRESH: std::time::Duration = std::time::Duration::from_secs(300);
 

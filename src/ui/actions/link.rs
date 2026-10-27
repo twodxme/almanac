@@ -233,6 +233,8 @@ impl Win {
     /// updates are asked afresh, not taken from what the last scan kept.
     pub fn after_pacman(&self, _ok: bool) {
         crate::inventory::forget_pending();
+        crate::maintenance::forget_last_run();
+        self.shared.borrow().findings.set(Vec::new());
         self.reload();
     }
 }
