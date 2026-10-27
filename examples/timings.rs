@@ -23,6 +23,7 @@ fn main() {
         let _ = time("    desktop_map", || inv::desktop_map(&names));
         let aur: Vec<String> = String::from_utf8(std::process::Command::new("pacman").arg("-Qmq").output().unwrap().stdout).unwrap().lines().map(String::from).collect();
         let _ = time("    try_aur_health", || inv::try_aur_health(&aur));
+        let _ = time("    foreign_packages", inv::foreign_packages);
         let _ = time("    security::vulnerabilities", || almanac::security::vulnerabilities(None, None));
         let _ = time("  appimages", || inv::appimages(true));
         let _ = time("  flatpaks", inv::flatpaks);

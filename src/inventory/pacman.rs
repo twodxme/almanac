@@ -315,6 +315,66 @@ pub(super) fn installed_names() -> Result<std::sync::Arc<HashSet<String>>, Strin
     Ok(names)
 }
 
+/// The last clean `pacman -Qmq`, with the database stamp it was taken at.
+pub(super) static FOREIGN: std::sync::Mutex<Option<(DbStamp, std::sync::Arc<Vec<String>>)>> =
+    std::sync::Mutex::new(None);
+
+/// `pacman -Qmq` (installed packages no sync database carries), in pacman's
+/// order, as `run` gives it: empty when pacman could not be run. It is the
+/// slow query of the lot (it reads every sync database), and what it answers
+/// moves only when a package comes or goes or the databases are synced,
+/// which is exactly what the stamp sees; so an answer pacman gave cleanly is
+/// kept while the stamp holds.
+pub fn foreign_packages() -> Result<std::sync::Arc<Vec<String>>, String> {
+    foreign_state().map(|(names, _)| names)
+}
+
+/// Whether `name` is a foreign package, None when pacman could not say.
+pub fn is_foreign(name: &str) -> Option<bool> {
+    let (names, clean) = foreign_state().ok()?;
+    clean.then(|| names.iter().any(|n| n == name))
+}
+
+/// `foreign_packages`, with whether pacman answered cleanly (exit 0, or 1
+/// with nothing listed: there are none).
+pub(super) fn foreign_state() -> Result<(std::sync::Arc<Vec<String>>, bool), String> {
+    let stamp = pacman_db_stamp();
+    if let Some(stamp) = stamp {
+        if let Some((at, names)) = FOREIGN.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if *at == stamp {
+                return Ok((names.clone(), true));
+            }
+        }
+    }
+    let (stdout, clean) = match subprocess_run(&["pacman", "-Qmq"], 25) {
+        Ok(r) => {
+            let clean = r.code == Some(0) || (r.code == Some(1) && py_strip(&r.stdout).is_empty());
+            (r.stdout, clean)
+        }
+        Err(RunError::Os | RunError::Timeout) => (String::new(), false),
+        Err(RunError::Decode(e)) => return Err(e),
+        Err(RunError::Nul) => return Err("embedded null byte".into()),
+    };
+    let names: std::sync::Arc<Vec<String>> = std::sync::Arc::new(py_split(&stdout).into_iter().map(String::from).collect());
+    if let (Some(stamp), true) = (stamp, clean) {
+        *FOREIGN.lock().unwrap_or_else(|e| e.into_inner()) = Some((stamp, names.clone()));
+    }
+    Ok((names, clean))
+}
+
+/// The explicit installs, split by where they come from: (`pacman -Qentq`,
+/// `pacman -Qemq`), worked out from `pacman -Qetq`, `pacman -Qeq` and the
+/// foreign list. -n and -m each read every sync database, which made the two
+/// direct queries 0.2 s apiece; -m is needed anyway, and the explicit lists
+/// without either take a few milliseconds. pacman's own order is kept: each
+/// list is filtered in the order pacman gave it, never re-sorted.
+pub(super) fn explicit_split(unrequired: &str, explicit: &str, foreign: &[String]) -> (Vec<String>, Vec<String>) {
+    let foreign: HashSet<&str> = foreign.iter().map(String::as_str).collect();
+    let native = py_split(unrequired).into_iter().filter(|n| !foreign.contains(n)).map(String::from).collect();
+    let aur = py_split(explicit).into_iter().filter(|n| foreign.contains(n)).map(String::from).collect();
+    (native, aur)
+}
+
 /// Drop what `pending_both` keeps: the user asked for a fresh look.
 pub fn forget_pending() {
     *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -429,15 +489,33 @@ pub(super) fn version_map(out: &str) -> Result<HashMap<String, String>, String> 
 /// `pacman -Q` line, an AUR reply of the wrong shape); `collect` then drops
 /// the section.
 pub fn packages() -> Result<Vec<App>, String> {
-    let words = |s: String| -> Vec<String> { py_split(&s).into_iter().map(String::from).collect() };
-    let mut repo_names = words(run(&["pacman", "-Qentq"], 25)?);
-    let mut aur_names = words(run(&["pacman", "-Qemq"], 25)?);
-    let versions = version_map(&run(&["pacman", "-Q"], 25)?)?;
+    // What pacman says, read side by side: none of these waits on another.
+    let (unrequired, explicit_all, versions, pending, foreign_all) = std::thread::scope(|s| {
+        let unrequired = s.spawn(|| run(&["pacman", "-Qetq"], 25));
+        let explicit_all = s.spawn(|| run(&["pacman", "-Qeq"], 25));
+        let versions = s.spawn(|| run(&["pacman", "-Q"], 25));
+        let pending = s.spawn(pending_both);
+        let foreign = foreign_packages();
+        let join = |h: std::thread::ScopedJoinHandle<'_, Result<String, String>>| {
+            h.join().unwrap_or_else(|_| Err("pacman panicked".into()))
+        };
+        (
+            join(unrequired),
+            join(explicit_all),
+            join(versions),
+            pending.join().unwrap_or_else(|_| Err("pending updates panicked".into())),
+            foreign,
+        )
+    });
+    let (unrequired, explicit_all) = (unrequired?, explicit_all?);
+    let foreign_all = foreign_all?;
+    let (mut repo_names, mut aur_names) = explicit_split(&unrequired, &explicit_all, &foreign_all);
+    let versions = version_map(&versions?)?;
     // Pull in any non-explicit package that has an update waiting, so the
     // list can never disagree with "Update all".
-    let (up_repo_pre, up_aur_pre) = pending_both()?;
+    let (up_repo_pre, up_aur_pre) = pending?;
     let known: HashSet<String> = repo_names.iter().chain(aur_names.iter()).cloned().collect();
-    let foreign: HashSet<String> = words(run(&["pacman", "-Qmq"], 25)?).into_iter().collect();
+    let foreign: HashSet<String> = foreign_all.iter().cloned().collect();
     // (The Python walks a set here, in hash order; sorted is one fixed order.)
     let pending_names: BTreeSet<String> =
         up_repo_pre.keys().chain(up_aur_pre.keys()).filter(|n| !known.contains(*n)).cloned().collect();
@@ -450,18 +528,30 @@ pub fn packages() -> Result<Vec<App>, String> {
     }
 
     let all_names: Vec<String> = repo_names.iter().chain(aur_names.iter()).cloned().collect();
-    let info = package_info(&all_names)?;
-    let desktops = desktop_map(&all_names)?;
-    let aur = try_aur_health(&aur_names)?;
+    // Four lookups on the final names, side by side.
+    let (info, desktops, aur, vulns) = std::thread::scope(|s| {
+        let info = s.spawn(|| package_info(&all_names));
+        let desktops = s.spawn(|| desktop_map(&all_names));
+        // "Security update" means the update fixes a known vulnerability in
+        // the installed version, per the Arch Security Tracker. Only when
+        // the tracker cannot be reached does the old guess-by-name stand in.
+        let vulns = s.spawn(|| crate::security::vulnerabilities(Some(&versions), None));
+        // Every foreign package is asked about, not only the listed ones:
+        // the Health page's check asks about them all, and one kept answer
+        // then serves both.
+        let aur = if aur_names.is_empty() { Ok(BTreeMap::new()) } else { try_aur_health(&foreign_all) };
+        (
+            info.join().unwrap_or_else(|_| Err("pacman -Qi panicked".into())),
+            desktops.join().unwrap_or_else(|_| Err("pacman -Ql panicked".into())),
+            aur,
+            vulns.join().ok().flatten(),
+        )
+    });
+    let (info, desktops, aur) = (info?, desktops?, aur?);
     let (up_repo, up_aur) = (up_repo_pre, up_aur_pre);
     // The explicit installs: the two lists above as pacman gave them, before
     // the pending names joined them (asking pacman again took 0.4 s).
     let explicit = known;
-
-    // "Security update" means the update fixes a known vulnerability in the
-    // installed version, per the Arch Security Tracker. Only when the tracker
-    // cannot be reached does the old guess-by-name stand in.
-    let vulns = crate::security::vulnerabilities(Some(&versions), None);
     let vuln_map = vulns.as_ref().map(|v| crate::security::by_package(v));
 
     let critical_for = |name: &str, pend: &str| -> String {
@@ -637,5 +727,46 @@ mod tests {
     #[test]
     fn test_nul_in_argv_is_an_error() {
         assert!(run(&["true", "a\0b"], 5).is_err());
+    }
+
+    #[test]
+    fn the_explicit_lists_split_by_origin_keep_pacmans_order() {
+        // -Qetq: explicit and required by nothing; -Qeq: every explicit one.
+        let unrequired = "zed\nobs-studio\nyay\nobsidian\n";
+        let explicit = "zed\nlibfoo\nobs-studio\nyay\nobsidian\nfoo-bin\n";
+        let foreign = ["foo-bin".to_string(), "yay".to_string(), "dep-from-aur".to_string()];
+        let (native, aur) = explicit_split(unrequired, explicit, &foreign);
+        // Native: explicit and unrequired, as -Qentq has it (libfoo is
+        // required by something, so it is not listed).
+        assert_eq!(native, ["zed", "obs-studio", "obsidian"]);
+        // Foreign: every explicit one, required or not, as -Qemq has it, in
+        // -Qeq's order, not sorted.
+        assert_eq!(aur, ["yay", "foo-bin"]);
+    }
+
+    #[test]
+    fn nothing_foreign_leaves_every_explicit_package_native() {
+        let (native, aur) = explicit_split("a\nb\n", "a\nb\nc\n", &[]);
+        assert_eq!(native, ["a", "b"]);
+        assert!(aur.is_empty());
+    }
+
+    /// On this machine: the split matches pacman's own -Qentq and -Qemq,
+    /// and `is_foreign` matches `pacman -Qmq <name>`. Read-only; opt in with
+    /// `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "reads this machine's pacman database"]
+    fn the_split_matches_pacmans_own_queries_here() {
+        let q = |a: &str| run(&["pacman", a], 60).unwrap();
+        let words = |s: String| -> Vec<String> { py_split(&s).into_iter().map(String::from).collect() };
+        let foreign = words(q("-Qmq"));
+        let (native, aur) = explicit_split(&q("-Qetq"), &q("-Qeq"), &foreign);
+        assert_eq!(native, words(q("-Qentq")));
+        assert_eq!(aur, words(q("-Qemq")));
+        assert_eq!(*foreign_packages().unwrap(), foreign);
+        for name in words(q("-Qeq")).iter().take(40).chain(foreign.iter()) {
+            let direct = subprocess_run(&["pacman", "-Qmq", name], 20).unwrap();
+            assert_eq!(is_foreign(name), Some(direct.code == Some(0)), "{name}");
+        }
     }
 }

@@ -386,6 +386,18 @@ pub fn classify(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> State 
     })
 }
 
+/// `classify` for each of `dirs`, side by side (`classify_all`), in `dirs`
+/// order.
+pub fn classify_each(dirs: &[PathBuf], cache: Option<&mut FetchCache>, fetch: bool) -> Vec<State> {
+    classify_all(dirs, cache, fetch)
+        .into_iter()
+        .zip(dirs)
+        .map(|(st, d)| {
+            st.unwrap_or_else(|exc| State::new(&py_name(d), ERROR, &exc.chars().take(80).collect::<String>(), 0, ""))
+        })
+        .collect()
+}
+
 /// `classify` as the Python has it: `Err` for an exception it does not catch.
 pub fn try_classify(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<State, String> {
     let d = &py_path(d);
