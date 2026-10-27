@@ -1484,6 +1484,30 @@ impl Default for Market {
 /// after `timeout_secs` without data. ureq only limits a whole phase, so the
 /// body is read on a helper thread and each chunk waited for in turn.
 fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
+    // Asked unconditionally, the answer always has a body (a 304's empty one).
+    Ok(http_get_since(url, timeout_secs, &Validators::default())?.map(|(body, _)| body).unwrap_or_default())
+}
+
+/// What identifies one download of a URL, to ask the server whether it
+/// changed since: its `ETag` and `Last-Modified` (empty when not sent).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Validators {
+    pub etag: String,
+    pub modified: String,
+}
+
+impl Validators {
+    fn is_empty(&self) -> bool {
+        self.etag.is_empty() && self.modified.is_empty()
+    }
+}
+
+/// `http_get`, asking only for a body newer than `since`: None when the
+/// server says it has not changed (304), else the body and what identifies
+/// it. Both validators go out: some servers match one and not the other
+/// (plugins.omarchy.org answers If-Modified-Since, but not its weak ETag
+/// once the body is compressed).
+fn http_get_since(url: &str, timeout_secs: u64, since: &Validators) -> Result<Option<(Vec<u8>, Validators)>, String> {
     let t = std::time::Duration::from_secs(timeout_secs);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(t))
@@ -1491,7 +1515,19 @@ fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
         .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
         .build()
         .into();
-    let r = agent.get(url).header(UA.0, UA.1).call().map_err(|e| format!("URLError: {e}"))?;
+    let mut req = agent.get(url).header(UA.0, UA.1);
+    if !since.etag.is_empty() {
+        req = req.header("If-None-Match", &since.etag);
+    }
+    if !since.modified.is_empty() {
+        req = req.header("If-Modified-Since", &since.modified);
+    }
+    let r = req.call().map_err(|e| format!("URLError: {e}"))?;
+    if r.status() == 304 && !since.is_empty() {
+        return Ok(None);
+    }
+    let header = |name: &str| r.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let got = Validators { etag: header("etag"), modified: header("last-modified") };
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     std::thread::spawn(move || {
         use std::io::Read;
@@ -1516,7 +1552,7 @@ fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
     loop {
         match rx.recv_timeout(t) {
-            Ok(Ok(chunk)) if chunk.is_empty() => return Ok(body),
+            Ok(Ok(chunk)) if chunk.is_empty() => return Ok(Some((body, got))),
             Ok(Ok(chunk)) => body.extend_from_slice(&chunk),
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err("URLError: timed out".into()),
@@ -1540,6 +1576,14 @@ impl Market {
     /// The market's rows, each tagged with `market`. `Err` when the fetch or
     /// the loader fails (the Python raises; `_load_market` catches it).
     pub fn fetch(&self) -> Result<Vec<Row>, String> {
+        Ok(self.fetch_since(&Validators::default())?.map(|(rows, _)| rows).unwrap_or_default())
+    }
+
+    /// `fetch`, for a market with a catalogue to download: None when the
+    /// download is unchanged since `since` (and nothing was downloaded),
+    /// else the rows and what identifies the download. A market that builds
+    /// its own rows always builds them.
+    pub fn fetch_since(&self, since: &Validators) -> Result<Option<(Vec<Row>, Validators)>, String> {
         if let Some(loader) = self.loader {
             let mut out = Vec::new();
             for mut row in loader()? {
@@ -1548,9 +1592,14 @@ impl Market {
                     out.push(row);
                 }
             }
-            return Ok(out);
+            return Ok(Some((out, Validators::default())));
         }
-        let raw = http_get(&self.catalog_url, 60)?;
+        let Some((raw, got)) = http_get_since(&self.catalog_url, 60, since)? else { return Ok(None) };
+        self.rows_from(raw).map(|rows| Some((rows, got)))
+    }
+
+    /// The rows of a downloaded catalogue.
+    fn rows_from(&self, raw: Vec<u8>) -> Result<Vec<Row>, String> {
         let text = String::from_utf8(raw).map_err(|e| format!("UnicodeDecodeError: {e}"))?;
         let data: Value = py_json_loads(&text)?;
         let rows = match &data {
@@ -1935,11 +1984,32 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
         return Ok(rows);
     }
 
-    let fetched = m.fetch().and_then(|rows| {
+    // A downloaded catalogue is asked for only if it changed since the copy
+    // kept here (15 MB, for a file that changes a few times a day), when
+    // that copy is one this version wrote and nothing in it waits on a
+    // recheck. Unchanged, the kept rows are what mapping it again would give.
+    let kept = if m.loader.is_none() { _unchanged_candidate(&path)? } else { None };
+    let since = kept.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+    let fetched = m.fetch_since(&since).and_then(|got| {
+        let Some((rows, validators)) = got else {
+            let Some((rows, _)) = kept else { return Err("HTTPError: 304 with nothing kept".into()) };
+            // The kept copy counts as fetched now: its age restarts.
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            return Ok(rows);
+        };
         let rows = Value::Array(rows.into_iter().map(Value::Object).collect());
-        let blob = json!({"schema": SCHEMA, "rows": rows});
+        let mut blob = json!({"schema": SCHEMA, "rows": rows});
+        if !validators.etag.is_empty() {
+            blob["etag"] = json!(validators.etag);
+        }
+        if !validators.modified.is_empty() {
+            blob["modified"] = json!(validators.modified);
+        }
         crate::util::write_json(&path, &blob, None, false).map_err(|e| format!("OSError: {e}"))?;
-        Ok(rows)
+        Ok(blob["rows"].take())
     });
     match fetched {
         Ok(rows) => Ok(rows),
@@ -1955,6 +2025,27 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
             Ok(or_v(rows, json!([])))
         }
     }
+}
+
+/// The rows a market's cache file holds and what identifies the download
+/// they came from, when they can stand for an unchanged download: this
+/// schema, a list of rows, none of them marked unchecked, and an ETag or
+/// Last-Modified to ask with. None otherwise; Err where reading the rows
+/// raises, as the fresh-cache check does.
+fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, String> {
+    let Ok(Value::Object(blob)) = read_blob(path) else { return Ok(None) };
+    if blob.get("schema").and_then(Value::as_f64) != Some(SCHEMA as f64) || matches!(blob.get("schema"), Some(Value::Bool(_))) {
+        return Ok(None);
+    }
+    let Some(rows @ Value::Array(list)) = blob.get("rows") else { return Ok(None) };
+    for r in list {
+        if truthy(as_dict(r)?.get("unchecked")) {
+            return Ok(None);
+        }
+    }
+    let text = |k: &str| blob.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let v = Validators { etag: text("etag"), modified: text("modified") };
+    Ok((!v.is_empty()).then(|| (rows.clone(), v)))
 }
 
 /// Every listed plugin from every enabled marketplace.
@@ -1974,9 +2065,31 @@ pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
             return Ok(c.clone());
         }
     }
+    let markets = try_enabled_markets()?;
+    // The markets load side by side: one is a download, the others runs of
+    // GitHub lookups, and none waits on another. Read in their order, so the
+    // first one that fails is the one reported, as when they ran in turn.
+    let loaded: Vec<Result<Value, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = markets
+            .iter()
+            .map(|m| {
+                let spawned = std::thread::Builder::new()
+                    .stack_size(crate::util::DEEP_STACK)
+                    .spawn_scoped(s, move || _load_market(m, force));
+                (m, spawned)
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(m, spawned)| match spawned {
+                Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
+                Err(_) => _load_market(m, force),
+            })
+            .collect()
+    });
     let mut out: Vec<Plugin> = Vec::new();
-    for m in try_enabled_markets()? {
-        let rows = _load_market(m, force)?;
+    for rows in loaded {
+        let rows = rows?;
         for r in py_iter(&rows)? {
             let Value::Object(r) = r else {
                 return Err(format!("TypeError: store.Plugin() argument after ** must be a mapping, not {}",
@@ -3085,6 +3198,81 @@ mod tests {
         let rows = _load_market(&m, false).expect("rows");
         std::env::remove_var("XDG_CACHE_HOME");
         assert_eq!(rows[0]["unchecked"], false, "the stale miss must be retried");
+    }
+
+    fn id_only(e: &Value) -> Result<Row, String> {
+        Ok(json!({"id": e["id"]}).as_object().cloned().unwrap_or_default())
+    }
+
+    /// A catalogue server on localhost: 304 to a request that says
+    /// `If-Modified-Since: <its date>`, else the catalogue, gzipped when the
+    /// request accepts gzip. Every request's head is kept.
+    fn catalogue_server() -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        const DATE: &str = "Tue, 27 Oct 2026 01:04:35 GMT";
+        // {"plugins": [{"id": "zipped"}]}, gzipped.
+        const GZ: [u8; 49] = [31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 171, 86, 42, 200, 41, 77, 207, 204, 43, 86, 178, 82, 136,
+                              174, 86, 202, 76, 1, 210, 74, 85, 153, 5, 5, 169, 41, 74, 181, 177, 181, 0, 65, 213, 120,
+                              226, 31, 0, 0, 0];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/catalog.json", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).unwrap_or(0) == 1 {
+                    head.push(b[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_lowercase();
+                log.lock().unwrap().push(head.clone());
+                let mut out = Vec::new();
+                if head.contains(&format!("if-modified-since: {}", DATE.to_lowercase())) {
+                    out.extend_from_slice(b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n");
+                } else if head.contains("accept-encoding: gzip") {
+                    let h = format!("HTTP/1.1 200 OK\r\nLast-Modified: {DATE}\r\nContent-Encoding: gzip\r\n\
+                                     Content-Length: {}\r\nConnection: close\r\n\r\n", GZ.len());
+                    out.extend_from_slice(h.as_bytes());
+                    out.extend_from_slice(&GZ);
+                } else {
+                    let body = r#"{"plugins": [{"id": "plain"}]}"#;
+                    let h = format!("HTTP/1.1 200 OK\r\nLast-Modified: {DATE}\r\nContent-Length: {}\r\n\
+                                     Connection: close\r\n\r\n{body}", body.len());
+                    out.extend_from_slice(h.as_bytes());
+                }
+                let _ = s.write_all(&out);
+            }
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn an_unchanged_catalogue_is_not_downloaded_again() {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().expect("tmp");
+        std::env::set_var("XDG_CACHE_HOME", d.path());
+        let (url, seen) = catalogue_server();
+        let m = Market { id: "cond".into(), catalog_url: url, mapper: Some(id_only), ..Market::default() };
+        // First: downloaded, compressed on the wire, and kept with its date.
+        let first = _load_market(&m, false).expect("rows");
+        assert_eq!(first, json!([{"id": "zipped", "market": "cond"}]));
+        let blob = read_blob(&m.cache()).expect("kept");
+        assert_eq!(blob["modified"], "Tue, 27 Oct 2026 01:04:35 GMT");
+        // Past its TTL: asked again, conditionally; unchanged, the kept rows
+        // stand and their age restarts.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs_f64(TTL + 60.0);
+        std::fs::File::options().write(true).open(m.cache()).expect("open").set_modified(past).expect("utime");
+        let again = _load_market(&m, false).expect("rows");
+        let age = std::fs::metadata(m.cache()).unwrap().modified().unwrap().elapsed().unwrap();
+        std::env::remove_var("XDG_CACHE_HOME");
+        assert_eq!(again, first);
+        assert!(age.as_secs() < 60, "the kept copy counts as fresh again");
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert!(!seen[0].contains("if-modified-since"));
+        assert!(seen[1].contains("if-modified-since: tue, 27 oct 2026 01:04:35 gmt"), "{}", seen[1]);
     }
 
     // SetupAfterInstall: plugins the marketplace marks "requires additional

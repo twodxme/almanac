@@ -2205,7 +2205,31 @@ pub fn run_all() -> Vec<Finding> {
     if crate::demo::active() {
         return crate::demo::findings();
     }
-    _run_checks(CHECKS)
+    let found = _run_checks(CHECKS);
+    *LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), found.clone()));
+    found
+}
+
+/// The last `run_all` in this process, with when it finished.
+static LAST_RUN: std::sync::Mutex<Option<(std::time::Instant, Vec<Finding>)>> = std::sync::Mutex::new(None);
+
+/// What the last `run_all` in this process found, and how long ago: Today
+/// and Health show the same checks, and the page opened second can show
+/// the first one's answer at once rather than ask every check again.
+pub fn last_run() -> Option<(std::time::Duration, Vec<Finding>)> {
+    LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(at, found)| (at.elapsed(), found.clone()))
+}
+
+/// How long a `last_run` answer stands in for a new run.
+pub const FINDINGS_FRESH: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// "checked just now", "checked 1 min ago", "checked 12 min ago".
+pub fn checked_ago(age: std::time::Duration) -> String {
+    match age.as_secs() / 60 {
+        0 => "checked just now".to_string(),
+        m @ 1..60 => format!("checked {m} min ago"),
+        m => format!("checked {} h ago", m / 60),
+    }
 }
 
 /// `checks`, each guarded, all at once; sorted by severity, then size.
@@ -2384,6 +2408,15 @@ mod tests {
         assert_eq!(ids, ["big", "small", "tie-a", "raises_here", "tie-b", "slow", "slow"]);
         let failed = &out[3];
         assert_eq!(failed.detail, "Check failed: boom", "a check that raises is a finding, not a lost run");
+    }
+
+    #[test]
+    fn how_long_ago_findings_were_checked_reads_plainly() {
+        let s = std::time::Duration::from_secs;
+        assert_eq!(checked_ago(s(20)), "checked just now");
+        assert_eq!(checked_ago(s(61)), "checked 1 min ago");
+        assert_eq!(checked_ago(s(59 * 60 + 59)), "checked 59 min ago");
+        assert_eq!(checked_ago(s(2 * 3600 + 5)), "checked 2 h ago");
     }
 
     /// `_pacman_qk`, split, reads exactly as one `pacman -Qk` on this

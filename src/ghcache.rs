@@ -76,7 +76,47 @@ const INT_MAX_STR_DIGITS: usize = 4300;
 /// urllib's `timeout=25`: every socket operation, not the whole request.
 const SOCKET_TIMEOUT: u64 = 25;
 
-static _LOCK: Mutex<()> = Mutex::new(());
+/// One lock per URL: a URL's cache entry is read, asked about and written
+/// by one caller at a time, so two asking at once make one request and the
+/// second is answered from the first's entry. Different URLs no longer wait
+/// on each other's network round trips (one lock for all of them made a
+/// pool of fourteen release lookups run one after another).
+static _LOCKS: Mutex<Option<std::collections::HashMap<String, std::sync::Arc<Mutex<()>>>>> = Mutex::new(None);
+
+fn _url_lock(url: &str) -> std::sync::Arc<Mutex<()>> {
+    let mut locks = _LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.get_or_insert_with(Default::default).entry(url.to_string()).or_default().clone()
+}
+
+/// How many requests may be out at once. Each is checked against the
+/// remaining quota before it goes, so this many at most can be in flight
+/// on one look at it -- fewer than `RESERVE`, which the check keeps back.
+pub const IN_FLIGHT: usize = 4;
+
+static _FLYING: (Mutex<usize>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
+
+/// A place among the [`IN_FLIGHT`] requests, held while it is out.
+struct Permit;
+
+impl Permit {
+    fn take() -> Permit {
+        let (count, freed) = &_FLYING;
+        let mut n = count.lock().unwrap_or_else(|e| e.into_inner());
+        while *n >= IN_FLIGHT {
+            n = freed.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+        *n += 1;
+        Permit
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let (count, freed) = &_FLYING;
+        *count.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        freed.notify_one();
+    }
+}
 
 /// `_token` and `_token_checked`: the token read once per process.
 struct TokenMemo {
@@ -1109,7 +1149,8 @@ fn _keeps_auth(from: &str, to: &str) -> bool {
 }
 
 fn _get_json(url: &str, ttl: Ttl, allow_stale: bool, accept: &str) -> Result<PyValue, String> {
-    let _guard = _LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = _url_lock(url);
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut entry = _read(url)?.unwrap_or(PyValue::None);
     let now = crate::util::now();
 
@@ -1119,6 +1160,11 @@ fn _get_json(url: &str, ttl: Ttl, allow_stale: bool, accept: &str) -> Result<PyV
             return Ok(entry.get("body").cloned().unwrap_or(PyValue::None));
         }
     }
+
+    // From the quota check until what the answer says about the quota is
+    // written down: requests to other URLs go out beside this one, but no
+    // more than IN_FLIGHT on one reading of what is left.
+    let _permit = Permit::take();
 
     if !_can_spend()? {
         // Out of budget. A 304 would be free, but a miss would not, and
@@ -2872,6 +2918,56 @@ mod tests {
         assert_eq!(try_get_json(url, DEFAULT_TTL, true, ACCEPT).unwrap(), Some(serde_json::json!([1, 2])));
         assert_eq!(try_get_json(url, DEFAULT_TTL, false, ACCEPT).unwrap(), None);
         assert!(try_describe().unwrap().starts_with("GitHub API: 3/60 left (unauthenticated), resets in "));
+    }
+
+    /// A server on localhost that answers every request with `[1]` after
+    /// `delay`, counting the requests it gets.
+    fn slow_server(delay: std::time::Duration) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let counted = counted.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    let _ = s.read(&mut buf);
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::thread::sleep(delay);
+                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n[1]");
+                });
+            }
+        });
+        (base, hits)
+    }
+
+    #[test]
+    fn different_urls_are_fetched_side_by_side_and_one_url_once() {
+        let _env = Env::new();
+        crate::settings::set("net_gh_token", Value::Bool(false)).unwrap();
+        let delay = std::time::Duration::from_millis(400);
+        let (base, hits) = slow_server(delay);
+        let urls: Vec<String> = (0..IN_FLIGHT).map(|i| format!("{base}/r{i}")).collect();
+        let t = std::time::Instant::now();
+        std::thread::scope(|s| {
+            for u in &urls {
+                s.spawn(move || assert_eq!(try_get_json(u, DEFAULT_TTL, true, ACCEPT).unwrap(), Some(serde_json::json!([1]))));
+            }
+        });
+        assert!(t.elapsed() < delay * 2, "{} requests took {:?}", urls.len(), t.elapsed());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), urls.len());
+        // The same URL asked from three threads at once: one request, the
+        // other two answered from its entry.
+        let one = format!("{base}/same");
+        std::thread::scope(|s| {
+            for _ in 0..3 {
+                s.spawn(|| assert_eq!(try_get_json(&one, DEFAULT_TTL, true, ACCEPT).unwrap(), Some(serde_json::json!([1]))));
+            }
+        });
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), urls.len() + 1);
     }
 
     #[test]

@@ -474,9 +474,17 @@ impl Win {
         let w = self.downgrade();
         spawn_bg(
             move || {
-                // `getattr(self, "_findings", None) or maintenance.run_all()`
+                // `getattr(self, "_findings", None) or maintenance.run_all()`,
+                // where a run the Health page made a few minutes ago counts.
                 let have = findings.get();
-                let found = if have.is_empty() { maintenance::run_all() } else { have };
+                let found = if !have.is_empty() {
+                    have
+                } else {
+                    match maintenance::last_run() {
+                        Some((age, found)) if age < maintenance::FINDINGS_FRESH => found,
+                        _ => maintenance::run_all(),
+                    }
+                };
                 // Assigned as soon as it is known, not after the catalog: the
                 // Python's GIL-bound worker sets `_findings` long before its
                 // slow main thread first applies the inventory, so the
@@ -504,6 +512,7 @@ impl Win {
                     sh.plugins_none = false;
                 }
                 w.feat_show(shelves);
+                crate::ui::timings::mark("today shown");
                 if !plugins.is_empty() {
                     w.picks_reload(plugins);
                 }

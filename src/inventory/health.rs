@@ -118,6 +118,9 @@ pub fn aur_health_answer(names: &[String]) -> Result<Option<BTreeMap<String, Aur
     Ok(out)
 }
 
+/// What the AUR says, by package name.
+pub type AurMap = BTreeMap<String, AurHealth>;
+
 /// How long an AUR answer is trusted, in seconds. Flags and maintainers
 /// change over days, not minutes; an hour keeps a launch, its scan and the
 /// Health page to one call between them.
@@ -169,7 +172,7 @@ pub(super) fn aur_health_from(
     names: &[String],
     now: f64,
     fetch: &dyn Fn(&str) -> Result<Value, String>,
-) -> Result<(Option<BTreeMap<String, AurHealth>>, Option<AurAnswer>), String> {
+) -> Result<(Option<AurMap>, Option<AurAnswer>), String> {
     let usable = kept.filter(|k| k.covers(names));
     if let Some(k) = usable {
         if (0.0..AUR_HEALTH_TTL).contains(&(now - k.at)) {
