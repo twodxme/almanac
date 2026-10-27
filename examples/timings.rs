@@ -28,10 +28,18 @@ fn main() {
         let _ = time("  appimages", || inv::appimages(true));
         let _ = time("  flatpaks", inv::flatpaks);
         let _ = time("  local_builds", || inv::local_builds(true));
+        let _ = time("  local_builds (no fetch)", || inv::local_builds(false));
+        let _ = time("    plugins::enabled", almanac::plugins::enabled);
         let _ = time("  agents::try_detect", || almanac::agents::try_detect(true));
         let _ = time("  agents::try_mise_tools", || almanac::agents::try_mise_tools(true));
         let _ = time("  selfupdate::try_as_app", || almanac::selfupdate::try_as_app(true));
         let _ = time("  try_orphans", inv::try_orphans);
+    }
+    if std::env::var_os("BREAKDOWN").is_some() {
+        // The Today page's other half: the store catalogue, from its cache
+        // while that is fresh.
+        let _ = time("store::try_catalog", || almanac::store::try_catalog(false));
+        let _ = time("store::try_catalog_annotated", || almanac::store::try_catalog_annotated(false));
     }
     let found = time("maintenance::run_all (first)", almanac::maintenance::run_all);
     time("maintenance::run_all (again)", almanac::maintenance::run_all);

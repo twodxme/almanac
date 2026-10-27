@@ -1933,6 +1933,11 @@ pub fn enabled_markets() -> Vec<&'static Market> {
 /// `_cached`, behind `_lock`.
 static CACHED: Mutex<Option<Vec<Plugin>>> = Mutex::new(None);
 
+/// Held while the markets load, so one load runs at a time; CACHED itself
+/// is held only to read or swap the list, so marking it (on the main thread,
+/// after an install) never waits on a download.
+static LOADING: Mutex<()> = Mutex::new(());
+
 /// A catalogue with rows that could not be checked is retried this soon rather
 /// than kept for the full TTL: one rate-limited refresh otherwise reported four
 /// installable apps as having no Linux build for six hours.
@@ -2059,8 +2064,8 @@ fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, Stri
 /// `Plugin(**r)` rejects -- and then nothing is cached, so the next call
 /// tries again.
 pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
-    let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = cached.as_ref() {
+    let _loading = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(c) = CACHED.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         if !force {
             return Ok(c.clone());
         }
@@ -2098,7 +2103,7 @@ pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
             out.push(Plugin::from_row(&r)?);
         }
     }
-    *cached = Some(out.clone());
+    *CACHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(out.clone());
     Ok(out)
 }
 
