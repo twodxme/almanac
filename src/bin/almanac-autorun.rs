@@ -13,6 +13,11 @@
 //! and fails closed: a check that did not finish exits 3 with the reason
 //! on stderr, never 0 with an empty list the script would read as "nothing
 //! to hold".
+//!
+//! `--record-hold TITLE DETAIL` puts a run that stopped short -- held for a
+//! core package or Arch news, skipped on battery, failed -- on the History
+//! page, so a notification that went unseen is not the only record of why
+//! nothing was installed.
 
 use std::io::Read;
 
@@ -45,10 +50,27 @@ fn core_holds(rest: &[String]) -> i32 {
     }
 }
 
+fn record_hold(rest: &[String]) -> i32 {
+    let [title, detail] = rest else {
+        eprintln!("usage: almanac-autorun --record-hold TITLE DETAIL");
+        return 2;
+    };
+    let history = almanac::history::record_checked(almanac::history::AUTOUPDATE, title, detail, "warn", &[]);
+    match history {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("almanac-autorun --record-hold: {e}");
+            1
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("--core-holds") {
-        std::process::exit(core_holds(&args[1..]));
+    match args.first().map(String::as_str) {
+        Some("--core-holds") => std::process::exit(core_holds(&args[1..])),
+        Some("--record-hold") => std::process::exit(record_hold(&args[1..])),
+        _ => {}
     }
     std::process::exit(almanac::autorun::main(None));
 }

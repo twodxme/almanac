@@ -1,0 +1,15 @@
+[Unit]
+Description=Weekly system update, holding anything that needs judgement
+Documentation=https://github.com/twodxme/almanac#scheduled-updates
+After=network-online.target
+Wants=network-online.target
+# An upgrade cut off by a flat battery leaves the system half-upgraded. A
+# skipped run waits for the next one; the script also checks, and says why,
+# when it is run by hand.
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/almanac/omarchy-auto-update
+# AUR builds are not quick; do not let a long compile get killed halfway.
+TimeoutStartSec=3h

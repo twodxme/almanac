@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::i18n::tr;
 use crate::ui::shell::{spawn_bg, Win};
-use crate::{autoupdate, plugins as plugins_mod, settings, tasks, util, watcher, xdg};
+use crate::{autoupdate, plugins as plugins_mod, settings, tasks, watcher, xdg};
 
 /// This section keeps nothing of its own: `self._plugins is None` is
 /// shared state (`shell::Shared::plugins_none`).
@@ -472,7 +472,7 @@ impl Win {
             "Scheduled update",
             vec![tasks::Step::argv(
                 "Running the scheduled update",
-                vec![util::home().join(".local/bin/omarchy-auto-update").to_string_lossy().into_owned()],
+                vec![autoupdate::script_path().to_string_lossy().into_owned()],
             )],
             Some(Box::new(move |ok| {
                 if let Some(w) = w.upgrade() {

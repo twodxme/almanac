@@ -1,7 +1,10 @@
 //! Scheduled updates: the settings, and the systemd timer behind them.
 //!
-//! The timer and its service already exist on disk; this is the part that lets
-//! the app change them without the user editing unit files. Everything that is a
+//! The package ships the timer and its service in /usr/lib/systemd/user, off
+//! until switched on here; this is the part that lets the app switch them and
+//! change the schedule without the user editing unit files. A full copy of the
+//! timer in ~/.config/systemd/user (how it was installed before it shipped) is
+//! still edited in place. Everything that is a
 //! *policy* decision lives in one JSON file that both this module and the shell
 //! script read, so the checkbox in the window and the behaviour at 11am on Sunday
 //! cannot drift apart.
@@ -114,6 +117,48 @@ pub const UNIT: &str = "omarchy-auto-update.timer";
 pub static TIMER_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
     to_path(py_norm(&py_join(&py_join(&config_root(), b"systemd/user"), UNIT.as_bytes())))
 });
+/// The timer as the package installs it. Never edited: a schedule chosen
+/// here goes in [`SCHEDULE_DROPIN`], which overrides only `OnCalendar=`.
+pub const SHIPPED_TIMER: &str = "/usr/lib/systemd/user/omarchy-auto-update.timer";
+/// The user's override of the shipped timer's schedule.
+pub static SCHEDULE_DROPIN: LazyLock<PathBuf> =
+    LazyLock::new(|| TIMER_FILE.with_file_name(format!("{UNIT}.d")).join("schedule.conf"));
+/// The script the timer runs, as the package installs it.
+pub const SHIPPED_SCRIPT: &str = "/usr/lib/almanac/omarchy-auto-update";
+
+/// The script to run for "run it now": the packaged one, else the copy in
+/// ~/.local/bin that installs from before it shipped used.
+pub fn script_path() -> PathBuf {
+    let shipped = Path::new(SHIPPED_SCRIPT);
+    if shipped.exists() {
+        shipped.to_path_buf()
+    } else {
+        crate::util::home().join(".local/bin/omarchy-auto-update")
+    }
+}
+
+/// Where the timer's schedule can live: a full user copy of the unit, the
+/// packaged unit, and a drop-in overriding the packaged one.
+struct TimerFiles<'a> {
+    user: &'a Path,
+    shipped: &'a Path,
+    dropin: &'a Path,
+}
+
+impl TimerFiles<'static> {
+    fn real() -> Self {
+        TimerFiles { user: &TIMER_FILE, shipped: Path::new(SHIPPED_TIMER), dropin: &SCHEDULE_DROPIN }
+    }
+}
+
+impl TimerFiles<'_> {
+    /// Whether a schedule goes in the drop-in: once there is one (it
+    /// overrides any unit file, the user's copy included), or when the
+    /// packaged unit is the only one.
+    fn uses_dropin(&self) -> bool {
+        self.dropin.exists() || (std::fs::symlink_metadata(self.user).is_err() && self.shipped.exists())
+    }
+}
 
 /// label -> OnCalendar: `(key, label, OnCalendar)`.
 pub const SCHEDULES: &[(&str, &str, &str)] = &[
@@ -1261,7 +1306,38 @@ fn status_with(sys: Sys) -> Result<Status, String> {
 /// systemctl output that is not.
 pub fn set_schedule(key: &str) -> Result<(bool, String), String> {
     imported()?;
-    set_schedule_with(key, &TIMER_FILE, &mut real_sys())
+    set_schedule_in(key, &TimerFiles::real(), &mut real_sys())
+}
+
+/// [`set_schedule_with`] on the user's copy of the unit, or, for the
+/// packaged unit, a drop-in: /usr/lib is the package's, and a package update
+/// would put an edit there back.
+fn set_schedule_in(key: &str, files: &TimerFiles, sys: Sys) -> Result<(bool, String), String> {
+    if !files.uses_dropin() {
+        return set_schedule_with(key, files.user, sys);
+    }
+    let calendar = match SCHEDULES.iter().find(|(k, _l, _c)| *k == key) {
+        Some((_k, _l, cal)) => *cal,
+        None => return Ok((false, format!("unknown schedule {}", py_repr(key)))),
+    };
+    if let Some(dir) = files.dropin.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            return Ok((false, py_oserror(&e, dir)));
+        }
+    }
+    // OnCalendar= adds to a timer's schedule; the empty one first clears
+    // what the packaged unit set.
+    let text = format!(
+        "# Written by Almanac (Preferences, Updates).\n[Timer]\nOnCalendar=\nOnCalendar={calendar}\n"
+    );
+    if let Err(e) = write_unit(files.dropin, &text) {
+        return Ok((false, e));
+    }
+    sys(&["daemon-reload"], 30)?;
+    if is_enabled_with(sys)? {
+        sys(&["restart", UNIT], 30)?;
+    }
+    Ok((true, calendar.to_owned()))
 }
 
 fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, String), String> {
@@ -1312,7 +1388,38 @@ fn write_unit(path: &Path, text: &str) -> Result<(), String> {
 /// `Err` where the Python raises: a timer unit that is not UTF-8.
 pub fn current_schedule() -> Result<String, String> {
     imported()?;
-    current_schedule_in(&TIMER_FILE)
+    current_schedule_of(&TimerFiles::real())
+}
+
+/// The schedule in effect: the drop-in's, over the user's copy of the unit,
+/// over the packaged unit.
+fn current_schedule_of(files: &TimerFiles) -> Result<String, String> {
+    match read_text(files.dropin) {
+        Ok(text) => {
+            // systemd's reading: an empty OnCalendar= clears those before it,
+            // and what is left is the schedule.
+            let mut cals: Vec<&str> = Vec::new();
+            for line in py_splitlines(&text) {
+                if let Some(v) = line.strip_prefix("OnCalendar=") {
+                    match py_strip(v) {
+                        "" => cals.clear(),
+                        cal => cals.push(cal),
+                    }
+                }
+            }
+            if let Some(cal) = cals.last() {
+                let key = SCHEDULES.iter().find(|(_k, _l, c)| c == cal).map_or("weekly", |(k, _l, _c)| *k);
+                return Ok(key.to_owned());
+            }
+        }
+        Err(Ok(_)) => {}
+        Err(Err(e)) => return Err(e),
+    }
+    if std::fs::symlink_metadata(files.user).is_ok() || !files.shipped.exists() {
+        current_schedule_in(files.user)
+    } else {
+        current_schedule_in(files.shipped)
+    }
 }
 
 fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
@@ -1656,6 +1763,91 @@ mod tests {
         let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, vec![std::ffi::OsString::from(UNIT)]);
         assert_eq!(current_schedule_in(&t).unwrap(), "daily");
+    }
+
+    fn files(d: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        std::fs::create_dir_all(d.join("user")).unwrap();
+        std::fs::create_dir_all(d.join("usr")).unwrap();
+        (d.join("user").join(UNIT), d.join("usr").join(UNIT), d.join("user").join(format!("{UNIT}.d/schedule.conf")))
+    }
+
+    /// With only the packaged unit, the schedule goes in a drop-in in the
+    /// user's directory; the packaged file is left as it was.
+    #[test]
+    fn a_packaged_timer_is_rescheduled_with_a_drop_in() {
+        let d = tmp("sched-dropin");
+        let (user, shipped, dropin) = files(&d);
+        std::fs::write(&shipped, TIMER).unwrap();
+        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        assert_eq!(current_schedule_of(&f).unwrap(), "weekly");
+        let mut calls = Vec::new();
+        let mut sys = |a: &[&str], _t: u64| {
+            calls.push(a.join(" "));
+            Ok(if a[0] == "is-enabled" { (1, "disabled".to_owned()) } else { (0, String::new()) })
+        };
+        assert_eq!(set_schedule_in("monthly", &f, &mut sys).unwrap(), (true, "Sun *-*-1..7 11:00:00".to_owned()));
+        assert_eq!(calls, vec!["daemon-reload".to_owned(), format!("is-enabled {UNIT}")]);
+        assert_eq!(std::fs::read_to_string(&shipped).unwrap(), TIMER);
+        assert!(!user.exists(), "no user copy of the unit is made");
+        let text = std::fs::read_to_string(&dropin).unwrap();
+        assert!(text.ends_with("[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n"), "{text}");
+        assert_eq!(current_schedule_of(&f).unwrap(), "monthly");
+        // A second change rewrites the drop-in, not adds to it.
+        let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
+        set_schedule_in("daily", &f, &mut none).unwrap();
+        assert_eq!(std::fs::read_to_string(&dropin).unwrap().matches("OnCalendar=").count(), 2);
+        assert_eq!(current_schedule_of(&f).unwrap(), "daily");
+        assert_eq!(set_schedule_in("hourly", &f, &mut none).unwrap(), (false, "unknown schedule 'hourly'".to_owned()));
+    }
+
+    /// A full copy in the user's directory (installs from before the timer
+    /// shipped) is still edited in place, and is what the schedule is read
+    /// from, over the packaged unit.
+    #[test]
+    fn a_user_copy_of_the_timer_is_still_edited_in_place() {
+        let d = tmp("sched-usercopy");
+        let (user, shipped, dropin) = files(&d);
+        std::fs::write(&shipped, TIMER).unwrap();
+        std::fs::write(&user, TIMER.replace("Sun 11:00", "*-*-* 11:00:00")).unwrap();
+        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        assert_eq!(current_schedule_of(&f).unwrap(), "daily");
+        let mut none = |_a: &[&str], _t: u64| Ok((1, String::new()));
+        assert!(set_schedule_in("fortnightly", &f, &mut none).unwrap().0);
+        assert!(std::fs::read_to_string(&user).unwrap().contains("OnCalendar=Sun *-*-1..7,15..21 11:00:00\n"));
+        assert!(!dropin.exists());
+        assert_eq!(current_schedule_of(&f).unwrap(), "fortnightly");
+    }
+
+    /// A drop-in overrides whichever unit file there is, so once one exists
+    /// it is the one changed and read.
+    #[test]
+    fn an_existing_drop_in_wins_over_a_user_copy() {
+        let d = tmp("sched-both");
+        let (user, shipped, dropin) = files(&d);
+        std::fs::write(&user, TIMER).unwrap();
+        std::fs::create_dir_all(dropin.parent().unwrap()).unwrap();
+        std::fs::write(&dropin, "[Timer]\nOnCalendar=\nOnCalendar=*-*-* 11:00:00\n").unwrap();
+        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        assert_eq!(current_schedule_of(&f).unwrap(), "daily");
+        let mut none = |_a: &[&str], _t: u64| Ok((1, String::new()));
+        set_schedule_in("monthly", &f, &mut none).unwrap();
+        assert_eq!(std::fs::read_to_string(&user).unwrap(), TIMER);
+        assert_eq!(current_schedule_of(&f).unwrap(), "monthly");
+    }
+
+    /// Neither unit on disk: the schedule reads as the default, and setting
+    /// one says why it could not, as before the timer shipped.
+    #[test]
+    fn no_timer_at_all_reads_weekly_and_cannot_be_rescheduled() {
+        let d = tmp("sched-none");
+        let (user, shipped, dropin) = files(&d);
+        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        assert_eq!(current_schedule_of(&f).unwrap(), "weekly");
+        let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
+        let (ok, msg) = set_schedule_in("daily", &f, &mut none).unwrap();
+        assert!(!ok);
+        assert!(msg.starts_with("[Errno 2] No such file or directory"), "{msg}");
+        assert!(!dropin.exists());
     }
 
     #[test]
