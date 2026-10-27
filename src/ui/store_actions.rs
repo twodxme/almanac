@@ -950,12 +950,22 @@ impl Win {
                     eprintln!("almanac: {}: {}", py_os_error_class(&e), py_os_error(&e, Path::new(&argv[0])));
                     return;
                 }
-                if let Err(e) = history::record_checked(
+                // They run in a terminal, which does not report back: how
+                // each ended is not known, and is recorded as such.
+                let action = history::ActionLog {
+                    commands: plan
+                        .commands
+                        .iter()
+                        .map(|c| history::CommandRun { argv: c.clone(), exit: None, secs: None })
+                        .collect(),
+                    ..Default::default()
+                };
+                if let Err(e) = history::record_action(
                     history::ALMANAC,
                     &format!("Setup commands run for {}", p.name),
                     "",
                     "",
-                    &plan.commands,
+                    &action,
                 ) {
                     eprintln!("almanac: {e}");
                 }

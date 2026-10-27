@@ -160,6 +160,14 @@ impl AlmanacApp {
                 let _ = std::thread::Builder::new()
                     .name("housekeeping".into())
                     .spawn(crate::housekeeping::run_if_due);
+                // Almanac's own log keeps 30 days; a window opened after a
+                // quiet month should not show what has expired. Never in
+                // demo mode, which must not touch the machine's files.
+                if !crate::demo::active() {
+                    let _ = std::thread::Builder::new()
+                        .name("history-expiry".into())
+                        .spawn(crate::history::expire);
+                }
                 w
             }
         };

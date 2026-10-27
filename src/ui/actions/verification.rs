@@ -99,7 +99,7 @@ impl Win {
                             match log {
                                 Some(log) => {
                                     win.record_update(&log, ok, Some(&out));
-                                    win.show_outcome(&out);
+                                    win.announce_outcome(&out);
                                 }
                                 None => win.report_outcome(&out),
                             }
@@ -188,12 +188,12 @@ impl Win {
         ) {
             return raised(&e);
         }
-        self.show_outcome(out);
+        self.announce_outcome(out);
     }
 
-    /// `report_outcome` without the history entry: said, and notified when
-    /// nothing changed.
-    fn show_outcome(&self, out: &Outcome) {
+    /// `report_outcome` without the History entry, for a caller that has
+    /// recorded the outcome with the rest of what it did.
+    pub fn announce_outcome(&self, out: &Outcome) {
         if out.changed == Some(false) {
             // Something the user asked for did not happen. A toast can be
             // missed; this is the one result that must not be.

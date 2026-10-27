@@ -87,12 +87,27 @@ pub fn run_title(items: &[String]) -> Option<String> {
     Some(format!("Scheduled update: updated {what}"))
 }
 
-/// The History entry for a scheduled run: one line, the details as items.
+/// The History entry for a scheduled run: one line, and each thing it
+/// updated as a change from one version to the next.
 pub fn record_run(items: &[String]) -> Result<(), String> {
     match run_title(items) {
-        Some(title) => crate::history::record_checked(crate::history::AUTOUPDATE, &title, "", "", items),
+        Some(title) => {
+            let action = crate::history::ActionLog { changes: items.iter().map(|i| run_change(i)).collect(), ..Default::default() };
+            crate::history::record_action(crate::history::AUTOUPDATE, &title, "", "", &action)
+        }
         None => Ok(()),
     }
+}
+
+/// One `updated` line as a change: "wordcraft 0.7.0 → 0.8.0" goes from
+/// 0.7.0 to 0.8.0; "weather (3 commits)" names only where it went.
+fn run_change(item: &str) -> crate::history::Change {
+    let (name, rest) = item.split_once(' ').unwrap_or((item, ""));
+    let (from, to) = match rest.split_once(" → ") {
+        Some((from, to)) => (from.to_string(), to.to_string()),
+        None => (String::new(), rest.to_string()),
+    };
+    crate::history::Change { name: name.to_string(), from, to }
 }
 
 /// `print(msg, flush=True)`.
@@ -2550,6 +2565,16 @@ mod tests {
             .unwrap_err()
             .contains("could not be started"));
         assert!(core_holds_checked(&ran(None, "")).is_err());
+    }
+
+    #[test]
+    fn what_a_scheduled_run_updated_reads_as_changes() {
+        let c = run_change("wordcraft 0.7.0 → 0.8.0");
+        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("wordcraft", "0.7.0", "0.8.0"));
+        let c = run_change("weather (3 commits)");
+        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("weather", "", "(3 commits)"));
+        let c = run_change("bare");
+        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("bare", "", ""));
     }
 
     #[test]

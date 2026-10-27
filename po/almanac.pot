@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-27 00:35-0700\n"
+"POT-Creation-Date: 2026-10-27 00:39-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -66,8 +66,8 @@ msgid "Adding:"
 msgstr ""
 
 #: src/ui/actions/appimage_add.rs:215 src/ui/actions/link.rs:37
-#: src/ui/actions/link.rs:149 src/ui/news.rs:257 src/ui/plugins/controls.rs:142
-#: src/ui/update_all.rs:261
+#: src/ui/actions/link.rs:149 src/ui/history.rs:559 src/ui/news.rs:257
+#: src/ui/plugins/controls.rs:142 src/ui/update_all.rs:261
 msgid "Cancel"
 msgstr ""
 
@@ -104,7 +104,7 @@ msgstr ""
 #: src/ui/actions/link.rs:150 src/ui/plugins/removal.rs:238
 #: src/ui/plugins/removal.rs:278 src/ui/plugins/removal.rs:313
 #: src/ui/store_actions.rs:603 src/ui/store_actions.rs:705
-#: src/ui/store_actions.rs:1114 src/ui/store_actions.rs:1572
+#: src/ui/store_actions.rs:1124 src/ui/store_actions.rs:1582
 msgid "Install"
 msgstr ""
 
@@ -187,7 +187,7 @@ msgstr ""
 msgid "Nothing of this kind is set up."
 msgstr ""
 
-#: src/ui/ai.rs:491 src/ui/history.rs:505
+#: src/ui/ai.rs:491 src/ui/history.rs:737
 msgid "manual"
 msgstr ""
 
@@ -269,49 +269,115 @@ msgstr ""
 msgid "OK"
 msgstr ""
 
-#: src/ui/history.rs:226
+#: src/ui/history.rs:233
+msgid "Passed"
+msgstr ""
+
+#: src/ui/history.rs:234
+msgid "Failed"
+msgstr ""
+
+#: src/ui/history.rs:235 src/ui/history.rs:243
+msgid "Could not tell"
+msgstr ""
+
+#: src/ui/history.rs:241
+msgid "Repaired"
+msgstr ""
+
+#: src/ui/history.rs:242
+msgid "Not repaired"
+msgstr ""
+
+#: src/ui/history.rs:374
 msgid ""
 "Each check reads the system and offers the one command that acts on what it "
 "found. Nothing here runs until you ask it to."
 msgstr ""
 
-#: src/ui/history.rs:260
+#: src/ui/history.rs:408
 msgid "Reading the last 30 days…"
 msgstr ""
 
-#: src/ui/history.rs:285
+#: src/ui/history.rs:433
 msgid "Nothing recorded yet"
 msgstr ""
 
-#: src/ui/history.rs:286
+#: src/ui/history.rs:434
 msgid ""
-"Package changes, snapshots and settings resets from the last 30 days appear "
-"here."
+"Package changes, snapshots, settings resets and what Almanac did in the last "
+"30 days appear here."
 msgstr ""
 
-#: src/ui/history.rs:289
+#: src/ui/history.rs:437
 msgid "Nothing in the last 30 days"
 msgstr ""
 
-#: src/ui/history.rs:297
+#: src/ui/history.rs:445
 msgid "In the last 24 hours"
 msgstr ""
 
-#: src/ui/history.rs:357
+#: src/ui/history.rs:453
+msgid "Almanac's log"
+msgstr ""
+
+#: src/ui/history.rs:454
+msgid "What Almanac did is kept for 30 days, then cleared automatically."
+msgstr ""
+
+#: src/ui/history.rs:456
+msgid "Clear…"
+msgstr ""
+
+#: src/ui/history.rs:457
+msgid "Clear Almanac's log"
+msgstr ""
+
+#: src/ui/history.rs:536
+msgid "Copy details"
+msgstr ""
+
+#: src/ui/history.rs:546
+msgid "Details copied"
+msgstr ""
+
+#: src/ui/history.rs:555
+msgid "Clear Almanac's log?"
+msgstr ""
+
+#: src/ui/history.rs:556
+msgid ""
+"Removes the record of what Almanac did. Package history from pacman and your "
+"snapshots are not affected."
+msgstr ""
+
+#: src/ui/history.rs:560
+msgid "Clear log"
+msgstr ""
+
+#: src/ui/history.rs:576
+msgid "Almanac's log cleared"
+msgstr ""
+
+#: src/ui/history.rs:579
+msgid "Could not clear Almanac's log"
+msgstr ""
+
+#: src/ui/history.rs:589
 msgid "Checking the system…"
 msgstr ""
 
-#: src/ui/history.rs:608
+#: src/ui/history.rs:861
 msgid "Nothing to reclaim"
 msgstr ""
 
-#: src/ui/history.rs:615
+#: src/ui/history.rs:868
 msgid ""
 "These free cached downloads, build artefacts and old logs. Nothing you "
 "created is touched, and nothing installed is removed."
 msgstr ""
 
-#: src/ui/history.rs:617
+#: src/ui/history.rs:870
 msgid "Reclaim"
 msgstr ""
 
@@ -454,7 +520,7 @@ msgstr ""
 msgid "Off"
 msgstr ""
 
-#: src/ui/packages/details.rs:108 src/ui/store_actions.rs:1502
+#: src/ui/packages/details.rs:108 src/ui/store_actions.rs:1512
 msgid "On"
 msgstr ""
 
@@ -562,7 +628,7 @@ msgid ""
 "update; a development link never is."
 msgstr ""
 
-#: src/ui/plugins/page.rs:377 src/ui/store_actions.rs:1568
+#: src/ui/plugins/page.rs:377 src/ui/store_actions.rs:1578
 msgid "Built in"
 msgstr ""
 
@@ -599,8 +665,8 @@ msgstr ""
 #: src/ui/plugins/page.rs:731 src/ui/plugins/removal.rs:197
 #: src/ui/plugins/removal.rs:389 src/ui/plugins/removal.rs:411
 #: src/ui/store.rs:970 src/ui/store_actions.rs:646 src/ui/store_actions.rs:730
-#: src/ui/store_actions.rs:1219 src/ui/store_actions.rs:1474
-#: src/ui/store_actions.rs:1487
+#: src/ui/store_actions.rs:1229 src/ui/store_actions.rs:1484
+#: src/ui/store_actions.rs:1497
 msgid "Remove"
 msgstr ""
 
@@ -626,7 +692,7 @@ msgid ""
 "App Store and search there."
 msgstr ""
 
-#: src/ui/plugins/removal.rs:386 src/ui/store_actions.rs:1216
+#: src/ui/plugins/removal.rs:386 src/ui/store_actions.rs:1226
 msgid ""
 "The AppImage, its rollback copy and its launcher entry are deleted. "
 "Documents you created with it are untouched."
@@ -1060,7 +1126,7 @@ msgstr ""
 msgid "Filter by what is known about the source"
 msgstr ""
 
-#: src/ui/store.rs:305 src/ui/store_actions.rs:1355
+#: src/ui/store.rs:305 src/ui/store_actions.rs:1365
 msgid "Marketplace"
 msgstr ""
 
@@ -1121,8 +1187,8 @@ msgstr ""
 msgid "Source reviewed by the marketplace"
 msgstr ""
 
-#: src/ui/store.rs:960 src/ui/store_actions.rs:1052
-#: src/ui/store_actions.rs:1462
+#: src/ui/store.rs:960 src/ui/store_actions.rs:1062
+#: src/ui/store_actions.rs:1472
 msgid "Apply"
 msgstr ""
 
@@ -1226,73 +1292,73 @@ msgstr ""
 msgid "No terminal found to run the setup commands in"
 msgstr ""
 
-#: src/ui/store_actions.rs:979
+#: src/ui/store_actions.rs:989
 msgid "Installing what it needs"
 msgstr ""
 
-#: src/ui/store_actions.rs:1049
+#: src/ui/store_actions.rs:1059
 msgid ""
 "Applies the theme to the whole desktop — bar, terminal, editor and this "
 "window. Your previous theme stays installed."
 msgstr ""
 
-#: src/ui/store_actions.rs:1351
+#: src/ui/store_actions.rs:1361
 msgid "Provenance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1352
+#: src/ui/store_actions.rs:1362
 msgid "Where this comes from and what has actually been checked about it"
 msgstr ""
 
-#: src/ui/store_actions.rs:1356
+#: src/ui/store_actions.rs:1366
 msgid "Publisher"
 msgstr ""
 
-#: src/ui/store_actions.rs:1357
+#: src/ui/store_actions.rs:1367
 msgid "Declared author"
 msgstr ""
 
-#: src/ui/store_actions.rs:1358
+#: src/ui/store_actions.rs:1368
 msgid "Assurance"
 msgstr ""
 
-#: src/ui/store_actions.rs:1360
+#: src/ui/store_actions.rs:1370
 msgid "Review"
 msgstr ""
 
-#: src/ui/store_actions.rs:1362
+#: src/ui/store_actions.rs:1372
 msgid "Reviewed by"
 msgstr ""
 
-#: src/ui/store_actions.rs:1368
+#: src/ui/store_actions.rs:1378
 msgid "Validated commit"
 msgstr ""
 
-#: src/ui/store_actions.rs:1369
+#: src/ui/store_actions.rs:1379
 msgid "Validated"
 msgstr ""
 
-#: src/ui/store_actions.rs:1379
+#: src/ui/store_actions.rs:1389
 msgid "Upstream commit now"
 msgstr ""
 
-#: src/ui/store_actions.rs:1393
+#: src/ui/store_actions.rs:1403
 msgid "Upstream last checked"
 msgstr ""
 
-#: src/ui/store_actions.rs:1394
+#: src/ui/store_actions.rs:1404
 msgid "Manifest"
 msgstr ""
 
-#: src/ui/store_actions.rs:1397
+#: src/ui/store_actions.rs:1407
 msgid "Listing"
 msgstr ""
 
-#: src/ui/store_actions.rs:1543
+#: src/ui/store_actions.rs:1553
 msgid "Shortcut…"
 msgstr ""
 
-#: src/ui/store_actions.rs:1556
+#: src/ui/store_actions.rs:1566
 msgid "Finish setup"
 msgstr ""
 

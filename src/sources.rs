@@ -1837,12 +1837,23 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
     if crate::appimage::install_desktop_entry(&dest, &key).map_err(|e| exc_str(&e))? {
         log("launcher entry added");
     }
-    crate::history::record_checked(
+    // A mismatched checksum stopped the install above, so one that was
+    // given has been checked and matched.
+    let checks = if opt.sha256.is_empty() {
+        Vec::new()
+    } else {
+        vec![crate::history::CheckResult { name: "SHA-256 checksum".into(), ok: Some(true), detail: String::new() }]
+    };
+    crate::history::record_action(
         crate::history::ALMANAC,
         &format!("Installed {} {}", res.repo, version.py_str()),
         &format!("AppImage from {}{}", res.url(), if !opt.sha256.is_empty() { " · checksum verified" } else { "" }),
         "",
-        &[],
+        &crate::history::ActionLog {
+            changes: vec![crate::history::Change { name: res.repo.clone(), from: String::new(), to: version.py_str() }],
+            checks,
+            ..Default::default()
+        },
     )
     .map_err(|e| exc_str(&e))?;
     Ok(dest)

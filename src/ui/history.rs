@@ -171,6 +171,154 @@ fn panic_text(err: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// A pass, a failure or "could not tell" as an icon, named for a screen
+/// reader since the icon is all there is.
+fn verdict_icon(ok: Option<bool>, words: &str) -> gtk::Image {
+    let (icon, class) = match ok {
+        Some(true) => ("object-select-symbolic", "store-verified"),
+        Some(false) => ("dialog-error-symbolic", "error"),
+        None => ("dialog-question-symbolic", "dim-label"),
+    };
+    let image = gtk::Image::builder().icon_name(icon).valign(gtk::Align::Center).build();
+    image.add_css_class(class);
+    crate::ui::shell::name(&image, words);
+    image
+}
+
+/// A dim caption at the end of a row: an exit status, a verdict, versions.
+fn caption(text: &str) -> gtk::Label {
+    let label = gtk::Label::builder().label(text).valign(gtk::Align::Center).build();
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    label.add_css_class("numeric");
+    label
+}
+
+/// The rows an open event shows of what its action did: each command and
+/// how it ended, what changed, what was checked and repaired, and the
+/// snapshot, space freed and time taken.
+fn action_rows(a: &history::ActionLog) -> Vec<adw::ActionRow> {
+    let mut rows = Vec::new();
+    for c in &a.commands {
+        let ok = history::exit_ok(c.exit);
+        let row: adw::ActionRow = Win::plain(&c.argv, "");
+        // The command as it ran, in the face a terminal would show it in.
+        row.add_css_class("monospace");
+        row.set_title_selectable(true);
+        row.add_prefix(&verdict_icon(ok, history::verdict_text(ok)));
+        let mut end = history::exit_text(c.exit);
+        if let Some(s) = c.secs {
+            end += &format!(" · {}", history::duration_text(s));
+        }
+        row.add_suffix(&caption(&end));
+        rows.push(row);
+    }
+    for c in &a.changes {
+        let row: adw::ActionRow = Win::plain(&c.name, "");
+        let icon = gtk::Image::from_icon_name(history_icon(history::PACKAGES));
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        row.add_suffix(&caption(&history::change_text(c)));
+        rows.push(row);
+    }
+    let checked = |r: &history::CheckResult, verdict: &str| {
+        let row: adw::ActionRow = Win::plain(&r.name, &r.detail);
+        row.set_subtitle_lines(3);
+        row.add_prefix(&verdict_icon(r.ok, verdict));
+        row.add_suffix(&caption(verdict));
+        row
+    };
+    for r in &a.checks {
+        let verdict = match r.ok {
+            Some(true) => tr("Passed"),
+            Some(false) => tr("Failed"),
+            None => tr("Could not tell"),
+        };
+        rows.push(checked(r, &verdict));
+    }
+    for r in &a.repairs {
+        let verdict = match r.ok {
+            Some(true) => tr("Repaired"),
+            Some(false) => tr("Not repaired"),
+            None => tr("Could not tell"),
+        };
+        rows.push(checked(r, &verdict));
+    }
+    let facts = a.facts();
+    if !facts.is_empty() {
+        let row: adw::ActionRow = Win::plain(&facts, "");
+        row.add_css_class("dim-label");
+        // In line with the rows above, which all lead with an icon.
+        let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        rows.push(row);
+    }
+    rows
+}
+
+/// Free space on the root filesystem, in bytes: measured either side of a
+/// cleanup, so History says what it actually freed.
+fn free_bytes() -> Option<u64> {
+    let st = rustix::fs::statvfs("/").ok()?;
+    Some(st.f_bavail.saturating_mul(st.f_frsize))
+}
+
+/// What a Health check fix is recorded with: what it runs, and the clock
+/// and free space before it started.
+struct FixRun {
+    /// the History title for a run of several fixes
+    title: String,
+    commands: Vec<String>,
+    free_before: Option<u64>,
+    started: std::time::Instant,
+}
+
+impl FixRun {
+    /// The command lines `steps` will run, elevated as the task runs them.
+    fn of(title: &str, steps: &[Step], free_before: Option<u64>) -> Self {
+        let commands = steps
+            .iter()
+            .filter_map(|s| match &s.action {
+                tasks::StepAction::Argv(a) if !a.is_empty() => Some(history::command_line(&tasks::elevate(a))),
+                _ => None,
+            })
+            .collect();
+        FixRun { title: title.to_string(), commands, free_before, started: std::time::Instant::now() }
+    }
+
+    /// The History entry for the run, once each fixed check has been asked
+    /// again. `ok` is the task's: every command exited 0. When it is not,
+    /// which one failed is not known, and the record says so.
+    fn record(&self, ok: bool, fixed: &[maintenance::Finding], outs: &[Outcome], free_after: Option<u64>) -> Result<(), String> {
+        let action = history::ActionLog {
+            commands: self
+                .commands
+                .iter()
+                .map(|argv| history::CommandRun { argv: argv.clone(), exit: ok.then_some(0), secs: None })
+                .collect(),
+            checks: fixed
+                .iter()
+                .zip(outs)
+                .map(|(f, o)| history::CheckResult { name: f.title.clone(), ok: o.changed, detail: o.message.clone() })
+                .collect(),
+            freed_bytes: match (self.free_before, free_after) {
+                (Some(b), Some(a)) => Some(a as i64 - b as i64),
+                _ => None,
+            },
+            duration_secs: Some(self.started.elapsed().as_secs_f64()),
+            ..Default::default()
+        };
+        let title = match outs {
+            [one] => one.message.clone(),
+            _ => self.title.clone(),
+        };
+        let detail = fixed.iter().map(|f| f.fix_label.as_str()).collect::<Vec<_>>().join(" · ");
+        let failed = !ok || outs.iter().any(|o| o.changed == Some(false));
+        history::record_action(history::ALMANAC, &title, &detail, if failed { "warn" } else { "" }, &action)
+    }
+}
+
 enum Row {
     Action(adw::ActionRow),
     Expander(adw::ExpanderRow),
@@ -283,7 +431,7 @@ impl Win {
             history_body.append(&Win::status_page(
                 "document-open-recent-symbolic",
                 &tr("Nothing recorded yet"),
-                &tr("Package changes, snapshots and settings resets from the last 30 days appear here."),
+                &tr("Package changes, snapshots, settings resets and what Almanac did in the last 30 days appear here."),
                 None,
             ));
             self.summarize(&tr("Nothing in the last 30 days"), Some("history"));
@@ -297,6 +445,27 @@ impl Win {
             &tr("In the last 24 hours"),
             &history::last_day(&days, crate::util::now()),
         ));
+        // Under it, what Almanac keeps of its own and the way to clear it.
+        // Only Almanac's log can be cleared: the package history and the
+        // snapshots are the system's, read from where it keeps them.
+        let own = Win::note_row(
+            history_icon(history::ALMANAC),
+            &tr("Almanac's log"),
+            &tr("What Almanac did is kept for 30 days, then cleared automatically."),
+        );
+        let clear = gtk::Button::builder().label(tr("Clear…")).valign(gtk::Align::Center).build();
+        crate::ui::shell::name(&clear, &tr("Clear Almanac's log"));
+        clear.set_sensitive(
+            days.iter().flat_map(|d| &d.events).any(|e| e.kind == history::ALMANAC || e.kind == history::AUTOUPDATE),
+        );
+        let w = self.downgrade();
+        clear.connect_clicked(move |_| {
+            if let Some(w) = w.upgrade() {
+                w.on_clear_log();
+            }
+        });
+        own.add_suffix(&clear);
+        recent.append(&own);
         history_body.append(&recent);
 
         for day in &days {
@@ -326,13 +495,23 @@ impl Win {
         let subtitle = &e.detail;
         // An entry's title can be an outcome that carries an error.
         let title = &crate::util::human_error(&e.title);
-        let row = if !e.items.is_empty() {
+        let row = if let Some(action) = &e.action {
+            // What the action did, recorded as it happened: open the row
+            // to read it, or copy it whole for a bug report.
+            let row: adw::ExpanderRow = Win::plain(title, subtitle);
+            for entry in action_rows(action) {
+                row.add_row(&entry);
+            }
+            row.add_row(&self.copy_details_row(e));
+            Row::Expander(row)
+        } else if !e.items.is_empty() {
             let row: adw::ExpanderRow = Win::plain(title, subtitle);
             for item in e.items.iter().take(80) {
                 let entry: adw::ActionRow = Win::plain(item, "");
                 entry.add_css_class("property");
                 row.add_row(&entry);
             }
+            row.add_row(&self.copy_details_row(e));
             Row::Expander(row)
         } else {
             Row::Action(Win::plain(title, subtitle))
@@ -350,6 +529,59 @@ impl Win {
         clock.add_css_class("numeric");
         row.add_suffix(&clock);
         Some(row.row())
+    }
+
+    /// The last row of an open event: copies it as plain text.
+    fn copy_details_row(&self, e: &history::Event) -> adw::ActionRow {
+        let row: adw::ActionRow = Win::plain(&tr("Copy details"), "");
+        row.set_activatable(true);
+        let icon = gtk::Image::from_icon_name("edit-copy-symbolic");
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        let text = history::details_text(e);
+        let w = self.downgrade();
+        row.connect_activated(move |r| {
+            r.clipboard().set_text(&text);
+            if let Some(w) = w.upgrade() {
+                w.toast(&tr("Details copied"), 3);
+            }
+        });
+        row
+    }
+
+    /// Ask, then clear Almanac's own log; History reads itself again after.
+    pub fn on_clear_log(&self) {
+        let dialog = adw::AlertDialog::new(
+            Some(&tr("Clear Almanac's log?")),
+            Some(&tr("Removes the record of what Almanac did. Package history from pacman and your \
+                      snapshots are not affected.")),
+        );
+        dialog.add_response("cancel", &tr("Cancel"));
+        dialog.add_response("clear", &tr("Clear log"));
+        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let w = self.downgrade();
+        dialog.connect_response(None, move |_d, resp| {
+            if resp != "clear" {
+                return;
+            }
+            let w = w.clone();
+            spawn_bg(
+                || history::clear().map_err(|e| e.to_string()),
+                move |result| {
+                    let Some(w) = w.upgrade() else { return };
+                    match result {
+                        Ok(()) => {
+                            w.toast(&tr("Almanac's log cleared"), 5);
+                            w.history_reload();
+                        }
+                        Err(e) => w.say(&format!("{}: {e}", tr("Could not clear Almanac's log")), 8),
+                    }
+                },
+            );
+        });
+        dialog.present(Some(&self.window));
     }
 
     pub fn maint_reload(&self) {
@@ -537,15 +769,31 @@ impl Win {
             move || {
                 if let Some(w) = w.upgrade() {
                     let steps = fix_steps(fixed.fix_label.clone(), &fixed);
-                    let on_done = w.findings_done(vec![fixed.clone()]);
-                    let _ = tasks::run(&w.window, &fixed.title, steps, Some(on_done));
+                    w.run_fixes(&fixed.title, &fixed.title, steps, vec![fixed.clone()]);
                 }
             },
         );
     }
 
-    /// After fixes: ask each check again, and say what actually changed.
-    pub fn findings_done(&self, fixed: Vec<maintenance::Finding>) -> OnDone {
+    /// Run fix `steps` in a task dialog, then check `fixed` again and record
+    /// what the run did (`summary` titles a run of several fixes there).
+    /// The free space is read first, off the main thread, so History can
+    /// say what the run actually freed.
+    fn run_fixes(&self, title: &str, summary: &str, steps: Vec<Step>, fixed: Vec<maintenance::Finding>) {
+        let w = self.downgrade();
+        let (title, summary) = (title.to_string(), summary.to_string());
+        spawn_bg(free_bytes, move |free_before| {
+            let Some(w) = w.upgrade() else { return };
+            let run = FixRun::of(&summary, &steps, free_before);
+            let on_done = w.findings_done(fixed, run);
+            let _ = tasks::run(&w.window, &title, steps, Some(on_done));
+        });
+    }
+
+    /// After fixes: ask each check again, say what actually changed, and
+    /// record the run -- its commands, each check's answer, the space it
+    /// freed and how long it took -- as one History entry.
+    fn findings_done(&self, fixed: Vec<maintenance::Finding>, run: FixRun) -> OnDone {
         let w = self.downgrade();
         Box::new(move |ok: bool| {
             let Some(win) = w.upgrade() else { return };
@@ -558,19 +806,24 @@ impl Win {
                         .iter()
                         .map(|f| verify::judge_finding(f, verify::recheck(&f.id).as_ref()))
                         .collect();
+                    let recorded = run.record(ok, &fixed, &outs, free_bytes());
                     let failed: Vec<Outcome> =
                         outs.iter().filter(|o| o.changed == Some(false)).cloned().collect();
                     let message = (failed.is_empty() && !outs.is_empty()).then(|| {
                         outs.iter().map(|o| o.message.as_str()).collect::<Vec<_>>().join(" · ")
                     });
-                    (failed, message)
+                    (failed, message, recorded)
                 },
                 // spawn_bg's done already runs from the main loop, the one hop
                 // Python's GLib.idle_add makes; deliver straight from it.
-                move |(failed, message)| {
+                move |(failed, message, recorded)| {
                     let Some(w) = w.upgrade() else { return };
+                    if let Err(e) = recorded {
+                        eprintln!("almanac: history: {e}");
+                    }
+                    // Already in History, with the rest of the run.
                     for o in failed {
-                        w.report_outcome(&o);
+                        w.announce_outcome(&o);
                     }
                     if let Some(message) = message {
                         w.say(&message, 8);
@@ -627,8 +880,7 @@ impl Win {
                     .filter(|f| wanted.contains(&f.id.as_str()) && f.actionable())
                     .cloned()
                     .collect();
-                let on_done = w.findings_done(fixed);
-                let _ = tasks::run(&w.window, "Reclaiming space", steps.clone(), Some(on_done));
+                w.run_fixes("Reclaiming space", "Space reclaimed", steps.clone(), fixed);
             },
         );
     }
@@ -703,6 +955,55 @@ mod tests {
         assert_eq!(severity_css(maintenance::CRIT).unwrap().1, "pill-crit");
         assert_eq!(severity_css(maintenance::OK).unwrap().1, "pill-ok");
         assert!(severity_css("bogus").is_none());
+    }
+
+    #[test]
+    fn a_fix_run_is_recorded_with_its_commands_checks_and_space() {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().unwrap();
+        let old = std::env::var_os("XDG_STATE_HOME");
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        let steps = vec![
+            Step::argv("Trim", vec!["paccache".into(), "-rk2".into()]),
+            Step::argv("Nothing", Vec::new()),
+        ];
+        let run = FixRun::of("Space reclaimed", &steps, Some(10 << 20));
+        let fixed = vec![maintenance::Finding { title: "Package cache".into(), fix_label: "Trim to 2 versions".into(),
+                                                ..Default::default() }];
+        let worked = vec![Outcome::new(Some(true), "Package cache: resolved")];
+        run.record(true, &fixed, &worked, Some(13 << 20)).unwrap();
+        let stuck = vec![Outcome::new(Some(false), "Package cache: the fix ran but nothing changed")];
+        run.record(false, &fixed, &stuck, None).unwrap();
+        let evs = history::recorded(0.0).unwrap();
+        match old {
+            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        assert_eq!(evs.len(), 2);
+        let (good, bad) = (evs[0].action.clone().unwrap(), evs[1].action.clone().unwrap());
+        assert_eq!(evs[0].title, "Package cache: resolved");
+        assert_eq!(evs[0].detail, "Trim to 2 versions");
+        assert_eq!(evs[0].severity, "");
+        // The command as it ran: elevated, by path.
+        assert_eq!(good.commands.len(), 1);
+        assert_eq!(good.commands[0].argv, "/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2");
+        assert_eq!(good.commands[0].exit, Some(0));
+        assert_eq!(good.freed_bytes, Some(3 << 20));
+        assert_eq!(good.checks[0].ok, Some(true));
+        assert!(good.duration_secs.is_some());
+        // A task that failed does not say which command did.
+        assert_eq!(bad.commands[0].exit, None);
+        assert_eq!(bad.freed_bytes, None);
+        assert_eq!(bad.checks[0].ok, Some(false));
+        assert_eq!(evs[1].severity, "warn");
+    }
+
+    #[test]
+    fn clearing_says_what_it_does_not_touch_and_asks_first() {
+        let code = code();
+        assert!(code.contains("Package history from pacman and your \\\n                      snapshots are not affected."));
+        assert!(code.contains("set_response_appearance(\"clear\", adw::ResponseAppearance::Destructive)"));
+        assert!(code.contains("set_default_response(Some(\"cancel\"))"));
     }
 
     #[test]

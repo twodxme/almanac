@@ -10,8 +10,9 @@
 //!
 //! Almanac's own actions (an update that did not change anything, settings
 //! restored, file types handed back) are appended to a small JSON-lines file in
-//! the XDG state directory. Everything else is read from where it already is;
-//! nothing is collected that the system was not already keeping.
+//! the XDG state directory, kept for `DAYS` days and clearable from the page.
+//! Everything else is read from where it already is; nothing is collected that
+//! the system was not already keeping, and nothing of it is ever cleared here.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -29,7 +30,10 @@ use crate::util;
 
 /// recorded events kept; older ones drop off
 pub const KEEP: usize = 2000;
+/// How far back the page reads, and how long Almanac keeps its own log.
 pub const DAYS: i64 = 30;
+/// Past this size the log is cut to its last `KEEP` lines, dated or not.
+const MAX_BYTES: u64 = 512 * 1024;
 
 pub const PACKAGES: &str = "packages";
 pub const SNAPSHOT: &str = "snapshot";
@@ -55,6 +59,10 @@ pub struct Event {
     pub items: Vec<String>,
     /// "warn" for things that went wrong
     pub severity: String,
+    /// What the action did, where Almanac recorded it (`record_action`).
+    /// Not part of the event as Python had it, so not serialised with it.
+    #[serde(skip)]
+    pub action: Option<ActionLog>,
     #[serde(skip)]
     pub py: Option<Box<PyFields>>,
 }
@@ -90,6 +98,7 @@ impl Event {
             detail: detail.to_string(),
             items,
             severity: severity.to_string(),
+            action: None,
             py: None,
         }
     }
@@ -132,6 +141,7 @@ impl Event {
             detail: text(&f.detail),
             items,
             severity: text(&f.severity),
+            action: None,
             py: Some(Box::new(f)),
         }
     }
@@ -918,8 +928,11 @@ fn append(event: Value) -> Result<(), String> {
         let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
         fh.write_all(format!("{line}\n").as_bytes())?;
         drop(fh);
+        // A log that cannot be pruned is still a log; the size cap below
+        // still holds it.
+        let _ = expire_locked(&path, util::now());
         // Trim occasionally rather than on every write.
-        if std::fs::metadata(&path)?.len() > 512 * 1024 {
+        if std::fs::metadata(&path)?.len() > MAX_BYTES {
             let text = match decode_strict(std::fs::read(&path)?) {
                 Ok(t) => t,
                 Err(e) => return Ok(Err(e)),
@@ -931,6 +944,118 @@ fn append(event: Value) -> Result<(), String> {
         Ok(Ok(()))
     })();
     r.unwrap_or(Ok(()))
+}
+
+/// The time a log line was written, if it says so plainly. A line that is
+/// not JSON, or has no numeric "ts", cannot be dated.
+fn line_ts(line: &[u8]) -> Option<f64> {
+    let v: Value = serde_json::from_slice(line).ok()?;
+    v.get("ts")?.as_f64().filter(|t| t.is_finite())
+}
+
+/// Whether the log's oldest dated line is from before `cutoff`. Lines are
+/// appended in time order, so only the head of the file is read.
+fn oldest_expired(path: &std::path::Path, cutoff: f64) -> std::io::Result<bool> {
+    use std::io::BufRead;
+    let mut reader = match std::fs::File::open(path) {
+        Ok(f) => std::io::BufReader::new(f),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            return Ok(false);
+        }
+        if let Some(ts) = line_ts(line.strip_suffix(b"\n").unwrap_or(&line)) {
+            return Ok(ts < cutoff);
+        }
+    }
+}
+
+/// `raw` without the lines dated before `cutoff`. A line that cannot be
+/// dated is kept: it may be something a newer Almanac wrote, and only the
+/// size cap may drop what this one does not understand.
+fn drop_expired(raw: &[u8], cutoff: f64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    for line in raw.split_inclusive(|&b| b == b'\n') {
+        let body = line.strip_suffix(b"\n").unwrap_or(line);
+        if line_ts(body).is_some_and(|ts| ts < cutoff) {
+            continue;
+        }
+        out.extend_from_slice(line);
+    }
+    out
+}
+
+/// Drop what is older than `DAYS` from the log at `path`; the caller holds
+/// the lock. True when the file was rewritten.
+fn expire_locked(path: &std::path::Path, now: f64) -> std::io::Result<bool> {
+    let cutoff = now - (DAYS * 86400) as f64;
+    if !oldest_expired(path, cutoff)? {
+        return Ok(false);
+    }
+    let raw = std::fs::read(path)?;
+    let kept = drop_expired(&raw, cutoff);
+    if kept.len() == raw.len() {
+        return Ok(false);
+    }
+    util::atomic_write(path, kept)?;
+    Ok(true)
+}
+
+/// Drop what is older than `DAYS` from Almanac's log. Run at startup, off
+/// the main thread; appending does the same as it goes. True when anything
+/// was dropped.
+pub fn expire() -> std::io::Result<bool> {
+    expire_at(util::now())
+}
+
+fn expire_at(now: f64) -> std::io::Result<bool> {
+    let path = _log_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = util::lock_file(&path.with_extension("lock"))?;
+    expire_locked(&path, now)
+}
+
+/// Title of the one line a cleared log keeps.
+pub const CLEARED: &str = "Almanac's log cleared";
+
+/// Empty Almanac's own log, leaving one line that says it was cleared.
+/// Only what Almanac recorded goes: package history (pacman's log), the
+/// snapshots and the settings resets are read from the system, not from
+/// here, and are untouched. Nothing is written in demo mode.
+pub fn clear() -> std::io::Result<()> {
+    if crate::demo::active() {
+        return Ok(());
+    }
+    let path = _log_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let line = util::dumps(
+        &serde_json::json!({"ts": util::now(), "kind": ALMANAC, "title": CLEARED,
+                            "detail": "", "severity": "", "items": []}),
+        None,
+        false,
+    );
+    let _lock = util::lock_file(&path.with_extension("lock"))?;
+    // In one write, so a reader sees the old log or the new one, never a
+    // log emptied and not yet marked.
+    util::atomic_write(&path, format!("{line}\n"))
+}
+
+/// The "action" of a log line, where it is one `ActionLog` can read; an
+/// absent, malformed or empty one is None.
+fn action_of(v: Option<&PyVal>) -> Option<ActionLog> {
+    let value = v?.to_value(false);
+    let action = ActionLog::deserialize(&value).ok();
+    // A value can be nested as deep as json.loads goes; drop it flat.
+    crate::util::tree::drop_value(value);
+    action.filter(|a| *a != ActionLog::default())
 }
 
 /// Almanac's own recorded actions since `since` (epoch seconds), values as
@@ -958,15 +1083,157 @@ pub fn recorded(since: f64) -> Result<Vec<Event>, String> {
             Some(v) if v.truthy() => v.clone(),
             _ => PyVal::List(Vec::new()),
         };
-        out.push(Event::from_py(ALMANAC, PyFields {
+        // A scheduled run says so (autorun writes AUTOUPDATE); everything
+        // else in this log is Almanac's own.
+        let kind = match d.get("kind") {
+            Some(PyVal::Str(k)) if *k == py_str(AUTOUPDATE) => AUTOUPDATE,
+            _ => ALMANAC,
+        };
+        let mut event = Event::from_py(kind, PyFields {
             ts: ts.clone(),
             title: text("title"),
             detail: text("detail"),
             items,
             severity: text("severity"),
-        }));
+        });
+        event.action = action_of(d.get("action"));
+        out.push(event);
     }
     Ok(out)
+}
+
+// ---- what an action did, in words ----------------------------------------
+
+impl ActionLog {
+    /// Snapshot, space freed and time taken, as one line: "Snapshot 412
+    /// taken first · 1.2 GB freed · took 2 min 5 s". Empty when none is known.
+    pub fn facts(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(n) = self.snapshot.as_deref().filter(|n| !n.is_empty()) {
+            parts.push(format!("Snapshot {n} taken first"));
+        }
+        if let Some(b) = self.freed_bytes {
+            parts.push(freed_text(b));
+        }
+        if let Some(s) = self.duration_secs.filter(|s| s.is_finite() && *s >= 0.0) {
+            parts.push(format!("took {}", duration_text(s)));
+        }
+        let line = parts.join(" · ");
+        let mut chars = line.chars();
+        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    }
+}
+
+/// "1.2 GB freed"; "no space freed" for nothing or less (other programs
+/// write while a cleanup runs).
+pub fn freed_text(bytes: i64) -> String {
+    if bytes <= 0 {
+        return "no space freed".to_string();
+    }
+    format!("{} freed", crate::maintenance::fmt_size(bytes as f64 / 1_048_576.0))
+}
+
+/// "0.4 s", "45 s", "2 min 5 s", "1 h 4 min".
+pub fn duration_text(secs: f64) -> String {
+    if secs < 9.95 {
+        let tenths = (secs * 10.0).round() / 10.0;
+        return if tenths.fract() == 0.0 { format!("{tenths:.0} s") } else { format!("{tenths:.1} s") };
+    }
+    let s = secs.round() as u64;
+    match (s / 3600, (s % 3600) / 60, s % 60) {
+        (0, 0, sec) => format!("{sec} s"),
+        (0, min, 0) => format!("{min} min"),
+        (0, min, sec) => format!("{min} min {sec} s"),
+        (h, 0, _) => format!("{h} h"),
+        (h, min, _) => format!("{h} h {min} min"),
+    }
+}
+
+/// How a command ended, in words: "exit 0", "exit 1", "exit status unknown".
+pub fn exit_text(exit: Option<i32>) -> String {
+    match exit {
+        Some(code) => format!("exit {code}"),
+        None => "exit status unknown".to_string(),
+    }
+}
+
+/// A command's exit status as a verdict: 0 passed, anything else failed,
+/// unknown could not tell.
+pub fn exit_ok(exit: Option<i32>) -> Option<bool> {
+    exit.map(|c| c == 0)
+}
+
+/// "passed", "failed", "could not tell".
+pub fn verdict_text(ok: Option<bool>) -> &'static str {
+    match ok {
+        Some(true) => "passed",
+        Some(false) => "failed",
+        None => "could not tell",
+    }
+}
+
+/// What a change went from and to: "1.0 → 1.1", or one side alone.
+pub fn change_text(c: &Change) -> String {
+    match (c.from.is_empty(), c.to.is_empty()) {
+        (false, false) => format!("{} → {}", c.from, c.to),
+        (true, false) => c.to.clone(),
+        (false, true) => format!("{} → removed", c.from),
+        (true, true) => String::new(),
+    }
+}
+
+/// A command line from its argv, quoted so it can be pasted into a shell.
+pub fn command_line(argv: &[String]) -> String {
+    argv.iter().map(|a| crate::store::shlex_quote(a)).collect::<Vec<_>>().join(" ")
+}
+
+/// The event as plain text, for a bug report: when, what, and everything
+/// the action recorded about itself.
+pub fn details_text(e: &Event) -> String {
+    let when = Some(e.ts)
+        .filter(|t| t.is_finite())
+        .and_then(|t| chrono::DateTime::from_timestamp(t.floor() as i64, 0))
+        .map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default();
+    let mut out = format!("{when}  {}", e.title).trim().to_string();
+    if !e.detail.is_empty() {
+        out += &format!("\n{}", e.detail);
+    }
+    let mark = |ok: Option<bool>| match ok {
+        Some(true) => "✓",
+        Some(false) => "✗",
+        None => "?",
+    };
+    let section = |out: &mut String, head: &str, lines: Vec<String>| {
+        if !lines.is_empty() {
+            *out += &format!("\n\n{head}");
+            for l in lines {
+                *out += &format!("\n  {l}");
+            }
+        }
+    };
+    let Some(a) = &e.action else {
+        section(&mut out, "Items", e.items.clone());
+        return out;
+    };
+    section(&mut out, "Commands", a.commands.iter().map(|c| {
+        let secs = c.secs.map(|s| format!(", {}", duration_text(s))).unwrap_or_default();
+        format!("{} {}  ({}{secs})", mark(exit_ok(c.exit)), c.argv, exit_text(c.exit))
+    }).collect());
+    section(&mut out, "Changes", a.changes.iter().map(|c| {
+        format!("{}  {}", c.name, change_text(c)).trim_end().to_string()
+    }).collect());
+    let checked = |r: &CheckResult| {
+        let detail = if r.detail.is_empty() { String::new() } else { format!(": {}", r.detail) };
+        format!("{} {} — {}{detail}", mark(r.ok), r.name, verdict_text(r.ok))
+    };
+    section(&mut out, "Checks", a.checks.iter().map(checked).collect());
+    section(&mut out, "Repairs", a.repairs.iter().map(checked).collect());
+    let facts = a.facts();
+    if !facts.is_empty() {
+        out += &format!("\n\n{facts}");
+    }
+    out
 }
 
 // ---- what the system recorded ------------------------------------------------
@@ -1701,5 +1968,212 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// Runs `f` with Almanac's log in a fresh temporary state directory.
+    fn with_log<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().unwrap();
+        let old = std::env::var_os("XDG_STATE_HOME");
+        let demo = std::env::var_os("ALMANAC_DEMO");
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        std::env::remove_var("ALMANAC_DEMO");
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&_log_path())));
+        match old {
+            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        if let Some(v) = demo {
+            std::env::set_var("ALMANAC_DEMO", v);
+        }
+        r.unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    fn line(ts: f64, title: &str) -> String {
+        format!("{}\n", serde_json::json!({"ts": ts, "kind": ALMANAC, "title": title}))
+    }
+
+    fn titles(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).ok()
+                .and_then(|v| v.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                .unwrap_or_else(|| l.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn appending_drops_what_is_older_than_thirty_days_and_keeps_what_cannot_be_dated() {
+        with_log(|path| {
+            let now = util::now();
+            let old = now - 31.0 * 86400.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = "not json at all\n".to_string()
+                + &line(old, "old")
+                + "{\"title\": \"no date\"}\n"
+                + &line(now - 29.0 * 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            record_checked(ALMANAC, "new", "", "", &[]).unwrap();
+            assert_eq!(titles(path), ["not json at all", "no date", "recent", "new"]);
+        });
+    }
+
+    #[test]
+    fn a_log_with_nothing_expired_is_left_as_it_is() {
+        with_log(|path| {
+            let now = util::now();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(now - 86400.0, "yesterday");
+            std::fs::write(path, &text).unwrap();
+            assert!(!expire_at(now).unwrap());
+            assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+            // No log at all is nothing to do, not an error.
+            std::fs::remove_file(path).unwrap();
+            assert!(!expire_at(now).unwrap());
+            assert!(!path.exists());
+        });
+    }
+
+    #[test]
+    fn startup_expiry_reads_the_oldest_dated_line_past_undated_ones() {
+        with_log(|path| {
+            let now = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = "{\"ts\": \"a string\"}\n".to_string()
+                + &line(now - 40.0 * 86400.0, "old")
+                + &line(now - 30.0 * 86400.0 + 1.0, "just inside");
+            std::fs::write(path, text).unwrap();
+            assert!(expire_at(now).unwrap());
+            assert_eq!(titles(path), ["{\"ts\": \"a string\"}", "just inside"]);
+        });
+    }
+
+    #[test]
+    fn lines_that_cannot_be_dated_go_only_when_the_log_is_over_its_size_cap() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let filler = format!("{{\"title\": \"{}\"}}\n", "x".repeat(300));
+            std::fs::write(path, filler.repeat(2000)).unwrap();
+            assert!(std::fs::metadata(path).unwrap().len() > MAX_BYTES);
+            record_checked(ALMANAC, "new", "", "", &[]).unwrap();
+            let after = titles(path);
+            assert_eq!(after.len(), KEEP);
+            assert_eq!(after.last().map(String::as_str), Some("new"));
+        });
+    }
+
+    #[test]
+    fn clearing_leaves_one_line_that_says_so() {
+        with_log(|path| {
+            record_checked(ALMANAC, "one", "", "", &[]).unwrap();
+            record_action(ALMANAC, "two", "", "", &ActionLog { duration_secs: Some(1.0), ..Default::default() })
+                .unwrap();
+            clear().unwrap();
+            assert_eq!(titles(path), [CLEARED]);
+            let evs = recorded(0.0).unwrap();
+            assert_eq!(evs.len(), 1);
+            assert_eq!(evs[0].title, CLEARED);
+            assert_eq!(evs[0].action, None);
+        });
+    }
+
+    #[test]
+    fn an_action_is_read_back_with_its_event() {
+        with_log(|_| {
+            let action = ActionLog {
+                commands: vec![CommandRun { argv: "/usr/bin/pkexec /usr/bin/paccache -rk2".into(), exit: Some(0), secs: Some(2.5) }],
+                changes: vec![Change { name: "fd".into(), from: "10.3.0-1".into(), to: "10.4.0-1".into() }],
+                checks: vec![CheckResult { name: "fd".into(), ok: None, detail: "pacman did not answer".into() }],
+                freed_bytes: Some(3 * 1024 * 1024),
+                snapshot: Some("412".into()),
+                ..Default::default()
+            };
+            record_action(ALMANAC, "Updated fd", "", "", &action).unwrap();
+            let evs = recorded(0.0).unwrap();
+            assert_eq!(evs[0].action.as_ref(), Some(&action));
+            assert_eq!(evs[0].items, ["fd"]);
+            // What the event was before actions existed is unchanged.
+            assert!(evs[0].to_value(false).get("action").is_none());
+        });
+    }
+
+    #[test]
+    fn a_missing_malformed_or_empty_action_is_none() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let lines = [
+                r#"{"ts": 5, "title": "plain"}"#,
+                r#"{"ts": 5, "title": "a string", "action": "ran"}"#,
+                r#"{"ts": 5, "title": "wrong types", "action": {"commands": [{"argv": 1}]}}"#,
+                r#"{"ts": 5, "title": "empty", "action": {}}"#,
+                r#"{"ts": 5, "title": "deep", "action": {"commands": [[[[[[[[1]]]]]]]]}}"#,
+                r#"{"ts": 5, "title": "unknown keys", "action": {"later": true, "snapshot": "7"}}"#,
+            ];
+            std::fs::write(path, lines.join("\n") + "\n").unwrap();
+            let evs = recorded(0.0).unwrap();
+            let got: Vec<(&str, Option<&ActionLog>)> = evs.iter().map(|e| (e.title.as_str(), e.action.as_ref())).collect();
+            let seven = ActionLog { snapshot: Some("7".into()), ..Default::default() };
+            assert_eq!(got, [("plain", None), ("a string", None), ("wrong types", None), ("empty", None),
+                             ("deep", None), ("unknown keys", Some(&seven))]);
+        });
+    }
+
+    #[test]
+    fn a_scheduled_run_keeps_its_kind_on_the_timeline() {
+        with_log(|_| {
+            record_checked(AUTOUPDATE, "Scheduled update: updated fd", "", "", &[]).unwrap();
+            record_checked("something else", "Shell restarted", "", "", &[]).unwrap();
+            let kinds: Vec<String> = recorded(0.0).unwrap().into_iter().map(|e| e.kind).collect();
+            assert_eq!(kinds, [AUTOUPDATE, ALMANAC]);
+        });
+    }
+
+    #[test]
+    fn details_read_as_plain_text_for_a_bug_report() {
+        let mut e = Event::new(1_792_400_000.0, ALMANAC, "Package cache: resolved", "Trim to 2 versions", vec![], "");
+        e.action = Some(ActionLog {
+            commands: vec![
+                CommandRun { argv: "/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2".into(), exit: Some(0), secs: Some(3.0) },
+                CommandRun { argv: "yay -Sc".into(), exit: Some(1), secs: None },
+                CommandRun { argv: "omarchy update".into(), exit: None, secs: None },
+            ],
+            changes: vec![Change { name: "fd".into(), from: "1".into(), to: "2".into() },
+                          Change { name: "gone".into(), from: "3".into(), to: String::new() }],
+            checks: vec![CheckResult { name: "Package cache".into(), ok: Some(true), detail: String::new() }],
+            repairs: vec![CheckResult { name: "Keyring".into(), ok: None, detail: "no answer".into() }],
+            freed_bytes: Some(1_288_490_189),
+            snapshot: Some("412".into()),
+            duration_secs: Some(125.0),
+        });
+        let text = details_text(&e);
+        let expected_tail = "  Package cache: resolved\nTrim to 2 versions\n\n\
+            Commands\n  ✓ /usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2  (exit 0, 3 s)\n  \
+            ✗ yay -Sc  (exit 1)\n  ? omarchy update  (exit status unknown)\n\n\
+            Changes\n  fd  1 → 2\n  gone  3 → removed\n\n\
+            Checks\n  ✓ Package cache — passed\n\n\
+            Repairs\n  ? Keyring — could not tell: no answer\n\n\
+            Snapshot 412 taken first · 1.2 GB freed · took 2 min 5 s";
+        assert!(text.ends_with(expected_tail), "{text}");
+        // An event without an action lists its items.
+        let plain = Event::new(1_792_400_000.0, PACKAGES, "Updated a", "", vec!["upgraded a (1 -> 2)".into()], "");
+        assert!(details_text(&plain).ends_with("Updated a\n\nItems\n  upgraded a (1 -> 2)"));
+    }
+
+    #[test]
+    fn durations_and_sizes_read_plainly() {
+        assert_eq!(duration_text(0.42), "0.4 s");
+        assert_eq!(duration_text(3.0), "3 s");
+        assert_eq!(duration_text(45.4), "45 s");
+        assert_eq!(duration_text(120.0), "2 min");
+        assert_eq!(duration_text(125.0), "2 min 5 s");
+        assert_eq!(duration_text(3600.0), "1 h");
+        assert_eq!(duration_text(3840.0), "1 h 4 min");
+        assert_eq!(freed_text(0), "no space freed");
+        assert_eq!(freed_text(-5), "no space freed");
+        assert_eq!(freed_text(3 * 1024 * 1024), "3 MB freed");
+        assert_eq!(ActionLog { freed_bytes: Some(0), ..Default::default() }.facts(), "No space freed");
+        assert_eq!(ActionLog::default().facts(), "");
+        assert_eq!(command_line(&["echo".into(), "two words".into()]), "echo 'two words'");
     }
 }
