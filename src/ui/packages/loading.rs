@@ -240,6 +240,34 @@ impl Win {
         self.shared.borrow_mut().row_actions.retain(|name, _| names.contains(name.as_str()));
     }
 
+    /// Rows whose update was verified installed show it at once, ahead of
+    /// the rescan that confirms it: they leave Updates and the header's
+    /// count, rather than waiting seconds for checkupdates.
+    pub fn mark_updated(&self, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        let store = self.shared.borrow().store.clone();
+        let mut changed = false;
+        for i in 0..store.n_items() {
+            let Some(obj) = store.item(i) else { continue };
+            let done = match AppItem::of(&obj) {
+                Some(it) if it.has_update && names.contains(&it.name) => Some(it.app.as_updated()),
+                _ => None,
+            };
+            if let Some(app) = done {
+                store.splice(i, 1, &[AppItem::new(app).boxed()]);
+                changed = true;
+            }
+        }
+        if changed {
+            self.filter_changed();
+            if let Err(e) = self.update_status() {
+                eprintln!("almanac: mark_updated: {e}");
+            }
+        }
+    }
+
     pub fn apply(&self, apps: Vec<inventory::App>) {
         self.set_rows(&apps);
         if let Some(act) = self.win_action("rescan") {

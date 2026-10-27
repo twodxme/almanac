@@ -357,6 +357,20 @@ pub fn details(app: &App) -> Extra {
 mod tests {
     use super::*;
 
+    /// A row verified updated leaves the Updates list at once, a falsy
+    /// non-str update included.
+    #[test]
+    fn a_row_marked_updated_has_no_update_left() {
+        let mut a = App { update: "2.0".into(), ..App::new("x", "1.0", REPO) };
+        assert!(a.has_update());
+        let done = a.as_updated();
+        assert!(!done.has_update());
+        assert_eq!(done.version, "2.0");
+        a = App::new("y", "1.0", REPO).with_values(&[("update", &serde_json::json!(["2.0"]))]);
+        assert!(a.has_update());
+        assert!(!a.as_updated().has_update());
+    }
+
     // ---- Criticality
     #[test]
     fn test_network_facing_is_security() {

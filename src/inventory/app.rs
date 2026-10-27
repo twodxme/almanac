@@ -146,6 +146,20 @@ impl App {
         }
         !self.update.is_empty()
     }
+
+    /// The row as it reads once its update is verified installed: the new
+    /// version, nothing waiting. Shown until the rescan has the real row.
+    pub fn as_updated(&self) -> App {
+        let mut app = self.clone();
+        if !app.update.is_empty() {
+            app.version = std::mem::take(&mut app.update);
+        }
+        if let Some(Value::Object(r)) = app.extra.get_mut(RAW_FIELDS) {
+            r.remove("update");
+            r.remove("version");
+        }
+        app
+    }
 }
 
 impl Serialize for App {

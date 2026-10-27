@@ -2,8 +2,10 @@
 
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::{history, settings, snapshots, verify};
+use crate::history::{ActionLog, Change, CheckResult, CommandRun};
 use crate::i18n::tr;
 use crate::inventory::App;
 use crate::tasks::{OnDone, Step};
@@ -37,8 +39,22 @@ impl Win {
         on_err: fn(&str),
         start: impl FnOnce(OnDone) + 'static,
     ) {
+        self.checked_logged(probe, judge, then, on_err, None, start);
+    }
+
+    /// `checked` for an update of one thing: its history entry is the
+    /// update's whole account (`UpdateLog`), not just the verdict.
+    pub(super) fn checked_logged(
+        &self,
+        probe: Option<TryProbe>,
+        judge: Judge,
+        then: Option<OnDone>,
+        on_err: fn(&str),
+        log: Option<UpdateLog>,
+        start: impl FnOnce(OnDone) + 'static,
+    ) {
         let Some(first) = probe.clone() else {
-            start(self.checked_from(None, None, judge, then));
+            start(self.checked_from(None, None, judge, then, log));
             return;
         };
         let w = self.downgrade();
@@ -47,7 +63,7 @@ impl Win {
             move |before| match before {
                 Ok(before) => {
                     if let Some(win) = w.upgrade() {
-                        start(win.checked_from(before, probe, judge, then));
+                        start(win.checked_from(before, probe, judge, then, log));
                     }
                 }
                 Err(e) => on_err(&e),
@@ -56,13 +72,23 @@ impl Win {
     }
 
     /// `checked`'s on_done, once the first answer is `before`.
-    fn checked_from(&self, before: Option<ProbeValue>, probe: Option<TryProbe>, judge: Judge, then: Option<OnDone>) -> OnDone {
+    fn checked_from(
+        &self,
+        before: Option<ProbeValue>,
+        probe: Option<TryProbe>,
+        judge: Judge,
+        then: Option<OnDone>,
+        log: Option<UpdateLog>,
+    ) -> OnDone {
         let w = self.downgrade();
         Box::new(move |ok| {
             if let Some(then) = then {
                 then(ok);
             }
             let Some(probe) = probe else {
+                if let (Some(log), Some(win)) = (log, w.upgrade()) {
+                    win.record_update(&log, ok, None);
+                }
                 return;
             };
             spawn_bg(
@@ -70,13 +96,33 @@ impl Win {
                 move |out| match out {
                     Ok(out) => {
                         if let Some(win) = w.upgrade() {
-                            win.report_outcome(&out);
+                            match log {
+                                Some(log) => {
+                                    win.record_update(&log, ok, Some(&out));
+                                    win.show_outcome(&out);
+                                }
+                                None => win.report_outcome(&out),
+                            }
                         }
                     }
                     Err(e) => raised(&e),
                 },
             );
         })
+    }
+
+    /// One update's history entry: what ran, how long, what changed, and
+    /// what the check found.
+    pub(super) fn record_update(&self, log: &UpdateLog, ok: bool, out: Option<&Outcome>) {
+        if let Err(e) = history::record_action(
+            history::ALMANAC,
+            &out.map(|o| o.message.clone()).unwrap_or_else(|| format!("Updated {}", log.app.name)),
+            "",
+            update_severity(ok, out),
+            &update_action(log, ok, out),
+        ) {
+            raised(&e);
+        }
     }
 
     /// `_checked` for a `done` that may run more than once (the Python
@@ -142,6 +188,12 @@ impl Win {
         ) {
             return raised(&e);
         }
+        self.show_outcome(out);
+    }
+
+    /// `report_outcome` without the history entry: said, and notified when
+    /// nothing changed.
+    fn show_outcome(&self, out: &Outcome) {
         if out.changed == Some(false) {
             // Something the user asked for did not happen. A toast can be
             // missed; this is the one result that must not be.
@@ -160,6 +212,50 @@ impl Win {
     pub fn snapshot_first(&self, steps: Vec<Step>, what: &str) -> Result<Vec<Step>, String> {
         let step = snapshots::try_create_step(&format!("Almanac: before {what}"))?;
         Ok(with_snapshot(step, steps))
+    }
+}
+
+/// What one update ran, for its history entry.
+pub(super) struct UpdateLog {
+    pub app: App,
+    pub argv: String,
+    pub started: Instant,
+}
+
+impl UpdateLog {
+    pub fn new(app: &App, argv: &[String]) -> UpdateLog {
+        UpdateLog { app: app.clone(), argv: argv.join(" "), started: Instant::now() }
+    }
+}
+
+/// "warn" when the update failed or changed nothing.
+pub(super) fn update_severity(ok: bool, out: Option<&Outcome>) -> &'static str {
+    if !ok || out.is_some_and(|o| o.changed == Some(false)) {
+        "warn"
+    } else {
+        ""
+    }
+}
+
+/// The action record of one update. The task reports one result, so the
+/// command is known to have exited 0 only when it succeeded.
+pub(super) fn update_action(log: &UpdateLog, ok: bool, out: Option<&Outcome>) -> ActionLog {
+    let secs = log.started.elapsed().as_secs_f64();
+    let changed = out.and_then(|o| o.changed);
+    ActionLog {
+        commands: vec![CommandRun { argv: log.argv.clone(), exit: ok.then_some(0), secs: Some(secs) }],
+        changes: if changed == Some(true) {
+            vec![Change { name: log.app.name.clone(), from: log.app.version.clone(), to: log.app.update.clone() }]
+        } else {
+            Vec::new()
+        },
+        checks: vec![CheckResult {
+            name: "Installed version changed".into(),
+            ok: changed,
+            detail: out.map(|o| o.message.clone()).unwrap_or_else(|| "could not be checked".into()),
+        }],
+        duration_secs: Some(secs),
+        ..Default::default()
     }
 }
 
@@ -193,4 +289,33 @@ pub(super) fn after_pacman_cb(win: &Win) -> OnDone {
             win.after_pacman(ok);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single update's history entry: the command, the version change
+    /// only when the check saw it, and "warn" when it failed or did nothing.
+    #[test]
+    fn one_update_is_logged_with_what_its_check_found() {
+        let mut app = App::new("ghostty", "1.0", crate::inventory::REPO);
+        app.update = "1.1".into();
+        let log = UpdateLog::new(&app, &["yay".to_string(), "-S".into(), "ghostty".into()]);
+        let landed = Outcome::new(Some(true), "ghostty 1.0 → 1.1");
+        let a = update_action(&log, true, Some(&landed));
+        assert_eq!(a.commands[0].argv, "yay -S ghostty");
+        assert_eq!(a.commands[0].exit, Some(0));
+        assert_eq!(a.changes, vec![Change { name: "ghostty".into(), from: "1.0".into(), to: "1.1".into() }]);
+        assert_eq!(a.checks[0].ok, Some(true));
+        assert_eq!(update_severity(true, Some(&landed)), "");
+
+        let nothing = Outcome::new(Some(false), "ghostty did not change");
+        let a = update_action(&log, true, Some(&nothing));
+        assert!(a.changes.is_empty());
+        assert_eq!(update_severity(true, Some(&nothing)), "warn");
+        let a = update_action(&log, false, None);
+        assert_eq!((a.commands[0].exit, a.checks[0].ok), (None, None));
+        assert_eq!(update_severity(false, None), "warn");
+    }
 }

@@ -18,17 +18,12 @@ use crate::ui::shell::{Win, spawn_bg};
 
 use super::pyisms::{extra_str, not_a_path, py_oserror, py_path, py_str, py_str_repr, py_type, strerror, truthy};
 use super::raised;
-use super::verification::{after_pacman_again, after_pacman_cb, app_judge, app_judge_again};
+use super::verification::{after_pacman_again, after_pacman_cb, app_judge, app_judge_again, UpdateLog};
 
 /// The `yay` argv that installs or updates one package (`on_update_one`,
 /// `_install_option`).
 pub fn yay_argv(name: &str) -> Vec<String> {
     tasks::yay_install(&[name])
-}
-
-/// The shell script `on_update_all` runs in a terminal.
-pub fn update_all_script(command: &str) -> String {
-    format!("{command}; echo; read -n1 -r -p 'Done — press any key to close'")
 }
 
 /// The test of `on_update_one`: a release only checkupdates knows about
@@ -371,7 +366,8 @@ impl Win {
                 };
                 let w = win.downgrade();
                 let title = format!("Updating {}", app.name);
-                win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
+                let log = Some(UpdateLog::new(&app, &argv));
+                win.checked_logged(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, log, move |done| {
                     if let Some(win) = w.upgrade() {
                         tasks::run(&win.window, &title, steps, Some(done));
                     }
@@ -456,7 +452,8 @@ impl Win {
             let app = app_c.clone();
             let w = win.downgrade();
             let (title, cmd) = (format!("Updating {}", app.name), cmd.clone());
-            win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
+            let log = Some(UpdateLog::new(&app, &cmd));
+            win.checked_logged(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, log, move |done| {
                 if let Some(win) = w.upgrade() {
                     tasks::run(&win.window, &title, vec![Step::argv(title.clone(), cmd)], Some(done));
                 }
@@ -567,6 +564,8 @@ impl Win {
         let work = move || appimage_update_work(&app_c);
         let w = self.downgrade();
         let (name, version) = (app.name.clone(), app.update.clone());
+        let url = app.extra.get("download").map(py_str).unwrap_or_default();
+        let log = UpdateLog::new(app, &[format!("download {url}")]);
         spawn_bg(
             move || {
                 // A panic is a bug, the Rust form of the TypeErrors and
@@ -583,6 +582,13 @@ impl Win {
             },
             move |error| {
                 if let Some(win) = w.upgrade() {
+                    // The download is checked against the release's sha256
+                    // where it publishes one; a failure is said as is.
+                    let out = match &error {
+                        None => verify::Outcome::new(Some(true), format!("{name} updated to {version}")),
+                        Some(e) => verify::Outcome::new(Some(false), format!("{name} update failed: {e}")),
+                    };
+                    win.record_update(&log, error.is_none(), Some(&out));
                     win.after_appimage(&name, &version, error);
                 }
             },
@@ -720,9 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn update_all_waits_for_a_key() {
-        assert_eq!(update_all_script("omarchy update"),
-                   "omarchy update; echo; read -n1 -r -p 'Done — press any key to close'");
+    fn one_package_is_installed_with_root_by_path() {
         assert_eq!(
             yay_argv("p").join(" "),
             "yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"

@@ -227,9 +227,12 @@ impl Win {
     }
 
     /// The app ran it, so it knows to re-read rather than guess.
-    pub fn after_pacman(&self, ok: bool) {
-        if ok {
-            self.reload();
-        }
+    ///
+    /// Whether or not it worked: a batch where one item failed still has
+    /// the others done, and they must leave the Updates list. The pending
+    /// updates are asked afresh, not taken from what the last scan kept.
+    pub fn after_pacman(&self, _ok: bool) {
+        crate::inventory::forget_pending();
+        self.reload();
     }
 }

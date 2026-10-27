@@ -1206,6 +1206,25 @@ pub fn confirm(
     destructive: bool,
     on_yes: impl Fn() + 'static,
 ) {
+    confirm_then(parent, heading, body, detail, action, destructive, move |yes| {
+        if yes {
+            on_yes();
+        }
+    });
+}
+
+/// [`confirm`], also told when the answer is no (Cancel, Escape, closing
+/// it): for a caller with more to do either way.
+#[allow(clippy::too_many_arguments)]
+pub fn confirm_then(
+    parent: &impl gtk::glib::object::IsA<gtk::Widget>,
+    heading: &str,
+    body: &str,
+    detail: &str,
+    action: &str,
+    destructive: bool,
+    on_answer: impl Fn(bool) + 'static,
+) {
     let body = crate::util::human_error(body);
     let dialog = adw::AlertDialog::new(Some(c_str(heading)), Some(c_str(&body)));
     if !detail.is_empty() {
@@ -1243,11 +1262,7 @@ pub fn confirm(
     );
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
-    dialog.connect_response(None, move |_d, resp| {
-        if resp == "go" {
-            on_yes();
-        }
-    });
+    dialog.connect_response(None, move |_d, resp| on_answer(resp == "go"));
     dialog.present(Some(parent));
 }
 
