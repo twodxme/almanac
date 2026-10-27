@@ -227,8 +227,13 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         Map::new()
     };
     let mut dirty_cache = false;
+    // Which plugins Omarchy has switched on is a script run of its own
+    // (`omarchy plugin list`): asked now, beside the git work below.
+    let pdir = crate::plugins::plugins_dir();
+    let pdir_ok = pdir.is_dir();
+    let switched_on = pdir_ok.then(|| std::thread::spawn(crate::plugins::enabled));
 
-    let git_extra = |repo: &Path, cache: &mut Map<String, Value>, dirty_cache: &mut bool| -> Result<Map<String, Value>, String> {
+    let git_extra =|repo: &Path, cache: &mut Map<String, Value>, dirty_cache: &mut bool| -> Result<Map<String, Value>, String> {
         if !check_updates || !repo.join(".git").exists() {
             return Ok(Map::new());
         }
@@ -293,19 +298,23 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
     }
     // Omarchy shell plugins: classified before anything offers to touch them
     // (plugins.py), with whether Omarchy currently has each one switched on.
-    let pdir = crate::plugins::plugins_dir();
-    let pdir_ok = pdir.is_dir();
-    let switched_on = if pdir_ok { crate::plugins::enabled() } else { BTreeMap::new() };
+    let switched_on = switched_on.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
     // pcache = cache.setdefault("_plugins", {}): an existing value is used
     // as it is, whatever it is.
     if !cache.contains_key("_plugins") {
         cache.insert("_plugins".into(), json!({}));
     }
-    let children = if pdir_ok { sorted_children(&pdir) } else { Vec::new() };
+    let children: Vec<PathBuf> =
+        if pdir_ok { sorted_children(&pdir).into_iter().filter(|p| p.is_dir()).collect() } else { Vec::new() };
+    // Each plugin is a few git calls and, when due, a fetch: classified all
+    // at once (`plugins::classify_all`, as the Plugins page does) when the
+    // cache is the usual map. Anything else goes one at a time below, with
+    // the Python's errors.
+    let mut classified: std::collections::VecDeque<crate::plugins::State> = match cache.get_mut("_plugins") {
+        Some(Value::Object(pc)) => crate::plugins::classify_each(&children, Some(pc), check_updates).into(),
+        _ => Default::default(),
+    };
     for p in children {
-        if !p.is_dir() {
-            continue;
-        }
         let pname = path_json(Path::new(p.file_name().unwrap_or_default()));
         let (mut desc, mut ver, mut pid) = (json!("Omarchy shell plugin"), json!("—"), pname.clone());
         // OSError and ValueError (bad JSON, or text that is not UTF-8) are
@@ -326,7 +335,10 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
             }
         }
         let st = match cache.get_mut("_plugins") {
-            Some(Value::Object(pc)) => crate::plugins::classify(&p, Some(pc), check_updates),
+            Some(Value::Object(pc)) => match classified.pop_front() {
+                Some(st) => st,
+                None => crate::plugins::classify(&p, Some(pc), check_updates),
+            },
             // None is classify's "no cache".
             Some(Value::Null) | None => crate::plugins::classify(&p, None, check_updates),
             // Anything else is handed to classify as is, which only fails

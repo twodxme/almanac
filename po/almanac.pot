@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-26 23:54-0700\n"
+"POT-Creation-Date: 2026-10-27 00:35-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -39,11 +39,11 @@ msgid ""
 "the repository beyond the files shown here."
 msgstr ""
 
-#: src/plugins.rs:1686
+#: src/plugins.rs:1698
 msgid "no reviewed commit to compare with"
 msgstr ""
 
-#: src/plugins.rs:1695 src/ui/plugins/updates.rs:89
+#: src/plugins.rs:1707 src/ui/plugins/updates.rs:89
 msgid "changed since it was reviewed"
 msgstr ""
 
@@ -498,15 +498,15 @@ msgstr ""
 msgid "Loading the plugin marketplace…"
 msgstr ""
 
-#: src/ui/packages/loading.rs:53
+#: src/ui/packages/loading.rs:53 src/ui/packages/loading.rs:70
 msgid "Scanning…"
 msgstr ""
 
-#: src/ui/packages/loading.rs:210
+#: src/ui/packages/loading.rs:235
 msgid "Software no longer maintained"
 msgstr ""
 
-#: src/ui/packages/loading.rs:222
+#: src/ui/packages/loading.rs:247
 msgid "Duplicate software installed"
 msgstr ""
 
@@ -1044,15 +1044,15 @@ msgstr ""
 msgid "Recently added"
 msgstr ""
 
-#: src/ui/shell/watch.rs:165
+#: src/ui/shell/watch.rs:184
 msgid "Your settings were reset"
 msgstr ""
 
-#: src/ui/shell/watch.rs:167
+#: src/ui/shell/watch.rs:186
 msgid "Settings reset to defaults — see Health check"
 msgstr ""
 
-#: src/ui/shell/watch.rs:203
+#: src/ui/shell/watch.rs:222
 msgid "Packages changed — rescanning…"
 msgstr ""
 
@@ -1389,11 +1389,11 @@ msgstr ""
 msgid "Plugin"
 msgstr ""
 
-#: src/ui/today.rs:459
+#: src/ui/today.rs:475
 msgid "Working out what needs you…"
 msgstr ""
 
-#: src/ui/today.rs:595
+#: src/ui/today.rs:637
 msgid "Nothing needs you right now"
 msgstr ""
 

@@ -51,6 +51,26 @@ impl Win {
             act.set_enabled(false);
         }
         self.summarize(&tr("Scanning…"), None);
+        crate::ui::timings::mark("first scan started");
+
+        // A new window: the last scan's list, shown while this one runs
+        // (`inventory::load_snapshot` says what of it can be trusted).
+        let fresh_window = self.packages.borrow().last_scan.is_none() && self.shared.borrow().store.n_items() == 0;
+        if fresh_window && !crate::demo::active() {
+            let w = self.downgrade();
+            spawn_bg(inventory::load_snapshot, move |apps| {
+                let (Some(w), Some(apps)) = (w.upgrade(), apps) else { return };
+                // The scan won the race, or something else filled the list.
+                if !w.packages.borrow().scanning || w.shared.borrow().store.n_items() != 0 {
+                    return;
+                }
+                w.set_rows(&apps);
+                w.filter_changed();
+                let _ = w.update_status();
+                w.summarize(&tr("Scanning…"), None);
+                crate::ui::timings::mark("last scan shown");
+            });
+        }
 
         // checkupdates and yay take seconds; on the UI thread that is a freeze.
         let w = self.downgrade();
@@ -79,7 +99,12 @@ impl Win {
         match apps {
             Some(apps) => {
                 self.packages.borrow_mut().last_scan = Some(apps.clone());
+                if !crate::demo::active() {
+                    let keep = apps.clone();
+                    spawn_bg(move || inventory::save_snapshot(&keep), |()| {});
+                }
                 self.apply(apps);
+                crate::ui::timings::mark("scan shown");
             }
             // The scan panicked: the list stays as it was, rescanning allowed.
             None => {

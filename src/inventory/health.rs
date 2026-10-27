@@ -19,6 +19,9 @@ pub struct AurHealth {
     pub out_of_date: bool,
     pub last_modified: f64,
     pub maintainer: String,
+    /// The upstream URL the package points at, so a name can be told to be
+    /// this project's (`selfupdate`) from the same answer.
+    pub url: String,
 }
 
 /// `{icon, categories}` read from a package's .desktop file (one value of
@@ -73,13 +76,108 @@ pub fn staleness(
 /// This is the only *authoritative* staleness signal available -- a human
 /// maintainer flags out-of-date, and LastModified is real packaging activity.
 /// Build age (below) is only a proxy. One RPC call covers every package.
-/// Offline returns an empty map: offline is not a reason to show nothing.
+///
+/// The answer is kept for [`AUR_HEALTH_TTL`], in memory and on disk, so the
+/// inventory scan and the Health page's check share one call, and a later
+/// launch does not wait on the network for something that changes over days:
+/// a kept answer that asked about every name requested serves any subset of
+/// them. Offline, the last answer stands in whatever its age; with none,
+/// an empty map: offline is not a reason to show nothing.
+///
 /// Err where the Python raises after the fetch (a reply of an unexpected
 /// shape: not an object, `results` not a list of objects, a LastModified
-/// that is not a number); `packages` then fails, as in the Python.
+/// that is not a number); `packages` then fails, as in the Python. A reply
+/// like that is never kept.
 pub fn try_aur_health(names: &[String]) -> Result<BTreeMap<String, AurHealth>, String> {
+    Ok(aur_health_answer(names)?.unwrap_or_default())
+}
+
+/// `try_aur_health`, None when there is no answer at all: offline (or the
+/// AUR answered with an error) and nothing kept from before.
+pub fn aur_health_answer(names: &[String]) -> Result<Option<BTreeMap<String, AurHealth>>, String> {
     if names.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(Some(BTreeMap::new()));
+    }
+    // Held across the fetch, so callers that ask together share one call.
+    let mut kept = AUR_KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    let path = aur_health_cache_path();
+    if kept.as_ref().is_none_or(|(p, _)| *p != path) {
+        // First use, or the cache directory moved (a test's XDG_CACHE_HOME).
+        let disk = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<AurAnswer>(&b).ok());
+        *kept = Some((path.clone(), disk));
+    }
+    let Some((_, answer)) = kept.as_mut() else { return Ok(None) };
+    let fetch = |url: &str| http_json(url, 15).map_err(|e| e.to_string());
+    let (out, fresh) = aur_health_from(answer.as_ref(), names, util::now(), &fetch)?;
+    if let Some(fresh) = fresh {
+        if let Ok(bytes) = serde_json::to_vec(&fresh) {
+            let _ = util::atomic_write(&path, bytes);
+        }
+        *answer = Some(fresh);
+    }
+    Ok(out)
+}
+
+/// What the AUR says, by package name.
+pub type AurMap = BTreeMap<String, AurHealth>;
+
+/// How long an AUR answer is trusted, in seconds. Flags and maintainers
+/// change over days, not minutes; an hour keeps a launch, its scan and the
+/// Health page to one call between them.
+pub const AUR_HEALTH_TTL: f64 = 3600.0;
+
+/// One AUR answer as kept: when it was asked, every name it asked about (a
+/// name the AUR did not answer for is one it no longer carries, which is
+/// itself the answer), and what came back.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AurAnswer {
+    pub at: f64,
+    pub asked: BTreeSet<String>,
+    pub results: BTreeMap<String, AurHealth>,
+}
+
+/// The kept answer, with the file it was read from.
+static AUR_KEPT: std::sync::Mutex<Option<(PathBuf, Option<AurAnswer>)>> = std::sync::Mutex::new(None);
+
+/// `$XDG_CACHE_HOME/almanac/aur-health.json`.
+pub fn aur_health_cache_path() -> PathBuf {
+    match std::env::var_os("XDG_CACHE_HOME") {
+        Some(v) => PathBuf::from(v).join("almanac/aur-health.json"),
+        None => crate::util::home().join(".cache").join("almanac/aur-health.json"),
+    }
+}
+
+impl AurAnswer {
+    /// Whether this answer asked about every one of `names`.
+    fn covers(&self, names: &[String]) -> bool {
+        names.iter().all(|n| self.asked.contains(n))
+    }
+
+    /// What this answer says about `names`, and nothing else.
+    fn only(&self, names: &[String]) -> BTreeMap<String, AurHealth> {
+        let want: HashSet<&str> = names.iter().map(String::as_str).collect();
+        self.results.iter().filter(|(k, _)| want.contains(k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+}
+
+/// `try_aur_health` against a kept answer, at `now`, fetching with `fetch`:
+/// the answer for `names`, and the answer to keep from now on when a fetch
+/// made a new one. A kept answer from the future (the clock went back) is
+/// treated as old. An error reply (`"type": "error"`, a rate limit) is no
+/// answer, the same as being offline: read as an answer it would say every
+/// package had left the AUR.
+pub(super) fn aur_health_from(
+    kept: Option<&AurAnswer>,
+    names: &[String],
+    now: f64,
+    fetch: &dyn Fn(&str) -> Result<Value, String>,
+) -> Result<(Option<AurMap>, Option<AurAnswer>), String> {
+    let usable = kept.filter(|k| k.covers(names));
+    if let Some(k) = usable {
+        if (0.0..AUR_HEALTH_TTL).contains(&(now - k.at)) {
+            return Ok((Some(k.only(names)), None));
+        }
     }
     let query = names
         .iter()
@@ -87,9 +185,10 @@ pub fn try_aur_health(names: &[String]) -> Result<BTreeMap<String, AurHealth>, S
         .collect::<Vec<_>>()
         .join("&");
     let url = format!("https://aur.archlinux.org/rpc/v5/info?{query}");
-    let data = match http_json(&url, 15) {
-        Ok(d) => d,
-        Err(_) => return Ok(BTreeMap::new()), // offline is not a reason to show nothing
+    let data = match fetch(&url) {
+        Ok(d) if d.get("type").and_then(Value::as_str) != Some("error") => d,
+        // Offline: the last answer, however old, says more than none.
+        _ => return Ok((usable.map(|k| k.only(names)), None)),
     };
     let mut out = BTreeMap::new();
     let Value::Object(data) = data else {
@@ -112,10 +211,12 @@ pub fn try_aur_health(names: &[String]) -> Result<BTreeMap<String, AurHealth>, S
                 out_of_date: rec.get("OutOfDate").is_some_and(truthy),
                 last_modified: float_or_zero(rec, "LastModified")?,
                 maintainer: get_str_or(rec, "Maintainer"),
+                url: get_str_or(rec, "URL"),
             },
         );
     }
-    Ok(out)
+    let fresh = AurAnswer { at: now, asked: names.iter().cloned().collect(), results: out.clone() };
+    Ok((Some(out), Some(fresh)))
 }
 
 /// `try_aur_health` for callers that need a plain map: where the Python
@@ -348,6 +449,104 @@ mod tests {
 
     fn bh(c: &str, l: &str) -> (i64, String) {
         versions_behind(c, l)
+    }
+
+    // ---- AUR health, kept
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn reply() -> Value {
+        json!({"results": [
+            {"Name": "yay", "OutOfDate": null, "LastModified": 100, "Maintainer": "jguer"},
+            {"Name": "old-thing", "OutOfDate": 1700000000, "LastModified": 50, "Maintainer": null},
+        ]})
+    }
+
+    fn counting(calls: &std::cell::Cell<u32>, answer: Result<Value, String>) -> impl Fn(&str) -> Result<Value, String> + '_ {
+        move |_| {
+            calls.set(calls.get() + 1);
+            answer.clone()
+        }
+    }
+
+    #[test]
+    fn a_fresh_answer_is_fetched_once_and_then_kept() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = counting(&calls, Ok(reply()));
+        let asked = names(&["yay", "old-thing", "gone-pkg"]);
+        let (first, kept) = aur_health_from(None, &asked, 1000.0, &fetch).unwrap();
+        let first = first.expect("an answer");
+        let kept = kept.expect("a fetch makes an answer to keep");
+        assert_eq!(calls.get(), 1);
+        assert!(first["old-thing"].out_of_date && first["old-thing"].maintainer.is_empty());
+        assert!(!first.contains_key("gone-pkg"), "a name the AUR does not carry stays absent");
+        let (again, none) = aur_health_from(Some(&kept), &asked, 1000.0 + AUR_HEALTH_TTL - 1.0, &fetch).unwrap();
+        assert_eq!(calls.get(), 1, "a fresh answer is not asked again");
+        assert!(none.is_none());
+        assert_eq!(again, Some(first));
+    }
+
+    #[test]
+    fn a_kept_answer_serves_any_subset_of_what_it_asked() {
+        let calls = std::cell::Cell::new(0);
+        let fetch = counting(&calls, Ok(reply()));
+        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing", "gone-pkg"]), 0.0, &fetch).unwrap();
+        let sub = aur_health_from(kept.as_ref(), &names(&["yay"]), 10.0, &fetch).unwrap().0.unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(sub.keys().collect::<Vec<_>>(), ["yay"], "only what was asked comes back");
+        // A name it never asked about needs a new call.
+        aur_health_from(kept.as_ref(), &names(&["yay", "new-pkg"]), 10.0, &fetch).unwrap();
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn an_old_answer_is_asked_again_but_stands_in_when_offline() {
+        let calls = std::cell::Cell::new(0);
+        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let offline = counting(&calls, Err("offline".into()));
+        let later = AUR_HEALTH_TTL * 30.0;
+        let (out, none) = aur_health_from(kept.as_ref(), &names(&["yay", "old-thing"]), later, &offline).unwrap();
+        assert_eq!(calls.get(), 2, "an old answer is asked again");
+        assert!(none.is_none(), "nothing new is kept from a failed fetch");
+        assert_eq!(out.map(|o| o.len()), Some(2), "offline, the old answer stands in");
+        // An answer from the future (the clock went back) is not trusted as fresh.
+        aur_health_from(kept.as_ref(), &names(&["yay"]), -100.0, &offline).unwrap();
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn offline_with_nothing_kept_is_no_answer() {
+        let calls = std::cell::Cell::new(0);
+        let (out, none) = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Err("offline".into()))).unwrap();
+        assert!(out.is_none() && none.is_none());
+    }
+
+    #[test]
+    fn an_error_reply_is_no_answer_rather_than_every_package_gone() {
+        let calls = std::cell::Cell::new(0);
+        let (_, kept) = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let limited = counting(&calls, Ok(json!({"type": "error", "results": [], "error": "Rate limit reached"})));
+        let (out, none) = aur_health_from(None, &names(&["yay"]), 0.0, &limited).unwrap();
+        assert!(out.is_none() && none.is_none());
+        let (out, none) = aur_health_from(kept.as_ref(), &names(&["yay"]), AUR_HEALTH_TTL * 2.0, &limited).unwrap();
+        assert!(out.is_some_and(|o| o.contains_key("yay")) && none.is_none(), "the old answer stands in");
+    }
+
+    #[test]
+    fn a_malformed_reply_is_an_error_and_is_not_kept() {
+        let calls = std::cell::Cell::new(0);
+        let r = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Ok(json!([1, 2]))));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn a_kept_answer_round_trips_through_its_file() {
+        let calls = std::cell::Cell::new(0);
+        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing"]), 5.0, &counting(&calls, Ok(reply()))).unwrap();
+        let kept = kept.unwrap();
+        let back: AurAnswer = serde_json::from_slice(&serde_json::to_vec(&kept).unwrap()).unwrap();
+        assert_eq!(back, kept);
     }
 
     // ---- VersionsBehind

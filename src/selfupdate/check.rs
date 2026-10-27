@@ -83,6 +83,13 @@ pub(super) fn package_origin(pkg: &str) -> PackageOrigin {
     if pkg.is_empty() {
         return PackageOrigin::Unknown;
     }
+    // The inventory's foreign list, kept while pacman's databases stand
+    // still: asking pacman about one package reads every sync database.
+    match crate::inventory::is_foreign(pkg) {
+        Some(true) => return PackageOrigin::Foreign { aur: None },
+        Some(false) => return PackageOrigin::Repo,
+        None => {}
+    }
     let argv: Vec<OsString> = vec!["pacman".into(), "-Qmq".into(), pkg.into()];
     match run_capture(&argv, Some(20)) {
         Ok(out) => origin_from(out.code, &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr)),
@@ -107,34 +114,46 @@ pub(super) fn origin_from(code: i32, stdout: &str, stderr: &str) -> PackageOrigi
 /// pointing somewhere else is not Almanac, and an AUR helper "updating" to
 /// it would not be an update, so it counts as not listed. `None` for an
 /// answer with no results list (an RPC error): that is no answer at all.
+/// (`aur_listed` reads the same rule off the inventory's kept answer.)
+#[cfg(test)]
 pub(super) fn aur_lists(answer: &serde_json::Value, pkg: &str) -> Option<bool> {
-    let home = crate::sources::norm(&format!("https://github.com/{RELEASE_REPO}"));
     let results = answer.get("results")?.as_array()?;
     Some(results.iter().any(|r| {
         r.get("Name").and_then(|n| n.as_str()) == Some(pkg)
-            && r.get("URL").and_then(|u| u.as_str()).is_some_and(|u| crate::sources::norm(u) == home)
+            && r.get("URL").and_then(|u| u.as_str()).is_some_and(is_this_project)
     }))
+}
+
+/// Whether an AUR package's upstream URL is this repository.
+pub(super) fn is_this_project(url: &str) -> bool {
+    crate::sources::norm(url) == crate::sources::norm(&format!("https://github.com/{RELEASE_REPO}"))
 }
 
 /// What the AUR said about a package name, as last asked by this process.
 pub(super) static AUR_LISTED: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
 
-/// Whether the AUR carries `pkg` as this project. With `fetch`, ask it (one
-/// RPC request); without, use what this process last heard, so the About
-/// window does not wait on the network. `None` when nobody knows.
+/// Whether the AUR carries `pkg` as this project. With `fetch`, ask it --
+/// through the inventory's kept AUR answer, which the scan's question about
+/// every foreign package usually holds already; without, use what this
+/// process last heard, so the About window does not wait on the network.
+/// `None` when nobody knows.
 pub(super) fn aur_listed(pkg: &str, fetch: bool) -> Option<bool> {
     if !fetch {
         let seen = AUR_LISTED.lock().ok()?;
         return seen.as_ref().filter(|(name, _)| name == pkg).map(|(_, listed)| *listed);
     }
-    // pacman names are [a-z0-9@._+-]; only '+' needs escaping in a query,
-    // and anything else is not a name to send.
+    // pacman names are [a-z0-9@._+-]; anything else is not a name to send.
     if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c)) {
         return None;
     }
-    let url = format!("https://aur.archlinux.org/rpc/v5/info?arg[]={}", pkg.replace('+', "%2B"));
-    let answer = crate::sources::get(&url, 20).ok()?;
-    let listed = aur_lists(&serde_json::from_slice(&answer).ok()?, pkg)?;
+    // Asked as part of every foreign package, the question the scan and the
+    // Health check ask, so the three share one request.
+    let mut names = crate::inventory::foreign_packages().map(|f| f.to_vec()).unwrap_or_default();
+    if !names.iter().any(|n| n == pkg) {
+        names = vec![pkg.to_string()];
+    }
+    let answer = crate::inventory::aur_health_answer(&names).ok()??;
+    let listed = answer.get(pkg).is_some_and(|r| is_this_project(&r.url));
     if let Ok(mut seen) = AUR_LISTED.lock() {
         *seen = Some((pkg.to_string(), listed));
     }

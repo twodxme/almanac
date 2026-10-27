@@ -53,15 +53,34 @@ impl Win {
         if let Some(old) = pending {
             old.remove();
         }
+        // Finding the resets already there walks ~/.config, so it runs off
+        // the main thread (this is called while the window is built); the
+        // watches start once it is known what has been reported.
+        let w = self.downgrade();
+        spawn_bg(
+            || crate::guard::try_resets_at(None, crate::guard::PyStack::WINDOW),
+            move |resets| {
+                if let Some(w) = w.upgrade() {
+                    w.watch_configs_from(resets);
+                }
+            },
+        );
+    }
+
+    /// The rest of `watch_configs`, given the resets already there.
+    fn watch_configs_from(&self, resets: Result<Vec<crate::guard::Reset>, String>) {
         // Where `guard.resets()` raises the Python's window is never built;
         // here it is logged and nothing is watched.
-        let resets = match crate::guard::try_resets_at(None, crate::guard::PyStack::WINDOW) {
+        let resets = match resets {
             Ok(resets) => resets,
             Err(e) => {
                 eprintln!("almanac: {e}");
                 return;
             }
         };
+        // A second watch_configs may have started since: the last to finish
+        // sets the watches, never both.
+        self.shell.borrow_mut().config_monitors.clear();
         let reported: BTreeSet<String> = resets
             .iter()
             .map(|r| r.backup.to_string_lossy().into_owned())

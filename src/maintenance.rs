@@ -1376,7 +1376,16 @@ fn _orphan_packages_from(apps: &[crate::inventory::App]) -> Finding {
 
 /// Foreign packages the AUR no longer carries, or that are flagged.
 pub fn unmaintained_aur() -> Finding {
-    _raise(_unmaintained_aur_with(&_run, &crate::inventory::aur_health))
+    // The foreign list is the one the inventory keeps while pacman's
+    // databases stand still (reading it means reading every sync database),
+    // and the AUR's answer is the one the inventory's scan already asked.
+    let run = |cmd: &[&str], timeout: u64| -> Result<String, String> {
+        if cmd == ["pacman", "-Qmq"] {
+            return crate::inventory::foreign_packages().map(|names| names.join("\n"));
+        }
+        _run(cmd, timeout)
+    };
+    _raise(_unmaintained_aur_with(&run, &crate::inventory::aur_health))
 }
 
 fn _unmaintained_aur_with(
@@ -1473,11 +1482,47 @@ fn _package_integrity() -> Result<Finding, String> {
     // summary to stdout. Reading only stdout silently reports full coverage
     // of a check that could not open a quarter of what it looked at.
     // (text=True: output that is not UTF-8 raises, uncaught.)
-    let out = match _run_bytes(&["pacman", "-Qk"], 240) {
+    let out = match _pacman_qk() {
         Some((o, e)) => _py_decode(&o)? + &_py_decode(&e)?,
         None => String::new(),
     };
     _package_integrity_from(&out)
+}
+
+/// `pacman -Qk`'s (stdout, stderr), None where it could not run. The check
+/// is a stat of every file pacman installed, which one pacman does one at a
+/// time; split over the installed packages in their own order, a few run
+/// side by side and their outputs joined in that order read exactly as the
+/// single run does, in a third of the time.
+fn _pacman_qk() -> Option<(Vec<u8>, Vec<u8>)> {
+    let listed = _run_bytes(&["pacman", "-Qq"], 60).map(|(o, _)| o).unwrap_or_default();
+    let names: Vec<&str> = std::str::from_utf8(&listed).unwrap_or("").split_whitespace().collect();
+    let parts = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
+    // Anything that is not plainly a package name, too few to be worth it,
+    // or one core: the single run.
+    if parts < 2 || names.len() < 64 || names.iter().any(|n| n.starts_with('-')) {
+        return _run_bytes(&["pacman", "-Qk"], 240);
+    }
+    let outs: Vec<Option<(Vec<u8>, Vec<u8>)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .chunks(names.len().div_ceil(parts))
+            .map(|chunk| {
+                s.spawn(move || {
+                    let mut argv = vec!["pacman", "-Qk"];
+                    argv.extend_from_slice(chunk);
+                    _run_bytes(&argv, 240)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+    });
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    for part in outs {
+        let (o, e) = part?;
+        out.extend(o);
+        err.extend(e);
+    }
+    Some((out, err))
 }
 
 fn _package_integrity_from(out: &str) -> Result<Finding, String> {
@@ -2200,28 +2245,86 @@ pub fn run_all() -> Vec<Finding> {
     if crate::demo::active() {
         return crate::demo::findings();
     }
+    let found = _run_checks(CHECKS);
+    *LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), found.clone()));
+    found
+}
 
-    let mut out: Vec<Finding> = Vec::new();
-    for (name, check) in CHECKS {
-        // `except Exception` around each check: a check that fails (here, one
-        // that panics) becomes a finding saying so instead of losing the rest.
-        // Quiet: the failure is reported as a finding, not on stderr.
+/// The last `run_all` in this process, with when it finished.
+static LAST_RUN: std::sync::Mutex<Option<(std::time::Instant, Vec<Finding>)>> = std::sync::Mutex::new(None);
+
+/// What the last `run_all` in this process found, and how long ago: Today
+/// and Health show the same checks, and the page opened second can show
+/// the first one's answer at once rather than ask every check again.
+pub fn last_run() -> Option<(std::time::Duration, Vec<Finding>)> {
+    LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(at, found)| (at.elapsed(), found.clone()))
+}
+
+/// How long a `last_run` answer stands in for a new run.
+pub const FINDINGS_FRESH: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// "checked just now", "checked 1 min ago", "checked 12 min ago".
+pub fn checked_ago(age: std::time::Duration) -> String {
+    match age.as_secs() / 60 {
+        0 => "checked just now".to_string(),
+        m @ 1..60 => format!("checked {m} min ago"),
+        m => format!("checked {} h ago", m / 60),
+    }
+}
+
+/// `checks`, each guarded, all at once; sorted by severity, then size.
+fn _run_checks(checks: &[(&str, Check)]) -> Vec<Finding> {
+    // `except Exception` around each check: a check that fails (here, one
+    // that panics) becomes a finding saying so instead of losing the rest.
+    // Quiet: the failure is reported as a finding, not on stderr. QUIET is
+    // per thread, so each check sets it on the thread it runs on.
+    let guarded = |name: &str, check: &Check| -> Finding {
         _quiet_panics();
         QUIET.with(|q| q.set(true));
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(check));
         QUIET.with(|q| q.set(false));
         match caught {
-            Ok(f) => out.push(f),
+            Ok(f) => f,
             Err(payload) => {
                 let exc = payload
                     .downcast_ref::<String>()
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_default();
-                out.push(_failed(name, &exc));
+                _failed(name, &exc)
             }
         }
-    }
+    };
+    // Every check at once: they only read, and most of the time is spent
+    // waiting on pacman, the disk or the network, so the whole run takes as
+    // long as its slowest check rather than all of them added up. Gathered
+    // in `checks` order, so the sort below sees what a sequential run gave it.
+    let caller = std::thread::current().name().map(str::to_owned);
+    let mut out: Vec<Finding> = std::thread::scope(|s| {
+        let handles: Vec<_> = checks
+            .iter()
+            .map(|(name, check)| {
+                // The caller's name and the stack the main thread would have
+                // had: some checks recurse as deep as the files they read, and
+                // their limits depend on which thread they run on
+                // (`util::with_stack` does the same).
+                let mut b = std::thread::Builder::new().stack_size(8 << 20);
+                if let Some(n) = &caller {
+                    b = b.name(n.clone());
+                }
+                let spawned = b.spawn_scoped(s, move || guarded(name, check));
+                (*name, check, spawned)
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(name, check, spawned)| match spawned {
+                Ok(h) => h.join().unwrap_or_else(|_| _failed(name, "")),
+                // No thread to be had: run it here.
+                Err(_) => guarded(name, check),
+            })
+            .collect()
+    });
     let rank = |s: &str| match s {
         CRIT => 0,
         WARN => 1,
@@ -2301,6 +2404,68 @@ mod tests {
         std::fs::File::open(d.path()).unwrap().set_modified(old).unwrap();
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
         assert!(newest_mtime(d.path()).unwrap() > now - 60.0);
+    }
+
+    // ---- Running the checks together ----
+    fn slow_ok() -> Finding {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Finding { id: "slow".into(), severity: OK.into(), ..Default::default() }
+    }
+    fn big_warn() -> Finding {
+        Finding { id: "big".into(), severity: WARN.into(), size_mb: 900.0, ..Default::default() }
+    }
+    fn small_warn() -> Finding {
+        Finding { id: "small".into(), severity: WARN.into(), size_mb: 1.0, ..Default::default() }
+    }
+    fn tie_a() -> Finding {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        Finding { id: "tie-a".into(), severity: INFO.into(), ..Default::default() }
+    }
+    fn tie_b() -> Finding {
+        Finding { id: "tie-b".into(), severity: INFO.into(), ..Default::default() }
+    }
+    fn raises() -> Finding {
+        _raise(Err("boom".into()))
+    }
+
+    #[test]
+    fn checks_run_together_but_come_back_in_the_sequential_order() {
+        let checks: &[(&str, Check)] = &[
+            ("slow_ok", slow_ok),
+            ("tie_a", tie_a),
+            ("small_warn", small_warn),
+            ("raises_here", raises),
+            ("tie_b", tie_b),
+            ("big_warn", big_warn),
+            ("slow_ok", slow_ok),
+        ];
+        let t = std::time::Instant::now();
+        let out = _run_checks(checks);
+        assert!(t.elapsed() < std::time::Duration::from_millis(550), "the two slow checks overlap");
+        let ids: Vec<&str> = out.iter().map(|f| f.id.as_str()).collect();
+        // Severity, then size; equal ones keep the order of `checks`
+        // whichever finished first -- tie_a sleeps, tie_b does not.
+        assert_eq!(ids, ["big", "small", "tie-a", "raises_here", "tie-b", "slow", "slow"]);
+        let failed = &out[3];
+        assert_eq!(failed.detail, "Check failed: boom", "a check that raises is a finding, not a lost run");
+    }
+
+    #[test]
+    fn how_long_ago_findings_were_checked_reads_plainly() {
+        let s = std::time::Duration::from_secs;
+        assert_eq!(checked_ago(s(20)), "checked just now");
+        assert_eq!(checked_ago(s(61)), "checked 1 min ago");
+        assert_eq!(checked_ago(s(59 * 60 + 59)), "checked 59 min ago");
+        assert_eq!(checked_ago(s(2 * 3600 + 5)), "checked 2 h ago");
+    }
+
+    /// `_pacman_qk`, split, reads exactly as one `pacman -Qk` on this
+    /// machine. Read-only; opt in with `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "stats every file pacman installed on this machine"]
+    fn the_split_integrity_check_matches_a_single_run_here() {
+        let single = _run_bytes(&["pacman", "-Qk"], 240).unwrap();
+        assert_eq!(_pacman_qk().unwrap(), single);
     }
 
     // ---- DiskChecks ----

@@ -129,6 +129,7 @@ impl AlmanacApp {
     /// look the same under any icon theme. (The Adw.Application default
     /// handler runs first: "startup" is a run-first signal.)
     pub fn startup(&self) {
+        crate::ui::timings::mark("startup");
         if let (Some(display), Some(icons)) = (gdk::Display::default(), icons_dir()) {
             gtk::IconTheme::for_display(&display).add_search_path(icons);
         }
@@ -142,6 +143,12 @@ impl AlmanacApp {
             Some(w) => w,
             None => {
                 let w = Win::new(&self.app);
+                crate::ui::timings::mark("window built");
+                w.window.connect_map(|_| crate::ui::timings::mark("window mapped"));
+                w.window.add_tick_callback(|_, _| {
+                    crate::ui::timings::mark("first frame");
+                    glib::ControlFlow::Break
+                });
                 let weak = w.downgrade();
                 w.window.connect_close_request(move |_| match weak.upgrade() {
                     Some(w) => AlmanacApp::on_close(&w),
@@ -262,6 +269,7 @@ pub fn run() -> glib::ExitCode {
         let code = crate::watcher::main();
         return glib::ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
+    crate::ui::timings::launch();
     AlmanacApp::new().app.run()
 }
 

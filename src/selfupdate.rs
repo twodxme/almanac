@@ -129,9 +129,37 @@ pub struct Info {
 /// `as_app`, with an exception the Python lets through as `Err`: the row for
 /// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {
-    let mut info = compiled_check_in(&ROOT, &running_exe(), check_updates)?;
+    let exe = running_exe();
+    // A build running from its own checkout fetches from its remote to see
+    // what is new: a network round trip every scan, for news that comes
+    // a few times a day. Within a few minutes of the last fetch the refs it
+    // left say the same thing. ("Check for updates" always fetches.)
+    let fetch = check_updates && !(exe.starts_with(&*ROOT) && fetched_within(&ROOT, SCAN_FETCH_SECONDS));
+    let mut info = compiled_check_in(&ROOT, &exe, fetch)?;
     note_release(&mut info, check_updates);
     app_with_home(&ROOT, info)
+}
+
+/// How recent a checkout's last fetch must be for a scan to skip its own.
+pub const SCAN_FETCH_SECONDS: u64 = 600;
+
+/// Whether `root`'s checkout fetched within the last `secs` seconds, by the
+/// FETCH_HEAD every fetch rewrites. A clock that went back counts as not.
+pub fn fetched_within(root: &Path, secs: u64) -> bool {
+    // A linked worktree's `.git` is a file naming its git directory.
+    let dot_git = root.join(".git");
+    let git_dir = match std::fs::read_to_string(&dot_git) {
+        Ok(text) => match text.trim().strip_prefix("gitdir:") {
+            Some(dir) => root.join(dir.trim()),
+            None => return false,
+        },
+        Err(_) => dot_git,
+    };
+    std::fs::metadata(git_dir.join("FETCH_HEAD"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age.as_secs() < secs)
 }
 
 /// `as_app` for a compiled build: the same row, from `compiled_check_in`. It
@@ -198,6 +226,27 @@ mod tests {
         let real = std::fs::canonicalize(dir.path()).unwrap();
         std::os::unix::fs::symlink(&real, real.join("link")).unwrap();
         assert_eq!(py_resolve(&real.join("link/missing/x")), real.join("missing/x"));
+    }
+
+    #[test]
+    fn a_scan_skips_the_fetch_only_just_after_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!fetched_within(dir.path(), 600), "never fetched");
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let head = dir.path().join(".git/FETCH_HEAD");
+        std::fs::write(&head, "").unwrap();
+        assert!(fetched_within(dir.path(), 600));
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&head).unwrap().set_modified(old).unwrap();
+        assert!(!fetched_within(dir.path(), 600), "an hour-old fetch is asked again");
+        // A linked worktree: `.git` names the directory FETCH_HEAD is in.
+        let tree = dir.path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join(".git"), format!("gitdir: {}\n", dir.path().join("wt").display())).unwrap();
+        assert!(!fetched_within(&tree, 600));
+        std::fs::create_dir(dir.path().join("wt")).unwrap();
+        std::fs::write(dir.path().join("wt/FETCH_HEAD"), "").unwrap();
+        assert!(fetched_within(&tree, 600));
     }
 }
 

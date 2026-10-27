@@ -30,6 +30,7 @@ mod flatpak;
 mod local;
 mod discover;
 mod plugin_registry;
+mod snapshot;
 
 use py::*;
 pub use health::*;
@@ -40,6 +41,7 @@ pub use flatpak::*;
 pub use local::*;
 pub use discover::*;
 pub use plugin_registry::*;
+pub use snapshot::*;
 
 // Runtime data, deliberately not where the code lives.
 //

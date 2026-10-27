@@ -394,7 +394,22 @@ impl Win {
             let first = !self.shared.borrow().maint_loaded_once;
             if first {
                 self.shared.borrow_mut().maint_loaded_once = true;
-                self.maint_reload();
+                // Today ran the same checks moments ago: show its answer at
+                // once, saying how old it is, and ask again only once it is
+                // a few minutes old (and then with the old answer showing
+                // meanwhile).
+                match crate::maintenance::last_run() {
+                    Some((age, found)) => {
+                        self.maint_show(found);
+                        let said = self.title.subtitle();
+                        let when = crate::maintenance::checked_ago(age);
+                        self.summarize(&format!("{said} · {when}"), Some("maintenance"));
+                        if age >= crate::maintenance::FINDINGS_FRESH {
+                            self.maint_reload();
+                        }
+                    }
+                    None => self.maint_reload(),
+                }
             } else {
                 let findings = self.shared.borrow().findings.get();
                 self.maint_show(findings);

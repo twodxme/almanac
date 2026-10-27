@@ -398,9 +398,25 @@ impl Win {
             return;
         };
         hero.set_visible(true);
-        if let Some(tex) = self.texture(&bg, 1200) {
+        if let Some(tex) = self.texture_cached(&bg, 1200) {
             hero_pic.set_paintable(Some(&tex));
+            return;
         }
+        // A wallpaper is a large photo (130-160 ms to decode here), and this
+        // runs while the window is built: decode it off the main thread.
+        let w = self.downgrade();
+        let src = bg.clone();
+        self.thumb_bg(
+            move || crate::ui::store::decode_texture(&src, 1200),
+            move |tex| {
+                let (Some(w), Some(tex)) = (w.upgrade(), tex) else { return };
+                w.texture_keep(&bg, 1200, &tex);
+                // The wallpaper may have changed while this one decoded.
+                if theming::background().as_ref() == Some(&bg) {
+                    hero_pic.set_paintable(Some(&tex));
+                }
+            },
+        );
     }
 
     /// `Err` where `theming.theme_name()` raises, before anything is set.
@@ -474,25 +490,50 @@ impl Win {
         let w = self.downgrade();
         spawn_bg(
             move || {
-                // `getattr(self, "_findings", None) or maintenance.run_all()`
-                let have = findings.get();
-                let found = if have.is_empty() { maintenance::run_all() } else { have };
-                // Assigned as soon as it is known, not after the catalog: the
-                // Python's GIL-bound worker sets `_findings` long before its
-                // slow main thread first applies the inventory, so the
-                // sidebar stats always show "Free-able"; Rust's main thread
-                // gets there first, and a later assignment came too late.
-                findings.set(found.clone());
-                // `if not plugins: try: catalog(); annotate(); self._plugins
-                // = plugins / except Exception: plugins = []`.
-                let (plugins, fresh) = if plugins.is_empty() {
-                    match store_mod::try_catalog_annotated(false) {
-                        Ok(plugins) => (plugins, true),
-                        Err(_) => (Vec::new(), false),
-                    }
-                } else {
-                    (std::sync::Arc::unwrap_or_clone(plugins), false)
-                };
+                // The checks and the catalogue do not wait on each other.
+                let (found, (plugins, fresh)) = std::thread::scope(|s| {
+                    let checks = std::thread::Builder::new().stack_size(crate::util::DEEP_STACK).spawn_scoped(s, || {
+                        // `getattr(self, "_findings", None) or
+                        // maintenance.run_all()`, where a run the Health page
+                        // made a few minutes ago counts.
+                        let have = findings.get();
+                        let found = if !have.is_empty() {
+                            have
+                        } else {
+                            match maintenance::last_run() {
+                                Some((age, found)) if age < maintenance::FINDINGS_FRESH => found,
+                                _ => maintenance::run_all(),
+                            }
+                        };
+                        // Assigned as soon as it is known, not after the
+                        // catalog: the Python's GIL-bound worker sets
+                        // `_findings` long before its slow main thread first
+                        // applies the inventory, so the sidebar stats always
+                        // show "Free-able"; Rust's main thread gets there
+                        // first, and a later assignment came too late.
+                        findings.set(found.clone());
+                        found
+                    });
+                    // `if not plugins: try: catalog(); annotate(); self._plugins
+                    // = plugins / except Exception: plugins = []`.
+                    let catalog = if plugins.is_empty() {
+                        match store_mod::try_catalog_annotated(false) {
+                            Ok(plugins) => (plugins, true),
+                            Err(_) => (Vec::new(), false),
+                        }
+                    } else {
+                        (std::sync::Arc::unwrap_or_clone(plugins), false)
+                    };
+                    let found = match checks {
+                        Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
+                        Err(_) => {
+                            let found = maintenance::run_all();
+                            findings.set(found.clone());
+                            found
+                        }
+                    };
+                    (found, catalog)
+                });
                 let shelves = featured::build(&apps, &found, &plugins);
                 (plugins, fresh, shelves)
             },
@@ -504,6 +545,7 @@ impl Win {
                     sh.plugins_none = false;
                 }
                 w.feat_show(shelves);
+                crate::ui::timings::mark("today shown");
                 if !plugins.is_empty() {
                     w.picks_reload(plugins);
                 }
