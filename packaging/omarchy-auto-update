@@ -309,7 +309,9 @@ main() {
     if headline_in "$news_title" "$NEWS_HELD" \
       && upgraded_by_hand_since "$(stat -c %Y "$NEWS_HELD" 2>/dev/null || echo 0)"; then
       echo "news read: a full upgrade was run by hand since the hold"
-      ((DRY_RUN)) || printf '%s\n' "$news_title" >>"$NEWS_SEEN"
+      # Under Almanac's lock on the same file: it trims news-seen by
+      # rewriting it, and a line appended mid-rewrite would be lost.
+      ((DRY_RUN)) || (flock 8 && printf '%s\n' "$news_title" >>"$NEWS_SEEN") 8>>"$NEWS_SEEN.lock"
     else
       news_new="$news_title"
     fi
