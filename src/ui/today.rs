@@ -523,6 +523,7 @@ impl Win {
         while let Some(child) = picks_area.next_sibling() {
             feat_page.remove(&child);
         }
+        self.news_today(&feat_page);
 
         let mut problems = 0usize;
         for shelf in &shelves {

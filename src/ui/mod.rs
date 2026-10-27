@@ -12,3 +12,4 @@ pub mod preferences;
 pub mod today;
 pub mod actions;
 pub mod update_all;
+pub mod news;

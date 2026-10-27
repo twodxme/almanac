@@ -32,10 +32,16 @@ fn main() {
         let _ = time("  selfupdate::try_as_app", || almanac::selfupdate::try_as_app(true));
         let _ = time("  try_orphans", inv::try_orphans);
     }
+    time("restart::reboot_needed", almanac::restart::reboot_needed);
+    let (stale, scanned) = time("restart::scan /proc", || almanac::restart::scan(std::path::Path::new("/proc")));
+    println!("{:32} {:>8} processes, {} stale", "  restart", scanned, stale.len());
+    for s in &stale {
+        println!("    {} {} {:?} {}", s.pid, s.name, s.unit.as_ref().map(|u| &u.name), s.files.join(" "));
+    }
     let found = time("maintenance::run_all (first)", almanac::maintenance::run_all);
     time("maintenance::run_all (again)", almanac::maintenance::run_all);
     println!("{:32} {:>8}", "  findings", found.len());
-    for id in ["disk", "runtime-logs", "integrity", "pacman-cache", "journal", "yay-cache", "orphans", "aur-health", "failed-units", "pacnew", "dangling-desktop", "broken-symlinks", "rollbacks", "trash", "config-reset", "snapshot", "vulnerabilities"] {
+    for id in ["disk", "runtime-logs", "integrity", "pacman-cache", "journal", "yay-cache", "orphans", "aur-health", "failed-units", "pacnew", "dangling-desktop", "broken-symlinks", "rollbacks", "trash", "config-reset", "snapshot", "vulnerabilities", "restart-needed"] {
         if let Some(check) = almanac::maintenance::check_by_id(id) {
             time(&format!("  check {id}"), check);
         }
