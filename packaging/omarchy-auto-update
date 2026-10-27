@@ -74,20 +74,30 @@ NEWS_SEEN="$STATE/news-seen"
 NEWS_HELD="$STATE/news-held"
 
 # Read one boolean out of the settings file, defaulting when it is absent.
+# A file that is there but cannot be read answers "false": every setting
+# read here allows something, and a broken file must not allow more.
 setting() {
-  python3 - "$CONFIG" "$1" "$2" <<'PYEOF' 2>/dev/null || echo "$2"
+  python3 - "$CONFIG" "$1" "$2" <<'PYEOF' 2>/dev/null || echo false
 import json, sys
 path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path) as f:
         print("true" if json.load(f).get(key, default == "true") else "false")
-except Exception:
+except FileNotFoundError:
     print(default)
+except Exception:
+    print("false")
 PYEOF
 }
 
 notify() {
   local urgency="$1" title="$2" body="$3"
+  # Notification daemons read the body as markup; a headline from the feed
+  # is text.
+  # (A bare & in the replacement means "what matched" since bash 5.2.)
+  body="${body//&/\&amp;}"
+  body="${body//</\&lt;}"
+  body="${body//>/\&gt;}"
   if ((DRY_RUN)); then
     echo "would notify ($urgency): $title: $body"
     return
@@ -163,21 +173,26 @@ metered() {
   return 1
 }
 
-# The newest Arch news headline from the feed on stdin, entities decoded.
-# The feed's first <title> is the channel name, so the newest item is the
-# second. Parsed with python rather than grep -P so a reordered feed or a
-# CDATA-wrapped title cannot silently select the wrong entry. The feed
+# The newest Arch news headline from the feed on stdin, entities decoded and
+# whitespace collapsed to single spaces (a seen-file holds one per line).
+# The first <item>'s <title>, read as XML: counting <title> tags would
+# select a channel image's title the day the feed gains one. The feed
 # escapes some titles twice (&amp;gt;), so decoding repeats until stable.
+# Prints nothing, and fails, when the feed cannot be read.
 newest_headline() {
   python3 -c '
-import html, re, sys
-t = re.findall(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", sys.stdin.read(), re.S)
-s = t[1].strip() if len(t) > 1 else ""
+import html, sys
+import xml.etree.ElementTree as ET
+item = ET.fromstring(sys.stdin.read()).find("channel/item")
+s = (item.findtext("title") or "") if item is not None else ""
 while True:
     d = html.unescape(s)
     if d == s:
         break
     s = d
+s = " ".join(s.split())
+if not s:
+    sys.exit(1)
 print(s)' 2>/dev/null
 }
 
@@ -201,11 +216,17 @@ PYEOF
 
 # A full upgrade run by hand after the news hold was a person at the
 # keyboard: count the headline as read. pacman.log stamps each run
-# ([2026-10-25T11:02:13+0100] [PACMAN] starting full system upgrade).
+# ([2026-10-25T11:02:13+0100] [PACMAN] starting full system upgrade), but
+# writes that before the "Proceed?" prompt: a run answered "n", or one that
+# failed on the conflict the news warned about, logs it too. Only a run
+# followed by a completed transaction counts.
 upgraded_by_hand_since() {
   local since="$1" stamp
   [[ -r $PACMAN_LOG ]] || return 1
-  stamp="$(grep -a 'starting full system upgrade' "$PACMAN_LOG" | tail -n 1 | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
+  stamp="$(awk '/\[PACMAN\] starting full system upgrade/ { start = $1; next }
+                /\[PACMAN\] Running/ { start = "" }
+                /\[ALPM\] transaction completed/ && start != "" { done = start; start = "" }
+                END { print done }' "$PACMAN_LOG" | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
   [[ -n $stamp ]] || return 1
   stamp="$(date -d "$stamp" +%s 2>/dev/null)" || return 1
   ((stamp > since))
@@ -217,8 +238,8 @@ main() {
   echo "=== $(date -Is)$mode ==="
 
   # --- conditions: mains power, an unmetered connection --------------------
-  # The service carries ConditionACPower=true too, but that skips silently;
-  # this says why when the script is run by hand.
+  # Checked here rather than with ConditionACPower, which skips silently:
+  # a skipped week is recorded in History and said in a notification.
   if on_battery; then
     hold normal "Scheduled update skipped" \
       "On battery power. Nothing was changed; plug in and run: omarchy update" \
@@ -243,6 +264,15 @@ main() {
       "$AUTORUN" 2>&1 || echo "autorun failed"
     fi
     echo "--- packages ---"
+  fi
+
+  # Settings and news are read with python; without it neither can be
+  # honoured, so nothing is applied.
+  if ! command -v python3 >/dev/null 2>&1; then
+    hold critical "Scheduled update stopped" \
+      "It needs python to read its settings and the Arch news. Install python, or run: omarchy update" \
+      "HELD — python3 not found"
+    return 0
   fi
 
   if [[ "$(setting packages true)" != "true" ]]; then
@@ -302,8 +332,16 @@ main() {
 
   # --- hold 2: fresh Arch news (where manual interventions are announced) --
   local news_title news_new=""
-  news_title="$(curl -sm 20 https://archlinux.org/feeds/news/ 2>/dev/null | newest_headline)"
-  if [[ -n $news_title ]] && ! headline_in "$news_title" "$NEWS_SEEN"; then
+  # A run started at wake can come before the network: retry a little.
+  # News that cannot be read is not "no news" -- the batch waits.
+  if ! news_title="$(curl -fsS -m 20 --retry 3 --retry-delay 10 --retry-connrefused \
+    https://archlinux.org/feeds/news/ 2>/dev/null | newest_headline)"; then
+    hold normal "$total updates held" \
+      "Arch news could not be checked, so the update waits. Run: omarchy update" \
+      "HELD — Arch news could not be read"
+    return 0
+  fi
+  if ! headline_in "$news_title" "$NEWS_SEEN"; then
     # Held for this headline before, and a full upgrade was made by hand
     # since: that was someone looking.
     if headline_in "$news_title" "$NEWS_HELD" \
@@ -377,11 +415,14 @@ if ! flock -n 9; then
 fi
 
 # Run by hand, show the run as well as logging it.
+# main, and everything it starts, runs without the lock's descriptor: a
+# child left running (omarchy update's root-owned sleep inhibitor) would
+# otherwise hold the lock and silently stop every later run.
 if [[ -t 1 ]]; then
-  main 2>&1 | tee -a "$LOG"
+  main 9>&- 2>&1 | tee -a "$LOG"
   rc=${PIPESTATUS[0]}
 else
-  main >>"$LOG" 2>&1
+  main 9>&- >>"$LOG" 2>&1
   rc=$?
 fi
 

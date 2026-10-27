@@ -3,10 +3,8 @@ Description=Weekly system update, holding anything that needs judgement
 Documentation=https://github.com/twodxme/almanac#scheduled-updates
 After=network-online.target
 Wants=network-online.target
-# An upgrade cut off by a flat battery leaves the system half-upgraded. A
-# skipped run waits for the next one; the script also checks, and says why,
-# when it is run by hand.
-ConditionACPower=true
+# On battery the script skips the run itself (an upgrade cut off by a flat
+# battery leaves the system half-upgraded), and records why.
 
 [Service]
 Type=oneshot

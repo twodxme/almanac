@@ -161,7 +161,9 @@ fn unread_arch_news_holds_the_update() {
     assert_not_applied(&sb);
     let calls = sb.calls();
     let held = format!("Not applied automatically. Arch news: {NEWS}. Read it in Almanac (Updates) or run: omarchy update");
-    assert!(calls.contains(&format!("notify -u critical 1 updates held {held}")), "{calls}");
+    // The notification body is markup to the daemon: the headline's ">" is escaped there.
+    let shown = held.replace('>', "&gt;");
+    assert!(calls.contains(&format!("notify -u critical 1 updates held {shown}")), "{calls}");
     assert!(calls.contains(&format!("record 1 updates held | {held}")), "{calls}");
     assert!(sb.log().contains(&format!("HELD — Arch news: {NEWS}")), "{}", sb.log());
     // The headline is remembered as the one held for, not as read.
@@ -201,11 +203,45 @@ fn a_full_upgrade_by_hand_after_a_news_hold_clears_it() {
     sb.write("pacman.log", "[2025-12-30T10:00:00+0000] [PACMAN] starting full system upgrade\n");
     sb.run(&[]);
     assert_not_applied(&sb);
-    // After it: read.
+    // After it, but answered "n" at the prompt: nothing was upgraded, still held.
     sb.write("pacman.log", "[2026-02-01T10:00:00+0000] [PACMAN] starting full system upgrade\n");
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    // After it, and the transaction completed: read.
+    sb.write(
+        "pacman.log",
+        "[2026-02-01T10:00:00+0000] [PACMAN] starting full system upgrade\n\
+         [2026-02-01T10:00:30+0000] [ALPM] transaction started\n\
+         [2026-02-01T10:01:00+0000] [ALPM] upgraded foo (1.0-1 -> 1.1-1)\n\
+         [2026-02-01T10:01:02+0000] [ALPM] transaction completed\n",
+    );
     sb.run(&[]);
     assert_applied(&sb);
     assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("{NEWS}\n"));
+}
+
+#[test]
+fn news_that_cannot_be_read_holds_the_update() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("news-unreadable");
+    sb.write("feed", "<html>502 Bad Gateway</html>");
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    assert!(sb.log().contains("HELD — Arch news could not be read"), "{}", sb.log());
+}
+
+#[test]
+fn a_settings_file_that_cannot_be_read_allows_nothing() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("bad-config");
+    sb.write("config/auto-update.json", "{not json");
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    assert!(sb.log().contains("package updates disabled"), "{}", sb.log());
 }
 
 #[test]
