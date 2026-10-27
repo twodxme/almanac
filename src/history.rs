@@ -843,18 +843,75 @@ fn loads_line(line: &str) -> Result<Option<PyVal>, String> {
 /// `record` with what escapes Python's `except OSError`: trimming a log
 /// that is not UTF-8 raises UnicodeDecodeError (after the line is written).
 pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, items: &[String]) -> Result<(), String> {
+    append(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+                              "detail": detail, "severity": severity,
+                              "items": items}))
+}
+
+/// What one action did, for the log: everything a person (or a later bug
+/// report) needs to tell what happened without re-running it. Every field
+/// is optional; record what is known.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActionLog {
+    /// each command as it ran, with its exit status
+    pub commands: Vec<CommandRun>,
+    /// what changed: a package, an AppImage, a plugin; `from`/`to` versions
+    pub changes: Vec<Change>,
+    /// checks made afterwards, and what they found
+    pub checks: Vec<CheckResult>,
+    /// repairs tried because a check failed, and whether they worked
+    pub repairs: Vec<CheckResult>,
+    /// disk space actually freed, in bytes (free space after minus before)
+    pub freed_bytes: Option<i64>,
+    /// the snapshot taken first, as snapper numbers it
+    pub snapshot: Option<String>,
+    pub duration_secs: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommandRun {
+    pub argv: String,
+    /// None: not known (it ran in a terminal that did not report back)
+    pub exit: Option<i32>,
+    pub secs: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Change {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CheckResult {
+    pub name: String,
+    /// None: the check could not tell
+    pub ok: Option<bool>,
+    pub detail: String,
+}
+
+/// `record_checked` with the full account of what the action did, kept
+/// under the event's "action" key. `detail` stays the one-line summary the
+/// timeline shows folded.
+pub fn record_action(kind: &str, title: &str, detail: &str, severity: &str, action: &ActionLog) -> Result<(), String> {
+    let items: Vec<String> = action.changes.iter().map(|c| c.name.clone()).collect();
+    append(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+                              "detail": detail, "severity": severity,
+                              "items": items, "action": action}))
+}
+
+fn append(event: Value) -> Result<(), String> {
     let path = _log_path();
     let r = (|| -> std::io::Result<Result<(), String>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let line = util::dumps(
-            &serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
-                                "detail": detail, "severity": severity,
-                                "items": items}),
-            None,
-            false,
-        );
+        let line = util::dumps(&event, None, false);
         // The window, the guard and the scheduled run all append here: a
         // line appended between the trim's read and its write was lost.
         let _lock = util::lock_file(&path.with_extension("lock"))?;
