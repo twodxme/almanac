@@ -25,6 +25,7 @@ optdepends=(
   'mise: version-managed AI agent CLIs'
   'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
   'webp-pixbuf-loader: marketplace card artwork'
+  'python: the scheduled update (its settings and the Arch news check)'
 )
 makedepends=('cargo' 'gettext')
 makedepends+=('git')
@@ -77,6 +78,13 @@ package() {
   # The scheduled update's non-pacman half, which omarchy-auto-update calls.
   install -Dm755 target/release/almanac-autorun \
     "$pkgdir/usr/lib/$_pkgname/almanac-autorun"
+  # The scheduled update itself, and the user units that run it. Shipped
+  # off: user units in /usr/lib do nothing until switched on in
+  # Preferences (systemctl --user enable --now omarchy-auto-update.timer).
+  install -Dm755 packaging/omarchy-auto-update \
+    "$pkgdir/usr/lib/$_pkgname/omarchy-auto-update"
+  install -Dm644 packaging/omarchy-auto-update.service \
+    packaging/omarchy-auto-update.timer -t "$pkgdir/usr/lib/systemd/user/"
 
   # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them.
   install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"

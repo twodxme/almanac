@@ -17,7 +17,8 @@ comment explains *why*, keep it when you change the code beside it.
 | `src/ui/*.rs` | the window, one file per section (see UI below) |
 | `src/util.rs` | subprocess with timeout, rounding and title-casing that match what users saw in 1.x, ISO dates, atomic JSON — **use it, do not re-implement** |
 | `src/main.rs` | the `almanac` binary |
-| `src/bin/almanac-autorun.rs` | the non-pacman half of the scheduled update, and `--core-holds [--stdin]` for omarchy-auto-update (which pending repo/AUR updates are core; exits 3, never an empty list, when it cannot tell) |
+| `src/bin/almanac-autorun.rs` | the non-pacman half of the scheduled update, `--core-holds [--stdin]` for omarchy-auto-update (which pending repo/AUR updates are core; exits 3, never an empty list, when it cannot tell), and `--record-hold TITLE DETAIL` (a held or failed run, on the History page) |
+| `packaging/omarchy-auto-update` + `.service`/`.timer` | the scheduled update itself and its user units, installed to `/usr/lib/almanac` and `/usr/lib/systemd/user`, off until enabled; `src/autoupdate.rs` switches it and sets its schedule (a drop-in over the packaged timer). `tests/auto_update_script.rs` runs it against stubs |
 | `data/style.css` | the stylesheet, loaded with `include_str!` |
 | `tests/ported.rs` | cross-module checks (translation template, icons, sources) |
 

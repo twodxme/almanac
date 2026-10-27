@@ -199,6 +199,36 @@ Install and removal run **inside the app**. Removal still shows you the full
 anything happens — the confirmation moved somewhere readable, it was not
 dropped.
 
+### Scheduled updates
+
+A weekly update comes with the package, switched off. Turn it on in **☰ →
+Preferences → Updates**, which also sets how often it runs (every day, every
+Sunday, every other Sunday, the first Sunday of the month) and what it
+includes — or from a terminal:
+
+```sh
+systemctl --user enable --now omarchy-auto-update.timer
+```
+
+It runs at 11:00, or on the next wake if the laptop was asleep. It updates
+agents, AppImages and plugins first, then runs `omarchy update` for a routine
+batch of packages. What needs a person is **held, not applied**: the kernel,
+the bootloader, systemd and the other packages the Updates page marks core,
+and fresh Arch news, which is where Arch announces the manual steps an
+unattended upgrade would get wrong. Marking the news read in Almanac, or
+running a full upgrade yourself, lets the next run go ahead. It does nothing
+on battery or on a metered connection, and without passwordless `sudo` it
+tells you an update is ready rather than waiting at a password prompt.
+
+Every held, skipped or failed run is on the **History** page with the reason,
+as well as in a notification, and the full log is
+`~/.local/state/omarchy-auto-update/last-run.log`. To see what the next run
+would do without doing it:
+
+```sh
+/usr/lib/almanac/omarchy-auto-update --dry-run
+```
+
 ### AI — the estate no package manager tracks
 
 <img src="docs/screenshots/ai.png" alt="AI" width="820">

@@ -117,3 +117,9 @@ jobs:
             rc=$?; kill $b; exit $rc'
           # (makepkg also makes an almanac-git-debug package here)
           tar -tf almanac-git-[0-9]*.pkg.tar.zst | grep -q usr/bin/almanac
+          # The scheduled update ships with it: the script and both user units.
+          for f in usr/lib/almanac/omarchy-auto-update \
+                   usr/lib/systemd/user/omarchy-auto-update.service \
+                   usr/lib/systemd/user/omarchy-auto-update.timer; do
+            tar -tf almanac-git-[0-9]*.pkg.tar.zst | grep -qx "$f" || { echo "missing $f"; exit 1; }
+          done
