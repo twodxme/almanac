@@ -495,7 +495,7 @@ pub fn packages() -> Result<Vec<App>, String> {
         let explicit_all = s.spawn(|| run(&["pacman", "-Qeq"], 25));
         let versions = s.spawn(|| run(&["pacman", "-Q"], 25));
         let pending = s.spawn(pending_both);
-        let foreign = foreign_packages();
+        let foreign = foreign_state();
         let join = |h: std::thread::ScopedJoinHandle<'_, Result<String, String>>| {
             h.join().unwrap_or_else(|_| Err("pacman panicked".into()))
         };
@@ -508,8 +508,16 @@ pub fn packages() -> Result<Vec<App>, String> {
         )
     });
     let (unrequired, explicit_all) = (unrequired?, explicit_all?);
-    let foreign_all = foreign_all?;
-    let (mut repo_names, mut aur_names) = explicit_split(&unrequired, &explicit_all, &foreign_all);
+    let (foreign_all, clean) = foreign_all?;
+    let (mut repo_names, mut aur_names) = if clean {
+        explicit_split(&unrequired, &explicit_all, &foreign_all)
+    } else {
+        // `pacman -Qmq` did not answer (a timeout while everything else
+        // queries pacman too): ask the two direct questions rather than
+        // count every AUR package as a repo one.
+        let words = |s: String| -> Vec<String> { py_split(&s).into_iter().map(String::from).collect() };
+        (words(run(&["pacman", "-Qentq"], 25)?), words(run(&["pacman", "-Qemq"], 25)?))
+    };
     let versions = version_map(&versions?)?;
     // Pull in any non-explicit package that has an update waiting, so the
     // list can never disagree with "Update all".
@@ -520,7 +528,7 @@ pub fn packages() -> Result<Vec<App>, String> {
     let pending_names: BTreeSet<String> =
         up_repo_pre.keys().chain(up_aur_pre.keys()).filter(|n| !known.contains(*n)).cloned().collect();
     for name in pending_names {
-        if foreign.contains(&name) {
+        if foreign.contains(&name) || up_aur_pre.contains_key(&name) {
             aur_names.push(name);
         } else {
             repo_names.push(name);

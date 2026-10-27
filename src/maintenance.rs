@@ -2245,10 +2245,19 @@ pub fn run_all() -> Vec<Finding> {
     if crate::demo::active() {
         return crate::demo::findings();
     }
+    let generation = LAST_RUN_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
     let found = _run_checks(CHECKS);
-    *LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), found.clone()));
+    let mut kept = LAST_RUN.lock().unwrap_or_else(|e| e.into_inner());
+    // A run that began before `forget_last_run` describes the system before
+    // whatever changed it: it is still returned to its caller, not kept.
+    if LAST_RUN_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
+        *kept = Some((std::time::Instant::now(), found.clone()));
+    }
     found
 }
+
+/// Bumped by `forget_last_run`.
+static LAST_RUN_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The last `run_all` in this process, with when it finished.
 static LAST_RUN: std::sync::Mutex<Option<(std::time::Instant, Vec<Finding>)>> = std::sync::Mutex::new(None);
@@ -2263,7 +2272,9 @@ pub fn last_run() -> Option<(std::time::Duration, Vec<Finding>)> {
 /// Drop the kept answer: something just changed the system (an update, a
 /// fix), so the next page to ask runs the checks again.
 pub fn forget_last_run() {
-    *LAST_RUN.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let mut kept = LAST_RUN.lock().unwrap_or_else(|e| e.into_inner());
+    LAST_RUN_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *kept = None;
 }
 
 /// How long a `last_run` answer stands in for a new run.

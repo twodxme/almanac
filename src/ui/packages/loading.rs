@@ -75,7 +75,10 @@ impl Win {
         // checkupdates and yay take seconds; on the UI thread that is a freeze.
         let w = self.downgrade();
         spawn_bg(
-            || std::panic::catch_unwind(inventory::collect).ok(),
+            || {
+                let before = inventory::scan_stamp();
+                std::panic::catch_unwind(inventory::collect).ok().map(|apps| (apps, before))
+            },
             move |apps| {
                 if let Some(w) = w.upgrade() {
                     w.scan_done(apps);
@@ -86,7 +89,7 @@ impl Win {
 
     /// A scan landed: shown, unless `reload` was called meanwhile, in which
     /// case it is dropped for the one more scan that call asked for.
-    fn scan_done(&self, apps: Option<Vec<inventory::App>>) {
+    fn scan_done(&self, scanned: Option<(Vec<inventory::App>, inventory::ScanStamp)>) {
         let again = {
             let mut st = self.packages.borrow_mut();
             st.scanning = false;
@@ -96,12 +99,12 @@ impl Win {
             self.reload();
             return;
         }
-        match apps {
-            Some(apps) => {
+        match scanned {
+            Some((apps, before)) => {
                 self.packages.borrow_mut().last_scan = Some(apps.clone());
                 if !crate::demo::active() {
                     let keep = apps.clone();
-                    spawn_bg(move || inventory::save_snapshot(&keep), |()| {});
+                    spawn_bg(move || inventory::save_snapshot(&keep, before), |()| {});
                 }
                 self.apply(apps);
                 crate::ui::timings::mark("scan shown");

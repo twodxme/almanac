@@ -32,10 +32,25 @@ fn stamp_secs() -> Option<(f64, f64)> {
     pacman_db_stamp().map(|(local, sync)| (secs(local), secs(sync)))
 }
 
-/// Keep `apps` as the last scan. A lost write only costs the next window
-/// its head start.
-pub fn save_snapshot(apps: &[App]) {
-    save_snapshot_to(&snapshot_path(), apps, stamp_secs());
+/// pacman's database stamp, as `save_snapshot` takes it: read before a scan
+/// starts asking pacman anything.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScanStamp(Option<(f64, f64)>);
+
+pub fn scan_stamp() -> ScanStamp {
+    ScanStamp(stamp_secs())
+}
+
+/// Keep `apps` as the last scan, under the stamp taken before it began --
+/// and only when pacman's databases are still as they were then: a scan
+/// that ran beside an upgrade read some packages before it and some after,
+/// and stamped with the newer state it would vouch for updates already
+/// installed. A lost write only costs the next window its head start.
+pub fn save_snapshot(apps: &[App], before: ScanStamp) {
+    if before.0.is_none() || stamp_secs() != before.0 {
+        return;
+    }
+    save_snapshot_to(&snapshot_path(), apps, before.0);
 }
 
 /// The last scan, as far as it can be trusted (see the module notes); None

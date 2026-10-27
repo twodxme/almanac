@@ -953,27 +953,6 @@ fn line_ts(line: &[u8]) -> Option<f64> {
     v.get("ts")?.as_f64().filter(|t| t.is_finite())
 }
 
-/// Whether the log's oldest dated line is from before `cutoff`. Lines are
-/// appended in time order, so only the head of the file is read.
-fn oldest_expired(path: &std::path::Path, cutoff: f64) -> std::io::Result<bool> {
-    use std::io::BufRead;
-    let mut reader = match std::fs::File::open(path) {
-        Ok(f) => std::io::BufReader::new(f),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            return Ok(false);
-        }
-        if let Some(ts) = line_ts(line.strip_suffix(b"\n").unwrap_or(&line)) {
-            return Ok(ts < cutoff);
-        }
-    }
-}
-
 /// `raw` without the lines dated before `cutoff`. A line that cannot be
 /// dated is kept: it may be something a newer Almanac wrote, and only the
 /// size cap may drop what this one does not understand.
@@ -991,12 +970,25 @@ fn drop_expired(raw: &[u8], cutoff: f64) -> Vec<u8> {
 
 /// Drop what is older than `DAYS` from the log at `path`; the caller holds
 /// the lock. True when the file was rewritten.
+///
+/// The cutoff counts back from `now`, unless `now` is more than a year past
+/// the newest line -- a clock wrong by years at boot would otherwise empty
+/// the log in one go -- in which case it counts back from that line. Every
+/// line is looked at, not only the first: lines are in time order only
+/// while the clock is.
 fn expire_locked(path: &std::path::Path, now: f64) -> std::io::Result<bool> {
-    let cutoff = now - (DAYS * 86400) as f64;
-    if !oldest_expired(path, cutoff)? {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let dated = || raw.split(|&b| b == b'\n').filter_map(line_ts);
+    let Some(newest) = dated().reduce(f64::max) else { return Ok(false) };
+    let base = if now - newest > 365.0 * 86400.0 { newest } else { now };
+    let cutoff = base - (DAYS * 86400) as f64;
+    if !dated().any(|ts| ts < cutoff) {
         return Ok(false);
     }
-    let raw = std::fs::read(path)?;
     let kept = drop_expired(&raw, cutoff);
     if kept.len() == raw.len() {
         return Ok(false);
@@ -2046,6 +2038,34 @@ mod tests {
             std::fs::write(path, text).unwrap();
             assert!(expire_at(now).unwrap());
             assert_eq!(titles(path), ["{\"ts\": \"a string\"}", "just inside"]);
+        });
+    }
+
+    #[test]
+    fn a_clock_years_ahead_does_not_empty_the_log() {
+        with_log(|path| {
+            let then = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(then - 40.0 * 86400.0, "old") + &line(then - 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            // Booted with the clock three years out: only what is old next to
+            // the newest line goes.
+            assert!(expire_at(then + 3.0 * 365.0 * 86400.0).unwrap());
+            assert_eq!(titles(path), ["recent"]);
+        });
+    }
+
+    #[test]
+    fn a_line_from_the_future_at_the_head_does_not_stop_expiry() {
+        with_log(|path| {
+            let now = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(now + 86400.0, "written with a clock ahead")
+                + &line(now - 40.0 * 86400.0, "old")
+                + &line(now - 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            assert!(expire_at(now).unwrap());
+            assert_eq!(titles(path), ["written with a clock ahead", "recent"]);
         });
     }
 
