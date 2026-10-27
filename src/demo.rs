@@ -1200,6 +1200,29 @@ pub fn history_at(now: f64) -> Result<Vec<crate::history::Day>, String> {
              "installed wl-clipboard (2.2.1-3)"]),
         ev(at(3, 10, 28)?, h::SNAPSHOT, "Snapshot taken", "“4.0.4-1”", &[]),
     ];
+    // What Almanac recorded of its own actions, as History shows it opened.
+    let run = |argv: &str, exit: Option<i32>, secs: f64| h::CommandRun { argv: s(argv), exit, secs: Some(secs) };
+    let check = |name: &str, ok: Option<bool>, detail: &str| h::CheckResult { name: s(name), ok, detail: s(detail) };
+    events[0].action = Some(h::ActionLog {
+        commands: vec![run("/usr/bin/pkexec --keep-cwd /usr/bin/pacman -S --noconfirm fd", Some(0), 4.2)],
+        changes: vec![h::Change { name: s("fd"), from: s("10.3.0-1"), to: s("10.4.0-1") }],
+        checks: vec![check("fd", Some(true), "pacman reports 10.4.0-1 installed")],
+        snapshot: Some(s("412")),
+        duration_secs: Some(11.0),
+        ..Default::default()
+    });
+    let mut cleanup = ev(at(0, 8, 40)?, h::ALMANAC, "Package cache: resolved — freed 1.2 GB",
+                         "Trim to 2 versions · Vacuum to 500 MB", &[]);
+    cleanup.action = Some(h::ActionLog {
+        commands: vec![run("/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2", Some(0), 3.1),
+                       run("/usr/bin/pkexec --keep-cwd /usr/bin/journalctl --vacuum-size=500M", None, 1.4)],
+        checks: vec![check("Package cache", Some(true), "Package cache: resolved — freed 1.2 GB"),
+                     check("Journal size", None, "Journal size: done, but the check could not be run again")],
+        freed_bytes: Some(1_288_490_189),
+        duration_secs: Some(6.0),
+        ..Default::default()
+    });
+    events.push(cleanup);
     // Stable, like Python's sorted(reverse=True): equal times keep their order.
     events.sort_by(|a, b| b.ts.partial_cmp(&a.ts).unwrap_or(std::cmp::Ordering::Equal));
     let mut by_day: std::collections::BTreeMap<NaiveDate, Vec<Event>> = std::collections::BTreeMap::new();

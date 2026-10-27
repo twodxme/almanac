@@ -1167,12 +1167,22 @@ pub fn restore(reset: &Reset, log: crate::tasks::LogFn<'_>) -> Result<(), String
     copy2(&reset.path, &keep)?;
     copy2(&reset.backup, &reset.path)?;
     log(&format!("restored {} from {}", reset.name(), file_name(&reset.backup)));
-    crate::history::record_checked(
+    // Checked, not assumed: the file now holds what the backup does.
+    let same = match (std::fs::read(&reset.path), std::fs::read(&reset.backup)) {
+        (Ok(now), Ok(backup)) => Some(now == backup),
+        _ => None,
+    };
+    let check = crate::history::CheckResult {
+        name: format!("{} matches {}", reset.name(), file_name(&reset.backup)),
+        ok: same,
+        detail: String::new(),
+    };
+    crate::history::record_action(
         crate::history::ALMANAC,
         &format!("{} restored", reset.name()),
         &format!("From {}; the defaults were kept as {}", file_name(&reset.backup), file_name(&keep)),
-        "",
-        &[],
+        if same == Some(false) { "warn" } else { "" },
+        &crate::history::ActionLog { checks: vec![check], ..Default::default() },
     )?;
     log(&format!("the defaults it replaced are in {}", file_name(&keep)));
     Ok(())

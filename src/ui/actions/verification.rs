@@ -142,6 +142,12 @@ impl Win {
         ) {
             return raised(&e);
         }
+        self.announce_outcome(out);
+    }
+
+    /// `report_outcome` without the History entry, for a caller that has
+    /// recorded the outcome with the rest of what it did.
+    pub fn announce_outcome(&self, out: &Outcome) {
         if out.changed == Some(false) {
             // Something the user asked for did not happen. A toast can be
             // missed; this is the one result that must not be.
