@@ -359,6 +359,14 @@ impl TaskDialog {
             });
         }
 
+        // Callers drop what `run` returns, and the worker lets go when it
+        // finishes, so the open dialog holds itself until it is closed (by
+        // Close or Escape); the handlers above would find nothing otherwise.
+        let keep = RefCell::new(Some(this.clone()));
+        this.dialog.connect_closed(move |_d| {
+            keep.borrow_mut().take();
+        });
+
         let t = this.downgrade();
         let id = glib::timeout_add_local(Duration::from_millis(90), move || match t.upgrade() {
             Some(t) => t.tick(),
@@ -1618,6 +1626,27 @@ mod tests {
                 "the closed dialog is still alive"
             );
         }
+        parent.destroy();
+    }
+
+    /// Callers drop what `run` returns (`let _ = tasks::run(..)`): the
+    /// finished dialog's Close button must still close it.
+    #[test]
+    fn close_works_after_the_caller_drops_the_dialog() {
+        if gtk_here().is_none() {
+            return;
+        }
+        let parent = adw::Window::new();
+        parent.present();
+        let result = Rc::new(std::cell::Cell::new(None));
+        let r = result.clone();
+        let t = run(&parent, "Test", vec![Step::call("ok", Arc::new(|_log: LogFn<'_>| Ok(())))], Some(Box::new(move |ok| r.set(Some(ok)))));
+        let (dialog, close_btn) = (t.dialog.downgrade(), t.close_btn.downgrade());
+        drop(t);
+        assert!(spin(10, || result.get().is_some()), "the task never finished");
+        close_btn.upgrade().expect("the button is still shown").emit_clicked();
+        let closed = || dialog.upgrade().is_none_or(|d| !d.is_mapped() && d.parent().is_none());
+        assert!(spin(10, closed), "Close did nothing");
         parent.destroy();
     }
 
