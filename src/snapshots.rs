@@ -224,12 +224,18 @@ pub fn last_transaction(log_text: Option<&str>) -> Option<Transaction> {
 /// Err where Python raises: a `started` time.localtime cannot convert, or
 /// journal output that is not UTF-8.
 pub fn snapshot_before(started: f64, journal_text: Option<&str>) -> Result<Option<bool>, String> {
+    snapshot_between(started - LEAD as f64, started + 60.0, journal_text)
+}
+
+/// Did someone run `snapper create` between `since` and `until` (epoch
+/// seconds)? None when the journal cannot be read; Err as `snapshot_before`.
+pub fn snapshot_between(since: f64, until: f64, journal_text: Option<&str>) -> Result<Option<bool>, String> {
     let read;
     let journal_text = match journal_text {
         Some(t) => t,
         None => {
-            let since = strftime_local("%Y-%m-%d %H:%M:%S", started - LEAD as f64)?;
-            let until = strftime_local("%Y-%m-%d %H:%M:%S", started + 60.0)?;
+            let since = strftime_local("%Y-%m-%d %H:%M:%S", since)?;
+            let until = strftime_local("%Y-%m-%d %H:%M:%S", until)?;
             let r = run_raw(
                 &[
                     "journalctl", "--no-pager", "-q", "-o", "short-iso",

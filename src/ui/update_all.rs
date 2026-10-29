@@ -37,6 +37,37 @@ use crate::ui::update_report::{BatchDone, BatchResult, Run, SharedRun};
 use crate::verify::{self, Outcome, ProbeValue};
 use crate::{agents, patches, plugins, selfupdate, xdg};
 
+thread_local! {
+    /// An Update all is on, from its start to its history entry.
+    static RUNNING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// One Update all at a time. Taken as a run starts and held by whatever
+/// carries it on (the preflight dialog, the terminal's watcher, the report)
+/// until its history entry is written, or until it is dropped on the way: a
+/// dialog cancelled, a terminal that would not start, the window closed.
+/// While it is held, the button and Ctrl+U are refused with a toast.
+pub struct Busy(());
+
+impl Busy {
+    pub fn take() -> Option<Busy> {
+        RUNNING.with(|r| (!r.replace(true)).then_some(Busy(())))
+    }
+
+    pub fn held() -> bool {
+        RUNNING.with(Cell::get)
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        RUNNING.with(|r| r.set(false));
+    }
+}
+
+/// What starts the run once preflight lets it.
+type Go = Rc<dyn Fn(&Win, Busy)>;
+
 /// Which updater a row with an update goes to: the same choice its own
 /// Update button makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +100,9 @@ pub fn route(app: &App) -> Route {
     }
 }
 
+/// By path: the terminal's login shell puts user-writable folders first.
+const FLATPAK: &str = "/usr/bin/flatpak";
+
 /// The terminal half: `None` when nothing waiting needs it. With both, the
 /// exit status is the system update's when it failed: a flatpak update
 /// that went fine must not hide it.
@@ -78,8 +112,8 @@ pub fn system_command(routes: &[Route], command: &str) -> Option<String> {
     match (system, flatpak) {
         (false, false) => None,
         (true, false) => Some(command.to_string()),
-        (false, true) => Some("flatpak update -y".to_string()),
-        (true, true) => Some(format!("{command}; rc=$?; flatpak update -y || exit; exit $rc")),
+        (false, true) => Some(format!("{FLATPAK} update -y")),
+        (true, true) => Some(format!("{command}; rc=$?; {FLATPAK} update -y || exit; exit $rc")),
     }
 }
 
@@ -206,9 +240,27 @@ impl Win {
     /// Everything else follows as one batch, so nothing counted is left
     /// behind.
     pub fn on_update_all(&self) {
-        if self.confirm_news_then(|w| w.on_update_all()) {
+        // Demo mode never touches the machine: no terminal, no updaters.
+        if crate::demo::active() {
+            self.say(&tr("Demo mode: nothing is updated"), 5);
             return;
         }
+        if Busy::held() {
+            self.say(&tr("Update all is already running"), 5);
+            return;
+        }
+        if self.confirm_news_then(|w| w.update_all_now()) {
+            return;
+        }
+        self.update_all_now();
+    }
+
+    /// Past the news: the run starts here, and holds `Busy` from now on.
+    fn update_all_now(&self) {
+        let Some(busy) = Busy::take() else {
+            self.say(&tr("Update all is already running"), 5);
+            return;
+        };
         let pending: Vec<App> = self
             .store_objects()
             .iter()
@@ -231,16 +283,17 @@ impl Win {
             let issues = postupdate::preflight_issues(&p, pacman);
             win.preflight(
                 issues,
-                Rc::new(move |win: &Win| win.start_update_all(command.clone(), pacman, rest.clone())),
+                busy,
+                Rc::new(move |win: &Win, busy: Busy| win.start_update_all(command.clone(), pacman, rest.clone(), busy)),
             );
         });
     }
 
     /// Say what stands in the way, in the app rather than as a terminal
     /// that fails: a blocking problem has no "Continue anyway".
-    fn preflight(&self, issues: Vec<Issue>, go: Rc<dyn Fn(&Win)>) {
+    fn preflight(&self, issues: Vec<Issue>, busy: Busy, go: Go) {
         if issues.is_empty() {
-            return go(self);
+            return go(self, busy);
         }
         let blocked = issues.iter().any(|i| i.level == Level::Block);
         let fix = if blocked { None } else { issues.iter().find_map(|i| i.fix.clone()) };
@@ -269,10 +322,12 @@ impl Win {
         dialog.set_default_response(Some("cancel"));
         dialog.set_close_response("cancel");
         let w = self.downgrade();
+        // Cancel lets the run go, and with it `Busy`.
+        let busy = RefCell::new(Some(busy));
         dialog.connect_response(None, move |_d, resp| {
-            let Some(win) = w.upgrade() else { return };
+            let (Some(win), Some(busy)) = (w.upgrade(), busy.borrow_mut().take()) else { return };
             match (resp, &fix) {
-                ("continue", _) => go(&win),
+                ("continue", _) => go(&win, busy),
                 ("fix", Some(f)) => {
                     let steps = postupdate::repair_steps(std::slice::from_ref(f), false);
                     let (w, go) = (win.downgrade(), go.clone());
@@ -283,7 +338,7 @@ impl Win {
                         Some(Box::new(move |ok| {
                             let Some(win) = w.upgrade() else { return };
                             if ok {
-                                go(&win);
+                                go(&win, busy);
                             } else {
                                 win.say(&tr("The lock file is still there, so the update did not start"), 8);
                             }
@@ -296,8 +351,9 @@ impl Win {
         dialog.present(Some(&self.window));
     }
 
-    fn start_update_all(&self, command: Option<String>, pacman: bool, rest: Vec<App>) {
+    fn start_update_all(&self, command: Option<String>, pacman: bool, rest: Vec<App>, busy: Busy) {
         let run = Run::new(pacman && command.is_some());
+        run.borrow_mut().busy = Some(busy);
         match command {
             Some(command) => self.run_system_update(&command, pacman, rest, run),
             None => {
@@ -310,14 +366,15 @@ impl Win {
     fn run_system_update(&self, command: &str, pacman: bool, rest: Vec<App>, run: SharedRun) {
         // Where the script reports back. Without it the update still runs;
         // how it ended is then not known.
-        let files = match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
-            Ok(f) => Some(f),
+        let (files, files_error) = match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
+            Ok(f) => (Some(f), None),
             Err(e) => {
                 eprintln!("almanac: {e}");
-                None
+                (None, Some(e))
             }
         };
         let recorder = Path::new("/usr/bin/script");
+        let unrecorded = postupdate::unrecorded_why(files_error.as_deref(), recorder.exists());
         let script = postupdate::terminal_script(command, files.as_ref(), recorder.exists().then_some(recorder));
         let Some(argv) = xdg::terminal_argv(&["bash", "-lc", script.as_str()]) else {
             self.say(&tr("No terminal found to run the update in"), 5);
@@ -327,41 +384,51 @@ impl Win {
             self.say(&tr("No terminal found to run the update in"), 5);
             return;
         }
-        // Where this update's lines in pacman.log will start.
-        let offset = postupdate::log_offset(Path::new(postupdate::PACMAN_LOG));
-        let started = Instant::now();
-        let proc = match popen_new_session(&argv) {
-            Ok(p) => p,
-            Err(e) => {
+        let command = command.to_string();
+        let w = self.downgrade();
+        glib::spawn_future_local(async move {
+            // How things were, asked before the update starts: asked while
+            // it runs, what it breaks would count as how things were, and
+            // the checks after it would pass.
+            let before = gio::spawn_blocking(move || postupdate::probe_before(pacman)).await.unwrap_or_default();
+            let Some(win) = w.upgrade() else {
                 if let Some(f) = &files {
                     f.remove();
                 }
-                self.say(&format!("Could not start the update: {e}"), 5);
                 return;
+            };
+            // Where this update's lines in pacman.log will start.
+            let offset = postupdate::log_offset(Path::new(postupdate::PACMAN_LOG));
+            let started = Instant::now();
+            let proc = match popen_new_session(&argv) {
+                Ok(p) => p,
+                Err(e) => {
+                    if let Some(f) = &files {
+                        f.remove();
+                    }
+                    win.say(&format!("Could not start the update: {e}"), 5);
+                    return;
+                }
+            };
+            {
+                let mut r = run.borrow_mut();
+                r.terminal = true;
+                r.command = command;
+                r.files = files.clone();
+                r.before = before.clone();
             }
-        };
-        {
-            let mut r = run.borrow_mut();
-            r.terminal = true;
-            r.command = command.to_string();
-            r.files = files.clone();
-        }
-        self.say(&tr("Update running in a terminal — it is checked when it finishes"), 5);
+            win.say(&tr("Update running in a terminal — it is checked when it finishes"), 5);
+            drop(win);
 
-        // The `wait` thread, as a main-loop future: a GSubprocess is waited
-        // on there. A single-instance terminal returns at once, so its end
-        // is only one of the signs the update is over.
-        let exited: Rc<Cell<Option<Duration>>> = Rc::new(Cell::new(None));
-        let e = exited.clone();
-        glib::spawn_future_local(async move {
-            let _ = proc.wait_future().await;
-            e.set(Some(started.elapsed()));
-        });
-        let w = self.downgrade();
-        glib::spawn_future_local(async move {
-            // Asked while the user types their password, which is longer
-            // than checkupdates takes.
-            let before = gio::spawn_blocking(move || postupdate::probe_before(pacman));
+            // The `wait` thread, as a main-loop future: a GSubprocess is
+            // waited on there. A single-instance terminal returns at once,
+            // so its end is only one of the signs the update is over.
+            let exited: Rc<Cell<Option<Duration>>> = Rc::new(Cell::new(None));
+            let e = exited.clone();
+            glib::spawn_future_local(async move {
+                let _ = proc.wait_future().await;
+                e.set(Some(started.elapsed()));
+            });
             let status_file = files.as_ref().map(|f| f.status.clone());
             let status = loop {
                 glib::timeout_future(Duration::from_secs(1)).await;
@@ -389,7 +456,6 @@ impl Win {
             let Some(win) = w.upgrade() else { return };
             win.after_pacman(true);
             drop(win);
-            let before = before.await.unwrap_or_default();
             let started_wall = run.borrow().started_wall;
             let exit = status.exit;
             let checked = gio::spawn_blocking(move || {
@@ -407,8 +473,11 @@ impl Win {
                 });
                 let inputs = Inputs { system: pacman, exit, log, before: before.clone(), after: after.clone() };
                 let mut report = postupdate::build_report(&inputs);
-                report.log = postupdate::log_text(section.as_deref(), &output);
-                let snapshot = if pacman { postupdate::snapshot_since(started_wall) } else { None };
+                report.log = postupdate::log_text(section.as_deref(), &output, unrecorded.as_deref());
+                // The snapshot is looked for over the whole run, the
+                // password prompt included.
+                let snapshot =
+                    if pacman { postupdate::snapshot_since(started_wall, crate::util::now()) } else { None };
                 (before, after, report, snapshot)
             });
             let Ok((before, after, report, snapshot)) = checked.await else { return };
@@ -611,10 +680,10 @@ mod tests {
         let c = "omarchy update";
         assert_eq!(system_command(&[Route::Plugin, Route::AppImage], c), None);
         assert_eq!(system_command(&[Route::System, Route::Plugin], c).as_deref(), Some(c));
-        assert_eq!(system_command(&[Route::Flatpak], c).as_deref(), Some("flatpak update -y"));
+        assert_eq!(system_command(&[Route::Flatpak], c).as_deref(), Some("/usr/bin/flatpak update -y"));
         assert_eq!(
             system_command(&[Route::Flatpak, Route::System], c).as_deref(),
-            Some("omarchy update; rc=$?; flatpak update -y || exit; exit $rc")
+            Some("omarchy update; rc=$?; /usr/bin/flatpak update -y || exit; exit $rc")
         );
         assert_eq!(system_command(&[], c), None);
     }
@@ -628,7 +697,7 @@ mod tests {
             std::process::Command::new("/usr/bin/bash").arg("-c").arg(cmd).status().unwrap().code()
         };
         let both = |sys: &str, flat: &str| {
-            system_command(&[Route::System, Route::Flatpak], sys).unwrap().replace("flatpak update -y", flat)
+            system_command(&[Route::System, Route::Flatpak], sys).unwrap().replace("/usr/bin/flatpak update -y", flat)
         };
         assert_eq!(status(&both("false", "true")), Some(1));
         assert_eq!(status(&both("true", "exit 3")), Some(3));
@@ -645,6 +714,42 @@ mod tests {
         assert!(body.contains("self.reload()"), "the split found after_pacman");
         assert!(!body.contains("if ok"), "a failed item must not keep the others listed");
         assert!(body.contains("forget_pending()"), "and the pending updates are asked again");
+    }
+
+    /// The "before" picture was taken after the terminal had started, so a
+    /// service the update broke counted as already broken and the checks
+    /// after it passed.
+    #[test]
+    fn how_things_were_is_asked_before_the_update_starts() {
+        let code = include_str!("update_all.rs");
+        let body = code.split("fn run_system_update(").nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("");
+        let before = body.find("probe_before(").expect("the split found run_system_update");
+        let start = body.find("popen_new_session(").unwrap();
+        assert!(before < start);
+        assert!(body[before..start].contains(".await"), "and it has answered before the start");
+    }
+
+    /// One Update all at a time: a second start is refused until the first
+    /// lets go, however it ends.
+    #[test]
+    fn a_second_update_all_waits_for_the_first() {
+        let first = Busy::take().expect("free at first");
+        assert!(Busy::held());
+        assert!(Busy::take().is_none());
+        drop(first);
+        assert!(!Busy::held());
+        let again = Busy::take();
+        assert!(again.is_some());
+    }
+
+    /// ALMANAC_DEMO: Update all says so and stops, before any terminal,
+    /// probe or updater.
+    #[test]
+    fn demo_mode_updates_nothing() {
+        let code = include_str!("update_all.rs");
+        let body = code.split("pub fn on_update_all(").nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("");
+        let demo = body.find("crate::demo::active()").expect("demo mode is checked");
+        assert!(body[demo..].find("return;").unwrap() < body[demo..].find("update_all_now").unwrap());
     }
 
     #[test]

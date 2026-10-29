@@ -2,16 +2,19 @@
 
 use super::*;
 
+/// By path: PATH puts user-writable folders ahead of /usr/bin.
+pub(super) const FLATPAK_BIN: &str = "/usr/bin/flatpak";
+
 /// Installed Flatpak apps. Silent no-op when flatpak is not installed, so
 /// the section simply does not appear rather than erroring.
 /// (Err: flatpak's output is not UTF-8, `_run`'s UnicodeDecodeError.)
 pub fn flatpaks() -> Result<Vec<App>, String> {
-    let out = run(&["flatpak", "list", "--app", "--columns=application,name,version"], 30)?;
+    let out = run(&[FLATPAK_BIN, "list", "--app", "--columns=application,name,version"], 30)?;
     if py_strip(&out).is_empty() {
         return Ok(Vec::new());
     }
     let mut pending = HashSet::new();
-    for line in py_splitlines(&run(&["flatpak", "remote-ls", "--updates", "--columns=application"], 60)?) {
+    for line in py_splitlines(&run(&[FLATPAK_BIN, "remote-ls", "--updates", "--columns=application"], 60)?) {
         if !py_strip(line).is_empty() {
             pending.insert(py_strip(line).to_string());
         }

@@ -6,8 +6,12 @@
 //! with Fix when there is a repair for it. Fix runs the repairs after that
 //! one click (root ones still ask polkit), then asks the checks again and
 //! shows what they say now.
+//!
+//! The tidy-up (the package cache trimmed, the build cache of what was just
+//! built cleared) is offered on the passing toast, never run by itself: it
+//! asks polkit, and it deletes the older package copies a downgrade needs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -35,6 +39,8 @@ pub struct Run {
     pub before: Before,
     pub report: Report,
     pub record: RunRecord,
+    /// held while the run is on: a second Update all is refused meanwhile
+    pub busy: Option<crate::ui::update_all::Busy>,
 }
 
 pub type SharedRun = Rc<RefCell<Run>>;
@@ -51,6 +57,7 @@ impl Run {
             before: Before::default(),
             report: Report::default(),
             record: RunRecord::default(),
+            busy: None,
         }))
     }
 }
@@ -97,8 +104,7 @@ impl Win {
     pub(in crate::ui) fn surface_update(&self, run: SharedRun) {
         let report = run.borrow().report.clone();
         if report.passed() {
-            self.say(&report.summary(), 8);
-            self.tidy_up(run);
+            self.passed(run, &report.summary());
         } else {
             self.show_update_report(run, report, true);
         }
@@ -107,12 +113,16 @@ impl Win {
     fn show_update_report(&self, run: SharedRun, report: Report, first: bool) {
         let attention = report.attention().len();
         let repairs = if first { report.repairs() } else { Vec::new() };
-        let has_yay = crate::util::which("yay").is_some();
+        let has_yay = Path::new(crate::inventory::YAY).exists();
         let lines: Vec<String> = repairs.iter().filter_map(|r| postupdate::describe(r, has_yay)).collect();
         let fixable = !postupdate::repair_steps(&repairs, has_yay).is_empty();
 
         let mut body = if first {
-            format!("{} after the update did not pass.", if attention == 1 { "One check".to_string() } else { format!("{attention} checks") })
+            if attention == 1 {
+                "A check after the update did not pass.".to_string()
+            } else {
+                format!("{attention} checks after the update did not pass.")
+            }
         } else {
             tr("The repairs ran, and this is what the checks say now.")
         };
@@ -168,7 +178,7 @@ impl Win {
         scroll.set_child(Some(&list));
         let show_log = gtk::Button::builder().label(tr("Show log")).halign(gtk::Align::Start).build();
         show_log.add_css_class("flat");
-        let log = report.log.clone();
+        let log = log_shown(&report.log, run.borrow().terminal);
         let w = self.downgrade();
         show_log.connect_clicked(move |_| {
             if let Some(win) = w.upgrade() {
@@ -206,7 +216,7 @@ impl Win {
     /// pacman's log section and the terminal's output, as they were.
     fn show_update_log(&self, text: &str) {
         let buf = gtk::TextBuffer::new(None);
-        buf.set_text(if text.trim().is_empty() { "Nothing was logged." } else { text });
+        buf.set_text(text);
         let view = gtk::TextView::builder().buffer(&buf).editable(false).monospace(true).cursor_visible(false).build();
         view.set_wrap_mode(gtk::WrapMode::WordChar);
         view.set_left_margin(8);
@@ -231,7 +241,7 @@ impl Win {
 
     /// Fix: the repairs, then the checks that had them, asked again.
     fn run_update_repairs(&self, run: SharedRun, repairs: Vec<Repair>, report: Report) {
-        let steps = postupdate::repair_steps(&repairs, crate::util::which("yay").is_some());
+        let steps = postupdate::repair_steps(&repairs, Path::new(crate::inventory::YAY).exists());
         let w = self.downgrade();
         let done_steps = steps.clone();
         tasks::run_each(
@@ -256,8 +266,7 @@ impl Win {
                         win.mark_updated(&postupdate::installed_since(&before, &after));
                         win.after_pacman(true);
                         if again.passed() {
-                            win.say(&tr("Repaired — every check passes now"), 8);
-                            win.tidy_up(run);
+                            win.passed(run, &tr("Repaired — every check passes now"));
                         } else {
                             win.show_update_report(run, again, false);
                         }
@@ -267,30 +276,42 @@ impl Win {
         );
     }
 
-    /// After a system update that went through: the package cache trimmed
-    /// and the build cache of what was just built cleared, with the space
-    /// that freed measured, not added up. Skipped without a word when
-    /// there is nothing to do it with.
-    fn tidy_up(&self, run: SharedRun) {
-        let (eligible, updated) = {
+    /// A run that passed: said in a toast, with the tidy-up on it when there
+    /// is one to offer, and the run recorded now.
+    fn passed(&self, run: SharedRun, message: &str) {
+        let steps = {
             let r = run.borrow();
             let passed = r.record.last().is_some_and(Report::passed);
             let names: Vec<String> =
                 r.report.changes.iter().filter(|c| !c.to.is_empty()).map(|c| c.name.clone()).collect();
-            (r.pacman && r.terminal && passed, names)
+            tidy_steps(r.pacman && r.terminal && passed, Path::new(postupdate::PACCACHE).exists(), &names)
         };
-        if !eligible {
-            return self.finish_update(run);
-        }
-        let steps = postupdate::cleanup_steps(crate::util::which("paccache").is_some(), &updated);
-        if steps.is_empty() {
-            return self.finish_update(run);
-        }
+        self.finish_update(run);
+        let Some(steps) = steps else {
+            return self.say(message, 8);
+        };
+        let toast = adw::Toast::builder().title(message).use_markup(false).timeout(15).build();
+        toast.set_button_label(Some(&tr("Tidy up")));
+        let w = self.downgrade();
+        let once = Cell::new(Some(steps));
+        toast.connect_button_clicked(move |_| {
+            if let (Some(win), Some(steps)) = (w.upgrade(), once.take()) {
+                win.tidy_up(steps);
+            }
+        });
+        self.toasts.add_toast(toast);
+    }
+
+    /// Tidy up, when asked: the package cache trimmed and the build cache
+    /// of what was just built cleared, with the space that freed measured,
+    /// not added up. It has a history entry of its own.
+    fn tidy_up(&self, steps: Vec<Step>) {
         let free = || {
             let paths: Vec<PathBuf> = postupdate::cache_paths();
             let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
             postupdate::free_total(&refs)
         };
+        let started = Instant::now();
         let w = self.downgrade();
         spawn_bg(free, move |before| {
             let Some(win) = w.upgrade() else { return };
@@ -301,15 +322,26 @@ impl Win {
                 &tr("Tidying up after the update"),
                 steps,
                 Some(Box::new(move |ok| {
-                    run.borrow_mut().record.commands.extend(ran(&done_steps, ok));
                     spawn_bg(free, move |after| {
-                        let Some(win) = w.upgrade() else { return };
                         let freed = before.zip(after).map(|(b, a)| a as i64 - b as i64);
-                        run.borrow_mut().record.freed = freed;
+                        let action = history::ActionLog {
+                            commands: ran(&done_steps, ok),
+                            freed_bytes: freed,
+                            duration_secs: Some(started.elapsed().as_secs_f64()),
+                            ..Default::default()
+                        };
+                        let detail = match freed.filter(|b| *b > 0) {
+                            Some(b) => format!("{} freed", crate::maintenance::fmt_size(b as f64 / 1048576.0)),
+                            None => String::new(),
+                        };
+                        let severity = if ok { "" } else { "warn" };
+                        if let Err(e) = history::record_action(history::ALMANAC, "Tidy up after Update all", &detail, severity, &action) {
+                            eprintln!("almanac: {e}");
+                        }
+                        let Some(win) = w.upgrade() else { return };
                         if let Some(b) = freed.filter(|b| *b >= 1048576) {
                             win.say(&format!("Freed {}", crate::maintenance::fmt_size(b as f64 / 1048576.0)), 5);
                         }
-                        win.finish_update(run);
                     });
                 })),
             );
@@ -318,13 +350,65 @@ impl Win {
 
     /// The run's one history entry, and its files let go of.
     pub(in crate::ui) fn finish_update(&self, run: SharedRun) {
-        let r = run.borrow();
-        let action = r.record.action(r.started.elapsed().as_secs_f64());
-        if let Err(e) = history::record_action(history::ALMANAC, "Update all", &r.record.detail(), r.record.severity(), &action) {
-            eprintln!("almanac: {e}");
+        {
+            let r = run.borrow();
+            let action = r.record.action(r.started.elapsed().as_secs_f64());
+            if let Err(e) = history::record_action(history::ALMANAC, "Update all", &r.record.detail(), r.record.severity(), &action) {
+                eprintln!("almanac: {e}");
+            }
+            if let Some(f) = &r.files {
+                f.remove();
+            }
         }
-        if let Some(f) = &r.files {
-            f.remove();
-        }
+        // The run is over: Update all can start again.
+        run.borrow_mut().busy = None;
+    }
+}
+
+/// What a passing run offers to tidy up, or None: only after a system
+/// update that went through, and only what there is something to do it with.
+fn tidy_steps(eligible: bool, have_paccache: bool, updated: &[String]) -> Option<Vec<Step>> {
+    let steps = if eligible { postupdate::cleanup_steps(have_paccache, updated) } else { Vec::new() };
+    (!steps.is_empty()).then_some(steps)
+}
+
+/// What "Show log" shows. With nothing to show it says why: a run without
+/// the system update has no pacman log or terminal (each item's result is
+/// in the report itself).
+fn log_shown(text: &str, terminal: bool) -> String {
+    if !text.trim().is_empty() {
+        text.to_string()
+    } else if terminal {
+        "Nothing was recorded for this update: pacman’s log and the terminal’s output could not be read."
+            .to_string()
+    } else {
+        "No system update ran, so there is no pacman log. Each item’s result is in the report.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tidy-up runs paccache as root and deletes the copies a
+    /// downgrade needs: offered, never started by a passing run itself.
+    #[test]
+    fn the_tidy_up_is_offered_not_run() {
+        let code = include_str!("update_report.rs");
+        let body = |f: &str| code.split(f).nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("").to_string();
+        let surface = body("fn surface_update(");
+        assert!(surface.contains("self.passed("), "the split found surface_update");
+        assert!(!surface.contains("tidy_up("));
+        assert!(!body("fn run_update_repairs(").contains("tidy_up("));
+        let passed = body("fn passed(");
+        assert!(passed.contains("connect_button_clicked"), "only the toast's button tidies up");
+        assert_eq!(tidy_steps(false, true, &[]).map(|s| s.len()), None, "nothing offered after a failed update");
+    }
+
+    #[test]
+    fn an_empty_log_says_why() {
+        assert!(log_shown("", true).contains("could not be read"));
+        assert!(log_shown(" ", false).contains("No system update ran"));
+        assert_eq!(log_shown("x", true), "x");
     }
 }

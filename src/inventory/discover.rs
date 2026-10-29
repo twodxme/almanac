@@ -25,7 +25,7 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
     let mut found: Vec<App> = Vec::new();
 
     // --- official repos ---
-    let out = run(&["pacman", "-Ss", query], 40)?;
+    let out = run(&[PACMAN, "-Ss", query], 40)?;
     let (mut name, mut version, mut repo) = (String::new(), String::new(), String::new());
     for line in py_splitlines(&out) {
         if !line.starts_with(' ') {

@@ -576,6 +576,10 @@ msgstr ""
 msgid "Duplicate software installed"
 msgstr ""
 
+#: src/ui/packages/loading.rs:432
+msgid "Could not check for updates"
+msgstr ""
+
 #: src/ui/plugins/controls.rs:98
 msgid "Press the keys, e.g. Super + Alt + V"
 msgstr ""
@@ -1463,6 +1467,14 @@ msgstr ""
 msgid "Nothing needs you right now"
 msgstr ""
 
+#: src/ui/update_all.rs:242
+msgid "Demo mode: nothing is updated"
+msgstr ""
+
+#: src/ui/update_all.rs:246 src/ui/update_all.rs:258
+msgid "Update all is already running"
+msgstr ""
+
 #: src/ui/update_all.rs:248
 msgid "Before updating"
 msgstr ""
@@ -1565,6 +1577,10 @@ msgstr ""
 
 #: src/ui/update_report.rs:301
 msgid "Tidying up after the update"
+msgstr ""
+
+#: src/ui/update_report.rs:294
+msgid "Tidy up"
 msgstr ""
 
 #: src/util/human.rs:117 src/util/human.rs:193

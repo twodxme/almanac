@@ -269,7 +269,7 @@ pub fn file_identity_try(path: &str) -> TryProbe {
 pub fn pending_updates() -> Probe {
     Arc::new(|| {
         let mut names: BTreeSet<String> = crate::inventory::checked_pending_repo()?.into_keys().collect();
-        if crate::util::which("yay").is_some() {
+        if std::path::Path::new(crate::inventory::YAY).exists() {
             names.extend(crate::inventory::checked_pending_aur()?.into_keys());
         }
         Some(ProbeValue::Set(names))
