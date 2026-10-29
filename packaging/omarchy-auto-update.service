@@ -3,11 +3,16 @@ Description=Weekly system update, holding anything that needs judgement
 Documentation=https://github.com/twodxme/almanac#scheduled-updates
 After=network-online.target
 Wants=network-online.target
+# Almanac removed with the timer still enabled: skip quietly rather than
+# fail every week on a script that is gone (status 203/EXEC).
+ConditionPathExists=/usr/lib/almanac/omarchy-auto-update
 # On battery the script skips the run itself (an upgrade cut off by a flat
 # battery leaves the system half-upgraded), and records why.
 
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/almanac/omarchy-auto-update
+# Not $HOME: nothing the script starts should find files there by accident.
+WorkingDirectory=/
 # AUR builds are not quick; do not let a long compile get killed halfway.
 TimeoutStartSec=3h

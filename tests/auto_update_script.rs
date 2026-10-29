@@ -10,10 +10,26 @@ use std::process::{Command, Output};
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/omarchy-auto-update");
 
 const NEWS: &str = "Mkinitcpio >=42 needs manual intervention";
-/// The feed as archlinux.org serves it: this title escaped twice.
-const FEED: &str = "<?xml version=\"1.0\"?><rss><channel><title>Arch Linux: Recent news updates</title>\
-<item><title>Mkinitcpio &amp;gt;=42 needs manual intervention</title></item>\
-<item><title>Older news</title></item></channel></rss>";
+const OLDER: &str = "Older news";
+
+/// A feed as archlinux.org serves it, newest first, each item `(title as
+/// the feed has it, days old)`.
+fn feed(items: &[(&str, i64)]) -> String {
+    let now = chrono::Utc::now();
+    let mut xml = String::from(
+        "<?xml version=\"1.0\"?><rss><channel><title>Arch Linux: Recent news updates</title>",
+    );
+    for (title, days) in items {
+        let date = (now - chrono::Duration::days(*days)).to_rfc2822();
+        xml.push_str(&format!("<item><title>{title}</title><pubDate>{date}</pubDate></item>"));
+    }
+    xml + "</channel></rss>"
+}
+
+/// The usual feed: the newest title escaped twice, then an older post.
+fn usual_feed() -> String {
+    feed(&[("Mkinitcpio &amp;gt;=42 needs manual intervention", 2), (OLDER, 20)])
+}
 
 fn have(tool: &str) -> bool {
     Command::new("sh").args(["-c", &format!("command -v {tool}")]).output().is_ok_and(|o| o.status.success())
@@ -47,8 +63,8 @@ impl Sandbox {
         sb.write("power/AC/online", "1\n");
         sb.write("repo", "foo 1.0-1 -> 1.1-1\n");
         sb.write("aur", "");
-        sb.write("feed", FEED);
-        sb.write("state/news-seen", &format!("{NEWS}\n"));
+        sb.write("feed", &usual_feed());
+        sb.write("state/news-seen", &format!("{NEWS}\n{OLDER}\n"));
         let calls = sb.path("calls");
         let log = |what: &str| format!("#!/bin/sh\nprintf '%s\\n' \"{what} $*\" >>'{}'\n", calls.display());
         sb.stub("checkupdates", &format!(
@@ -102,6 +118,9 @@ impl Sandbox {
             .env("OMARCHY_AUTO_UPDATE_AUTORUN", d("bin/almanac-autorun"))
             .env("OMARCHY_AUTO_UPDATE_POWER_SUPPLY", d("power"))
             .env("OMARCHY_AUTO_UPDATE_PACMAN_LOG", d("pacman.log"))
+            .env("OMARCHY_AUTO_UPDATE_OMARCHY", d("bin/omarchy"))
+            // Where the user unit starts it without WorkingDirectory=.
+            .current_dir(d("home"))
             .output()
             .unwrap()
     }
@@ -155,7 +174,7 @@ fn unread_arch_news_holds_the_update() {
         return;
     }
     let sb = Sandbox::new("news-unread");
-    sb.write("state/news-seen", "Some older headline\n");
+    sb.write("state/news-seen", &format!("Some older headline\n{OLDER}\n"));
     let out = sb.run(&[]);
     assert!(out.status.success(), "{out:?}");
     assert_not_applied(&sb);
@@ -168,7 +187,59 @@ fn unread_arch_news_holds_the_update() {
     assert!(sb.log().contains(&format!("HELD — Arch news: {NEWS}")), "{}", sb.log());
     // The headline is remembered as the one held for, not as read.
     assert_eq!(std::fs::read_to_string(sb.path("state/news-held")).unwrap(), format!("{NEWS}\n"));
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), "Some older headline\n");
+    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("Some older headline\n{OLDER}\n"));
+}
+
+/// "Read" is per post: the newest one read does not make an older one,
+/// a manual intervention perhaps, read too.
+#[test]
+fn an_older_unread_post_holds_even_when_the_newest_is_read() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("news-older-unread");
+    sb.write("state/news-seen", &format!("{NEWS}\n"));
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    assert!(sb.log().contains(&format!("HELD — Arch news: {OLDER}")), "{}", sb.log());
+    // Every unread post is named, newest first.
+    sb.write("state/news-seen", "");
+    sb.run(&[]);
+    assert!(sb.log().contains(&format!("HELD — Arch news: {NEWS}; {OLDER}")), "{}", sb.log());
+    assert_eq!(std::fs::read_to_string(sb.path("state/news-held")).unwrap(), format!("{NEWS}\n{OLDER}\n"));
+}
+
+/// Only the window Almanac lists (news.rs RECENT_DAYS) holds: a hold is
+/// always for a post Almanac shows, so it can be cleared there.
+#[test]
+fn news_older_than_almanac_lists_does_not_hold() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("news-old");
+    sb.write("feed", &feed(&[(NEWS, 61), (OLDER, 400)]));
+    sb.write("state/news-seen", "");
+    sb.run(&[]);
+    assert_applied(&sb);
+    // ...and a post with no date Almanac can read is not listed there either.
+    sb.write("feed", "<rss><channel><item><title>Undated</title><pubDate>soon</pubDate></item></channel></rss>");
+    sb.run(&[]);
+    assert!(!sb.log().contains("Arch news"), "{}", sb.log());
+}
+
+/// Both sides normalise a headline the same way: entities decoded, every
+/// run of whitespace (a no-break space from &nbsp; too) one space. A
+/// headline Almanac marked read matches the feed's spelling of it.
+#[test]
+fn a_headline_with_odd_spacing_marked_read_counts_as_read() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("news-nbsp");
+    sb.write("feed", &feed(&[("Foo&amp;nbsp;42  needs\n manual intervention", 2)]));
+    sb.write("state/news-seen", "Foo 42 needs manual intervention\n");
+    sb.run(&[]);
+    assert_applied(&sb);
 }
 
 /// Lines written before the script decoded entities carry them; the feed
@@ -180,7 +251,7 @@ fn news_marked_read_with_entities_still_counts_as_read() {
     }
     for seen in ["Mkinitcpio &gt;=42 needs manual intervention", "Mkinitcpio &amp;gt;=42 needs manual intervention"] {
         let sb = Sandbox::new("news-entities");
-        sb.write("state/news-seen", &format!("Other\n{seen}\n"));
+        sb.write("state/news-seen", &format!("Other\n{seen}\n{OLDER}\n"));
         sb.run(&[]);
         assert_applied(&sb);
         assert!(!sb.calls().contains("Arch news"), "{}", sb.calls());
@@ -195,7 +266,7 @@ fn a_full_upgrade_by_hand_after_a_news_hold_clears_it() {
         return;
     }
     let sb = Sandbox::new("news-by-hand");
-    sb.write("state/news-seen", "");
+    sb.write("state/news-seen", &format!("{OLDER}\n"));
     sb.write("state/news-held", &format!("{NEWS}\n"));
     let st = Command::new("touch").args(["-d", "2026-01-01 00:00"]).arg(sb.path("state/news-held")).status().unwrap();
     assert!(st.success());
@@ -217,7 +288,7 @@ fn a_full_upgrade_by_hand_after_a_news_hold_clears_it() {
     );
     sb.run(&[]);
     assert_applied(&sb);
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("{NEWS}\n"));
+    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("{OLDER}\n{NEWS}\n"));
 }
 
 #[test]
@@ -257,6 +328,98 @@ fn a_core_package_holds_the_batch() {
     assert!(calls.contains("notify -u critical 2 updates held Not applied automatically. needs a reboot or touches boot: linux. Run: omarchy update"),
             "{calls}");
     assert!(calls.contains("record 2 updates held | "), "{calls}");
+}
+
+/// An almanac-autorun that cannot read a line (exit 3), or none at all,
+/// holds the whole batch: what it cannot classify might be the kernel.
+#[test]
+fn core_packages_that_cannot_be_told_hold_everything() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("core-unknown");
+    // kmod is core in Almanac's list; a fallback list here once missed it.
+    sb.write("repo", "kmod 33-1 -> 34-1\n");
+    sb.stub("almanac-autorun", &format!(
+        "#!/bin/sh\ncase \"$1\" in\n--core-holds) exit 3 ;;\n\
+         --record-hold) printf 'record %s | %s\\n' \"$2\" \"$3\" >>'{c}' ;;\nesac\n",
+        c = sb.path("calls").display()));
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    assert!(sb.log().contains("HELD — Almanac could not tell which of them touch boot"), "{}", sb.log());
+
+    let sb = Sandbox::new("core-missing");
+    sb.write("repo", "foo 1.0-1 -> 1.1-1\n");
+    std::fs::remove_file(sb.path("bin/almanac-autorun")).unwrap();
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    assert!(sb.log().contains("HELD — Almanac could not tell"), "{}", sb.log());
+}
+
+/// AUR packages run build scripts anyone can publish: not installed
+/// unattended unless the setting says so.
+#[test]
+fn an_aur_update_is_only_announced_unless_allowed() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("aur");
+    sb.write("aur", "some-tool-bin 1.0-1 -> 1.1-1\n");
+    sb.run(&[]);
+    assert_not_applied(&sb);
+    let calls = sb.calls();
+    assert!(calls.contains("notify -u normal 2 updates ready Not applied automatically: AUR updates (some-tool-bin)"),
+            "{calls}");
+    assert!(calls.contains("record 2 updates ready | "), "{calls}");
+
+    sb.write("config/auto-update.json", r#"{"aur": true}"#);
+    sb.run(&[]);
+    assert_applied(&sb);
+}
+
+/// The batch is applied with omarchy update; on plain Arch it is
+/// announced, and the way to run it by hand is pacman's.
+#[test]
+fn without_omarchy_updates_are_only_announced() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("no-omarchy");
+    std::fs::remove_file(sb.path("bin/omarchy")).unwrap();
+    sb.run(&[]);
+    let calls = sb.calls();
+    assert!(!calls.lines().any(|l| l.starts_with("omarchy ")), "{calls}");
+    assert!(calls.contains("Omarchy is not installed. Run: sudo pacman -Syu"), "{calls}");
+    assert!(sb.log().contains("HELD — omarchy not found"), "{}", sb.log());
+}
+
+/// python3 runs isolated: a module left in the directory the unit starts
+/// in (home) is not imported in place of the standard one.
+#[test]
+fn python_does_not_import_from_the_working_directory() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("python-isolated");
+    let marker = sb.path("imported");
+    for module in ["json", "html", "email"] {
+        sb.write(&format!("home/{module}.py"), &format!("open('{}', 'a').write('{module}\\n')\n", marker.display()));
+    }
+    sb.run(&[]);
+    assert_applied(&sb);
+    assert!(!marker.exists(), "imported from the working directory: {:?}", std::fs::read_to_string(&marker));
+}
+
+/// The units: run from /, and a timer left enabled after Almanac is
+/// removed skips instead of failing on a script that is gone.
+#[test]
+fn the_units_start_in_root_and_skip_when_the_script_is_gone() {
+    let unit = |name: &str| std::fs::read_to_string(format!("{}/packaging/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let service = unit("omarchy-auto-update.service");
+    assert!(service.lines().any(|l| l == "WorkingDirectory=/"), "{service}");
+    for text in [service, unit("omarchy-auto-update.timer")] {
+        assert!(text.lines().any(|l| l == "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update"), "{text}");
+    }
 }
 
 #[test]

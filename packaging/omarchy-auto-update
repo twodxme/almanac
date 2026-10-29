@@ -12,10 +12,20 @@
 #
 # "Risky" means either a package that can stop the machine booting or needs a
 # reboot to take effect (kernel, glibc, systemd, mkinitcpio, the bootloader,
-# mesa/nvidia), or fresh Arch news -- which is where Arch announces the manual
-# interventions that break unattended upgrades. News stops holding once it has
-# been read: marked read in Almanac (which adds the headline to news-seen), or
+# mesa/nvidia), or Arch news not yet read -- which is where Arch announces the
+# manual interventions that break unattended upgrades. Each post counts on its
+# own, over the same window Almanac lists (the last RECENT_DAYS days), so
+# every hold for news can be cleared there. A post stops holding once it has
+# been read: marked read in Almanac (which adds its headline to news-seen), or
 # a full upgrade run by hand since the hold.
+#
+# AUR packages are built from scripts anyone can publish, and installing one
+# runs that script: they are not installed unattended unless the setting
+# "aur" (Almanac → Preferences → Updates) says so. Until then a batch with an
+# AUR update in it is announced and left for a person.
+#
+# Updates are applied with `omarchy update`; on a system without Omarchy the
+# packages are announced, never applied.
 #
 # Nothing runs on battery or on a metered connection: an update interrupted by
 # a flat battery is how a machine ends up half-upgraded.
@@ -33,7 +43,11 @@
 # no updates, no notifications, no History entries, no state written.
 #
 # For tests, the paths are overridable: OMARCHY_AUTO_UPDATE_CONFIG,
-# _STATE, _AUTORUN, _POWER_SUPPLY (sysfs) and _PACMAN_LOG.
+# _STATE, _AUTORUN, _POWER_SUPPLY (sysfs) and _PACMAN_LOG; _OMARCHY names
+# the omarchy command.
+#
+# python3 always runs isolated (-I): the unit starts in $HOME, and without it
+# a json.py or html.py left in the working directory would be imported.
 set -uo pipefail
 
 DRY_RUN=0
@@ -65,19 +79,23 @@ fi
 STATE="${OMARCHY_AUTO_UPDATE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-auto-update}"
 POWER_SUPPLY="${OMARCHY_AUTO_UPDATE_POWER_SUPPLY:-/sys/class/power_supply}"
 PACMAN_LOG="${OMARCHY_AUTO_UPDATE_PACMAN_LOG:-/var/log/pacman.log}"
+OMARCHY="${OMARCHY_AUTO_UPDATE_OMARCHY:-omarchy}"
 LOG="$STATE/last-run.log"
 # Headlines the user has read, one per line. Almanac writes it too ("Mark as
 # read" on the news); lines may carry HTML entities, compared decoded.
 NEWS_SEEN="$STATE/news-seen"
-# The headline the last run held for, so a full upgrade made by hand after
-# the hold can count as having read it.
+# The headlines the last news hold was for, one per line, so a full upgrade
+# made by hand after the hold can count as having read them.
 NEWS_HELD="$STATE/news-held"
+# News older than this many days is not held for: what news.rs lists
+# (RECENT_DAYS), so a hold is always for something Almanac shows.
+RECENT_DAYS=60
 
 # Read one boolean out of the settings file, defaulting when it is absent.
 # A file that is there but cannot be read answers "false": every setting
 # read here allows something, and a broken file must not allow more.
 setting() {
-  python3 - "$CONFIG" "$1" "$2" <<'PYEOF' 2>/dev/null || echo false
+  python3 -I - "$CONFIG" "$1" "$2" <<'PYEOF' 2>/dev/null || echo false
 import json, sys
 path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
@@ -173,45 +191,65 @@ metered() {
   return 1
 }
 
-# The newest Arch news headline from the feed on stdin, entities decoded and
-# whitespace collapsed to single spaces (a seen-file holds one per line).
-# The first <item>'s <title>, read as XML: counting <title> tags would
-# select a channel image's title the day the feed gains one. The feed
-# escapes some titles twice (&amp;gt;), so decoding repeats until stable.
-# Prints nothing, and fails, when the feed cannot be read.
-newest_headline() {
-  python3 -c '
-import html, sys
-import xml.etree.ElementTree as ET
-item = ET.fromstring(sys.stdin.read()).find("channel/item")
-s = (item.findtext("title") or "") if item is not None else ""
-while True:
-    d = html.unescape(s)
-    if d == s:
-        break
-    s = d
-s = " ".join(s.split())
-if not s:
-    sys.exit(1)
-print(s)' 2>/dev/null
-}
-
-# Whether the headline is in a seen file, comparing both sides decoded:
-# lines written before decoding existed carry entities (Mkinitcpio &gt;=42).
-headline_in() {
-  [[ -f $2 ]] || return 1
-  python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
-import html, sys
-def decode(s):
+# A headline as both sides compare it: HTML entities decoded until none are
+# left (the feed escapes some titles twice, &amp;gt;), then every run of
+# whitespace -- a no-break space from &nbsp; included -- one space, trimmed.
+# news.rs `normalise` is the same rule; Almanac writes news-seen with it.
+NEWS_NORMALISE='
+import html
+def normalise(s):
     while True:
         d = html.unescape(s)
         if d == s:
-            return s
+            break
         s = d
-want = decode(sys.argv[1].strip())
-with open(sys.argv[2], encoding="utf-8", errors="replace") as f:
-    sys.exit(0 if any(decode(line.strip()) == want for line in f) else 1)
-PYEOF
+    return " ".join(s.split())
+'
+
+# The recent Arch news not read yet, from the feed on stdin: one headline per
+# line, newest first, normalised. "Recent" is a pubDate within RECENT_DAYS,
+# as Almanac counts it (an item with no date it can read is not listed
+# there, so not here either). Items are read as XML, under channel/item:
+# counting <title> tags would pick up a channel image's title. Fails, and
+# prints nothing, when the feed cannot be read.
+unread_news() {
+  python3 -I -c "$NEWS_NORMALISE"'
+import sys, time, email.utils
+import xml.etree.ElementTree as ET
+seen_path, days = sys.argv[1], int(sys.argv[2])
+channel = ET.fromstring(sys.stdin.read()).find("channel")
+if channel is None:
+    sys.exit(1)
+try:
+    with open(seen_path, encoding="utf-8", errors="replace") as f:
+        seen = {normalise(line) for line in f}
+except FileNotFoundError:
+    seen = set()
+cutoff = time.time() - days * 86400
+out = []
+for item in channel.findall("item"):
+    title = normalise(item.findtext("title") or "")
+    try:
+        published = email.utils.parsedate_to_datetime(item.findtext("pubDate") or "").timestamp()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        continue
+    if title and published >= cutoff and title not in seen:
+        out.append((published, title))
+out.sort(key=lambda p: -p[0])
+for _, title in out:
+    print(title)' "$1" "$RECENT_DAYS" 2>/dev/null
+}
+
+# Whether every headline on stdin is in the file $1, compared normalised:
+# lines written before normalising existed carry entities (Mkinitcpio &gt;=42).
+all_in() {
+  [[ -f $1 ]] || return 1
+  python3 -I -c "$NEWS_NORMALISE"'
+import sys
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    have = {normalise(line) for line in f}
+want = {normalise(line) for line in sys.stdin} - {""}
+sys.exit(0 if want <= have else 1)' "$1" 2>/dev/null
 }
 
 # A full upgrade run by hand after the news hold was a person at the
@@ -237,18 +275,26 @@ main() {
   ((DRY_RUN)) && mode=" (dry run)"
   echo "=== $(date -Is)$mode ==="
 
+  # What a person runs instead, said in every hold: Omarchy's update where
+  # there is one, pacman's on plain Arch.
+  local have_omarchy=1 by_hand="omarchy update"
+  if ! command -v "$OMARCHY" >/dev/null 2>&1; then
+    have_omarchy=0
+    by_hand="sudo pacman -Syu"
+  fi
+
   # --- conditions: mains power, an unmetered connection --------------------
   # Checked here rather than with ConditionACPower, which skips silently:
   # a skipped week is recorded in History and said in a notification.
   if on_battery; then
     hold normal "Scheduled update skipped" \
-      "On battery power. Nothing was changed; plug in and run: omarchy update" \
+      "On battery power. Nothing was changed; plug in and run: $by_hand" \
       "SKIPPED — on battery power"
     return 0
   fi
   if metered; then
     hold normal "Scheduled update skipped" \
-      "The connection is metered. Nothing was changed; run: omarchy update" \
+      "The connection is metered. Nothing was changed; run: $by_hand" \
       "SKIPPED — metered connection"
     return 0
   fi
@@ -270,7 +316,7 @@ main() {
   # honoured, so nothing is applied.
   if ! command -v python3 >/dev/null 2>&1; then
     hold critical "Scheduled update stopped" \
-      "It needs python to read its settings and the Arch news. Install python, or run: omarchy update" \
+      "It needs python to read its settings and the Arch news. Install python, or run: $by_hand" \
       "HELD — python3 not found"
     return 0
   fi
@@ -288,17 +334,22 @@ main() {
   repo="$(checkupdates 2>/dev/null)"
   rc=$?
   if [[ $rc -ne 0 && $rc -ne 2 ]]; then
-    hold normal "Updates not checked" "checkupdates failed (exit $rc). Run: omarchy update" \
+    hold normal "Updates not checked" "checkupdates failed (exit $rc). Run: $by_hand" \
       "HELD — checkupdates failed (exit $rc)"
     return 0
   fi
   # yay exits 1 both when nothing is pending and when it failed; only the
   # failure says why on stderr. An unknown AUR batch must not ride along.
+  # Without yay nothing here could update the AUR anyway.
   aur_err="$(mktemp)"
-  aur="$(yay -Qua 2>"$aur_err")"
-  rc=$?
+  if command -v yay >/dev/null 2>&1; then
+    aur="$(yay -Qua 2>"$aur_err")"
+    rc=$?
+  else
+    aur="" rc=0
+  fi
   if [[ $rc -ne 0 && -s $aur_err ]]; then
-    hold normal "Updates not checked" "yay -Qua failed (exit $rc). Run: omarchy update" \
+    hold normal "Updates not checked" "yay -Qua failed (exit $rc). Run: $by_hand" \
       "HELD — yay -Qua failed (exit $rc): $(head -c 300 "$aur_err")"
     rm -f "$aur_err"
     return 0
@@ -320,64 +371,84 @@ main() {
   # definitions of "critical" drifting apart is how a hold silently stops
   # holding the thing it was written for.
   # Both lists go in, so an AUR kernel or dkms module is held too. If Almanac
-  # is missing or cannot answer, fall back to the inline list rather than
-  # reading "no answer" as "nothing risky".
-  local pending risky
+  # is missing or cannot answer (exit 3: a line it cannot read), the whole
+  # batch is held: "no answer" is not "nothing risky", and a shorter list
+  # kept here would miss what the real one has.
+  local pending risky="" core_unknown=0
   pending="$(printf '%s\n%s\n' "$repo" "$aur" | sed '/^$/d')"
-  if [[ -x $AUTORUN ]] && risky="$(printf '%s\n' "$pending" | "$AUTORUN" --core-holds --stdin 2>/dev/null)"; then
-    :
-  else
-    risky="$(printf '%s\n' "$pending" | grep -ioE '^(linux|linux-[a-z0-9-]+|glibc|systemd|mkinitcpio|dracut|booster|limine[a-z-]*|grub|refind|efibootmgr|cryptsetup|lvm2|mdadm|plymouth|mesa|pacman|btrfs-progs|dkms|[a-z0-9-]+-dkms|nvidia[a-z0-9-]*|lib32-nvidia-utils|[a-z]+-ucode)( |$)' | awk '{print $1}' | grep -vE '^linux-(api-headers|docs|tools|wifi|atm|pam)|-docs$' | sort -u)"
+  if ! [[ -x $AUTORUN ]] || ! risky="$(printf '%s\n' "$pending" | "$AUTORUN" --core-holds --stdin 2>/dev/null)"; then
+    core_unknown=1
+    risky=""
   fi
 
-  # --- hold 2: fresh Arch news (where manual interventions are announced) --
-  local news_title news_new=""
+  # --- hold 2: unread Arch news (where manual interventions are announced) -
+  local feed news_unread="" news_new=""
   # A run started at wake can come before the network: retry a little.
   # News that cannot be read is not "no news" -- the batch waits.
-  if ! news_title="$(curl -fsS -m 20 --retry 3 --retry-delay 10 --retry-connrefused \
-    https://archlinux.org/feeds/news/ 2>/dev/null | newest_headline)"; then
+  if ! feed="$(curl -fsS -m 20 --retry 3 --retry-delay 10 --retry-connrefused \
+    https://archlinux.org/feeds/news/ 2>/dev/null)" \
+    || ! news_unread="$(printf '%s' "$feed" | unread_news "$NEWS_SEEN")"; then
     hold normal "$total updates held" \
-      "Arch news could not be checked, so the update waits. Run: omarchy update" \
+      "Arch news could not be checked, so the update waits. Run: $by_hand" \
       "HELD — Arch news could not be read"
     return 0
   fi
-  if ! headline_in "$news_title" "$NEWS_SEEN"; then
-    # Held for this headline before, and a full upgrade was made by hand
+  if [[ -n $news_unread ]]; then
+    # Held for these posts before, and a full upgrade was made by hand
     # since: that was someone looking.
-    if headline_in "$news_title" "$NEWS_HELD" \
+    if printf '%s\n' "$news_unread" | all_in "$NEWS_HELD" \
       && upgraded_by_hand_since "$(stat -c %Y "$NEWS_HELD" 2>/dev/null || echo 0)"; then
       echo "news read: a full upgrade was run by hand since the hold"
       # Under Almanac's lock on the same file: it trims news-seen by
       # rewriting it, and a line appended mid-rewrite would be lost.
-      ((DRY_RUN)) || (flock 8 && printf '%s\n' "$news_title" >>"$NEWS_SEEN") 8>>"$NEWS_SEEN.lock"
+      ((DRY_RUN)) || (flock 8 && printf '%s\n' "$news_unread" >>"$NEWS_SEEN") 8>>"$NEWS_SEEN.lock"
     else
-      news_new="$news_title"
+      news_new="$news_unread"
     fi
   fi
 
-  if [[ -n $risky || -n $news_new ]]; then
+  if [[ -n $risky || $core_unknown == 1 || -n $news_new ]]; then
     local reason="" body
     [[ -n $risky ]] && reason="needs a reboot or touches boot: $(printf '%s' "$risky" | tr '\n' ' ' | sed 's/ *$//')"
-    [[ -n $news_new ]] && reason="${reason:+$reason; }Arch news: $news_new"
+    ((core_unknown)) && reason="${reason:+$reason; }Almanac could not tell which of them touch boot"
+    [[ -n $news_new ]] && reason="${reason:+$reason; }Arch news: $(printf '%s' "$news_new" | sed ':a;N;$!ba;s/\n/; /g')"
     body="Not applied automatically. $reason."
     if [[ -n $news_new ]]; then
-      body+=" Read it in Almanac (Updates) or run: omarchy update"
-      # Only when the headline changes, so the hold's own time (which the
-      # by-hand check compares against) is when it was first held.
-      if ! ((DRY_RUN)) && ! headline_in "$news_new" "$NEWS_HELD"; then
+      body+=" Read it in Almanac (Updates) or run: $by_hand"
+      # Only when the posts held for change, so the hold's own time (which
+      # the by-hand check compares against) is when they were first held.
+      if ! ((DRY_RUN)) && ! printf '%s\n' "$news_new" | all_in "$NEWS_HELD"; then
         printf '%s\n' "$news_new" >"$NEWS_HELD"
       fi
     else
-      body+=" Run: omarchy update"
+      body+=" Run: $by_hand"
     fi
     hold critical "$total updates held" "$body" "HELD — $reason"
+    return 0
+  fi
+
+  # --- hold 3: AUR packages, unless the user allowed them ------------------
+  if [[ $aur_n -gt 0 && "$(setting aur false)" != "true" ]]; then
+    local names
+    names="$(printf '%s\n' "$aur" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
+    hold normal "$total updates ready" \
+      "Not applied automatically: AUR updates ($names) run build scripts anyone can publish. Review them and run: $by_hand" \
+      "HELD — AUR updates, not allowed unattended: $names"
+    return 0
+  fi
+
+  # --- Omarchy: what applies the batch --------------------------------------
+  if [[ $have_omarchy == 0 ]]; then
+    hold normal "$total updates ready" \
+      "Not applied automatically: the scheduled update installs with omarchy update, and Omarchy is not installed. Run: $by_hand" \
+      "HELD — omarchy not found, notify only"
     return 0
   fi
 
   # --- elevation check: never hang a timer on a password prompt ------------
   if ! sudo -n true 2>/dev/null; then
     hold normal "$total updates ready" \
-      "Routine batch, but automatic install needs passwordless sudo. Run: omarchy update" \
+      "Routine batch, but automatic install needs passwordless sudo. Run: $by_hand" \
       "no passwordless sudo — notify only"
     return 0
   fi
@@ -391,7 +462,7 @@ main() {
     return 0
   fi
   echo "applying $total updates"
-  if omarchy update -y 2>&1; then
+  if "$OMARCHY" update -y 2>&1; then
     notify normal "Updated $total packages" "System is current. $(date '+%a %-d %b %H:%M')"
     echo "ok"
   else

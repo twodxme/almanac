@@ -1,5 +1,7 @@
 [Unit]
 Description=Run the weekly update check
+# Left enabled after Almanac was removed: do not start at all.
+ConditionPathExists=/usr/lib/almanac/omarchy-auto-update
 
 [Timer]
 OnCalendar=Sun 11:00
