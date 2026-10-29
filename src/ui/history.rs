@@ -456,7 +456,9 @@ impl Win {
         let clear = gtk::Button::builder().label(tr("Clear…")).valign(gtk::Align::Center).build();
         crate::ui::shell::name(&clear, &tr("Clear Almanac's log"));
         clear.set_sensitive(
-            days.iter().flat_map(|d| &d.events).any(|e| e.kind == history::ALMANAC || e.kind == history::AUTOUPDATE),
+            days.iter()
+                .flat_map(|d| &d.events)
+                .any(|e| (e.kind == history::ALMANAC || e.kind == history::AUTOUPDATE) && !history::is_cleared_marker(e)),
         );
         let w = self.downgrade();
         clear.connect_clicked(move |_| {

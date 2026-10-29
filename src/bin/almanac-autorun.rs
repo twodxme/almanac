@@ -69,8 +69,15 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--core-holds") => std::process::exit(core_holds(&args[1..])),
-        Some("--record-hold") => std::process::exit(record_hold(&args[1..])),
+        Some("--record-hold") => {
+            let code = record_hold(&args[1..]);
+            almanac::history::flush();
+            std::process::exit(code)
+        }
         _ => {}
     }
-    std::process::exit(almanac::autorun::main(None));
+    let code = almanac::autorun::main(None);
+    // process::exit does not wait for History's writer thread.
+    almanac::history::flush();
+    std::process::exit(code);
 }

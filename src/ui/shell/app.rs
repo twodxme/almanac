@@ -283,10 +283,15 @@ pub fn run() -> glib::ExitCode {
     // `env::args` would panic on it, so the bytes are compared.
     if std::env::args_os().skip(1).any(|a| a == "--guard") {
         let code = crate::watcher::main();
+        crate::history::flush();
         return glib::ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
     crate::ui::timings::launch();
-    AlmanacApp::new().app.run()
+    let code = AlmanacApp::new().app.run();
+    // History lines the window recorded are written by a thread of their
+    // own: let it finish before the process ends.
+    crate::history::flush();
+    code
 }
 
 #[cfg(test)]
