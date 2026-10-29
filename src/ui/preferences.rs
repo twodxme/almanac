@@ -17,6 +17,61 @@ pub struct State {}
 
 type After = Rc<dyn Fn()>;
 
+/// What the Updates page shows about the scheduled run, read off the main
+/// thread before the dialog is built.
+struct Scheduled {
+    cfg: autoupdate::Config,
+    st: autoupdate::Status,
+    /// The schedule key in effect (`autoupdate::current_schedule`).
+    current: String,
+    /// Old units in ~/.config, and what became of them.
+    legacy: autoupdate::Legacy,
+    /// The scheduled run installs with `omarchy update`.
+    omarchy: bool,
+    /// Demo mode: fixtures shown, nothing saved, no unit touched.
+    demo: bool,
+}
+
+impl Scheduled {
+    /// The machine's own state. Old units Almanac installed before the
+    /// package shipped them are replaced first (see
+    /// `autoupdate::migrate_legacy_units`), so what is shown is what runs.
+    fn read() -> Result<Scheduled, String> {
+        if crate::demo::active() {
+            return Ok(Scheduled::demo());
+        }
+        let legacy = autoupdate::migrate_legacy_units().unwrap_or_else(|e| {
+            eprintln!("almanac: {e}");
+            autoupdate::Legacy::None
+        });
+        Ok(Scheduled {
+            cfg: autoupdate::load()?,
+            st: autoupdate::try_status()?,
+            current: autoupdate::current_schedule()?,
+            legacy,
+            omarchy: autoupdate::omarchy_installed(),
+            demo: false,
+        })
+    }
+
+    /// Screenshots: a timer that is on, with made-up times, nothing read
+    /// from this machine's systemd.
+    fn demo() -> Scheduled {
+        Scheduled {
+            cfg: autoupdate::DEFAULTS.clone(),
+            st: autoupdate::Status {
+                enabled: true,
+                next: "Sun 2026-11-01 11:14:02 UTC".into(),
+                last: "Sun 2026-10-25 11:06:51 UTC".into(),
+            },
+            current: "weekly".into(),
+            legacy: autoupdate::Legacy::None,
+            omarchy: true,
+            demo: true,
+        }
+    }
+}
+
 fn switch(
     group: &adw::PreferencesGroup,
     key: &'static str,
@@ -43,6 +98,12 @@ fn switch(
     Ok(row)
 }
 
+/// Why the scheduled update cannot be switched on without Omarchy.
+fn needs_omarchy() -> String {
+    tr("Needs Omarchy: the scheduled run installs updates with omarchy update, which is not \
+        installed here. Update by hand with sudo pacman -Syu.")
+}
+
 // ---- settings ---------------------------------------------------------
 impl Win {
     /// Almanac's preferences: General, Updates, Privacy, Background.
@@ -55,11 +116,11 @@ impl Win {
     pub fn on_preferences(&self) {
         let w = self.downgrade();
         spawn_bg(
-            || -> Result<_, String> { Ok((autoupdate::load()?, autoupdate::try_status()?)) },
+            Scheduled::read,
             move |read| match read {
-                Ok((cfg, st)) => {
+                Ok(sched) => {
                     if let Some(w) = w.upgrade() {
-                        if let Err(e) = w.build_preferences(cfg, st) {
+                        if let Err(e) = w.build_preferences(sched) {
                             eprintln!("almanac: {e}");
                         }
                     }
@@ -69,7 +130,8 @@ impl Win {
         );
     }
 
-    fn build_preferences(&self, cfg: autoupdate::Config, st: autoupdate::Status) -> Result<(), String> {
+    fn build_preferences(&self, sched_state: Scheduled) -> Result<(), String> {
+        let Scheduled { cfg, st, current, legacy, omarchy, demo } = sched_state;
         let dialog = adw::PreferencesDialog::builder().title(tr("Preferences")).build();
 
         // ---- General
@@ -150,12 +212,31 @@ impl Win {
             .title(tr("Run updates on a schedule"))
             .active(st.enabled)
             .build();
+        // It installs with `omarchy update`: on plain Arch there is nothing
+        // to switch on (a timer switched on some other way can still be
+        // switched off).
+        if !omarchy {
+            enabled.set_subtitle(&needs_omarchy());
+            enabled.set_sensitive(st.enabled);
+        }
         sched.add(&enabled);
+        if let autoupdate::Legacy::Foreign(paths) = &legacy {
+            let shown: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            // Not Almanac's: they override the packaged units, and are left
+            // alone.
+            let body = format!(
+                "{}\n{}",
+                tr("Almanac leaves it alone, and it overrides the one Almanac ships, so these \
+                    settings may not apply. Remove it to use Almanac's:"),
+                shown.join("\n")
+            );
+            let note = Win::note_row("dialog-information-symbolic", &tr("Your own copy of the timer is in use"), &body);
+            sched.add(&note);
+        }
         // Its own names: the plugin-scope list below once reused "keys", and
         // closing the dialog saved a scope ("verified") as the schedule.
         let sched_labels: Vec<&str> = autoupdate::SCHEDULES.iter().map(|(_k, label, _c)| *label).collect();
         let sched_keys: Vec<&'static str> = autoupdate::SCHEDULES.iter().map(|(k, _l, _c)| *k).collect();
-        let current = autoupdate::current_schedule()?;
         let combo = adw::ComboRow::builder()
             .title(tr("How often"))
             .model(&gtk::StringList::new(&sched_labels))
@@ -180,9 +261,16 @@ impl Win {
         for (key, title, subtitle) in [
             (
                 "packages",
-                "Repository and AUR packages",
+                "Repository packages",
                 "Needs passwordless sudo to apply; without it the run only notifies you that \
                  updates are waiting.",
+            ),
+            (
+                "aur",
+                "Also update AUR packages",
+                "Off unless you turn it on. An AUR package is built from a script anyone can \
+                 publish, and installing it runs that script as root with nobody reading it \
+                 first. Left off, the run tells you about AUR updates and installs nothing.",
             ),
             (
                 "agents",
@@ -209,6 +297,12 @@ impl Win {
                 .build();
             rows.push((key, row.clone()));
             include.add(&row);
+        }
+        // AUR updates ride on package updates: off with them.
+        if let (Some((_, packages)), Some((_, aur))) =
+            (rows.iter().find(|(k, _)| *k == "packages"), rows.iter().find(|(k, _)| *k == "aur"))
+        {
+            packages.bind_property("active", aur, "sensitive").sync_create().build();
         }
         updates.add(&include);
 
@@ -255,6 +349,14 @@ impl Win {
             "Run the scheduled update immediately, in a window you can watch",
         )));
         run_btn.add_css_class("suggested-action");
+        // Demo mode runs nothing; without Omarchy there is nothing it could
+        // install.
+        if demo || !omarchy {
+            run_btn.set_sensitive(false);
+            if !omarchy {
+                run_row.set_subtitle(&needs_omarchy());
+            }
+        }
         {
             let w = self.downgrade();
             run_btn.connect_clicked(move |_b| {
@@ -424,6 +526,10 @@ impl Win {
         // The saves need no window: only the toasts and the store reload do,
         // so a window already gone still gets its settings written.
         dialog.connect_closed(move |_d| {
+            // Demo mode: the switches were for show.
+            if demo {
+                return;
+            }
             let mut new = cfg.clone();
             for (key, row) in &rows {
                 new.set(key, row.is_active());
@@ -515,6 +621,25 @@ mod tests {
         let src = source();
         let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
         src[..cut].to_string()
+    }
+
+    /// Demo mode shows fixtures: a demo screenshot once carried the real
+    /// timer's next run. Nothing is read from systemd, no old unit is
+    /// moved, and closing the dialog saves nothing.
+    #[test]
+    fn demo_mode_shows_fixtures_and_touches_no_unit() {
+        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let read = super::Scheduled::read();
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let s = read.unwrap();
+        assert!(s.demo && s.omarchy && s.st.enabled);
+        assert_eq!(s.st.next, super::Scheduled::demo().st.next);
+        assert_eq!(s.legacy, crate::autoupdate::Legacy::None);
+        assert_eq!(s.cfg, *crate::autoupdate::DEFAULTS);
+        let src = body();
+        let closed = &src[src.find("dialog.connect_closed").unwrap()..];
+        assert!(closed[..300].contains("if demo {\n                return;"), "{}", &closed[..300]);
     }
 
     /// test_closing_preferences_reads_the_schedule_from_its_own_list:

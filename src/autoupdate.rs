@@ -126,15 +126,48 @@ pub static SCHEDULE_DROPIN: LazyLock<PathBuf> =
 /// The script the timer runs, as the package installs it.
 pub const SHIPPED_SCRIPT: &str = "/usr/lib/almanac/omarchy-auto-update";
 
-/// The script to run for "run it now": the packaged one, else the copy in
-/// ~/.local/bin that installs from before it shipped used.
+/// The service the timer starts, as the package installs it.
+pub const SHIPPED_SERVICE: &str = "/usr/lib/systemd/user/omarchy-auto-update.service";
+/// The service's name.
+pub const SERVICE: &str = "omarchy-auto-update.service";
+
+/// The script to run for "run it now": the one the timer runs, so the two
+/// cannot differ. That is the ExecStart of a user copy of the service when
+/// there is one (units kept from before the package shipped them), else the
+/// packaged script, else the copy in ~/.local/bin installs from before it
+/// shipped used.
 pub fn script_path() -> PathBuf {
-    let shipped = Path::new(SHIPPED_SCRIPT);
+    let user = TIMER_FILE.with_file_name(SERVICE);
+    script_path_in(&user, Path::new(SHIPPED_SCRIPT), &crate::util::home())
+}
+
+fn script_path_in(user_service: &Path, shipped: &Path, home: &Path) -> PathBuf {
+    if let Some(exec) = std::fs::read_to_string(user_service).ok().as_deref().and_then(|t| exec_start(t, home)) {
+        return exec;
+    }
     if shipped.exists() {
         shipped.to_path_buf()
     } else {
-        crate::util::home().join(".local/bin/omarchy-auto-update")
+        home.join(".local/bin/omarchy-auto-update")
     }
+}
+
+/// The program a service's last `ExecStart=` runs, `%h` as the home
+/// folder; None when it has none or names it some other way.
+fn exec_start(unit: &str, home: &Path) -> Option<PathBuf> {
+    let line = unit.lines().rev().find_map(|l| l.trim().strip_prefix("ExecStart="))?;
+    let prog = line.split_whitespace().next()?.trim_start_matches(['-', '@', ':', '+', '!']);
+    let prog = match prog.strip_prefix("%h/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(prog),
+    };
+    (prog.is_absolute() && !prog.to_string_lossy().contains('%')).then_some(prog)
+}
+
+/// Whether Omarchy is installed: the scheduled run applies updates with
+/// `omarchy update`, and only announces them without it.
+pub fn omarchy_installed() -> bool {
+    crate::agents::which("omarchy").is_some()
 }
 
 /// Where the timer's schedule can live: a full user copy of the unit, the
@@ -431,6 +464,9 @@ impl Default for Config {
         c.set("agents", true);
         c.set("appimages", true);
         c.set("plugins", false);
+        // AUR updates build and install what anyone can publish, as root:
+        // off unless chosen, and the run only announces them.
+        c.set("aur", false);
         c.set("notify", true);
         c
     }
@@ -1442,6 +1478,201 @@ fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
 }
 
 
+// --- Units an earlier Almanac left in ~/.config ----------------------------
+
+/// What [`migrate_legacy_units`] found in ~/.config/systemd/user.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Legacy {
+    /// No user copy of the units: the packaged ones are in use.
+    #[default]
+    None,
+    /// Almanac's own old copies were moved aside (`.bak`); the packaged
+    /// units run now, enabled again when the old timer was.
+    Migrated { enabled: bool },
+    /// Copies that do not look like Almanac's: left alone, and they
+    /// override the packaged units.
+    Foreign(Vec<PathBuf>),
+}
+
+/// The lines an Almanac-written service may have (comments and blank lines
+/// aside): every version from the one first set up by hand (ExecStart in
+/// ~/.local/bin) to the packaged one. Anything else in the file is the
+/// user's, and the file is left alone.
+const OUR_SERVICE_LINES: &[&str] = &[
+    "[Unit]",
+    "Description=Weekly system update, holding anything that needs judgement",
+    "Documentation=man:omarchy-auto-update",
+    "Documentation=https://github.com/twodxme/almanac#scheduled-updates",
+    "After=network-online.target",
+    "Wants=network-online.target",
+    "ConditionACPower=true",
+    "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update",
+    "[Service]",
+    "Type=oneshot",
+    "WorkingDirectory=/",
+    "TimeoutStartSec=3h",
+];
+/// The scripts an Almanac-written service has run.
+const OUR_EXEC_STARTS: &[&str] =
+    &["ExecStart=%h/.local/bin/omarchy-auto-update", "ExecStart=/usr/lib/almanac/omarchy-auto-update"];
+/// The same for the timer; its OnCalendar= is whichever schedule was set.
+const OUR_TIMER_LINES: &[&str] = &[
+    "[Unit]",
+    "Description=Run the weekly update check",
+    "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update",
+    "[Timer]",
+    "Persistent=true",
+    "RandomizedDelaySec=30m",
+    "[Install]",
+    "WantedBy=timers.target",
+];
+
+/// A unit's lines that say something: trimmed, comments and blanks dropped.
+fn unit_lines(text: &str) -> Vec<&str> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])).collect()
+}
+
+/// Whether `text` is a service an Almanac wrote: only its known lines, one
+/// of its scripts, and the description it always had.
+fn is_our_service(text: &str) -> bool {
+    let lines = unit_lines(text);
+    lines.iter().filter(|l| l.starts_with("ExecStart=")).count() == 1
+        && lines.iter().any(|l| OUR_EXEC_STARTS.contains(l))
+        && lines.contains(&OUR_SERVICE_LINES[1])
+        && lines.iter().all(|l| OUR_SERVICE_LINES.contains(l) || OUR_EXEC_STARTS.contains(l))
+}
+
+/// The same for the timer, with its schedule: Some(OnCalendar) when it is
+/// Almanac's (one OnCalendar=, one of [`SCHEDULES`] or the first default).
+fn our_timer_schedule(text: &str) -> Option<String> {
+    let lines = unit_lines(text);
+    let cals: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix("OnCalendar=")).map(str::trim).collect();
+    let [cal] = cals.as_slice() else { return None };
+    let known = SCHEDULES.iter().any(|(_k, _l, c)| c == cal);
+    let ours = known
+        && lines.contains(&OUR_TIMER_LINES[1])
+        && lines.iter().all(|l| l.starts_with("OnCalendar=") || OUR_TIMER_LINES.contains(l));
+    ours.then(|| (*cal).to_owned())
+}
+
+/// Where the old copies and the packaged units are.
+struct LegacyFiles<'a> {
+    /// ~/.config/systemd/user
+    dir: &'a Path,
+    shipped_timer: &'a Path,
+    shipped_service: &'a Path,
+}
+
+/// Units Almanac installed in ~/.config/systemd/user before the package
+/// shipped them (ExecStart in ~/.local/bin, an older script without the
+/// battery and metered-connection skips) override the packaged ones for
+/// as long as they are there, and nothing else removes them. When they
+/// are Almanac's own -- nothing in them but what Almanac wrote -- they are
+/// moved aside as `.bak`, and the packaged timer takes over: enabled when
+/// the old one was, on the schedule the old one had (a schedule drop-in
+/// already there stays, and applies to the packaged timer the same way).
+/// Copies with anything else in them are the user's, and left alone:
+/// [`Legacy::Foreign`] names them for Preferences to say so.
+///
+/// Nothing is done until the packaged units are installed. Never in demo
+/// mode.
+pub fn migrate_legacy_units() -> Result<Legacy, String> {
+    imported()?;
+    if crate::demo::active() {
+        return Ok(Legacy::None);
+    }
+    let dir = TIMER_FILE.parent().map(Path::to_path_buf).unwrap_or_default();
+    let files = LegacyFiles {
+        dir: &dir,
+        shipped_timer: Path::new(SHIPPED_TIMER),
+        shipped_service: Path::new(SHIPPED_SERVICE),
+    };
+    migrate_in(&files, &mut real_sys())
+}
+
+fn migrate_in(files: &LegacyFiles, sys: Sys) -> Result<Legacy, String> {
+    let timer = files.dir.join(UNIT);
+    let service = files.dir.join(SERVICE);
+    let present: Vec<&PathBuf> = [&timer, &service].into_iter().filter(|p| std::fs::symlink_metadata(p).is_ok()).collect();
+    if present.is_empty() || !files.shipped_timer.exists() || !files.shipped_service.exists() {
+        return Ok(Legacy::None);
+    }
+    // A link (into a dotfiles checkout, say) is the user's arrangement even
+    // when what it points at is Almanac's.
+    let text = |p: &Path| -> Option<String> {
+        let meta = std::fs::symlink_metadata(p).ok()?;
+        if !meta.file_type().is_file() {
+            return None;
+        }
+        std::fs::read_to_string(p).ok()
+    };
+    let mut schedule = None;
+    let mut foreign = Vec::new();
+    for p in &present {
+        let ours = match text(p) {
+            Some(t) if **p == timer => {
+                schedule = our_timer_schedule(&t);
+                schedule.is_some()
+            }
+            Some(t) => is_our_service(&t),
+            None => false,
+        };
+        if !ours {
+            foreign.push((*p).clone());
+        }
+    }
+    if !foreign.is_empty() {
+        return Ok(Legacy::Foreign(foreign));
+    }
+
+    let enabled = is_enabled_with(sys)?;
+    if enabled {
+        // Takes the old copy out of timers.target.wants.
+        let (code, out) = sys(&["disable", "--now", UNIT], 30)?;
+        if code != 0 {
+            return Err(format!("could not switch off the old timer: {out}"));
+        }
+    }
+    // The old timer's schedule, where it is not the packaged default and no
+    // drop-in already says otherwise.
+    let dropin = files.dir.join(format!("{UNIT}.d")).join("schedule.conf");
+    if let Some(cal) = schedule.filter(|c| c != "Sun 11:00") {
+        if std::fs::symlink_metadata(&dropin).is_err() {
+            if let Some(parent) = dropin.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| py_oserror(&e, parent))?;
+            }
+            write_unit(&dropin, &format!("# Written by Almanac (Preferences, Updates).\n[Timer]\nOnCalendar=\nOnCalendar={cal}\n"))?;
+        }
+    }
+    for p in &present {
+        let bak = backup_name(p);
+        std::fs::rename(p, &bak).map_err(|e| py_oserror2(&e, p, Some(&bak)))?;
+    }
+    sys(&["daemon-reload"], 30)?;
+    if enabled {
+        let (code, out) = sys(&["enable", "--now", UNIT], 30)?;
+        if code != 0 {
+            return Err(format!("could not switch on the packaged timer: {out}"));
+        }
+    }
+    Ok(Legacy::Migrated { enabled })
+}
+
+/// `p.bak`, or `p.bak.2`, `.3`... when that is taken: a backup never
+/// replaces a file already there.
+fn backup_name(p: &Path) -> PathBuf {
+    let with = |suffix: &str| {
+        let mut name = p.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let first = with(".bak");
+    if std::fs::symlink_metadata(&first).is_err() {
+        return first;
+    }
+    (2..).map(|n| with(&format!(".bak.{n}"))).find(|c| std::fs::symlink_metadata(c).is_err()).unwrap_or(first)
+}
+
 /// Code points `str.isprintable()` rejects (Python 3.14, Unicode 16.0.0),
 /// as inclusive ranges, generated from `unicodedata`.
 #[rustfmt::skip]
@@ -1722,6 +1953,148 @@ mod tests {
         assert!(matches!(r, Ran::Exited { code: -15, .. }));
         let r = run_capture(&["sh", "-c", "(sleep 3 &); echo x"], Duration::from_secs(1)).unwrap();
         assert!(matches!(r, Ran::TimedOut));
+    }
+
+    /// The units as 2.1 left them in ~/.config/systemd/user, byte for byte.
+    const OLD_SERVICE: &str = "[Unit]\nDescription=Weekly system update, holding anything that needs judgement\n\
+Documentation=man:omarchy-auto-update\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\n\
+Type=oneshot\nExecStart=%h/.local/bin/omarchy-auto-update\n# AUR builds are not quick; do not let a long compile get killed halfway.\n\
+TimeoutStartSec=3h\n";
+    const OLD_TIMER: &str = "[Unit]\nDescription=Run the weekly update check\n\n[Timer]\nOnCalendar=Sun 11:00\n\
+# A laptop is often asleep at the scheduled time; run on next wake instead of\n# skipping the week entirely.\n\
+Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
+
+    /// A fake HOME's unit folder and a fake package: (dir, shipped timer,
+    /// shipped service).
+    fn legacy_setup(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let d = tmp(name);
+        let dir = d.join("config/systemd/user");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(d.join("usr")).unwrap();
+        let (t, sv) = (d.join("usr").join(UNIT), d.join("usr").join(SERVICE));
+        std::fs::write(&t, include_str!("../packaging/omarchy-auto-update.timer")).unwrap();
+        std::fs::write(&sv, include_str!("../packaging/omarchy-auto-update.service")).unwrap();
+        (dir, t, sv)
+    }
+
+    fn fake_systemctl(enabled: bool) -> (std::rc::Rc<std::cell::RefCell<Vec<String>>>, impl FnMut(&[&str], u64) -> Result<(i32, String), String>) {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let c = calls.clone();
+        let sys = move |a: &[&str], _t: u64| {
+            c.borrow_mut().push(a.join(" "));
+            Ok(match a[0] {
+                "is-enabled" if enabled => (0, "enabled".to_owned()),
+                "is-enabled" => (1, "disabled".to_owned()),
+                _ => (0, String::new()),
+            })
+        };
+        (calls, sys)
+    }
+
+    /// The units 2.1 left behind are Almanac's: moved aside, and the
+    /// packaged timer enabled in their place.
+    #[test]
+    fn old_units_almanac_wrote_are_replaced_by_the_packaged_ones() {
+        let (dir, t, sv) = legacy_setup("legacy-ours");
+        std::fs::write(dir.join(SERVICE), OLD_SERVICE).unwrap();
+        std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
+        // Until then, the old timer runs the old script, and so does Run now.
+        let home = dir.join("home");
+        assert_eq!(script_path_in(&dir.join(SERVICE), &t, &home), home.join(".local/bin/omarchy-auto-update"));
+        let (calls, mut sys) = fake_systemctl(true);
+        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: true });
+        assert_eq!(
+            *calls.borrow(),
+            vec![format!("is-enabled {UNIT}"), format!("disable --now {UNIT}"), "daemon-reload".into(), format!("enable --now {UNIT}")]
+        );
+        assert!(!dir.join(UNIT).exists() && !dir.join(SERVICE).exists());
+        assert_eq!(std::fs::read_to_string(dir.join(format!("{SERVICE}.bak"))).unwrap(), OLD_SERVICE);
+        assert_eq!(std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(), OLD_TIMER);
+        // The default schedule needs no drop-in.
+        assert!(!dir.join(format!("{UNIT}.d")).exists());
+        // Run now and the timer run one script: the packaged one, now.
+        assert_eq!(script_path_in(&dir.join(SERVICE), &t, &home), t);
+        assert_eq!(script_path_in(&dir.join(SERVICE), &dir.join("gone"), &home), home.join(".local/bin/omarchy-auto-update"));
+        // Nothing left to do the next time.
+        let (calls, mut sys) = fake_systemctl(true);
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::None);
+        assert!(calls.borrow().is_empty());
+    }
+
+    /// A timer that was off stays off; a schedule other than the default
+    /// moves into a drop-in, and a drop-in already there is kept as it is.
+    #[test]
+    fn an_old_timer_keeps_its_schedule_and_its_state() {
+        let (dir, t, sv) = legacy_setup("legacy-schedule");
+        std::fs::write(dir.join(UNIT), OLD_TIMER.replace("OnCalendar=Sun 11:00", "OnCalendar=*-*-* 11:00:00")).unwrap();
+        std::fs::write(dir.join(format!("{UNIT}.bak")), "the user's own").unwrap();
+        let (calls, mut sys) = fake_systemctl(false);
+        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: false });
+        assert_eq!(*calls.borrow(), vec![format!("is-enabled {UNIT}"), "daemon-reload".to_string()]);
+        let dropin = dir.join(format!("{UNIT}.d/schedule.conf"));
+        let files_now = TimerFiles { user: &dir.join(UNIT), shipped: &t, dropin: &dropin };
+        assert_eq!(current_schedule_of(&files_now).unwrap(), "daily");
+        // A backup never replaces a file already there.
+        assert_eq!(std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(), "the user's own");
+        assert!(dir.join(format!("{UNIT}.bak.2")).exists());
+
+        let (dir, t, sv) = legacy_setup("legacy-dropin");
+        std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
+        std::fs::create_dir_all(dir.join(format!("{UNIT}.d"))).unwrap();
+        std::fs::write(dir.join(format!("{UNIT}.d/schedule.conf")), "[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n").unwrap();
+        let (_calls, mut sys) = fake_systemctl(true);
+        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: true });
+        let dropin = dir.join(format!("{UNIT}.d/schedule.conf"));
+        let files_now = TimerFiles { user: &dir.join(UNIT), shipped: &t, dropin: &dropin };
+        assert_eq!(current_schedule_of(&files_now).unwrap(), "monthly");
+    }
+
+    /// Units with anything Almanac did not write in them are the user's:
+    /// untouched, nothing switched, and named for Preferences.
+    #[test]
+    fn units_the_user_wrote_are_left_alone() {
+        for (name, service) in [
+            ("env", OLD_SERVICE.replace("TimeoutStartSec=3h", "TimeoutStartSec=3h\nEnvironment=FOO=1")),
+            ("exec", OLD_SERVICE.replace("%h/.local/bin/omarchy-auto-update", "/opt/my-update")),
+        ] {
+            let (dir, t, sv) = legacy_setup(&format!("legacy-foreign-{name}"));
+            std::fs::write(dir.join(SERVICE), &service).unwrap();
+            std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
+            let (calls, mut sys) = fake_systemctl(true);
+            let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+            assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Foreign(vec![dir.join(SERVICE)]));
+            assert!(calls.borrow().is_empty());
+            assert_eq!(std::fs::read_to_string(dir.join(SERVICE)).unwrap(), service);
+            assert!(dir.join(UNIT).exists());
+            // Run now runs what that timer runs.
+            if name == "exec" {
+                assert_eq!(script_path_in(&dir.join(SERVICE), &t, &dir), PathBuf::from("/opt/my-update"));
+            }
+        }
+        // A link, even to Almanac's own text, is the user's arrangement.
+        let (dir, t, sv) = legacy_setup("legacy-link");
+        std::fs::write(dir.join("elsewhere.timer"), OLD_TIMER).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere.timer"), dir.join(UNIT)).unwrap();
+        let (_calls, mut sys) = fake_systemctl(true);
+        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Foreign(vec![dir.join(UNIT)]));
+        // Without the packaged units there is nothing to move to.
+        let (dir, t, sv) = legacy_setup("legacy-unpackaged");
+        std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
+        std::fs::remove_file(&t).unwrap();
+        let (calls, mut sys) = fake_systemctl(true);
+        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::None);
+        assert!(calls.borrow().is_empty() && dir.join(UNIT).exists());
+    }
+
+    #[test]
+    fn the_aur_is_off_unless_chosen() {
+        assert!(!DEFAULTS.get_bool("aur"));
+        assert!(DEFAULTS.get_bool("packages"));
     }
 
     #[test]

@@ -167,6 +167,14 @@ impl AlmanacApp {
                     let _ = std::thread::Builder::new()
                         .name("history-expiry".into())
                         .spawn(crate::history::expire);
+                    // Timer units an older Almanac put in ~/.config override
+                    // the packaged ones (and run an older script) until
+                    // they are replaced.
+                    let _ = std::thread::Builder::new().name("timer-migration".into()).spawn(|| {
+                        if let Err(e) = crate::autoupdate::migrate_legacy_units() {
+                            eprintln!("almanac: {e}");
+                        }
+                    });
                 }
                 w
             }
