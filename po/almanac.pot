@@ -269,6 +269,10 @@ msgstr ""
 msgid "OK"
 msgstr ""
 
+#: src/ui/history.rs:134
+msgid "Couldn't check"
+msgstr ""
+
 #: src/ui/history.rs:233
 msgid "Passed"
 msgstr ""

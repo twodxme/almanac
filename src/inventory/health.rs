@@ -93,10 +93,20 @@ pub fn try_aur_health(names: &[String]) -> Result<BTreeMap<String, AurHealth>, S
 }
 
 /// `try_aur_health`, None when there is no answer at all: offline (or the
-/// AUR answered with an error) and nothing kept from before.
+/// AUR answered with an error) and nothing kept from before covers every
+/// name.
 pub fn aur_health_answer(names: &[String]) -> Result<Option<BTreeMap<String, AurHealth>>, String> {
+    Ok(aur_health_known(names)?.filter(|k| k.covers(names)).map(|k| k.results))
+}
+
+/// What is known about `names`, for a caller that must tell "not in the
+/// AUR" from "could not ask": `asked` holds those of them an answer (fresh,
+/// or kept from before when offline) asked about, and a name in it with no
+/// result is one the AUR no longer carries; a name not in it was not
+/// checked. None when nothing at all is known.
+pub fn aur_health_known(names: &[String]) -> Result<Option<AurAnswer>, String> {
     if names.is_empty() {
-        return Ok(Some(BTreeMap::new()));
+        return Ok(Some(AurAnswer::default()));
     }
     // Held across the fetch, so callers that ask together share one call.
     let mut kept = AUR_KEPT.lock().unwrap_or_else(|e| e.into_inner());
@@ -108,7 +118,7 @@ pub fn aur_health_answer(names: &[String]) -> Result<Option<BTreeMap<String, Aur
     }
     let Some((_, answer)) = kept.as_mut() else { return Ok(None) };
     let fetch = |url: &str| http_json(url, 15).map_err(|e| e.to_string());
-    let (out, fresh) = aur_health_from(answer.as_ref(), names, util::now(), &fetch)?;
+    let (out, fresh) = aur_known_from(answer.as_ref(), names, util::now(), &fetch)?;
     if let Some(fresh) = fresh {
         if let Ok(bytes) = serde_json::to_vec(&fresh) {
             let _ = util::atomic_write(&path, bytes);
@@ -154,6 +164,13 @@ impl AurAnswer {
         names.iter().all(|n| self.asked.contains(n))
     }
 
+    /// This answer cut down to `names`: what it asked of them, and said.
+    /// None when it asked about none of them.
+    fn part(&self, names: &[String]) -> Option<AurAnswer> {
+        let asked: BTreeSet<String> = names.iter().filter(|n| self.asked.contains(*n)).cloned().collect();
+        (!asked.is_empty() || names.is_empty()).then(|| AurAnswer { at: self.at, results: self.only(names), asked })
+    }
+
     /// What this answer says about `names`, and nothing else.
     fn only(&self, names: &[String]) -> BTreeMap<String, AurHealth> {
         let want: HashSet<&str> = names.iter().map(String::as_str).collect();
@@ -161,22 +178,35 @@ impl AurAnswer {
     }
 }
 
-/// `try_aur_health` against a kept answer, at `now`, fetching with `fetch`:
-/// the answer for `names`, and the answer to keep from now on when a fetch
-/// made a new one. A kept answer from the future (the clock went back) is
-/// treated as old. An error reply (`"type": "error"`, a rate limit) is no
-/// answer, the same as being offline: read as an answer it would say every
-/// package had left the AUR.
-pub(super) fn aur_health_from(
+/// `aur_known_from` as `try_aur_health` reads it: the map only when what is
+/// known covers every name.
+#[cfg(test)]
+fn aur_health_from(
     kept: Option<&AurAnswer>,
     names: &[String],
     now: f64,
     fetch: &dyn Fn(&str) -> Result<Value, String>,
 ) -> Result<(Option<AurMap>, Option<AurAnswer>), String> {
-    let usable = kept.filter(|k| k.covers(names));
-    if let Some(k) = usable {
+    let (known, fresh) = aur_known_from(kept, names, now, fetch)?;
+    Ok((known.filter(|k| k.covers(names)).map(|k| k.results), fresh))
+}
+
+/// `aur_health_known` against a kept answer, at `now`, fetching with
+/// `fetch`: what is known about `names`, and the answer to keep from now on
+/// when a fetch made a new one. A kept answer from the future (the clock
+/// went back) is treated as old. An error reply (`"type": "error"`, a rate
+/// limit) is no answer, the same as being offline: read as an answer it
+/// would say every package had left the AUR. Offline, a kept answer that
+/// asked about only some of `names` still speaks for those.
+fn aur_known_from(
+    kept: Option<&AurAnswer>,
+    names: &[String],
+    now: f64,
+    fetch: &dyn Fn(&str) -> Result<Value, String>,
+) -> Result<(Option<AurAnswer>, Option<AurAnswer>), String> {
+    if let Some(k) = kept.filter(|k| k.covers(names)) {
         if (0.0..AUR_HEALTH_TTL).contains(&(now - k.at)) {
-            return Ok((Some(k.only(names)), None));
+            return Ok((k.part(names), None));
         }
     }
     let query = names
@@ -188,7 +218,7 @@ pub(super) fn aur_health_from(
     let data = match fetch(&url) {
         Ok(d) if d.get("type").and_then(Value::as_str) != Some("error") => d,
         // Offline: the last answer, however old, says more than none.
-        _ => return Ok((usable.map(|k| k.only(names)), None)),
+        _ => return Ok((kept.and_then(|k| k.part(names)), None)),
     };
     let mut out = BTreeMap::new();
     let Value::Object(data) = data else {
@@ -215,8 +245,8 @@ pub(super) fn aur_health_from(
             },
         );
     }
-    let fresh = AurAnswer { at: now, asked: names.iter().cloned().collect(), results: out.clone() };
-    Ok((Some(out), Some(fresh)))
+    let fresh = AurAnswer { at: now, asked: names.iter().cloned().collect(), results: out };
+    Ok((Some(fresh.clone()), Some(fresh)))
 }
 
 /// `try_aur_health` for callers that need a plain map: where the Python
@@ -531,6 +561,23 @@ mod tests {
         assert!(out.is_none() && none.is_none());
         let (out, none) = aur_health_from(kept.as_ref(), &names(&["yay"]), AUR_HEALTH_TTL * 2.0, &limited).unwrap();
         assert!(out.is_some_and(|o| o.contains_key("yay")) && none.is_none(), "the old answer stands in");
+    }
+
+    #[test]
+    fn offline_a_kept_answer_speaks_only_for_what_it_asked() {
+        let calls = std::cell::Cell::new(0);
+        let (_, kept) = aur_health_from(None, &names(&["yay", "gone-pkg"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let offline = counting(&calls, Err("offline".into()));
+        let asked = names(&["yay", "gone-pkg", "new-pkg"]);
+        let (known, none) = aur_known_from(kept.as_ref(), &asked, 10.0, &offline).unwrap();
+        let known = known.expect("what was asked before is still known");
+        assert!(none.is_none());
+        assert_eq!(known.asked, ["yay", "gone-pkg"].map(String::from).into_iter().collect());
+        assert!(known.results.contains_key("yay") && !known.results.contains_key("gone-pkg"));
+        // As a plain map that would read new-pkg as gone: there is none.
+        assert_eq!(aur_health_from(kept.as_ref(), &asked, 10.0, &offline).unwrap().0, None);
+        // Nothing it asked about: nothing known.
+        assert!(aur_known_from(kept.as_ref(), &names(&["new-pkg"]), 10.0, &offline).unwrap().0.is_none());
     }
 
     #[test]
