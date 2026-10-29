@@ -32,7 +32,8 @@ pkgbase = almanac-git
 	optdepends = mise: version-managed AI agent CLIs
 	optdepends = github-cli: raises the GitHub API ceiling from 60/h to 5000/h
 	optdepends = webp-pixbuf-loader: marketplace card artwork
-	provides = almanac
+	optdepends = python: the scheduled update (its settings and the Arch news check)
+	provides = almanac=2.1.7.r0
 	conflicts = almanac
 	options = !lto
 	source = git+https://github.com/twodxme/almanac.git
