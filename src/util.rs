@@ -504,16 +504,34 @@ pub fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     }
 }
 
-/// The checkout this binary was compiled in, when it is still there and only
-/// root or this user can change it or any folder above it (a root-owned
-/// sticky folder like /tmp is passed through). Translations, glyphs, release
-/// notes and `git -C` are read from it at run time, and a packaged build was
-/// compiled somewhere like `/tmp/pkg/src/almanac-x.y.z` that any local
-/// account could create afterwards.
+/// The checkout the running binary was built in and runs from (a `cargo
+/// run`, or a link to `target/release/almanac`), when only root or this
+/// user can change it or any folder above it (a root-owned sticky folder
+/// like /tmp is passed through). Translations, glyphs, release notes and
+/// `git -C` are read from it at run time.
+///
+/// Found from where the executable is, never from where it was compiled:
+/// a package is built in a tree (`makepkg`'s src/, yay's cache) that stays
+/// on disk, or that anyone could create later, and an installed
+/// /usr/bin/almanac must not read its translations or What's New from
+/// there. (Nor does the binary carry that path: makepkg warns of a package
+/// that refers to $srcdir.)
 pub fn build_checkout() -> Option<PathBuf> {
-    static DIR: std::sync::LazyLock<Option<PathBuf>> =
-        std::sync::LazyLock::new(|| trusted_dir(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    static DIR: std::sync::LazyLock<Option<PathBuf>> = std::sync::LazyLock::new(|| {
+        let exe = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
+        checkout_of(&exe).and_then(|d| trusted_dir(&d))
+    });
     DIR.clone()
+}
+
+/// The Almanac checkout `exe` lives in: the nearest folder above it with a
+/// Cargo.toml, when that is Almanac's (`name = "almanac"`) and `exe` is in
+/// its `target` folder. None for anything else.
+fn checkout_of(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.ancestors().skip(1).find(|d| d.join("Cargo.toml").is_file())?;
+    let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
+    let ours = manifest.lines().map(str::trim).any(|l| l == "name = \"almanac\"");
+    (ours && exe.starts_with(dir.join("target"))).then(|| dir.to_path_buf())
 }
 
 /// `dir`, symlinks resolved, when it and every folder above it belong to
@@ -1033,6 +1051,52 @@ pub(crate) static TEST_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
+    /// The checkout is where the executable runs from, not where it was
+    /// compiled: an installed binary built in makepkg's src/ tree never
+    /// reads from that tree.
+    #[test]
+    fn the_checkout_is_found_from_the_running_binary() {
+        let d = tempfile::tempdir().unwrap();
+        let checkout = d.path().join("almanac");
+        std::fs::create_dir_all(checkout.join("target/release")).unwrap();
+        std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"almanac\"\n").unwrap();
+        let exe = checkout.join("target/release/almanac");
+        assert_eq!(checkout_of(&exe), Some(checkout.clone()));
+        assert_eq!(checkout_of(&checkout.join("target/debug/deps/almanac-1234")), Some(checkout.clone()));
+        // Installed elsewhere: no checkout, whatever tree it was built in.
+        assert_eq!(checkout_of(Path::new("/usr/bin/almanac")), None);
+        assert_eq!(checkout_of(&d.path().join("bin/almanac")), None);
+        // Under a checkout, but not built there; or someone else's crate.
+        assert_eq!(checkout_of(&checkout.join("almanac")), None);
+        std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"other\"\n").unwrap();
+        assert_eq!(checkout_of(&exe), None);
+        // The test binary itself runs from this checkout.
+        assert!(build_checkout().is_some_and(|c| c.join("Cargo.toml").is_file()));
+    }
+
+    /// No path of the build tree is compiled into the program (makepkg:
+    /// "Package contains reference to $srcdir").
+    #[test]
+    fn the_program_does_not_name_the_folder_it_was_built_in() {
+        let mut offenders = Vec::new();
+        let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                let body = text.split("#[cfg(test)]").next().unwrap_or("");
+                if body.contains("env!(\"CARGO_MANIFEST_DIR\")") {
+                    offenders.push(p.display().to_string());
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "{offenders:?}");
+    }
+
     use super::*;
 
     #[test]

@@ -43,6 +43,11 @@ fn to_ask(items: &[NewsItem], asked: &[String]) -> Vec<NewsItem> {
     items.iter().filter(|i| !asked.contains(&i.title)).take(SHOWN).cloned().collect()
 }
 
+/// "1 more unread post" / "4 more unread posts".
+fn more_news_title(more: usize) -> String {
+    crate::i18n::ngettext("{n} more unread post", "{n} more unread posts", more as u64).replace("{n}", &more.to_string())
+}
+
 /// The line under a headline: its date, then the start of the post.
 fn subtitle(item: &NewsItem) -> String {
     match (item.date(), item.summary.is_empty()) {
@@ -98,18 +103,7 @@ impl Win {
         }
         let items = unread();
         if !items.is_empty() {
-            let more = (items.len() > SHOWN).then(|| {
-                let b = gtk::Button::builder().label(tr("All news")).valign(gtk::Align::Center).build();
-                b.add_css_class("flat");
-                b.set_tooltip_text(Some(NEWS_PAGE));
-                let w = self.downgrade();
-                b.connect_clicked(move |_| {
-                    if let Some(w) = w.upgrade() {
-                        w.open_url(NEWS_PAGE);
-                    }
-                });
-                b
-            });
+            let more = (items.len() > SHOWN).then(|| self.all_news_button());
             let section = Win::section(
                 &format!("{} ({})", tr("Arch news"), items.len()),
                 &tr("Announcements from archlinux.org you have not read. Updates that need manual \
@@ -122,6 +116,20 @@ impl Win {
             slot.append(&section.root);
         }
         slot.set_visible(slot.first_child().is_some());
+    }
+
+    /// "All news": the rest of the headlines, on archlinux.org.
+    fn all_news_button(&self) -> gtk::Button {
+        let b = gtk::Button::builder().label(tr("All news")).valign(gtk::Align::Center).build();
+        b.add_css_class("flat");
+        b.set_tooltip_text(Some(NEWS_PAGE));
+        let w = self.downgrade();
+        b.connect_clicked(move |_| {
+            if let Some(w) = w.upgrade() {
+                w.open_url(NEWS_PAGE);
+            }
+        });
+        b
     }
 
     /// One headline, with Read and Mark as read.
@@ -206,7 +214,21 @@ impl Win {
         for item in items.iter().take(SHOWN) {
             list.append(&self.news_row(item));
         }
-        items.len().min(SHOWN)
+        let mut added = items.len().min(SHOWN);
+        // The rest are a click away, as on Today.
+        if items.len() > SHOWN {
+            list.append(&self.more_news_row(items.len() - SHOWN));
+            added += 1;
+        }
+        added
+    }
+
+    /// Below the headlines the Updates list shows: how many more are
+    /// unread, and "All news".
+    fn more_news_row(&self, more: usize) -> adw::ActionRow {
+        let row: adw::ActionRow = Win::plain(&more_news_title(more), &tr("Read them on archlinux.org"));
+        row.add_suffix(&self.all_news_button());
+        row
     }
 
     /// Before Update all: when there is unread Arch news, ask once whether to
@@ -246,7 +268,9 @@ impl Win {
         let body = tr("Arch announces updates that need manual steps on its news page. Read \
                        these before updating:");
         let detail: Vec<String> = ask.iter().map(|i| format!("{} — {}", i.date(), i.title)).collect();
-        let dialog = adw::AlertDialog::new(Some(&tr("Arch news since your last update")), Some(&body));
+        // Unread recent posts: what was read before the last update does not
+        // show, and what came out before it but was never read does.
+        let dialog = adw::AlertDialog::new(Some(&tr("Unread Arch news")), Some(&body));
         let text = gtk::Label::builder()
             .label(detail.join("\n"))
             .xalign(0.0)
@@ -349,6 +373,24 @@ mod tests {
         assert!(to_ask(&items, &["a".into(), "b".into()]).is_empty());
         let many: Vec<NewsItem> = (0..6).map(|i| item(&i.to_string())).collect();
         assert_eq!(to_ask(&many, &[]).len(), SHOWN);
+    }
+
+    #[test]
+    fn the_updates_list_says_how_many_more_posts_are_unread() {
+        assert_eq!(more_news_title(1), "1 more unread post");
+        assert_eq!(more_news_title(4), "4 more unread posts");
+    }
+
+    /// The dialog lists unread recent posts, which is not "since your last
+    /// update"; and the Updates headlines link to the rest, as Today's do.
+    #[test]
+    fn the_news_copy_says_what_it_lists() {
+        let src = include_str!("news.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(!body.contains("since your last update"));
+        let into = &body[body.find("pub fn news_into").unwrap()..];
+        let into = &into[..into.find("\n    }\n").unwrap()];
+        assert!(into.contains("more_news_row"), "{into}");
     }
 
     #[test]

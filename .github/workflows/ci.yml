@@ -1,6 +1,6 @@
 # Every push and pull request, on a clean Arch Linux: the build, the tests,
-# the desktop and AppStream metadata, and a real package build of this
-# commit.
+# clippy, the desktop and AppStream metadata, a build with the oldest Rust
+# Cargo.toml allows (rust-version), and a real package build of this commit.
 #
 # Everything runs as an ordinary user with what an Arch desktop gives one:
 # an 8 MiB stack, an English UTF-8 locale, the packages' translations. Root
@@ -68,10 +68,39 @@ jobs:
           # that build widgets must skip themselves there, not crash.
           as-user cargo test --locked
 
+      - name: Clippy
+        run: as-user cargo clippy --all-targets --locked -- -D warnings
+
       - name: Metadata
         run: |
           appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
           desktop-file-validate docs/almanac.desktop
+
+  # rust-version in Cargo.toml is a promise: build with exactly that Rust.
+  msrv:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git rustup gtk4 libadwaita openssl gettext
+          useradd -m user
+          printf '%s\n' '#!/bin/sh' \
+            'exec sudo -u user -H env LANG=C.UTF-8 sh -c '"'"'ulimit -Ss 8192 && exec "$@"'"'"' sh "$@"' \
+            > /usr/local/bin/as-user
+          chmod +x /usr/local/bin/as-user
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build with the minimum supported Rust
+        run: |
+          chown -R user "$GITHUB_WORKSPACE"
+          msrv="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          as-user rustup toolchain install "$msrv" --profile minimal
+          as-user cargo "+$msrv" build --locked --all-targets
 
   # The package build, beside the tests rather than after them: the -git
   # PKGBUILD as an AUR user would build it, its check() running the tests

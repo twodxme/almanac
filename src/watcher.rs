@@ -325,8 +325,21 @@ fn py_int(text: &str) -> Option<BigInt> {
 /// A pid that does not fit a C int is the OverflowError of `os.kill`, which
 /// the Python does not catch: an `Err`.
 pub fn running() -> Result<i32, String> {
+    running_in(&pid_path(), &guard_alive)
+}
+
+/// Whether `pid` is a live `--guard`.
+fn guard_alive(pid: i32) -> bool {
+    match std::fs::read(format!("/proc/{pid}/cmdline")) {
+        Ok(cmdline) => cmdline.windows(7).any(|w| w == b"--guard"),
+        Err(_) => false,
+    }
+}
+
+/// [`running`] with the pid file and the liveness check passed in.
+fn running_in(path: &Path, alive: &dyn Fn(i32) -> bool) -> Result<i32, String> {
     // read_text(): an unreadable or non-UTF-8 file is OSError/ValueError.
-    let Ok(text) = std::fs::read_to_string(pid_path()) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(0);
     };
     let Some(pid) = py_int(py_strip(&text)) else {
@@ -343,10 +356,29 @@ pub fn running() -> Result<i32, String> {
     if pid <= 0 || rustix::process::test_kill_process(p).is_err() {
         return Ok(0);
     }
-    Ok(match std::fs::read(format!("/proc/{pid}/cmdline")) {
-        Ok(cmdline) if cmdline.windows(7).any(|w| w == b"--guard") => pid,
-        _ => 0,
-    })
+    Ok(if alive(pid) { pid } else { 0 })
+}
+
+/// Become the session's one guard: Ok(true) when no other is running, and
+/// this one's pid is now in the pid file. The check and the write are one
+/// step under a lock beside the pid file: two guards started together
+/// (autostart and a login script) both read "none running" otherwise, and
+/// both ran.
+fn claim(path: &Path, me: i32, alive: &dyn Fn(i32) -> bool) -> Result<bool, String> {
+    let mut lock_name = path.as_os_str().to_owned();
+    lock_name.push(".lock");
+    // Without the lock (a read-only runtime dir), as before: one guard
+    // still wins nearly always.
+    let _lock = crate::util::lock_file(Path::new(&lock_name)).ok();
+    if running_in(path, alive)? != 0 {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_ok() {
+            let _ = std::fs::write(path, me.to_string());
+        }
+    }
+    Ok(true)
 }
 
 /// A Python `str`, as code points: it may hold lone surrogates (from a
@@ -1082,16 +1114,11 @@ pub fn main() -> i32 {
         eprintln!("almanac --guard: {e}");
         1
     };
-    match running() {
-        Ok(0) => {}
-        Ok(_) => return 0, // one per session
+    let me = i32::try_from(std::process::id()).unwrap_or(i32::MAX);
+    match claim(&pid_path(), me, &guard_alive) {
+        Ok(true) => {}
+        Ok(false) => return 0, // one per session
         Err(e) => return uncaught(e),
-    }
-    let pp = pid_path();
-    if let Some(parent) = pp.parent() {
-        if std::fs::create_dir_all(parent).is_ok() {
-            let _ = std::fs::write(&pp, std::process::id().to_string());
-        }
     }
 
     let found = match crate::guard::try_resets_at(None, crate::guard::PyStack::WATCHER) {
@@ -1367,6 +1394,47 @@ mod tests {
         assert_eq!(int("\u{b2}"), None); // superscript two: a digit, not decimal
         assert_eq!(int("99999999999999999999").as_deref(), Some("99999999999999999999"));
         assert_eq!(int(&"1".repeat(4301)), None);
+    }
+
+    /// Two guards started together: one runs. The pid file is read and
+    /// written under a lock, so the second sees the first.
+    #[test]
+    fn two_guards_started_together_run_once() {
+        let d = tempfile::tempdir().unwrap();
+        let pid = d.path().join("almanac-guard.pid");
+        // A stale pid that is alive as a process (this one) but not a guard;
+        // checking it takes a while, as /proc can.
+        std::fs::write(&pid, std::process::id().to_string()).unwrap();
+        let guards = std::sync::Arc::new(std::sync::Mutex::new(Vec::<i32>::new()));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        // Two live processes stand in for the two guards' pids.
+        let mut kids: Vec<std::process::Child> =
+            (0..2).map(|_| std::process::Command::new("sleep").arg("30").spawn().unwrap()).collect();
+        let pids: Vec<i32> = kids.iter().map(|k| k.id() as i32).collect();
+        let handles: Vec<_> = pids
+            .into_iter()
+            .map(|me| {
+                let (pid, guards, barrier) = (pid.clone(), guards.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let alive = |p: i32| {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        guards.lock().unwrap().contains(&p)
+                    };
+                    barrier.wait();
+                    let won = claim(&pid, me, &alive).unwrap();
+                    if won {
+                        guards.lock().unwrap().push(me);
+                    }
+                    won
+                })
+            })
+            .collect();
+        let won: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for k in &mut kids {
+            let _ = k.kill();
+            let _ = k.wait();
+        }
+        assert_eq!(won.iter().filter(|w| **w).count(), 1, "{won:?}");
     }
 
     #[test]

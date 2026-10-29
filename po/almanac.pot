@@ -1638,3 +1638,34 @@ msgstr ""
 #: src/util/human.rs:207
 msgid "Something went wrong"
 msgstr ""
+
+#: src/ui/news.rs:48
+#, rust-format
+msgid "{n} more unread post"
+msgid_plural "{n} more unread posts"
+msgstr[0] ""
+msgstr[1] ""
+
+#: src/ui/news.rs:229
+msgid "Read them on archlinux.org"
+msgstr ""
+
+#: src/ui/news.rs:273
+msgid "Unread Arch news"
+msgstr ""
+
+#: src/ui/preferences.rs:103
+msgid ""
+"Needs Omarchy: the scheduled run installs updates with omarchy update, which "
+"is not installed here. Update by hand with sudo pacman -Syu."
+msgstr ""
+
+#: src/ui/preferences.rs:229
+msgid ""
+"Almanac leaves it alone, and it overrides the one Almanac ships, so these "
+"settings may not apply. Remove it to use Almanac's:"
+msgstr ""
+
+#: src/ui/preferences.rs:233
+msgid "Your own copy of the timer is in use"
+msgstr ""

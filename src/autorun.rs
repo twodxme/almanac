@@ -76,7 +76,8 @@ pub fn take_updated() -> Vec<String> {
 /// The History title for a scheduled run that updated `items`
 /// ("wordcraft 0.7.0 → 0.8.0", ...); None when it updated nothing.
 pub fn run_title(items: &[String]) -> Option<String> {
-    let names: Vec<&str> = items.iter().map(|i| i.split(' ').next().unwrap_or(i)).collect();
+    let changes: Vec<crate::history::Change> = items.iter().map(|i| run_change(i)).collect();
+    let names: Vec<&str> = changes.iter().map(|c| c.name.as_str()).collect();
     let what = match names.as_slice() {
         [] => return None,
         [one] => (*one).to_string(),
@@ -100,14 +101,25 @@ pub fn record_run(items: &[String]) -> Result<(), String> {
 }
 
 /// One `updated` line as a change: "wordcraft 0.7.0 → 0.8.0" goes from
-/// 0.7.0 to 0.8.0; "weather (3 commits)" names only where it went.
+/// 0.7.0 to 0.8.0; "weather (3 commits)" names only where it went. Read
+/// from the right: a name can have spaces in it ("GitHub Copilot CLI
+/// 1.0.101 → 1.0.103"), a version cannot.
 fn run_change(item: &str) -> crate::history::Change {
-    let (name, rest) = item.split_once(' ').unwrap_or((item, ""));
-    let (from, to) = match rest.split_once(" → ") {
-        Some((from, to)) => (from.to_string(), to.to_string()),
-        None => (String::new(), rest.to_string()),
+    let change = |name: &str, from: &str, to: &str| crate::history::Change {
+        name: name.to_string(),
+        from: from.to_string(),
+        to: to.to_string(),
     };
-    crate::history::Change { name: name.to_string(), from, to }
+    if let Some((left, to)) = item.rsplit_once(" → ") {
+        let (name, from) = left.rsplit_once(' ').unwrap_or((left, ""));
+        return change(name, from, to);
+    }
+    if item.ends_with(')') {
+        if let Some((name, what)) = item.rsplit_once(" (") {
+            return change(name, "", &format!("({what}"));
+        }
+    }
+    change(item, "", "")
 }
 
 /// `print(msg, flush=True)`.
@@ -2575,6 +2587,11 @@ mod tests {
         assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("weather", "", "(3 commits)"));
         let c = run_change("bare");
         assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("bare", "", ""));
+        // An agent's name can have spaces in it: read from the right.
+        let c = run_change("GitHub Copilot CLI 1.0.101 → 1.0.103");
+        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("GitHub Copilot CLI", "1.0.101", "1.0.103"));
+        let c = run_change("my plugin (3 commits)");
+        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("my plugin", "", "(3 commits)"));
     }
 
     #[test]
@@ -2588,6 +2605,10 @@ mod tests {
         assert_eq!(
             run_title(&items(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"])).as_deref(),
             Some("Scheduled update: updated vectorcraft and wordcraft")
+        );
+        assert_eq!(
+            run_title(&items(&["GitHub Copilot CLI 1.0.101 → 1.0.103"])).as_deref(),
+            Some("Scheduled update: updated GitHub Copilot CLI")
         );
         assert_eq!(
             run_title(&items(&["a 1 → 2", "b 1 → 2", "c 1 → 2", "d (3 commits)"])).as_deref(),

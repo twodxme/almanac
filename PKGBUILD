@@ -34,7 +34,7 @@ checkdepends=('git')
 # bitcode the Rust linker (lld) cannot read: undefined ring_core_* symbols.
 # The crate's own LTO (profile.release, lto = "thin") still applies.
 options=('!lto')
-provides=("$_pkgname")
+provides=("$_pkgname=$pkgver")
 conflicts=("$_pkgname")
 source=("git+$url.git")
 sha256sums=('SKIP')

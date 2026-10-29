@@ -862,7 +862,7 @@ fn loads_line(line: &str) -> Result<Option<PyVal>, String> {
 /// `record` with what escapes Python's `except OSError`: trimming a log
 /// that is not UTF-8 raises UnicodeDecodeError (after the line is written).
 pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, items: &[String]) -> Result<(), String> {
-    append(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+    submit(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
                               "detail": detail, "severity": severity,
                               "items": items}))
 }
@@ -919,36 +919,130 @@ pub struct CheckResult {
 /// timeline shows folded.
 pub fn record_action(kind: &str, title: &str, detail: &str, severity: &str, action: &ActionLog) -> Result<(), String> {
     let items: Vec<String> = action.changes.iter().map(|c| c.name.clone()).collect();
-    append(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+    submit(serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
                               "detail": detail, "severity": severity,
                               "items": items, "action": action}))
 }
 
-fn append(event: Value) -> Result<(), String> {
-    let path = _log_path();
+// ---- the writer ------------------------------------------------------------
+//
+// Writing a line takes the log's lock, which the guard and the scheduled
+// run share, may read the whole log (512 KB) and may rewrite it: too slow
+// for a click handler, and a lock held elsewhere would freeze the window.
+// So every write goes to one writer thread, in the order made. The window's
+// thread does not wait for it; any other thread (a background task, the
+// command line, a test) does, and gets the write's own result.
+
+/// One job for the writer.
+enum Job {
+    /// A line for the log at `path`, and where to say how it went.
+    Write { path: PathBuf, event: Value, done: Option<std::sync::mpsc::Sender<Result<(), String>>> },
+    /// Answered once everything sent before it is written.
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+/// The writer's queue; None when its thread could not be started (each
+/// write is then made where it is asked for).
+fn writer() -> Option<&'static std::sync::Mutex<std::sync::mpsc::Sender<Job>>> {
+    static WRITER: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<Job>>>> =
+        std::sync::OnceLock::new();
+    WRITER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            let spawned = std::thread::Builder::new().name("history-writer".into()).spawn(move || {
+                for job in rx {
+                    match job {
+                        Job::Write { path, event, done } => {
+                            let r = append(&path, &event);
+                            match done {
+                                Some(done) => {
+                                    let _ = done.send(r);
+                                }
+                                None => {
+                                    if let Err(e) = r {
+                                        eprintln!("almanac: could not write History: {e}");
+                                    }
+                                }
+                            }
+                        }
+                        Job::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            });
+            spawned.ok().map(|_| std::sync::Mutex::new(tx))
+        })
+        .as_ref()
+}
+
+/// Whether this is the window's thread (the one running the main loop),
+/// which must never wait on the log.
+fn on_ui_thread() -> bool {
+    gtk::glib::MainContext::default().is_owner()
+}
+
+/// Queue `event` for the log: waited for, with its result, unless this is
+/// the window's thread.
+fn submit(event: Value) -> Result<(), String> {
+    submit_to(_log_path(), event, !on_ui_thread())
+}
+
+fn submit_to(path: PathBuf, event: Value, wait: bool) -> Result<(), String> {
+    let Some(queue) = writer() else { return append(&path, &event) };
+    let (done, result) = if wait {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let sent = queue.lock().unwrap_or_else(|e| e.into_inner()).send(Job::Write { path, event, done });
+    if let Err(std::sync::mpsc::SendError(Job::Write { path, event, .. })) = sent {
+        return append(&path, &event);
+    }
+    match result {
+        Some(rx) => rx.recv().unwrap_or(Ok(())),
+        None => Ok(()),
+    }
+}
+
+/// Wait until every line recorded so far is written: before the process
+/// exits, and before the log is read back or cleared.
+pub fn flush() {
+    let Some(queue) = writer() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    if queue.lock().unwrap_or_else(|e| e.into_inner()).send(Job::Flush(tx)).is_ok() {
+        let _ = rx.recv();
+    }
+}
+
+fn append(path: &std::path::Path, event: &Value) -> Result<(), String> {
     let r = (|| -> std::io::Result<Result<(), String>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let line = util::dumps(&event, None, false);
+        let line = util::dumps(event, None, false);
         // The window, the guard and the scheduled run all append here: a
         // line appended between the trim's read and its write was lost.
         let _lock = util::lock_file(&path.with_extension("lock"))?;
-        let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
-        fh.write_all(format!("{line}\n").as_bytes())?;
-        drop(fh);
+        // Expired lines go before the new one is written: the clock guard
+        // compares the clock with the lines already there, and a new line
+        // is always "now" (so a clock years ahead would read as right).
         // A log that cannot be pruned is still a log; the size cap below
         // still holds it.
-        let _ = expire_locked(&path, util::now());
+        let _ = expire_locked(path, util::now());
+        let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
+        fh.write_all(format!("{line}\n").as_bytes())?;
+        drop(fh);
         // Trim occasionally rather than on every write.
-        if std::fs::metadata(&path)?.len() > MAX_BYTES {
-            let text = match decode_strict(std::fs::read(&path)?) {
+        if std::fs::metadata(path)?.len() > MAX_BYTES {
+            let text = match decode_strict(std::fs::read(path)?) {
                 Ok(t) => t,
                 Err(e) => return Ok(Err(e)),
             };
             let lines = splitlines(&text);
             let lines = &lines[lines.len().saturating_sub(KEEP)..];
-            crate::util::atomic_write(&path, lines.join("\n") + "\n")?;
+            crate::util::atomic_write(path, lines.join("\n") + "\n")?;
         }
         Ok(Ok(()))
     })();
@@ -962,14 +1056,14 @@ fn line_ts(line: &[u8]) -> Option<f64> {
     v.get("ts")?.as_f64().filter(|t| t.is_finite())
 }
 
-/// `raw` without the lines dated before `cutoff`. A line that cannot be
-/// dated is kept: it may be something a newer Almanac wrote, and only the
-/// size cap may drop what this one does not understand.
-fn drop_expired(raw: &[u8], cutoff: f64) -> Vec<u8> {
+/// `raw` without the lines `expired` says go. A line that cannot be dated
+/// is kept: it may be something a newer Almanac wrote, and only the size
+/// cap may drop what this one does not understand.
+fn drop_expired(raw: &[u8], expired: impl Fn(f64) -> bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(raw.len());
     for line in raw.split_inclusive(|&b| b == b'\n') {
         let body = line.strip_suffix(b"\n").unwrap_or(line);
-        if line_ts(body).is_some_and(|ts| ts < cutoff) {
+        if line_ts(body).is_some_and(&expired) {
             continue;
         }
         out.extend_from_slice(line);
@@ -977,28 +1071,61 @@ fn drop_expired(raw: &[u8], cutoff: f64) -> Vec<u8> {
     out
 }
 
+/// A gap in the log's times this long is the clock jumping, not a quiet
+/// spell.
+const CLOCK_JUMP: f64 = 365.0 * 86400.0;
+
+/// For each time in `stamps`, the time its expiry counts back from. The
+/// times (and `now`) fall into runs with no gap over a year between
+/// neighbours; the run `now` is in counts from `now`, any other from its
+/// own newest line. So a clock that boots years ahead does not take the
+/// log with it -- neither on the first line written then, nor on the ones
+/// after, each "now" as far as that clock knows -- and once the clock is
+/// put back, the lines it wrote do not hold the rest up.
+fn expiry_bases(stamps: &[f64], now: f64) -> impl Fn(f64) -> f64 {
+    let mut all: Vec<f64> = stamps.iter().copied().chain([now]).collect();
+    all.sort_by(|a, b| b.total_cmp(a));
+    // (lowest time in the run, the time it counts back from), newest run first.
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut head = all[0];
+    let mut low = all[0];
+    let mut has_now = false;
+    for &t in &all {
+        if low - t > CLOCK_JUMP {
+            runs.push((low, if has_now { now } else { head }));
+            head = t;
+            has_now = false;
+        }
+        has_now |= t == now;
+        low = t;
+    }
+    runs.push((low, if has_now { now } else { head }));
+    move |ts: f64| runs.iter().find(|(low, _)| ts >= *low).map_or(now, |(_, base)| *base)
+}
+
 /// Drop what is older than `DAYS` from the log at `path`; the caller holds
 /// the lock. True when the file was rewritten.
 ///
-/// The cutoff counts back from `now`, unless `now` is more than a year past
-/// the newest line -- a clock wrong by years at boot would otherwise empty
-/// the log in one go -- in which case it counts back from that line. Every
-/// line is looked at, not only the first: lines are in time order only
-/// while the clock is.
+/// The cutoff counts back from `now`, except across a jump of the clock by
+/// more than a year (see [`expiry_bases`]): a clock wrong by years at boot
+/// would otherwise empty the log in one go. Every line is looked at, not
+/// only the first: lines are in time order only while the clock is.
 fn expire_locked(path: &std::path::Path, now: f64) -> std::io::Result<bool> {
     let raw = match std::fs::read(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
     };
-    let dated = || raw.split(|&b| b == b'\n').filter_map(line_ts);
-    let Some(newest) = dated().reduce(f64::max) else { return Ok(false) };
-    let base = if now - newest > 365.0 * 86400.0 { newest } else { now };
-    let cutoff = base - (DAYS * 86400) as f64;
-    if !dated().any(|ts| ts < cutoff) {
+    let stamps: Vec<f64> = raw.split(|&b| b == b'\n').filter_map(line_ts).collect();
+    if stamps.is_empty() {
         return Ok(false);
     }
-    let kept = drop_expired(&raw, cutoff);
+    let base = expiry_bases(&stamps, now);
+    let expired = |ts: f64| ts < base(ts) - (DAYS * 86400) as f64;
+    if !stamps.iter().any(|&ts| expired(ts)) {
+        return Ok(false);
+    }
+    let kept = drop_expired(&raw, expired);
     if kept.len() == raw.len() {
         return Ok(false);
     }
@@ -1025,6 +1152,12 @@ fn expire_at(now: f64) -> std::io::Result<bool> {
 /// Title of the one line a cleared log keeps.
 pub const CLEARED: &str = "Almanac's log cleared";
 
+/// Whether `e` is that line: a note about the log, not something Almanac
+/// changed. Not counted as a change, and not something to clear again.
+pub fn is_cleared_marker(e: &Event) -> bool {
+    e.kind == ALMANAC && e.title == CLEARED
+}
+
 /// Empty Almanac's own log, leaving one line that says it was cleared.
 /// Only what Almanac recorded goes: package history (pacman's log), the
 /// snapshots and the settings resets are read from the system, not from
@@ -1033,6 +1166,8 @@ pub fn clear() -> std::io::Result<()> {
     if crate::demo::active() {
         return Ok(());
     }
+    // What was recorded before Clear goes with the rest, not after it.
+    flush();
     let path = _log_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1064,6 +1199,11 @@ fn action_of(v: Option<&PyVal>) -> Option<ActionLog> {
 /// line that is not an object, a "ts" that is missing (when 0 >= since) or
 /// cannot be compared.
 pub fn recorded(since: f64) -> Result<Vec<Event>, String> {
+    // What was just recorded shows too; the window's own thread does not
+    // wait (it reads in the background anyway).
+    if !on_ui_thread() {
+        flush();
+    }
     let Ok(raw) = std::fs::read(_log_path()) else {
         return Ok(Vec::new());
     };
@@ -1362,12 +1502,19 @@ pub fn last_day(days: &[Day], now: f64) -> String {
                 }
             }
             AUTOUPDATE => {
+                // The items are names, and a name can have spaces in it
+                // ("GitHub Copilot CLI"); a line from before carrying its
+                // versions is read from the right.
                 for item in &e.items {
-                    push(&mut scheduled, item.split(' ').next().unwrap_or(item));
+                    let name = item
+                        .rsplit_once(" → ")
+                        .map_or(item.as_str(), |(left, _)| left.rsplit_once(' ').map_or(left, |(n, _)| n));
+                    push(&mut scheduled, name);
                 }
             }
             SNAPSHOT => snapshots += 1,
             RESET => resets += 1,
+            _ if is_cleared_marker(e) => {}
             _ => other += 1,
         }
     }
@@ -1762,6 +1909,20 @@ mod tests {
         );
     }
 
+    /// The line a cleared log keeps is not a change, and an agent whose
+    /// name has spaces is named whole.
+    #[test]
+    fn last_day_skips_the_cleared_marker_and_keeps_whole_names() {
+        let now = 1_792_400_000.0;
+        let day = |events| Day { events, ..Default::default() };
+        let cleared = Event::new(now - 60.0, ALMANAC, CLEARED, "", vec![], "");
+        assert!(is_cleared_marker(&cleared));
+        assert_eq!(last_day(&[day(vec![cleared.clone()])], now), "Nothing changed.");
+        let run = Event::new(now - 30.0, AUTOUPDATE, "Scheduled update: updated GitHub Copilot CLI", "",
+                             vec!["GitHub Copilot CLI".into()], "");
+        assert_eq!(last_day(&[day(vec![run, cleared])], now), "The scheduled update updated GitHub Copilot CLI");
+    }
+
     #[test]
     fn last_day_counts_past_three_and_skips_reinstalls() {
         let now = 1_792_400_000.0;
@@ -2051,6 +2212,66 @@ mod tests {
             assert!(expire_at(then + 3.0 * 365.0 * 86400.0).unwrap());
             assert_eq!(titles(path), ["recent"]);
         });
+    }
+
+    /// Through `append`, as the window writes: the new line is "now" by the
+    /// same wrong clock, so the guard reads the lines already there. Each
+    /// later line is "now" too, and still takes nothing earlier with it.
+    #[test]
+    fn a_clock_years_ahead_does_not_empty_the_log_when_appending() {
+        with_log(|path| {
+            // The log as last written, three years before this clock.
+            let then = util::now() - 3.0 * 365.0 * 86400.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, line(then - 40.0 * 86400.0, "old") + &line(then - 86400.0, "recent")).unwrap();
+            record_checked(ALMANAC, "first", "", "", &[]).unwrap();
+            assert_eq!(titles(path), ["recent", "first"]);
+            record_checked(ALMANAC, "second", "", "", &[]).unwrap();
+            assert_eq!(titles(path), ["recent", "first", "second"]);
+        });
+    }
+
+    #[test]
+    fn expiry_counts_back_from_now_only_within_its_own_run_of_times() {
+        let now = 1_792_400_000.0;
+        let year = 365.0 * 86400.0;
+        let base = expiry_bases(&[now - 86400.0, now + 86400.0, now - 3.0 * year, now - 3.0 * year - 5.0], now);
+        assert_eq!(base(now - 86400.0), now);
+        assert_eq!(base(now + 86400.0), now);
+        assert_eq!(base(now - 3.0 * year - 5.0), now - 3.0 * year);
+        // Lines a clock years ahead wrote, after it was put back.
+        let base = expiry_bases(&[now - 86400.0, now + 2.0 * year, now + 2.0 * year - 100.0], now);
+        assert_eq!(base(now + 2.0 * year - 100.0), now + 2.0 * year);
+        assert_eq!(base(now - 86400.0), now);
+    }
+
+    /// Recording from the window's thread queues the line and returns at
+    /// once, even while the log's lock is held elsewhere (the scheduled
+    /// run, the guard); lines are written in the order recorded, and
+    /// `flush` waits for them.
+    #[test]
+    fn recording_from_the_window_does_not_wait_for_the_log() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let lock = util::lock_file(&path.with_extension("lock")).unwrap();
+            let p = path.to_path_buf();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for title in ["a", "b", "c"] {
+                    submit_to(p.clone(), serde_json::json!({"ts": util::now(), "kind": ALMANAC, "title": title}), false)
+                        .unwrap();
+                }
+                let _ = tx.send(());
+            });
+            assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(), "recording waited on the lock");
+            assert!(!path.exists() || titles(path).is_empty());
+            drop(lock);
+            flush();
+            assert_eq!(titles(path), ["a", "b", "c"]);
+        });
+        // A thread that is not the window's waits: the line is there when
+        // the call returns.
+        assert!(!on_ui_thread());
     }
 
     #[test]
