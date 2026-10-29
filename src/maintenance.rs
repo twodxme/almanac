@@ -206,8 +206,22 @@ fn _run(cmd: &[&str], timeout: u64) -> Result<String, String> {
 /// exception `_run` lets through (a UnicodeDecodeError).
 type RunFn<'a> = &'a dyn Fn(&[&str], u64) -> Result<String, String>;
 
+/// The device a directory is on, or None if it cannot be read. Walks call it
+/// on their root, which may be a symlink (a ~/.cache/yay kept on another
+/// disk) and is measured where it points, and on real directories inside.
+type DevFn<'a> = &'a dyn Fn(&Path) -> Option<u64>;
+
+fn _dev_of(p: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| m.dev())
+}
+
 /// (megabytes, file count). Walks rather than shelling out to du.
 fn _du_mb(path: &Path) -> (f64, i64) {
+    _du_mb_on(path, &_dev_of)
+}
+
+fn _du_mb_on(path: &Path, dev_of: DevFn<'_>) -> (f64, i64) {
     let mut total: u64 = 0;
     let mut count: i64 = 0;
     if !path.exists() {
@@ -215,16 +229,17 @@ fn _du_mb(path: &Path) -> (f64, i64) {
     }
     // os.walk(path, onerror=lambda _e: None): unreadable directories are
     // skipped; symlinks to directories are listed as directories and not
-    // followed; every non-directory entry is lstat'ed.
-    fn walk(dir: &Path, total: &mut u64, count: &mut i64) {
+    // followed; every non-directory entry is lstat'ed. Directories on another
+    // filesystem (a network or FUSE mount) are not entered.
+    fn walk(dir: &Path, root_dev: Option<u64>, dev_of: DevFn<'_>, total: &mut u64, count: &mut i64) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
             let p = entry.path();
             let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
             if is_dir {
                 let is_link = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-                if !is_link {
-                    walk(&p, total, count);
+                if !is_link && dev_of(&p) == root_dev {
+                    walk(&p, root_dev, dev_of, total, count);
                 }
                 continue;
             }
@@ -234,7 +249,7 @@ fn _du_mb(path: &Path) -> (f64, i64) {
             }
         }
     }
-    walk(path, &mut total, &mut count);
+    walk(path, dev_of(path), dev_of, &mut total, &mut count);
     (total as f64 / 1048576.0, count)
 }
 
@@ -576,8 +591,15 @@ fn _iterdir(d: &Path) -> Result<Vec<PathBuf>, String> {
 /// `Path(root).rglob("*<suffix>")`, in the order Python 3.14 yields them:
 /// the root's own matches, then each subdirectory's matches as it is met,
 /// subdirectories explored last-in first-out; symlinked directories are not
-/// followed.
+/// followed. Unlike rglob, it stays on root's filesystem: the runtime
+/// directory holds GVFS and portal FUSE mounts, and an SFTP mount there would
+/// walk the remote machine from its root (GitHub #4).
 fn _rglob_suffix(root: &Path, suffix: &str) -> Vec<PathBuf> {
+    _rglob_suffix_on(root, suffix, &_dev_of)
+}
+
+fn _rglob_suffix_on(root: &Path, suffix: &str, dev_of: DevFn<'_>) -> Vec<PathBuf> {
+    let root_dev = dev_of(root);
     let mut out = _glob_suffix_unsorted(root, suffix);
     let mut stack = vec![root.to_path_buf()];
     while let Some(p) = stack.pop() {
@@ -586,6 +608,9 @@ fn _rglob_suffix(root: &Path, suffix: &str) -> Vec<PathBuf> {
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             if is_dir {
                 let ep = entry.path();
+                if dev_of(&ep) != root_dev {
+                    continue;
+                }
                 out.extend(_glob_suffix_unsorted(&ep, suffix));
                 stack.push(ep);
             }
@@ -2521,6 +2546,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_session_log_scan_stays_off_network_mounts() {
+        // GitHub #4: an SFTP mount under $XDG_RUNTIME_DIR/gvfs was walked from
+        // the remote root. Another device stands in for the mount.
+        let d = tempfile::tempdir().unwrap();
+        let mount = d.path().join("gvfs").join("sftp:host=other");
+        std::fs::create_dir_all(mount.join("lib")).unwrap();
+        std::fs::write(mount.join("lib").join("remote.log"), b"x").unwrap();
+        std::fs::create_dir_all(d.path().join("hypr").join("abc")).unwrap();
+        std::fs::write(d.path().join("hypr").join("abc").join("hyprland.log"), b"x").unwrap();
+        let gvfs = d.path().join("gvfs");
+        let dev_of = |p: &Path| Some(if p.starts_with(&gvfs) { 2 } else { 1 });
+        let found = _rglob_suffix_on(d.path(), ".log", &dev_of);
+        assert_eq!(found, vec![d.path().join("hypr").join("abc").join("hyprland.log")]);
+        let (_mb, n) = _du_mb_on(d.path(), &dev_of);
+        assert_eq!(n, 1, "only the local log is counted");
+        // On one filesystem both still see everything.
+        assert_eq!(_rglob_suffix_on(d.path(), ".log", &|_p: &Path| Some(1)).len(), 2);
+        assert_eq!(_du_mb_on(d.path(), &|_p: &Path| Some(1)).1, 2);
+    }
+
+    #[test]
+    fn a_symlinked_root_is_measured_where_it_points() {
+        // ~/.cache/yay linked to another disk: what is inside is all on that disk.
+        // The target on another filesystem than the link, where there is one.
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::tempdir().unwrap();
+        let Ok(other) = tempfile::tempdir_in("/dev/shm") else { return };
+        if std::fs::metadata(other.path()).unwrap().dev() == std::fs::metadata(d.path()).unwrap().dev() {
+            return;
+        }
+        let target = other.path().join("elsewhere");
+        std::fs::create_dir_all(target.join("pkg")).unwrap();
+        std::fs::write(target.join("pkg").join("a.log"), b"x").unwrap();
+        let link = d.path().join("yay");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert_eq!(_du_mb(&link).1, 1);
+        assert_eq!(_rglob_suffix(&link, ".log").len(), 1);
+    }
+
     // ---- CleanupsThatCannotHelp ----
     // A finding must clear once its fix has done everything it can.
 
@@ -2608,6 +2673,8 @@ mod tests {
 
     #[test]
     fn test_the_store_is_beside_the_registry() {
+        // Both sides read XDG_STATE_HOME, which other tests set under this lock.
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(
             _appimage_store(),
             crate::inventory::registry().parent().unwrap().join("apps")
