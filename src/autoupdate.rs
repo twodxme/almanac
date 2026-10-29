@@ -1980,7 +1980,12 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         (dir, t, sv)
     }
 
-    fn fake_systemctl(enabled: bool) -> (std::rc::Rc<std::cell::RefCell<Vec<String>>>, impl FnMut(&[&str], u64) -> Result<(i32, String), String>) {
+    /// The systemctl calls a fake was asked to make.
+    type Calls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+    type FakeSys = Box<dyn FnMut(&[&str], u64) -> Result<(i32, String), String>>;
+
+    fn fake_systemctl(enabled: bool) -> (Calls, FakeSys) {
         let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let c = calls.clone();
         let sys = move |a: &[&str], _t: u64| {
@@ -1991,7 +1996,7 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
                 _ => (0, String::new()),
             })
         };
-        (calls, sys)
+        (calls, Box::new(sys))
     }
 
     /// The units 2.1 left behind are Almanac's: moved aside, and the
