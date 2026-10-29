@@ -155,18 +155,59 @@ pub fn reboot_reason(release: &str, modules_present: bool, installed: Option<(&s
 
 /// The running kernel, checked against what is installed. Reads `uname`, the
 /// modules directory, and `pacman -Q` for the one package the kernel says it
-/// came from (its `pkgbase` file).
+/// came from (its `pkgbase` file). The answer is kept while pacman's local
+/// database stands still: Today, the news card and the Health check all ask
+/// at launch. In demo mode nothing is read, and nothing needs a restart.
 pub fn reboot_needed() -> Option<String> {
+    if crate::demo::active() {
+        return None;
+    }
     let release = rustix::system::uname().release().to_string_lossy().into_owned();
-    reboot_needed_in(Path::new(MODULES), &release, &|pkg| {
-        let out = crate::util::run(&["pacman", "-Q", pkg], 15);
-        if !out.ok() {
-            return None;
-        }
-        let line = out.stdout.lines().next()?.to_string();
-        let mut parts = line.split_whitespace();
-        (parts.next() == Some(pkg)).then(|| parts.next().map(str::to_string)).flatten()
+    let key = local_db_stamp().map(|stamp| (release.clone(), stamp));
+    kept(&REBOOT, key, || {
+        reboot_needed_in(Path::new(MODULES), &release, &|pkg| {
+            let out = crate::util::run(&["pacman", "-Q", pkg], 15);
+            if !out.ok() {
+                return None;
+            }
+            let line = out.stdout.lines().next()?.to_string();
+            let mut parts = line.split_whitespace();
+            (parts.next() == Some(pkg)).then(|| parts.next().map(str::to_string)).flatten()
+        })
     })
+}
+
+/// What `reboot_needed` is kept against: the running kernel's release and
+/// when pacman's local database last changed. Installing, upgrading or
+/// removing a kernel changes the second (and is the only thing that removes
+/// a modules directory).
+type RebootKey = (String, std::time::SystemTime);
+
+/// The last `reboot_needed` answer, with what it was read at.
+static REBOOT: std::sync::Mutex<Option<(RebootKey, Option<String>)>> = std::sync::Mutex::new(None);
+
+/// When pacman's local database last changed, or None where it cannot be
+/// read (and then nothing is kept).
+fn local_db_stamp() -> Option<std::time::SystemTime> {
+    std::fs::metadata("/var/lib/pacman/local").and_then(|m| m.modified()).ok()
+}
+
+/// `compute()`, or what it said last time for the same `key`. No key: asked
+/// afresh, and not kept.
+fn kept(
+    slot: &std::sync::Mutex<Option<(RebootKey, Option<String>)>>,
+    key: Option<RebootKey>,
+    compute: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let Some(key) = key else { return compute() };
+    if let Some((at, answer)) = slot.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *at == key {
+            return answer.clone();
+        }
+    }
+    let answer = compute();
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, answer.clone()));
+    answer
 }
 
 fn reboot_needed_in(modules: &Path, release: &str, installed: &dyn Fn(&str) -> Option<String>) -> Option<String> {
@@ -355,8 +396,13 @@ fn parse_stat(stat: &str) -> Option<(String, u64)> {
     Some((name, flags))
 }
 
-/// The whole check, read now.
+/// The whole check, read now: every process's maps once (about 120 ms), so
+/// a Health run, which calls this once, reads them once. In demo mode
+/// nothing of the real machine is read.
 pub fn status() -> Status {
+    if crate::demo::active() {
+        return Status::default();
+    }
     let started = Instant::now();
     let reboot = reboot_needed();
     let (stale, scanned) = scan(Path::new("/proc"));
@@ -506,6 +552,10 @@ pub fn finding() -> Finding {
 /// whole of it goes to the history log.
 fn restart_fix(units: Vec<Unit>) -> Fix {
     Fix::func(move |log| {
+        if crate::demo::active() {
+            log("Demo mode: nothing is restarted.");
+            return Ok(());
+        }
         let started = Instant::now();
         let mut action = crate::history::ActionLog::default();
         let mut failed = Vec::new();
@@ -558,14 +608,24 @@ fn restart_fix(units: Vec<Unit>) -> Fix {
 }
 
 /// Restart the computer, logged first (nothing can be logged after). Err
-/// with what went wrong when `systemctl reboot` refused.
+/// with what went wrong when `systemctl reboot` refused, and always in demo
+/// mode, which never restarts the machine it is shown on.
 pub fn reboot_now() -> Result<(), String> {
+    reboot_now_with(crate::demo::active(), &|argv| crate::util::run(argv, 60))
+}
+
+/// `reboot_now`, told whether this is demo mode and handed what runs
+/// `systemctl reboot`: a test must never be able to reach the real one.
+fn reboot_now_with(demo: bool, run: &dyn Fn(&[&str]) -> crate::util::Output) -> Result<(), String> {
+    if demo {
+        return Err("Demo mode does not restart the computer.".into());
+    }
     let argv = ["/usr/bin/systemctl", "reboot"];
     let mut action = crate::history::ActionLog::default();
     action.commands.push(crate::history::CommandRun { argv: argv.join(" "), exit: None, secs: None });
     let why = reboot_needed().unwrap_or_default();
     let _ = crate::history::record_action(crate::history::ALMANAC, "Restarted to finish updating", &why, "", &action);
-    let out = crate::util::run(&argv, 60);
+    let out = run(&argv);
     if out.ok() {
         return Ok(());
     }
@@ -709,6 +769,50 @@ mod tests {
         assert_eq!(reboot_needed_in(d.path(), "6.99.0-custom", &newer), None);
         // The package query failing is not a reason to restart either.
         assert_eq!(reboot_needed_in(d.path(), "7.2.8-9-omarchy", &|_| None), None);
+    }
+
+    #[test]
+    fn the_reboot_answer_is_kept_while_pacmans_database_stands_still() {
+        let slot = std::sync::Mutex::new(None);
+        let calls = std::cell::Cell::new(0);
+        let ask = |answer: Option<&str>| {
+            calls.set(calls.get() + 1);
+            answer.map(str::to_string)
+        };
+        let t0 = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let t1 = t0 + std::time::Duration::from_secs(1);
+        let key = |stamp| Some(("7.2.8-9-omarchy".to_string(), stamp));
+        assert_eq!(kept(&slot, key(t0), || ask(None)), None);
+        assert_eq!(kept(&slot, key(t0), || ask(Some("x"))), None, "the same database: the kept answer");
+        assert_eq!(calls.get(), 1);
+        // A kernel installed since: asked again.
+        assert_eq!(kept(&slot, key(t1), || ask(Some("newer"))).as_deref(), Some("newer"));
+        assert_eq!(calls.get(), 2);
+        // No stamp to key on: asked every time, and not kept.
+        kept(&slot, None, || ask(None));
+        kept(&slot, None, || ask(None));
+        assert_eq!(calls.get(), 4);
+        assert_eq!(kept(&slot, key(t1), || ask(None)).as_deref(), Some("newer"));
+    }
+
+    #[test]
+    fn demo_mode_reads_nothing_and_restarts_nothing() {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let (reboot, status) = (reboot_needed(), status());
+        let now = reboot_now_with(crate::demo::active(), &|_argv| panic!("systemctl reboot ran in demo mode"));
+        // A unit that does not exist, should the guard ever fail.
+        let fix = restart_fix(vec![user("almanac-test-no-such-unit.service")]);
+        let ran = std::sync::Mutex::new(Vec::new());
+        let fixed = match &fix {
+            Fix::Func(f) => f(&|l| ran.lock().unwrap().push(l.to_string())),
+            _ => Err("not a callable".into()),
+        };
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(reboot, None);
+        assert_eq!(status, Status::default(), "no process was read");
+        assert!(now.unwrap_err().contains("Demo mode"));
+        assert!(fixed.is_ok() && ran.lock().unwrap().iter().all(|l| !l.starts_with('$')), "no command ran");
     }
 
     #[test]
