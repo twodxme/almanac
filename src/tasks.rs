@@ -127,10 +127,11 @@ pub fn needs_root(argv: &[String]) -> bool {
 pub const PKEXEC: &str = "/usr/bin/pkexec";
 
 /// The `yay -S` argv that installs `names` without a terminal: yay builds as
-/// this user and only its final pacman runs as root, through pkexec, both
-/// named by path.
+/// this user and only its final pacman runs as root, through pkexec. All
+/// three are named by path: yay found through PATH could be one planted in
+/// a user-writable folder ahead of /usr/bin.
 pub fn yay_install<S: AsRef<str>>(names: &[S]) -> Vec<String> {
-    let mut argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", PKEXEC, "--pacman", "/usr/bin/pacman"]
+    let mut argv: Vec<String> = [crate::inventory::YAY, "-S", "--needed", "--noconfirm", "--sudo", PKEXEC, "--pacman", "/usr/bin/pacman"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1398,6 +1399,13 @@ mod tests {
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// PATH puts user-writable npm and mise bins first: yay is named by
+    /// path, as pkexec and pacman already were.
+    #[test]
+    fn yay_is_run_by_path() {
+        assert_eq!(yay_install(&["p"])[..2], v(&["/usr/bin/yay", "-S"]));
     }
 
     /// A batch of unrelated updates runs every step; the first failure

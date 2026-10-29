@@ -28,6 +28,9 @@ use crate::verify::Outcome;
 
 pub const PACMAN_LOG: &str = crate::snapshots::PACMAN_LOG;
 pub const DB_LOCK: &str = "/var/lib/pacman/db.lck";
+/// By path, as every package tool here: PATH puts user-writable folders first.
+const CHECKREBUILD: &str = "/usr/bin/checkrebuild";
+pub const PACCACHE: &str = "/usr/bin/paccache";
 
 /// A terminal that hands its window to a server returns within this.
 pub const QUICK_RETURN: Duration = Duration::from_secs(5);
@@ -471,13 +474,13 @@ pub fn probe_units() -> Option<BTreeSet<String>> {
 }
 
 pub fn have_checkrebuild() -> bool {
-    crate::util::which("checkrebuild").is_some()
+    Path::new(CHECKREBUILD).exists()
 }
 
 /// AUR packages checkrebuild says need rebuilding; None when it could not
 /// run. Packages from the repositories are rebuilt by Arch, not here.
 pub fn probe_rebuild() -> Option<BTreeSet<String>> {
-    let out = crate::util::run(&["checkrebuild"], 300);
+    let out = crate::util::run(&[CHECKREBUILD], 300);
     if out.failed_to_start || out.timed_out || out.code != Some(0) {
         return None;
     }
@@ -508,6 +511,10 @@ pub fn probe_kernel() -> Option<bool> {
 }
 
 pub fn probe_after(pending: bool) -> After {
+    // Demo mode never looks at the real machine: nothing to report.
+    if crate::demo::active() {
+        return demo_after();
+    }
     let rebuild_tool = pending && have_checkrebuild();
     std::thread::scope(|s| {
         let rebuild = s.spawn(move || if rebuild_tool { probe_rebuild() } else { None });
@@ -518,12 +525,15 @@ pub fn probe_after(pending: bool) -> After {
             rebuild: rebuild.join().ok().flatten(),
             rebuild_tool,
             kernel_gone: probe_kernel(),
-            stale_lock: Path::new(DB_LOCK).exists() && lockers_in(Path::new("/proc")).is_empty(),
+            stale_lock: lock_is_stale(),
         }
     })
 }
 
 pub fn probe_before(pending: bool) -> Before {
+    if crate::demo::active() {
+        return Before { pending: pending.then(BTreeSet::new), units: Some(BTreeSet::new()), rebuild: None };
+    }
     let rebuild_tool = pending && have_checkrebuild();
     std::thread::scope(|s| {
         let rebuild = s.spawn(move || if rebuild_tool { probe_rebuild() } else { None });
@@ -538,13 +548,40 @@ pub fn probe_before(pending: bool) -> Before {
 
 /// Whether a process with this name and these arguments holds, or is
 /// about to take, pacman's lock. Queries (`pacman -Q`, `yay -Qua`, a sync
-/// search) never lock; Almanac runs those itself.
+/// search) never lock; Almanac runs those itself. Nor does a pacman pointed
+/// at a database of its own (`--dbpath`): checkupdates syncs a private copy
+/// with `fakeroot pacman -Sy --dbpath /tmp/checkup-db-UID`, and that lock
+/// is in its copy, not in /var/lib/pacman.
 pub fn locking(comm: &str, args: &[String]) -> bool {
     match comm {
         "makepkg" => true,
-        "pacman" | "yay" | "paru" => !is_query(args),
+        c if c == "pacman" || HELPERS.contains(&c) => !is_query(args) && !own_dbpath(args),
         _ => false,
     }
+}
+
+/// AUR helpers and front ends that run pacman, or take its lock through
+/// libalpm, for what they are asked to do.
+const HELPERS: &[&str] = &["yay", "paru", "pikaur", "aura", "powerpill", "pacaur", "trizen", "pakku", "aurman"];
+
+/// Services that take the lock through libalpm whenever a client asks
+/// them to. They sit idle most of the time, so one running is no reason to
+/// hold an update back; but while one runs, a lock file may be its own.
+const DAEMONS: &[&str] = &["pamac-daemon", "packagekitd"];
+
+/// The command line points pacman at a database other than the system's.
+fn own_dbpath(args: &[String]) -> bool {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let path = match a.as_str() {
+            "--dbpath" | "-b" => it.next().map(String::as_str),
+            s => s.strip_prefix("--dbpath="),
+        };
+        if let Some(p) = path {
+            return p.trim_end_matches('/') != "/var/lib/pacman";
+        }
+    }
+    false
 }
 
 fn is_query(args: &[String]) -> bool {
@@ -563,22 +600,70 @@ fn is_query(args: &[String]) -> bool {
     shorts.contains('S') && shorts.contains(['s', 'i', 'l', 'g', 'p']) && !shorts.contains(['y', 'u'])
 }
 
-/// Processes that hold pacman's lock, as "name (pid)". Our own process is
-/// left out.
-pub fn lockers_in(proc_root: &Path) -> Vec<String> {
+/// What the processes in /proc say about pacman's lock.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LockScan {
+    /// processes that hold it or are about to take it, as "name (pid)"
+    pub running: Vec<String>,
+    /// package services running (`DAEMONS`), which may hold it
+    pub daemons: Vec<String>,
+    /// other users' processes cannot be read (/proc mounted with hidepid):
+    /// root's pacman would not show, so nothing here says the lock is free
+    pub hidden: bool,
+}
+
+impl LockScan {
+    /// Positive evidence that nothing uses the lock: every process could be
+    /// read, and none of them takes it. Anything less is "may be in use".
+    pub fn nothing_uses_it(&self) -> bool {
+        !self.hidden && self.running.is_empty() && self.daemons.is_empty()
+    }
+}
+
+/// The names a process goes by: its own, and for a script run through an
+/// interpreter (`python /usr/bin/pikaur`), the script's.
+fn program_names(comm: &str, args: &[String]) -> Vec<String> {
+    let mut names = vec![comm.to_string()];
+    let interpreter = ["python", "perl", "bash", "sh", "ruby", "node"].iter().any(|i| comm.starts_with(i));
+    if interpreter {
+        if let Some(script) = args.iter().find(|a| !a.starts_with('-')) {
+            names.push(script.rsplit('/').next().unwrap_or(script).to_string());
+        }
+    }
+    names
+}
+
+/// Read /proc for what uses pacman's lock file `lock`; our own process is
+/// left out. A process with the file open holds it, whatever it is called,
+/// but only our own processes' files can be looked at (root's are closed to
+/// us), so names and command lines are read too.
+pub fn lock_scan_in(proc_root: &Path, lock: &Path) -> LockScan {
     let me = std::process::id().to_string();
-    let Ok(entries) = std::fs::read_dir(proc_root) else { return Vec::new() };
-    let mut out = Vec::new();
+    let mut scan = LockScan::default();
+    // The positive control: init is root's, so where it cannot be read,
+    // neither can a pacman run as root.
+    let init = proc_root.join("1");
+    let init_seen = std::fs::read_to_string(init.join("comm")).is_ok_and(|c| !c.trim().is_empty())
+        && std::fs::read(init.join("cmdline")).is_ok();
+    scan.hidden = !init_seen;
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        scan.hidden = true;
+        return scan;
+    };
     for e in entries.flatten() {
         let pid = e.file_name().to_string_lossy().into_owned();
         if !pid.bytes().all(|b| b.is_ascii_digit()) || pid == me {
             continue;
         }
-        let comm = std::fs::read_to_string(e.path().join("comm")).unwrap_or_default();
-        let comm = comm.trim();
-        if !matches!(comm, "pacman" | "yay" | "paru" | "makepkg") {
-            continue;
-        }
+        let comm = match std::fs::read_to_string(e.path().join("comm")) {
+            Ok(c) => c.trim().to_string(),
+            // Gone since the listing: it holds nothing now.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                scan.hidden = true;
+                continue;
+            }
+        };
         let cmdline = std::fs::read(e.path().join("cmdline")).unwrap_or_default();
         let args: Vec<String> = cmdline
             .split(|b| *b == 0)
@@ -586,12 +671,31 @@ pub fn lockers_in(proc_root: &Path) -> Vec<String> {
             .filter(|a| !a.is_empty())
             .map(|a| String::from_utf8_lossy(a).into_owned())
             .collect();
-        if locking(comm, &args) {
-            out.push(format!("{comm} ({pid})"));
+        let has_open = std::fs::read_dir(e.path().join("fd"))
+            .map(|fds| fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t == lock)))
+            .unwrap_or(false);
+        let names = program_names(&comm, &args);
+        let name = names.last().cloned().unwrap_or_default();
+        if has_open || names.iter().any(|n| locking(n, &args)) {
+            scan.running.push(format!("{name} ({pid})"));
+        } else if names.iter().any(|n| DAEMONS.contains(&n.as_str())) {
+            scan.daemons.push(format!("{name} ({pid})"));
         }
     }
-    out.sort();
-    out
+    scan.running.sort();
+    scan.daemons.sort();
+    scan
+}
+
+/// Processes that hold pacman's lock, as "name (pid)". Our own process is
+/// left out.
+pub fn lockers_in(proc_root: &Path) -> Vec<String> {
+    lock_scan_in(proc_root, Path::new(DB_LOCK)).running
+}
+
+/// Whether pacman's lock file is there and nothing uses it.
+pub fn lock_is_stale() -> bool {
+    Path::new(DB_LOCK).exists() && lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).nothing_uses_it()
 }
 
 /// Free bytes for an unprivileged user on the filesystem holding `path`.
@@ -655,17 +759,33 @@ pub fn battery_in(root: &Path) -> Option<Battery> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Preflight {
     pub free_root: Option<u64>,
-    pub lockers: Vec<String>,
+    pub lock: LockScan,
     pub lock_file: bool,
     pub battery: Option<Battery>,
 }
 
 pub fn probe_preflight() -> Preflight {
+    // Demo mode: the machine is not looked at, and nothing stands in the way.
+    if crate::demo::active() {
+        return Preflight { free_root: Some(50 * GIB), ..Default::default() };
+    }
     Preflight {
         free_root: free_bytes(Path::new("/")),
-        lockers: lockers_in(Path::new("/proc")),
+        lock: lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)),
         lock_file: Path::new(DB_LOCK).exists(),
         battery: battery_in(Path::new("/sys/class/power_supply")),
+    }
+}
+
+/// What the post-checks of a demo run find: everything went through.
+fn demo_after() -> After {
+    After {
+        pending: Some(BTreeSet::new()),
+        units: Some(BTreeSet::new()),
+        rebuild: None,
+        rebuild_tool: false,
+        kernel_gone: Some(false),
+        stale_lock: false,
     }
 }
 
@@ -710,14 +830,34 @@ pub fn preflight_issues(p: &Preflight, system: bool) -> Vec<Issue> {
             });
         }
     }
-    if system && !p.lockers.is_empty() {
+    // A service that is running only matters when a lock file is there:
+    // then it may be the service's.
+    let mut holders = p.lock.running.clone();
+    if p.lock_file {
+        holders.extend(p.lock.daemons.iter().cloned());
+    }
+    if system && !holders.is_empty() {
         out.push(Issue {
             level: Level::Block,
             title: "Another package manager is running".into(),
             detail: format!(
                 "{} is running. Only one can change packages at a time; wait for it to \
                  finish, then update.",
-                p.lockers.join(", ")
+                holders.join(", ")
+            ),
+            fix: None,
+        });
+    } else if system && p.lock_file && p.lock.hidden {
+        // Without every process in view, "nothing uses it" cannot be said,
+        // and removing a live lock breaks the update that holds it.
+        out.push(Issue {
+            level: Level::Warn,
+            title: "pacman’s lock file is there".into(),
+            detail: format!(
+                "{DB_LOCK} is there, and this system hides other users’ programs, so Almanac \
+                 cannot tell whether a package manager is using it. If one is, wait for it to \
+                 finish; pacman will not start while the file is there. If none is, an earlier \
+                 update was interrupted, and the file has to be removed by hand."
             ),
             fix: None,
         });
@@ -1320,7 +1460,7 @@ pub fn log_text(section: Option<&str>, output: &str) -> String {
 /// `yay -S --rebuild`: build the targets even though they are installed
 /// and current. No `--needed`, which would skip exactly those.
 pub fn rebuild_argv(names: &[String]) -> Vec<String> {
-    let mut argv: Vec<String> = ["yay", "-S", "--rebuild", "--noconfirm", "--sudo", tasks::PKEXEC, "--pacman", "/usr/bin/pacman"]
+    let mut argv: Vec<String> = [crate::inventory::YAY, "-S", "--rebuild", "--noconfirm", "--sudo", tasks::PKEXEC, "--pacman", "/usr/bin/pacman"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -1331,13 +1471,20 @@ pub fn rebuild_argv(names: &[String]) -> Vec<String> {
 /// The lock is removed only while nothing that takes it is running, asked
 /// again right before: a pacman started since must keep its lock.
 fn remove_stale_lock(log: LogFn<'_>) -> Result<(), String> {
+    if crate::demo::active() {
+        return Err("not removed: demo mode does not touch the machine".to_string());
+    }
     if !Path::new(DB_LOCK).exists() {
         log("already gone");
         return Ok(());
     }
-    let running = lockers_in(Path::new("/proc"));
+    let scan = lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK));
+    let running: Vec<String> = scan.running.iter().chain(&scan.daemons).cloned().collect();
     if !running.is_empty() {
         return Err(format!("not removed: {} is running", running.join(", ")));
+    }
+    if !scan.nothing_uses_it() {
+        return Err("not removed: other users’ programs are hidden here, so it may be in use".to_string());
     }
     let out = crate::util::run(&[tasks::PKEXEC, "/usr/bin/rm", "-f", DB_LOCK], 300);
     if Path::new(DB_LOCK).exists() {
@@ -1374,7 +1521,7 @@ pub fn cache_paths() -> Vec<PathBuf> {
 /// after `started` (epoch seconds). Listing needs read access to the
 /// snapshots, so without it the journal can still say one was taken.
 pub fn snapshot_since(started: f64) -> Option<String> {
-    let out = crate::util::run(&["snapper", "--csvout", "-c", "root", "list", "--columns", "number,date"], 20);
+    let out = crate::util::run(&["/usr/bin/snapper", "--csvout", "-c", "root", "list", "--columns", "number,date"], 20);
     if out.code == Some(0) {
         if let Some(n) = newest_since(&out.stdout, started) {
             return Some(n);
@@ -1788,7 +1935,7 @@ mod tests {
         assert_eq!(r.repairs(), vec![Repair::Rebuild(strs(&["python-thing"]))]);
         let steps = repair_steps(&r.repairs(), true);
         let tasks::StepAction::Argv(a) = &steps[0].action else { panic!("an argv") };
-        assert_eq!(a.join(" "), "yay -S --rebuild --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman python-thing");
+        assert_eq!(a.join(" "), "/usr/bin/yay -S --rebuild --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman python-thing");
         assert!(!a.contains(&"--needed".to_string()), "--needed would skip the rebuild");
         // Without yay there is nothing to rebuild with.
         assert!(repair_steps(&r.repairs(), false).is_empty());
@@ -1939,6 +2086,103 @@ mod tests {
         assert_eq!(lockers_in(dir.path()), strs(&["pacman (10)"]));
     }
 
+    /// checkupdates syncs its own copy of the databases with
+    /// `fakeroot pacman -Sy --dbpath /tmp/checkup-db-UID`: that pacman's
+    /// lock is in the copy, and Almanac's own scan must not block Update all.
+    #[test]
+    fn a_pacman_on_a_database_of_its_own_does_not_hold_the_lock() {
+        let q = |c: &str, a: &[&str]| locking(c, &strs(a));
+        assert!(!q("pacman", &["-Sy", "--dbpath", "/tmp/checkup-db-1000", "--logfile", "/dev/null"]));
+        assert!(!q("pacman", &["-Sy", "--dbpath=/tmp/checkup-db-1000"]));
+        assert!(!q("pacman", &["-b", "/tmp/x", "-Syu"]));
+        assert!(q("pacman", &["-Syu", "--dbpath", "/var/lib/pacman/"]), "the system's own, spelled out");
+        assert!(q("pikaur", &["-Syu"]));
+        assert!(q("paru", &[]));
+    }
+
+    fn fake_proc(dir: &Path, pid: &str, comm: &str, args: &[&str]) -> PathBuf {
+        let p = dir.join(pid);
+        std::fs::create_dir(&p).unwrap();
+        std::fs::write(p.join("comm"), format!("{comm}\n")).unwrap();
+        std::fs::write(p.join("cmdline"), args.iter().map(|a| format!("{a}\0")).collect::<String>()).unwrap();
+        p
+    }
+
+    /// pamac-daemon, packagekitd and AUR helpers other than yay take the
+    /// lock too; a lock is stale only when every process could be read and
+    /// none of them is running.
+    #[test]
+    fn a_lock_is_stale_only_with_every_process_in_view_and_none_using_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("db.lck");
+        fake_proc(dir.path(), "1", "systemd", &["/sbin/init"]);
+        assert!(lock_scan_in(dir.path(), &lock).nothing_uses_it(), "init alone: free");
+        fake_proc(dir.path(), "20", "python3", &["/usr/bin/python3", "/usr/bin/pikaur", "-Syu"]);
+        fake_proc(dir.path(), "21", "pamac-daemon", &["/usr/bin/pamac-daemon"]);
+        fake_proc(dir.path(), "22", "pacman", &["pacman", "-Sy", "--dbpath", "/tmp/checkup-db-1000"]);
+        let scan = lock_scan_in(dir.path(), &lock);
+        assert_eq!(scan.running, strs(&["pikaur (20)"]));
+        assert_eq!(scan.daemons, strs(&["pamac-daemon (21)"]));
+        assert!(!scan.nothing_uses_it());
+
+        // Whatever it is called, a process with the file open holds it.
+        let held = tempfile::tempdir().unwrap();
+        fake_proc(held.path(), "1", "systemd", &["/sbin/init"]);
+        let p = fake_proc(held.path(), "30", "alpm-thing", &["alpm-thing"]);
+        std::fs::create_dir(p.join("fd")).unwrap();
+        std::os::unix::fs::symlink(&lock, p.join("fd").join("3")).unwrap();
+        assert_eq!(lock_scan_in(held.path(), &lock).running, strs(&["alpm-thing (30)"]));
+
+        // /proc mounted hidepid: init (root's) cannot be seen, so neither
+        // could root's pacman. Never stale.
+        let hidden = tempfile::tempdir().unwrap();
+        fake_proc(hidden.path(), "40", "bash", &["bash"]);
+        let scan = lock_scan_in(hidden.path(), &lock);
+        assert!(scan.hidden && scan.running.is_empty());
+        assert!(!scan.nothing_uses_it());
+    }
+
+    /// ALMANAC_DEMO: the probes before and after an update do not look at
+    /// the machine, and a repair does not touch it.
+    #[test]
+    fn demo_mode_neither_reads_nor_changes_the_machine() {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let r = std::panic::catch_unwind(|| {
+            let log = |_: &str| {};
+            (probe_preflight(), probe_after(true), probe_before(true), remove_stale_lock(&log))
+        });
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (pre, after, before, removed) = r.unwrap();
+        assert_eq!(pre, Preflight { free_root: Some(50 * GIB), ..Default::default() });
+        assert_eq!(after, demo_after());
+        assert_eq!(before.pending, Some(BTreeSet::new()));
+        assert!(removed.is_err());
+    }
+
+    #[test]
+    fn a_lock_that_may_be_in_use_is_never_offered_for_removal() {
+        let hidden = Preflight {
+            free_root: Some(50 * GIB),
+            lock: LockScan { hidden: true, ..Default::default() },
+            lock_file: true,
+            battery: None,
+        };
+        let issues = preflight_issues(&hidden, true);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].level, Level::Warn);
+        assert_eq!(issues[0].fix, None);
+        // A package service running with the lock file there: it may be its.
+        let service = LockScan { daemons: strs(&["pamac-daemon (21)"]), ..Default::default() };
+        let p = Preflight { lock: service.clone(), ..hidden.clone() };
+        let issues = preflight_issues(&p, true);
+        assert_eq!(issues[0].level, Level::Block);
+        assert!(issues[0].detail.contains("pamac-daemon"));
+        // Idle, with no lock file: no reason to wait.
+        let p = Preflight { lock: service, lock_file: false, ..hidden };
+        assert!(preflight_issues(&p, true).is_empty());
+    }
+
     #[test]
     fn the_battery_is_low_only_when_running_on_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -1966,7 +2210,7 @@ mod tests {
         assert!(preflight_issues(&ok, true).is_empty());
         let p = Preflight {
             free_root: Some(GIB),
-            lockers: vec![],
+            lock: LockScan::default(),
             lock_file: true,
             battery: Some(Battery { percent: 10, on_battery: true }),
         };
@@ -1974,7 +2218,12 @@ mod tests {
         assert_eq!(issues[0].level, Level::Block, "the blocking one first");
         assert_eq!(issues.iter().filter(|i| i.level == Level::Warn).count(), 2);
         assert_eq!(issues.iter().find(|i| i.fix.is_some()).unwrap().fix, Some(Repair::RemoveLock));
-        let p = Preflight { free_root: Some(3 * GIB), lockers: strs(&["pacman (10)"]), lock_file: true, battery: None };
+        let p = Preflight {
+            free_root: Some(3 * GIB),
+            lock: LockScan { running: strs(&["pacman (10)"]), ..Default::default() },
+            lock_file: true,
+            battery: None,
+        };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues.len(), 2);
         assert!(issues[0].detail.contains("pacman (10)"));

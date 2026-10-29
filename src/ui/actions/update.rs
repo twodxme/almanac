@@ -729,7 +729,7 @@ mod tests {
     fn one_package_is_installed_with_root_by_path() {
         assert_eq!(
             yay_argv("p").join(" "),
-            "yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"
+            "/usr/bin/yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"
         );
     }
 }
