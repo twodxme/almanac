@@ -5,13 +5,17 @@
 //! the news feed and nowhere else. pacman does not show it. Reading it before
 //! updating is the one habit the Arch wiki asks of everyone.
 //!
-//! The scheduled update holds itself while the newest headline is unread, so
+//! The scheduled update holds itself while any recent post is unread, so
 //! "read" is shared with it through one file, kept where it keeps its state:
 //! `${XDG_STATE_HOME:-~/.local/state}/omarchy-auto-update/news-seen`, one
-//! headline per line, entities decoded. Older copies of the script wrote
-//! headlines as the feed escapes them (`Mkinitcpio &gt;=42`, even `&amp;gt;`),
-//! so lines are decoded before they are compared. Marking a headline read
-//! here appends it there, which also releases the hold.
+//! headline per line. Read is per post: marking one read says nothing about
+//! the others. Both sides compare headlines under one rule, [`normalise`]
+//! (the script's `normalise` is the same), and over one window,
+//! [`RECENT_DAYS`], so a hold is always for a post listed here and can be
+//! cleared here. Older copies of the script wrote headlines as the feed
+//! escapes them (`Mkinitcpio &gt;=42`, even `&amp;gt;`), which normalising
+//! reads too. Marking a headline read here appends it there, which also
+//! releases the hold.
 //!
 //! The feed is fetched at most once an hour and kept, so the news still shows
 //! offline; Preferences can switch the fetch off.
@@ -27,7 +31,8 @@ pub const FEED: &str = "https://archlinux.org/feeds/news/";
 /// How long a fetched feed is used before asking again.
 pub const TTL: f64 = 3600.0;
 /// News older than this is not brought up, read or not: a machine set up
-/// last week has no use for a manual intervention from last year.
+/// last week has no use for a manual intervention from last year. The
+/// script's RECENT_DAYS is the same.
 pub const RECENT_DAYS: i64 = 60;
 /// The seen-file is kept shorter than this many lines, oldest dropped first.
 pub const SEEN_MAX: usize = 200;
@@ -133,6 +138,22 @@ pub fn decode_entities(s: &str) -> String {
         cur = next;
     }
     cur
+}
+
+/// Whitespace as Python's `str.split()` sees it: Unicode's, plus the four
+/// ASCII separators (U+001C..U+001F) Python also counts.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
+/// A headline as it is compared and written to the seen-file: entities
+/// decoded until none are left, then every run of whitespace (a no-break
+/// space from `&nbsp;` too) one space, trimmed. The script's `normalise`
+/// is the same rule (`" ".join(html.unescape(s).split())`, decoded until
+/// stable), so a headline marked read here matches the feed's spelling of
+/// it there.
+pub fn normalise(s: &str) -> String {
+    decode_entities(s).split(py_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 /// A post's HTML as one paragraph of plain text, cut at about `max`
@@ -252,29 +273,24 @@ fn feed_with(cache: &Path, now: f64, online: bool, fetch: &dyn Fn() -> Result<Ve
 
 // ---- read and unread ------------------------------------------------------------
 
-/// The seen-file's headlines, decoded.
+/// The seen-file's headlines, normalised.
 pub fn read_seen(path: &Path) -> Vec<String> {
     std::fs::read(path)
-        .map(|b| String::from_utf8_lossy(&b).lines().map(|l| decode_entities(l.trim_end_matches('\r'))).collect())
+        .map(|b| String::from_utf8_lossy(&b).lines().map(normalise).collect())
         .unwrap_or_default()
 }
 
-/// What has not been read, newest first: items newer than the newest one
-/// marked read, not marked themselves, from the last `RECENT_DAYS`. The
-/// scheduled update records only the newest headline it saw, so everything
-/// older than a read item counts as read.
+/// What has not been read, newest first: the posts from the last
+/// `RECENT_DAYS` whose headline is not in `seen` (normalised, as
+/// [`read_seen`] gives it). Each post on its own: the script holds while
+/// any of these is unread.
 pub fn unread(items: &[NewsItem], seen: &[String], now: f64) -> Vec<NewsItem> {
-    let is_seen = |i: &NewsItem| {
-        let title = decode_entities(&i.title);
-        seen.contains(&title)
-    };
-    let newest_seen = items.iter().filter(|i| is_seen(i)).map(|i| i.published).max();
+    let seen: std::collections::HashSet<&str> = seen.iter().map(String::as_str).collect();
     let cutoff = now as i64 - RECENT_DAYS * 86400;
     let mut out: Vec<NewsItem> = items
         .iter()
-        .filter(|i| !is_seen(i))
+        .filter(|i| !seen.contains(normalise(&i.title).as_str()))
         .filter(|i| i.published >= cutoff)
-        .filter(|i| newest_seen.is_none_or(|n| i.published > n))
         .cloned()
         .collect();
     out.sort_by_key(|i| std::cmp::Reverse(i.published));
@@ -306,16 +322,17 @@ fn mark_read_at(path: &Path, titles: &[String]) -> std::io::Result<()> {
     lock_name.push(".lock");
     let _lock = util::lock_file(Path::new(&lock_name))?;
     let existing = std::fs::read(path).unwrap_or_default();
-    let have: Vec<String> = String::from_utf8_lossy(&existing).lines().map(decode_entities).collect();
+    let have: Vec<String> = String::from_utf8_lossy(&existing).lines().map(normalise).collect();
     let mut add = String::new();
     if !existing.is_empty() && !existing.ends_with(b"\n") {
         add.push('\n');
     }
     for t in titles {
-        // One line each: a headline is one line, and a stray newline would
-        // write a second "headline" the script then matches.
-        let t = decode_entities(t).replace(['\n', '\r'], " ");
-        let t = t.trim();
+        // One line each (normalising makes a stray newline a space: it
+        // would write a second "headline" the script then matches), and
+        // spelled the way the script compares it.
+        let t = normalise(t);
+        let t = t.as_str();
         if t.is_empty() || have.iter().any(|h| h == t) || add.lines().any(|l| l == t) {
             continue;
         }
@@ -395,9 +412,37 @@ mod tests {
         std::fs::write(&seen, "Mkinitcpio &gt;=42 requires manual intervention for TPM2-based unlocking of LUKS devices\n").unwrap();
         let items = parse(SAMPLE.as_bytes()).unwrap();
         let unread = unread(&items, &read_seen(&seen), NOW);
-        // The newer one is unread; the one marked and everything older is not.
-        assert_eq!(unread.len(), 1);
+        // The one marked is read; the others are not.
+        assert_eq!(unread.len(), 2);
         assert!(unread[0].title.starts_with("Update to ca-certificates"));
+        assert!(unread[1].title.starts_with("virtualbox-ext-vnc"));
+    }
+
+    /// "Read" is per post: marking the newest read leaves an older one,
+    /// a manual intervention perhaps, unread -- here and for the script.
+    #[test]
+    fn marking_one_post_read_leaves_older_ones_unread() {
+        let items = parse(SAMPLE.as_bytes()).unwrap();
+        let seen = vec![normalise(&items[0].title)];
+        let titles: Vec<String> = unread(&items, &seen, NOW).into_iter().map(|i| i.title).collect();
+        assert_eq!(titles.len(), 2, "{titles:?}");
+        assert!(titles[0].starts_with("Mkinitcpio"));
+    }
+
+    /// One rule for both sides (omarchy-auto-update normalises the same
+    /// way): entities decoded, every whitespace run -- a no-break space
+    /// from &nbsp; too -- one space.
+    #[test]
+    fn headlines_are_normalised_as_the_script_does() {
+        assert_eq!(normalise(" Foo&amp;nbsp;42 \t needs\n\u{a0}care "), "Foo 42 needs care");
+        // Python's str.split() also splits on the ASCII separators.
+        assert_eq!(normalise("a\u{1c}b\u{3000}c"), "a b c");
+        let d = tempfile::tempdir().unwrap();
+        let seen = d.path().join("news-seen");
+        mark_read_at(&seen, &["Foo\u{a0}42  needs care".to_string()]).unwrap();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "Foo 42 needs care\n");
+        let item = NewsItem { title: "Foo&nbsp;42 needs care".into(), published: NOW as i64, ..Default::default() };
+        assert!(unread(&[item], &read_seen(&seen), NOW).is_empty());
     }
 
     #[test]
