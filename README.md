@@ -36,8 +36,14 @@ sudo pacman -U almanac-x86_64.pkg.tar.zst
 That is all: `pacman` installs everything Almanac needs along with it. Open
 **Almanac** from your app launcher, or run `almanac`.
 
-To update to a newer release, run the same two commands again. To remove it:
-`sudo pacman -R almanac`.
+To update to a newer release, run the same two commands again. To remove it,
+switch the scheduled update off first (a user timer is yours, not the
+package's, and stays enabled otherwise), then remove the package:
+
+```bash
+systemctl --user disable --now omarchy-auto-update.timer
+sudo pacman -R almanac
+```
 
 To check the download before installing it, compare it with the release's
 `SHA256SUMS`, or verify that GitHub built it from this repository (needs the
@@ -213,12 +219,17 @@ systemctl --user enable --now omarchy-auto-update.timer
 It runs at 11:00, or on the next wake if the laptop was asleep. It updates
 agents, AppImages and plugins first, then runs `omarchy update` for a routine
 batch of packages. What needs a person is **held, not applied**: the kernel,
-the bootloader, systemd and the other packages the Updates page marks core,
-and fresh Arch news, which is where Arch announces the manual steps an
-unattended upgrade would get wrong. Marking the news read in Almanac, or
-running a full upgrade yourself, lets the next run go ahead. It does nothing
-on battery or on a metered connection, and without passwordless `sudo` it
-tells you an update is ready rather than waiting at a password prompt.
+the bootloader, systemd and the other packages the Updates page marks core
+(and everything, when Almanac cannot tell which those are), and Arch news from
+the last 60 days you have not read, which is where Arch announces the manual
+steps an unattended upgrade would get wrong. Each post counts on its own:
+marking all of them read in Almanac, or running a full upgrade yourself, lets
+the next run go ahead. AUR updates run build scripts anyone can publish, so a
+batch with one in it is only announced unless you turn on **Also update AUR
+packages**. It does nothing on battery or on a metered connection, and
+without passwordless `sudo` it tells you an update is ready rather than
+waiting at a password prompt. It needs Omarchy, whose `omarchy update` it
+runs; on plain Arch it cannot be switched on.
 
 Every held, skipped or failed run is on the **History** page with the reason,
 as well as in a notification, and the full log is
@@ -441,19 +452,33 @@ instead of the `rust` package, skip `rust` above and run
 `rustup default stable` once first.
 
 **From a checkout**, for working on Almanac itself (needs `cargo`). The app
-finds its icons in the checkout, so keep it where you cloned it:
+finds its icons and translations in the checkout it runs from, so keep it
+where you cloned it and link to the build rather than copying it:
 
 ```bash
 git clone https://github.com/twodxme/almanac ~/.local/share/almanac
 cd ~/.local/share/almanac
 cargo build --release
-install -Dm755 target/release/almanac ~/.local/bin/almanac
-install -Dm755 target/release/almanac-autorun ~/.local/lib/almanac/almanac-autorun
+mkdir -p ~/.local/bin ~/.local/lib/almanac
+ln -sf "$PWD/target/release/almanac" ~/.local/bin/almanac
+ln -sf "$PWD/target/release/almanac-autorun" ~/.local/lib/almanac/almanac-autorun
 install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
 install -Dm644 docs/io.github.twodxme.Almanac.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+# The scheduled update (off until switched on in Preferences), run from
+# ~/.local/bin rather than /usr/lib:
+install -Dm755 packaging/omarchy-auto-update ~/.local/bin/omarchy-auto-update
+mkdir -p ~/.config/systemd/user
+for unit in omarchy-auto-update.service omarchy-auto-update.timer; do
+  sed 's|/usr/lib/almanac/omarchy-auto-update|%h/.local/bin/omarchy-auto-update|' \
+    "packaging/$unit" > ~/.config/systemd/user/$unit
+done
+systemctl --user daemon-reload
 ```
+
+Installing the package later replaces these two units with its own (they
+are moved aside as `.bak`, and the timer stays on if it was).
 
 Runtime data lives in `~/.local/state/almanac/`, never inside the checkout, so
 a checkout can be pulled and rebuilt without fighting its own state.
@@ -598,7 +623,7 @@ better than I can.
 cargo test
 ```
 
-518 tests, weighted toward the destructive paths — removal, orphan cleanup,
+The tests are weighted toward the destructive paths — removal, orphan cleanup,
 AppImage replacement — because those are the ones that cannot be undone by
 clicking again. If you touch removal, orphan cleanup or install, the tests that
 assert *nothing runs before confirmation* must still pass.

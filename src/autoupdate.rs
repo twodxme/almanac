@@ -1496,8 +1496,9 @@ pub enum Legacy {
 
 /// The lines an Almanac-written service may have (comments and blank lines
 /// aside): every version from the one first set up by hand (ExecStart in
-/// ~/.local/bin) to the packaged one. Anything else in the file is the
-/// user's, and the file is left alone.
+/// ~/.local/bin) to the packaged one, and the copy the README's "From a
+/// checkout" steps make of it. Anything else in the file is the user's, and
+/// the file is left alone.
 const OUR_SERVICE_LINES: &[&str] = &[
     "[Unit]",
     "Description=Weekly system update, holding anything that needs judgement",
@@ -1507,6 +1508,7 @@ const OUR_SERVICE_LINES: &[&str] = &[
     "Wants=network-online.target",
     "ConditionACPower=true",
     "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update",
+    "ConditionPathExists=%h/.local/bin/omarchy-auto-update",
     "[Service]",
     "Type=oneshot",
     "WorkingDirectory=/",
@@ -1520,6 +1522,7 @@ const OUR_TIMER_LINES: &[&str] = &[
     "[Unit]",
     "Description=Run the weekly update check",
     "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update",
+    "ConditionPathExists=%h/.local/bin/omarchy-auto-update",
     "[Timer]",
     "Persistent=true",
     "RandomizedDelaySec=30m",
@@ -2020,6 +2023,20 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         let (calls, mut sys) = fake_systemctl(true);
         assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::None);
         assert!(calls.borrow().is_empty());
+    }
+
+    /// The packaged units, and the copies the README's "From a checkout"
+    /// steps make of them, are Almanac's too.
+    #[test]
+    fn the_shipped_units_and_the_readme_copies_count_as_almanacs() {
+        let service = include_str!("../packaging/omarchy-auto-update.service");
+        let timer = include_str!("../packaging/omarchy-auto-update.timer");
+        let local = |t: &str| t.replace("/usr/lib/almanac/omarchy-auto-update", "%h/.local/bin/omarchy-auto-update");
+        assert!(is_our_service(service) && is_our_service(&local(service)));
+        assert_eq!(our_timer_schedule(timer).as_deref(), Some("Sun 11:00"));
+        assert_eq!(our_timer_schedule(&local(timer)).as_deref(), Some("Sun 11:00"));
+        let readme = include_str!("../README.md");
+        assert!(readme.contains("sed 's|/usr/lib/almanac/omarchy-auto-update|%h/.local/bin/omarchy-auto-update|'"));
     }
 
     /// A timer that was off stays off; a schedule other than the default
