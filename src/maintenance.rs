@@ -2457,15 +2457,21 @@ pub const CHECK_BY_ID: &[(&str, Check)] = &[
     ("restart-needed", restart_needed),
 ];
 
-/// `CHECK_BY_ID.get(finding_id)`.
+/// `CHECK_BY_ID.get(finding_id)`. None in demo mode, whose findings are
+/// fixtures: asking a check again would read the real machine.
 pub fn check_by_id(finding_id: &str) -> Option<Check> {
+    if crate::demo::active() {
+        return None;
+    }
     CHECK_BY_ID.iter().find(|(id, _)| *id == finding_id).map(|(_, f)| *f)
 }
 
 /// Every check. Read-only; safe to run on a timer.
 pub fn run_all() -> Vec<Finding> {
     if crate::demo::active() {
-        return crate::demo::findings();
+        let mut found = crate::demo::findings();
+        _sort_findings(&mut found);
+        return found;
     }
     let generation = LAST_RUN_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
     let found = _run_checks(CHECKS);
@@ -3212,6 +3218,20 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), ["find /etc ( -name *.pacnew -o -name *.pacsave ) -type f"]);
         assert_eq!(f.items, ["/etc/b.pacnew", "/etc/c.pacnew", "/etc/a.pacsave"]);
         assert_eq!(f.severity, WARN);
+    }
+
+    #[test]
+    fn demo_findings_come_back_worst_first_and_demo_never_asks_a_real_check() {
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let found = run_all();
+        let again = check_by_id("disk");
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut sorted = found.clone();
+        _sort_findings(&mut sorted);
+        assert_eq!(found, sorted);
+        assert_eq!(found[0].severity, CRIT, "{:?}", found.iter().map(|f| &f.severity).collect::<Vec<_>>());
+        assert!(again.is_none());
     }
 
     #[test]
