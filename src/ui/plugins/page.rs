@@ -238,12 +238,14 @@ fn plugin_switch_shared(
         }
         if let Some(w) = &win {
             // `if getattr(self, "_plugins", None): annotate(self._plugins)`;
-            // what annotate raises ends this idle callback, logged.
-            let mut shared = w.shared.borrow_mut();
-            if !shared.plugins_none && !shared.plugins.is_empty() {
-                if let Err(e) = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut shared.plugins)) {
-                    eprintln!("almanac: {e}");
-                }
+            // what annotate raises is logged. Read off the main thread: it
+            // runs `omarchy plugin list`.
+            let wanted = {
+                let shared = w.shared.borrow();
+                !shared.plugins_none && !shared.plugins.is_empty()
+            };
+            if wanted {
+                w.annotate_plugins_then(|_| {});
             }
         }
     };

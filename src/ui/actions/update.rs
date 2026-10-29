@@ -286,19 +286,38 @@ impl Win {
     /// involved. Every caller has asked first: the file and its rollback
     /// copy are gone for good.
     pub fn remove_appimage(&self, app: &App) {
+        self.remove_appimage_then(app, |_| {});
+    }
+
+    /// `remove_appimage`, then `then` once the removal has been tried
+    /// (whatever came of it): it runs off the main thread, so what reads
+    /// the registry after it waits for it here.
+    pub fn remove_appimage_then(&self, app: &App, then: impl FnOnce(&Win) + 'static) {
         // Its read and its write of the registry as one, under the lock;
         // let go before anything (the reload) reads the registry again.
-        let removed = inventory::lock_registry().and_then(|_lock| {
-            remove_appimage_with(app, inventory::load_registry, inventory::save_registry, appimage::remove_desktop_entry)
-        });
-        match removed {
-            Err(e) => raised(&e),
-            Ok(Removal::NotDeleted(msg)) => self.say(&msg, 5),
-            Ok(Removal::Removed) => {
-                self.say(&format!("Removed {}", app.name), 5);
-                self.reload();
-            }
-        }
+        // Off the main thread: the lock waits for whoever holds it (the
+        // scheduled update holds it through its downloads).
+        let (w, app) = (self.downgrade(), app.clone());
+        let name = app.name.clone();
+        crate::ui::shell::spawn_bg_checked(
+            move || {
+                inventory::lock_registry().and_then(|_lock| {
+                    remove_appimage_with(&app, inventory::load_registry, inventory::save_registry, appimage::remove_desktop_entry)
+                })
+            },
+            move |removed| {
+                let Some(w) = w.upgrade() else { return };
+                match removed.and_then(|r| r) {
+                    Err(e) => raised(&e),
+                    Ok(Removal::NotDeleted(msg)) => w.say(&msg, 5),
+                    Ok(Removal::Removed) => {
+                        w.say(&format!("Removed {name}"), 5);
+                        w.reload();
+                    }
+                }
+                then(&w);
+            },
+        );
     }
 
     /// Update one thing, with whatever tool owns it.

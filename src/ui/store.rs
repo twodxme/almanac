@@ -65,6 +65,20 @@ impl Results {
         self.idx.is_empty()
     }
 
+    /// Let go of the list, if it is `plugins` (so it can be changed in
+    /// place); `put_plugins` gives it back. Whether it was let go.
+    pub fn take_plugins_if(&mut self, plugins: &Arc<Vec<Plugin>>) -> bool {
+        if !Arc::ptr_eq(&self.plugins, plugins) {
+            return false;
+        }
+        self.plugins = Arc::default();
+        true
+    }
+
+    pub fn put_plugins(&mut self, plugins: Arc<Vec<Plugin>>) {
+        self.plugins = plugins;
+    }
+
     /// Results `from..to` (clamped), as copies for the model.
     fn page(&self, from: usize, to: usize) -> Vec<Plugin> {
         let to = to.min(self.idx.len());
