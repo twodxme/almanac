@@ -1519,18 +1519,28 @@ pub fn cache_paths() -> Vec<PathBuf> {
 
 /// The snapshot this run took, when snapper says so: the newest one dated
 /// after `started` (epoch seconds). Listing needs read access to the
-/// snapshots, so without it the journal can still say one was taken.
-pub fn snapshot_since(started: f64) -> Option<String> {
+/// snapshots, so without it the journal can still say one was taken, any
+/// time from the click to the end of the run (`ended`): the snapshot comes
+/// when pacman starts, which is after the password, however long that took.
+pub fn snapshot_since(started: f64, ended: f64) -> Option<String> {
     let out = crate::util::run(&["/usr/bin/snapper", "--csvout", "-c", "root", "list", "--columns", "number,date"], 20);
     if out.code == Some(0) {
         if let Some(n) = newest_since(&out.stdout, started) {
             return Some(n);
         }
     }
-    match crate::snapshots::snapshot_before(started, None) {
+    let (since, until) = snapshot_window(started, ended);
+    match crate::snapshots::snapshot_between(since, until, None) {
         Ok(Some(true)) => Some("taken (its number needs root to read)".to_string()),
         _ => None,
     }
+}
+
+/// The journal window `snapshot_since` reads: from just before the click
+/// (the clocks of journal and Almanac are read a moment apart) to a minute
+/// past the end.
+pub fn snapshot_window(started: f64, ended: f64) -> (f64, f64) {
+    (started - 5.0, ended.max(started) + 60.0)
 }
 
 pub fn newest_since(csv: &str, started: f64) -> Option<String> {
@@ -2239,6 +2249,16 @@ mod tests {
         let csv = "number,date\n0,\n40,2026-10-19 10:00:00\n41,2026-10-20 13:43:05\n42,2026-10-20 13:43:40\n";
         assert_eq!(newest_since(csv, start).as_deref(), Some("42"));
         assert_eq!(newest_since("number,date\n40,2026-10-19 10:00:00\n", start), None);
+    }
+
+    /// The journal is asked about the whole run, not its first minute: a
+    /// password typed slowly put the snapshot past the old 60 s window, and
+    /// History lost it.
+    #[test]
+    fn the_journal_is_asked_about_the_whole_run() {
+        let (since, until) = snapshot_window(1000.0, 1000.0 + 3600.0);
+        assert!(since <= 1000.0 && since > 1000.0 - 60.0, "not a snapshot from before the click");
+        assert!(until >= 4600.0);
     }
 
     #[test]

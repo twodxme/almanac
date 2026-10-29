@@ -1467,6 +1467,14 @@ msgstr ""
 msgid "Nothing needs you right now"
 msgstr ""
 
+#: src/ui/update_all.rs:242
+msgid "Demo mode: nothing is updated"
+msgstr ""
+
+#: src/ui/update_all.rs:246 src/ui/update_all.rs:258
+msgid "Update all is already running"
+msgstr ""
+
 #: src/ui/update_all.rs:248
 msgid "Before updating"
 msgstr ""

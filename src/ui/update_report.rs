@@ -35,6 +35,8 @@ pub struct Run {
     pub before: Before,
     pub report: Report,
     pub record: RunRecord,
+    /// held while the run is on: a second Update all is refused meanwhile
+    pub busy: Option<crate::ui::update_all::Busy>,
 }
 
 pub type SharedRun = Rc<RefCell<Run>>;
@@ -51,6 +53,7 @@ impl Run {
             before: Before::default(),
             report: Report::default(),
             record: RunRecord::default(),
+            busy: None,
         }))
     }
 }
@@ -107,7 +110,7 @@ impl Win {
     fn show_update_report(&self, run: SharedRun, report: Report, first: bool) {
         let attention = report.attention().len();
         let repairs = if first { report.repairs() } else { Vec::new() };
-        let has_yay = crate::util::which("yay").is_some();
+        let has_yay = Path::new(crate::inventory::YAY).exists();
         let lines: Vec<String> = repairs.iter().filter_map(|r| postupdate::describe(r, has_yay)).collect();
         let fixable = !postupdate::repair_steps(&repairs, has_yay).is_empty();
 
@@ -231,7 +234,7 @@ impl Win {
 
     /// Fix: the repairs, then the checks that had them, asked again.
     fn run_update_repairs(&self, run: SharedRun, repairs: Vec<Repair>, report: Report) {
-        let steps = postupdate::repair_steps(&repairs, crate::util::which("yay").is_some());
+        let steps = postupdate::repair_steps(&repairs, Path::new(crate::inventory::YAY).exists());
         let w = self.downgrade();
         let done_steps = steps.clone();
         tasks::run_each(
@@ -282,7 +285,7 @@ impl Win {
         if !eligible {
             return self.finish_update(run);
         }
-        let steps = postupdate::cleanup_steps(crate::util::which("paccache").is_some(), &updated);
+        let steps = postupdate::cleanup_steps(Path::new(postupdate::PACCACHE).exists(), &updated);
         if steps.is_empty() {
             return self.finish_update(run);
         }
@@ -318,13 +321,17 @@ impl Win {
 
     /// The run's one history entry, and its files let go of.
     pub(in crate::ui) fn finish_update(&self, run: SharedRun) {
-        let r = run.borrow();
-        let action = r.record.action(r.started.elapsed().as_secs_f64());
-        if let Err(e) = history::record_action(history::ALMANAC, "Update all", &r.record.detail(), r.record.severity(), &action) {
-            eprintln!("almanac: {e}");
+        {
+            let r = run.borrow();
+            let action = r.record.action(r.started.elapsed().as_secs_f64());
+            if let Err(e) = history::record_action(history::ALMANAC, "Update all", &r.record.detail(), r.record.severity(), &action) {
+                eprintln!("almanac: {e}");
+            }
+            if let Some(f) = &r.files {
+                f.remove();
+            }
         }
-        if let Some(f) = &r.files {
-            f.remove();
-        }
+        // The run is over: Update all can start again.
+        run.borrow_mut().busy = None;
     }
 }
