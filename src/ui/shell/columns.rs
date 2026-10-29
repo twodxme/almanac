@@ -14,6 +14,13 @@ use super::helpers::{INSTALL_ICON, age, as_text, fmt_size, lower_cmp, name, sour
 use super::items::AppItem;
 use super::window::Win;
 
+/// The fewest characters a row's name and description shrink to.
+pub const NAME_MIN_CHARS: i32 = 10;
+
+/// At this window width and below, the Source column is hidden: the row's
+/// details say where it came from, and Name keeps the room.
+pub const SOURCE_HIDES_BELOW: i32 = 600;
+
 impl Win {
     /// `_column`: append one column to the table.
     ///
@@ -90,7 +97,10 @@ impl Win {
                 .hexpand(true)
                 .build();
             let title_row = gtk::Box::builder().spacing(6).build();
-            let name_lbl = gtk::Label::builder().xalign(0.0).hexpand(true).build();
+            // Name is the column that gives when the window is narrow, but
+            // never down to "…": a name stays this readable, and Version is
+            // what gives below it.
+            let name_lbl = gtk::Label::builder().xalign(0.0).hexpand(true).width_chars(NAME_MIN_CHARS).build();
             name_lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
             let pill = gtk::Label::builder().hexpand(false).build();
             pill.set_halign(gtk::Align::Start);
@@ -99,7 +109,7 @@ impl Win {
             pill.set_visible(false);
             title_row.append(&name_lbl);
             title_row.append(&pill);
-            let desc = gtk::Label::builder().xalign(0.0).build();
+            let desc = gtk::Label::builder().xalign(0.0).width_chars(NAME_MIN_CHARS).build();
             desc.add_css_class("dim-label");
             desc.add_css_class("caption");
             desc.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -230,6 +240,10 @@ impl Win {
             }
         };
 
+        // Every column but Name is as wide as its content (a fixed width cut
+        // "151.0.7620.9-1 → 152.0.77…" short and let an AppImage row's three
+        // buttons spill off the card); Name takes the rest and is the one
+        // that gives.
         self.column("Name", setup_name, bind_name, Some(str_sorter(|i| &i.name)), true, 0, true);
 
         // --- plain text columns ---
@@ -238,6 +252,7 @@ impl Win {
             dim: bool,
             align: f32,
             accent_on_update: bool,
+            ellipsize: gtk::pango::EllipsizeMode,
         ) -> (
             impl Fn(&gtk::SignalListItemFactory, &glib::Object) + 'static,
             impl Fn(&gtk::SignalListItemFactory, &glib::Object) + 'static,
@@ -245,7 +260,7 @@ impl Win {
             let setup = move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
                 let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
                 let lbl = gtk::Label::builder().xalign(align).build();
-                lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                lbl.set_ellipsize(ellipsize);
                 lbl.add_css_class("caption");
                 item.set_child(Some(&lbl));
             };
@@ -272,8 +287,11 @@ impl Win {
             (setup, bind)
         }
 
-        let (s, b) = make_text(version_text, true, 1.0, true);
-        self.column("Version", s, b, Some(num_sorter(|i| i.behind)), false, 170, true);
+        // Cut from the front when it must be: "… → 152.0.7727.24-1 ·1 maj"
+        // still says what the update brings, where "151.0.7620.9-1 → 15…"
+        // said only what is already here.
+        let (s, b) = make_text(version_text, true, 1.0, true, gtk::pango::EllipsizeMode::Start);
+        self.column("Version", s, b, Some(num_sorter(|i| i.behind)), false, 0, true);
 
         // Rows are recycled as the list scrolls, so a stale handler would
         // fire for whichever item later lands in this widget. Python
@@ -332,7 +350,8 @@ impl Win {
             }
         };
 
-        self.column("Source", setup_source, bind_source, Some(str_sorter(|i| &i.source)), false, 74, true);
+        // Hidden on a phone-narrow window (`SOURCE_HIDES_BELOW`, build.rs).
+        self.column("Source", setup_source, bind_source, Some(str_sorter(|i| &i.source)), false, 0, true);
 
         // --- launch button ---
         let setup_act = {
@@ -589,7 +608,7 @@ impl Win {
             }
         };
 
-        self.column("", setup_act, bind_act, None, false, 104, false);
+        self.column("", setup_act, bind_act, None, false, 0, false);
     }
 }
 

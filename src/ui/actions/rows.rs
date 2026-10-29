@@ -74,6 +74,9 @@ impl Win {
     /// The check is a `git fetch` (up to 90 s): it runs off the main thread,
     /// and the question is asked when it answers.
     pub fn on_self_update(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         spawn_bg(
             || selfupdate::try_check(true),
@@ -132,9 +135,7 @@ impl Win {
                     .map(|(label, argv)| Step::argv(label, argv))
                     .collect();
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
-                    "Updating Almanac",
+                win.run_task("Updating Almanac",
                     steps,
                     Some(Box::new(move |ok| {
                         if let Some(win) = w2.upgrade() {
@@ -228,7 +229,7 @@ impl Win {
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             if let Some(repo) = app.extra.get("repo").filter(|v| truthy(v)) {
-                self.open_url(&format!("file://{}", py_str(repo)));
+                self.open_path(std::path::Path::new(&py_str(repo)));
             }
         }
     }
@@ -241,9 +242,7 @@ impl Win {
             Some(Value::String(r)) => r.clone(),
             Some(other) => return raised(&not_a_path(other)),
         };
-        tasks::run(
-            &self.window,
-            &format!("Local changes in {name}"),
+        self.run_task(&format!("Local changes in {name}"),
             vec![
                 Step::argv("Working tree", strs(&["git", "-C", &repo, "status", "--short"])),
                 Step::argv("Diff summary", strs(&["git", "-C", &repo, "diff", "--stat"])),
@@ -253,6 +252,9 @@ impl Win {
     }
 
     pub fn row_pull(&self, name: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             self.on_git_pull(&app);
@@ -261,6 +263,9 @@ impl Win {
 
     /// Update a checkout that has local edits -- see on_git_pull.
     pub fn row_stash(&self, name: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             self.on_git_pull(&app);

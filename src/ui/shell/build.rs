@@ -11,9 +11,17 @@ use gtk::{gio, glib};
 use crate::i18n::tr;
 
 use super::helpers::{CSS, lower_cmp, name, spawn_bg, thumb_bg};
+use super::shape::PAGE_MARGIN;
 use super::items::AppItem;
 use super::tables::{COLLAPSED_BY_DEFAULT, GROUPS, GroupItem, sorts_installed};
 use super::window::{GroupHeader, Inner, Shared, WeakWin, Win, sidebar_entry};
+
+/// Keep `action` enabled exactly while `widget` is shown.
+pub(super) fn enabled_while_visible(action: &gio::SimpleAction, widget: &impl IsA<gtk::Widget>) {
+    action.set_enabled(widget.is_visible());
+    let action = action.clone();
+    widget.connect_visible_notify(move |w| action.set_enabled(w.is_visible()));
+}
 
 impl Win {
     /// `AlmanacWindow.__init__`: build the window, its sidebar, header,
@@ -45,11 +53,13 @@ impl Win {
             .margin_top(6)
             .margin_bottom(8)
             .build();
+        // On the page margins, like everything under the header: the page
+        // below it starts its own PAGE_MARGIN down, so a page with a search
+        // bar and one without start their content at the same rhythm.
         let search_bar = gtk::Box::builder()
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(6)
-            .margin_bottom(2)
+            .margin_start(PAGE_MARGIN)
+            .margin_end(PAGE_MARGIN)
+            .margin_top(PAGE_MARGIN)
             .build();
         // Gtk.Button(label=..., icon_name=...): properties are applied in
         // that order, as PyGObject does, so the result is the same button.
@@ -425,6 +435,14 @@ impl Win {
             });
             self.window.add_action(&act);
         }
+        // "Install what's in the search box…" means the box on this page:
+        // where there is none (Today, Health check, History, AI) the entry
+        // is hidden, and installing from it would take whatever another page
+        // left in it. The action follows the search bar's visibility, which
+        // the page chrome sets.
+        if let Some(install) = self.window.lookup_action("install").and_downcast::<gio::SimpleAction>() {
+            enabled_while_visible(&install, &self.search_bar);
+        }
 
         toolbar.add_top_bar(&header);
 
@@ -434,7 +452,9 @@ impl Win {
         self.search_bar.append(&self.search);
         toolbar.add_top_bar(&self.search_bar);
 
+        // The table's page, on the same top margin as every page_body.
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.set_margin_top(PAGE_MARGIN);
 
         // The way back from the repo/AUR search, which the sidebar cannot
         // offer: App Store is still the selected row, so re-selecting it
@@ -530,9 +550,22 @@ impl Win {
         // Below ~760px the sidebar costs more than it gives: 205 of 480 pixels
         // is most of a half-screen tile. It folds into an overlay instead, and
         // the toggle in the header becomes the way back to it.
-        if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 760px") {
+        //
+        // A window applies one breakpoint at a time (the last that matches),
+        // so the phone-narrow one repeats the folding and adds its own: the
+        // table's Source column goes, and Name keeps the room.
+        let source_col = (0..self.view.columns().n_items())
+            .filter_map(|i| self.view.columns().item(i).and_downcast::<gtk::ColumnViewColumn>())
+            .find(|c| c.title().is_some_and(|t| t == "Source"));
+        for (width, phone) in [(760, false), (super::columns::SOURCE_HIDES_BELOW, true)] {
+            let Ok(condition) = adw::BreakpointCondition::parse(&format!("max-width: {width}px")) else {
+                continue;
+            };
             let breakpoint = adw::Breakpoint::new(condition);
             breakpoint.add_setter(&self.split, "collapsed", Some(&true.to_value()));
+            if let (true, Some(col)) = (phone, &source_col) {
+                breakpoint.add_setter(col, "visible", Some(&false.to_value()));
+            }
             let w = self.downgrade();
             breakpoint.connect_apply(move |_| {
                 if let Some(w) = w.upgrade() {
@@ -606,6 +639,15 @@ impl Win {
             let key = if filter_key == "all" { "featured".to_string() } else { filter_key };
             self.select_category(&key);
         }
+        // Work that panics off the main thread cannot hand its page a
+        // result; the page is told it failed instead of spinning forever.
+        let w = self.downgrade();
+        super::helpers::on_bg_failure(move |msg| {
+            if let Some(w) = w.upgrade() {
+                w.busy(false);
+                w.say(&format!("{}: {msg}", tr("Something went wrong")), 8);
+            }
+        });
         self.watch_pacman();
         self.watch_configs();
         self.reload();
@@ -630,5 +672,39 @@ impl Win {
             Some(pool) => thumb_bg(pool, work, done),
             None => spawn_bg(work, done),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Install-from-the-search-box is on only where the page shows the box.
+    #[test]
+    fn install_follows_the_search_bar() {
+        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
+        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
+            return;
+        }
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gtk::gdk::Display::default().is_none() {
+            return;
+        }
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        bar.set_visible(false);
+        let install = gio::SimpleAction::new("install", None);
+        enabled_while_visible(&install, &bar);
+        assert!(!install.is_enabled(), "a page without a search box");
+        bar.set_visible(true);
+        assert!(install.is_enabled(), "a page with one");
+        bar.set_visible(false);
+        assert!(!install.is_enabled());
+        // And the window wires it to the search bar, not to something else.
+        let src = include_str!("build.rs");
+        assert!(src.contains("enabled_while_visible(&install, &self.search_bar)"));
+        let guard = include_str!("../plugins/removal.rs");
+        let on_install = guard.split("pub fn on_install(").nth(1).unwrap_or("");
+        let head: String = on_install.chars().take(400).collect();
+        assert!(head.contains("if !self.search_bar.is_visible()"), "on_install reads a hidden box");
     }
 }

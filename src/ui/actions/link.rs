@@ -20,6 +20,9 @@ use super::update::yay_argv;
 impl Win {
     /// Paste a GitHub link; see every way it ships before choosing one.
     pub fn on_install_link(&self, link: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let entry = gtk::Entry::builder()
             .placeholder_text("https://github.com/owner/project")
             .activates_default(true)
@@ -186,9 +189,7 @@ impl Win {
             let call: tasks::StepFn = Arc::new(move |log: LogFn<'_>| {
                 sources::install_appimage(&res_c, &opt_c, log).map(|_| ())
             });
-            tasks::run(
-                &self.window,
-                &format!("Installing {}", res.repo),
+            self.run_task(&format!("Installing {}", res.repo),
                 vec![Step::call(format!("Downloading {}", opt.name), call)],
                 Some(after),
             );
@@ -220,7 +221,7 @@ impl Win {
             raised,
             move |done| {
                 if let Some(win) = w.upgrade() {
-                    tasks::run(&win.window, &format!("Installing {name}"), steps, Some(done));
+                    win.run_task(&format!("Installing {name}"), steps, Some(done));
                 }
             },
         );

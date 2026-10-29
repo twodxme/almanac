@@ -167,18 +167,7 @@ impl Win {
     /// Plugins page, beside their state and actions; here they get one row
     /// that says how many are on and goes there.
     pub fn build_switchboard(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let switch_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&switch_body));
-        page.append(&scroller);
+        let (page, switch_body) = crate::ui::shell::page_body();
         let old = {
             let mut st = self.switchboard.borrow_mut();
             (st.switch_body.replace(switch_body), std::mem::take(&mut st.switch_rows))
@@ -420,6 +409,16 @@ impl Win {
         let w = self.downgrade();
         let keep = guard.clone();
         guard.connect(&switch, move |sw, on| {
+            if w.upgrade().is_some_and(|w| w.demo_refuses()) {
+                // Back where it was, once this handler has returned.
+                let (sw, keep) = (sw.downgrade(), keep.clone());
+                glib::idle_add_local_once(move || {
+                    if let Some(sw) = sw.upgrade() {
+                        keep.set(&sw, !on);
+                    }
+                });
+                return glib::Propagation::Stop;
+            }
             if !on && !confirm_off.is_empty() {
                 let dialog = adw::AlertDialog::new(
                     Some(&format!("Switch off {title}?")),

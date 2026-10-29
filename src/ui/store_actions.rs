@@ -531,7 +531,7 @@ impl Host for WeakWin {
     }
     fn run(&self, title: &str, steps: Vec<Step>, on_done: tasks::OnDone) {
         if let Some(win) = self.upgrade() {
-            tasks::run(&win.window, title, steps, Some(on_done));
+            win.run_task(title, steps, Some(on_done));
         }
     }
     fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
@@ -902,15 +902,14 @@ impl Win {
             let Some(win) = w.upgrade() else { return };
             if resp == "script" {
                 if let Some(script) = cut.first() {
-                    win.open_url(&gtk::gio::File::for_path(script).uri());
+                    win.open_path(std::path::Path::new(script));
                 }
             } else if resp == "readme" {
-                let url = if !p.repo.is_empty() {
-                    format!("{}#readme", p.repo)
+                if !p.repo.is_empty() {
+                    win.open_url(&format!("{}#readme", p.repo));
                 } else {
-                    format!("file://{}", py_join(&plan.plugin_dir, &plan.readme).display())
-                };
-                win.open_url(&url);
+                    win.open_path(&py_join(&plan.plugin_dir, &plan.readme));
+                }
             } else if resp == "run" {
                 win.run_setup(&p, &plan);
             }
@@ -919,6 +918,9 @@ impl Win {
     }
 
     pub fn run_setup(&self, p: &Plugin, plan: &SetupPlan) {
+        if self.demo_refuses() {
+            return;
+        }
         let commands = {
             let w = self.downgrade();
             let p = p.clone();
@@ -996,9 +998,7 @@ impl Win {
                 }
             };
             let w = self.downgrade();
-            tasks::run(
-                &self.window,
-                &format!("Setting up {}", p.name),
+            self.run_task(&format!("Setting up {}", p.name),
                 steps,
                 Some(Box::new(move |ok| {
                     if let Some(win) = w.upgrade() {
@@ -1030,27 +1030,29 @@ impl Win {
             self.say(&format!("{} was not installed", p.name), 8);
             return;
         }
-        if !self.annotate_plugins() {
-            return;
-        }
-        self.store_refresh();
-        let toast = adw::Toast::builder()
-            .title(format!("{} installed", p.name))
-            .use_markup(false)
-            .timeout(0)
-            .build();
-        toast.set_button_label(Some("Apply"));
-        let w = self.downgrade();
         let p = p.clone();
-        toast.connect_button_clicked(move |_| {
-            if let Some(win) = w.upgrade() {
-                win.apply_theme_now(&p);
-            }
+        self.annotate_plugins_then(move |win| {
+            win.store_refresh();
+            let toast = adw::Toast::builder()
+                .title(format!("{} installed", p.name))
+                .use_markup(false)
+                .timeout(0)
+                .build();
+            toast.set_button_label(Some("Apply"));
+            let w = win.downgrade();
+            toast.connect_button_clicked(move |_| {
+                if let Some(win) = w.upgrade() {
+                    win.apply_theme_now(&p);
+                }
+            });
+            win.toasts.add_toast(toast);
         });
-        self.toasts.add_toast(toast);
     }
 
     pub fn apply_theme_now(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         let p = p.clone();
         tasks::confirm(
@@ -1065,9 +1067,7 @@ impl Win {
                 let Some(win) = w.upgrade() else { return };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
-                    &format!("Applying {}", p.name),
+                win.run_task(&format!("Applying {}", p.name),
                     vec![Step::argv(format!("Applying {}", p.name), theme_set_argv(&p.name))],
                     Some(Box::new(move |ok| {
                         if let Some(win) = w.upgrade() {
@@ -1095,6 +1095,9 @@ impl Win {
 
     // ---- store entries that are AppImages, not plugins ----
     pub fn install_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let dest = store_appimage_path(p);
         let t = or_log!(p.try_trust());
         let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
@@ -1141,9 +1144,7 @@ impl Win {
                 };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
-                    &format!("Installing {}", p.name),
+                win.run_task(&format!("Installing {}", p.name),
                     vec![Step::call(format!("Downloading {} {}", p.name, p.version), fetch)],
                     Some(Box::new(move |ok| {
                         let Some(win) = w.upgrade() else { return };
@@ -1204,6 +1205,9 @@ impl Win {
     }
 
     pub fn remove_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let p = &self.live(p);
         let version = if p.local_version.is_empty() { &p.version } else { &p.local_version };
         let mut extra = serde_json::Map::new();
@@ -1230,8 +1234,10 @@ impl Win {
             true,
             move || {
                 if let Some(win) = w.upgrade() {
-                    win.remove_appimage(&entry);
-                    win.store_after(true, &p, "removed");
+                    let p = p.clone();
+                    win.remove_appimage_then(&entry, move |win| {
+                        win.store_after(true, &p, "removed");
+                    });
                 }
             },
         );
@@ -1239,45 +1245,90 @@ impl Win {
 
     /// The app ran the command, so it knows when to re-read the system.
     ///
-    /// False where the Python raises (see `annotate_plugins`), so a caller
-    /// with more to do after it stops there too.
+    /// False where the Python raises before anything is read (see
+    /// `annotate_plugins_then`), so a caller with more to do after it stops
+    /// there too. The marks themselves land a moment later: the store is
+    /// refreshed and the result said once they have.
     pub fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
         if !ok {
             self.say(&format!("{} was not {}", p.name, verb), 5);
             return true;
         }
-        if !self.annotate_plugins() {
-            return false;
-        }
-        self.store_refresh();
-        self.say(&format!("{} {}", p.name, verb), 5);
-        if p.install_kind == "appimage" {
-            self.reload();
-        }
-        true
+        let (p, verb) = (p.clone(), verb.to_string());
+        self.annotate_plugins_then(move |w| {
+            w.store_refresh();
+            w.say(&format!("{} {}", p.name, verb), 5);
+            if p.install_kind == "appimage" {
+                w.reload();
+            }
+        })
     }
 
-    /// `store_mod.annotate(self._plugins)`. False where the Python raises:
-    /// `_plugins` is None after Preferences' `reload_store`, annotate's loop
-    /// raises TypeError; or annotate itself raises. Either way the caller
-    /// stops there (logged, no toast).
+    /// `store_mod.annotate(self._plugins)`, then `then`. False where the
+    /// Python raises at once: `_plugins` is None after Preferences'
+    /// `reload_store` (logged, no toast).
     ///
-    /// The list is taken out for the call and put back, so nothing annotate
-    /// reaches can find `shared` borrowed.
-    fn annotate_plugins(&self) -> bool {
+    /// Reading what is installed runs `omarchy plugin list` (two seconds
+    /// through the shell's IPC, up to 25 when it hangs), so it is read off
+    /// the main thread, and the marks it changes are worked out there too.
+    /// Only those are put on the list, back on this thread; where annotate
+    /// raises, they are logged and `then` does not run.
+    pub fn annotate_plugins_then(&self, then: impl FnOnce(&Win) + 'static) -> bool {
         let none = self.shared.borrow().plugins_none;
         if none {
             eprintln!("almanac: TypeError: 'NoneType' object is not iterable");
             return false;
         }
-        let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
-        let r = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut plugins));
-        self.shared.borrow_mut().plugins = plugins;
-        if let Err(e) = r {
-            eprintln!("almanac: {e}");
-            return false;
-        }
+        let plugins = self.shared.borrow().plugins.clone();
+        let w = self.downgrade();
+        crate::ui::shell::spawn_bg_checked(
+            move || {
+                let facts = store_mod::annotation_facts(&plugins)?;
+                let (changes, r) = store_mod::mark_changes(&plugins, &facts);
+                Ok::<_, String>((plugins, changes, r))
+            },
+            move |result| {
+                let Some(w) = w.upgrade() else { return };
+                let (seen, changes, r) = match result.and_then(|r| r) {
+                    Ok(got) => got,
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return;
+                    }
+                };
+                w.put_marks(seen, &changes);
+                if let Err(e) = r {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+                then(&w);
+            },
+        );
         true
+    }
+
+    /// Put marks worked out on `seen` on the window's plugin list, if it is
+    /// still that list (a reload in between brought its own, marked).
+    ///
+    /// The list is shared with the store's current results; both let go of
+    /// it while it is changed, so it is changed in place rather than copied
+    /// (all 6,000 plugins, for one install), and both get it back.
+    fn put_marks(&self, seen: Arc<Vec<Plugin>>, changes: &[(usize, store_mod::Marks)]) {
+        if changes.is_empty() {
+            return;
+        }
+        let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
+        if !Arc::ptr_eq(&plugins, &seen) {
+            self.shared.borrow_mut().plugins = plugins;
+            return;
+        }
+        drop(seen);
+        let results = self.store.borrow_mut().store_results.take_plugins_if(&plugins);
+        store_mod::apply_mark_changes(Arc::<Vec<Plugin>>::make_mut(&mut plugins), changes);
+        if results {
+            self.store.borrow_mut().store_results.put_plugins(plugins.clone());
+        }
+        self.shared.borrow_mut().plugins = plugins;
     }
 
     /// The full listing for one plugin, as the marketplace shows it.

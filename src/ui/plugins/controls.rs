@@ -32,6 +32,9 @@ impl Win {
 
     /// Switch a plugin on or off through Omarchy, then check it took.
     pub fn toggle_plugin(&self, pid: &str, on: bool, label: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let label = if label.is_empty() { pid.to_string() } else { label.to_string() };
         let p = pid.to_string();
         let probe: TryProbe =
@@ -70,7 +73,7 @@ impl Win {
         let w = self.downgrade();
         self.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
             if let Some(w) = w.upgrade() {
-                tasks::run(&w.window, &title, steps, Some(on_done));
+                w.run_task(&title, steps, Some(on_done));
             }
         });
     }
@@ -87,6 +90,9 @@ impl Win {
 
     /// Record a key combination and bind it to opening the plugin.
     pub fn edit_shortcut(&self, pid: &str, label: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let existing = match shortcuts::current(pid, None) {
             Ok(e) => e,
             Err(exc) => {
@@ -184,6 +190,9 @@ impl Win {
     }
 
     pub fn on_restart_shell(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let restart = || {
             let argv = plugins_mod::restart_argv(true);
             match popen_detached(&argv) {

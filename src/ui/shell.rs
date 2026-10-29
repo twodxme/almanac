@@ -18,8 +18,10 @@
 mod app;
 mod build;
 mod columns;
+mod guard;
 mod helpers;
 mod items;
+mod shape;
 mod state;
 mod tables;
 mod watch;
@@ -29,10 +31,11 @@ pub use app::{run, AlmanacApp, PAGE_ALIASES, application_id, icons_dir, resolve_
 pub(in crate::ui) use helpers::as_text;
 pub use helpers::{
     age, compact, exc_str, fallback_icon, fmt_size, lower_cmp, name, primary_category, reverse_text,
-    source_label, spawn_bg, thumb_bg, version_text, SwitchGuard, CSS, FALLBACK_ICON, INSTALL_ICON,
+    source_label, spawn_bg, spawn_bg_checked, on_bg_failure, panic_text, thumb_bg, version_text, SwitchGuard, CSS, FALLBACK_ICON, INSTALL_ICON,
     SOURCE_LABEL,
 };
 pub use items::{AppItem, PluginItem};
+pub use shape::{page_body, section_note, severity_pill, PAGE_MARGIN, PAGE_MARGIN_BOTTOM, PAGE_SPACING};
 pub use tables::{
     page_accel, page_spec, sorts_discover, sorts_installed, GroupItem, PageSpec, COLLAPSED_BY_DEFAULT,
     GROUPS, PAGES, PAGE_KEYS,

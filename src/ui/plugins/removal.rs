@@ -7,10 +7,16 @@ use gtk::gio;
 use crate::i18n::tr;
 use crate::{inventory, sources, tasks, verify};
 use crate::ui::actions::Judge;
-use crate::ui::shell::{AppItem, Win, source_label};
+use crate::ui::shell::{spawn_bg_checked, AppItem, Win, source_label};
 use crate::verify::{Outcome, ProbeValue};
 
 use super::pyisms::{extra_str, popen_detached, py_oserror, py_splitlines, py_str_value, py_strip, truthy, uncaught_err};
+
+/// Whether `open_url` hands `url` to the desktop: an http or https link to
+/// a host, nothing else.
+pub fn web_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some_and(|h| !h.is_empty()))
+}
 
 /// The orphan split of `on_clean_orphans`: `(source, advice, name)` per row
 /// -> (safe to remove, kept deliberately).
@@ -153,14 +159,36 @@ impl Win {
         }
     }
 
-    /// Hand the URL to the desktop's default browser.
+    /// Hand a web page to the desktop's default browser.
+    ///
+    /// Only http and https: the links come from catalogues and caches (a
+    /// store entry's repository, a plugin's page, an app's homepage), and the
+    /// desktop's default handler for any other scheme can be a program --
+    /// `file:///…/x.desktop`, `ssh:`, a custom URL handler. Almanac's own
+    /// links to local folders and files go through `open_path`.
     pub fn open_url(&self, url: &str) {
+        if !web_url(url) {
+            self.say(&format!("Not opening {url}: only web links are opened"), 5);
+            return;
+        }
         if let Err(e) = gio::AppInfo::launch_default_for_uri(url, None::<&gio::AppLaunchContext>) {
             self.say(&format!("Could not open {url}: {}", e.message()), 5);
         }
     }
 
+    /// Show a local folder or file Almanac itself points at (a checkout, a
+    /// plugin's folder, its README) in the desktop's default app for it.
+    pub fn open_path(&self, path: &std::path::Path) {
+        let uri = gio::File::for_path(path).uri();
+        if let Err(e) = gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>) {
+            self.say(&format!("Could not open {}: {}", path.display(), e.message()), 5);
+        }
+    }
+
     pub fn on_launch(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if let Err(e) = popen_detached(std::slice::from_ref(&app.exec_path)) {
             self.say(&format!("Could not launch {}: {}", app.name, py_oserror(&e, &app.exec_path)), 5);
         }
@@ -171,6 +199,9 @@ impl Win {
     /// Build tooling and debug packages are excluded: the next AUR build pulls
     /// rust straight back, so removing it is churn rather than cleanup.
     pub fn on_clean_orphans(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let store = self.shared.borrow().store.clone();
         let mut rows: Vec<(String, String, String)> = Vec::new();
         for i in 0..store.n_items() {
@@ -178,12 +209,35 @@ impl Win {
             let row = AppItem::of(&obj).map(|it| (it.source.clone(), it.advice.clone(), it.name.clone()));
             rows.extend(row);
         }
-        clean_orphans(
-            rows.iter().map(|(s, a, n)| (s.as_str(), a.as_str(), n.as_str())),
-            &tasks::preview_removal,
-            &|m| self.say(m, 5),
-            &|plan, yes| self.confirm_removal(plan, yes),
-            self.removal_runner(),
+        // What would go is asked of pacman off the main thread (see
+        // `on_remove`); with nothing safe to remove there is nothing to ask.
+        let (safe, _kept) = split_orphans(rows.iter().map(|(s, a, n)| (s.as_str(), a.as_str(), n.as_str())));
+        if safe.is_empty() {
+            clean_orphans(
+                rows.iter().map(|(s, a, n)| (s.as_str(), a.as_str(), n.as_str())),
+                &|_names| (false, String::new()),
+                &|m| self.say(m, 5),
+                &|plan, yes| self.confirm_removal(plan, yes),
+                self.removal_runner(),
+            );
+            return;
+        }
+        let w = self.downgrade();
+        self.busy(true);
+        spawn_bg_checked(
+            move || tasks::preview_removal(&safe),
+            move |preview| {
+                let Some(w) = w.upgrade() else { return };
+                w.busy(false);
+                let preview = preview.unwrap_or_else(|e| (false, e));
+                clean_orphans(
+                    rows.iter().map(|(s, a, n)| (s.as_str(), a.as_str(), n.as_str())),
+                    &|_names| preview.clone(),
+                    &|m| w.say(m, 5),
+                    &|plan, yes| w.confirm_removal(plan, yes),
+                    w.removal_runner(),
+                );
+            },
         );
     }
 
@@ -206,9 +260,7 @@ impl Win {
         std::rc::Rc::new(move |title: &str, steps: Vec<tasks::Step>| {
             let Some(w) = w.upgrade() else { return };
             let wt = w.downgrade();
-            tasks::run(
-                &w.window,
-                title,
+            w.run_task(title,
                 steps,
                 Some(Box::new(move |ok| {
                     if let Some(w) = wt.upgrade() {
@@ -221,6 +273,9 @@ impl Win {
 
     /// Install one result, through the tool that owns that kind of thing.
     pub fn on_install_item(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if app.source == inventory::PLUGIN {
             let url = extra_str(app, "repo");
             if url.is_empty() {
@@ -240,9 +295,7 @@ impl Win {
                 move || {
                     let Some(w) = w.upgrade() else { return };
                     let wt = w.downgrade();
-                    tasks::run(
-                        &w.window,
-                        &format!("Installing {nm}"),
+                    w.run_task(&format!("Installing {nm}"),
                         vec![tasks::Step::argv(
                             format!("Installing {nm}"),
                             ["omarchy", "plugin", "add", &u, "--enable", "--yes"]
@@ -290,6 +343,15 @@ impl Win {
     /// yay's own interactive picker is better than anything reimplemented
     /// here, and it is the tool that owns the transaction.
     pub fn on_install(&self) {
+        if self.demo_refuses() {
+            return;
+        }
+        // Only the search box this page shows: a hidden one still holds
+        // whatever another page left in it (the action is off there too;
+        // a shortcut or a race must not get past it either).
+        if !self.search_bar.is_visible() {
+            return;
+        }
         let text = py_strip(&self.search.text()).to_string();
         if text.is_empty() {
             self.search.grab_focus();
@@ -322,6 +384,9 @@ impl Win {
 
     /// Install through yay: snapshot first, then check what changed.
     pub fn install_package(&self, name: &str, argv: Vec<String>) {
+        if self.demo_refuses() {
+            return;
+        }
         let holder = match self.try_watch_defaults() {
             Ok(holder) => holder,
             Err(e) => return uncaught_err(&e),
@@ -363,7 +428,7 @@ impl Win {
         let title = format!("Installing {name}");
         self.checked(Some(verify::installed_package_try(name)), judge, Some(after), uncaught_err, move |on_done| {
             if let Some(w) = w.upgrade() {
-                tasks::run(&w.window, &title, steps, Some(on_done));
+                w.run_task(&title, steps, Some(on_done));
             }
         });
     }
@@ -374,6 +439,9 @@ impl Win {
     /// expected, so the terminal shows the full list before confirming --
     /// no --noconfirm here, deliberately.
     pub fn on_remove(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if app.source == inventory::APPIMAGE {
             // The file and its rollback copy are deleted outright, so the
             // row menu's "Remove…" asks first, as the App Store does.
@@ -413,9 +481,7 @@ impl Win {
                 move || {
                     let Some(w) = w.upgrade() else { return };
                     let wt = w.downgrade();
-                    tasks::run(
-                        &w.window,
-                        &format!("Removing {nm}"),
+                    w.run_task(&format!("Removing {nm}"),
                         vec![tasks::Step::argv(
                             format!("Removing {nm}"),
                             vec!["flatpak".into(), "uninstall".into(), "--assumeyes".into(), id.clone()],
@@ -431,12 +497,26 @@ impl Win {
             return;
         }
 
-        remove_package(
-            &app.name,
-            &tasks::preview_removal,
-            &|m| self.say(m, 5),
-            &|plan, yes| self.confirm_removal(plan, yes),
-            self.removal_runner(),
+        // `pacman -Rs --print` can take a while (60 s at worst): it runs off
+        // the main thread, and the plan is made from its answer once it is in.
+        let name = app.name.clone();
+        let names = vec![name.clone()];
+        let w = self.downgrade();
+        self.busy(true);
+        spawn_bg_checked(
+            move || tasks::preview_removal(&names),
+            move |preview| {
+                let Some(w) = w.upgrade() else { return };
+                w.busy(false);
+                let preview = preview.unwrap_or_else(|e| (false, e));
+                remove_package(
+                    &name,
+                    &|_names| preview.clone(),
+                    &|m| w.say(m, 5),
+                    &|plan, yes| w.confirm_removal(plan, yes),
+                    w.removal_runner(),
+                );
+            },
         );
     }
 }
@@ -445,6 +525,45 @@ impl Win {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    const SRC: &str = include_str!("removal.rs");
+
+    /// `pacman -Rs --print` waits up to 60 s: the window asks it from a
+    /// background thread, never from its own.
+    #[test]
+    fn the_removal_preview_runs_off_the_main_thread() {
+        let code = SRC.split("#[cfg(test)]").next().unwrap_or(SRC);
+        for f in ["pub fn on_remove(", "pub fn on_clean_orphans("] {
+            let body = code.split(f).nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("");
+            assert!(!body.is_empty(), "{f} not found");
+            assert!(!body.contains("&tasks::preview_removal"), "{f} previews on the main thread");
+            assert!(body.contains("spawn_bg_checked(\n            move || tasks::preview_removal("), "{f}");
+        }
+    }
+
+    /// Catalogue values reach `open_url`; only web links get through.
+    #[test]
+    fn only_web_links_are_opened() {
+        for ok in ["https://github.com/a/b", "http://example.com", "HTTPS://Example.com/x?y=1#z"] {
+            assert!(web_url(ok), "{ok}");
+        }
+        for bad in [
+            "", "repo", "/home/me/repo", "file:///home/me/repo", "file:///usr/share/applications/x.desktop",
+            "ext::sh -c x", "javascript:alert(1)", "ssh://host/x", "steam://run/1", "https://",
+            "smb://server/share", "data:text/html,x",
+        ] {
+            assert!(!web_url(bad), "{bad}");
+        }
+        // Almanac's own folder links go through open_path, not open_url.
+        for (file, src) in [
+            ("actions/rows.rs", include_str!("../actions/rows.rs")),
+            ("plugins/page.rs", include_str!("page.rs")),
+            ("store_actions.rs", include_str!("../store_actions.rs")),
+        ] {
+            assert!(!src.contains("open_url(&format!(\"file://"), "{file} sends a file:// link to open_url");
+            assert!(!src.contains("open_url(&gtk::gio::File"), "{file} sends a file:// link to open_url");
+        }
+    }
 
     // RemovalCommands.test_package_removal_shows_the_list_before_removing_anything
     #[test]

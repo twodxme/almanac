@@ -171,6 +171,16 @@ fn plugin_switch_shared(
     guard: &SwitchGuard,
     i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
 ) -> glib::Propagation {
+    if w.upgrade().is_some_and(|w| w.demo_refuses()) {
+        // Back where it was, once this handler has returned.
+        let (sw, g) = (switch.downgrade(), guard.clone());
+        glib::idle_add_local_once(move || {
+            if let Some(sw) = sw.upgrade() {
+                g.set(&sw, !on);
+            }
+        });
+        return glib::Propagation::Stop;
+    }
     switch.set_sensitive(false);
 
     let id = i.borrow().id.clone();
@@ -238,12 +248,14 @@ fn plugin_switch_shared(
         }
         if let Some(w) = &win {
             // `if getattr(self, "_plugins", None): annotate(self._plugins)`;
-            // what annotate raises ends this idle callback, logged.
-            let mut shared = w.shared.borrow_mut();
-            if !shared.plugins_none && !shared.plugins.is_empty() {
-                if let Err(e) = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut shared.plugins)) {
-                    eprintln!("almanac: {e}");
-                }
+            // what annotate raises is logged. Read off the main thread: it
+            // runs `omarchy plugin list`.
+            let wanted = {
+                let shared = w.shared.borrow();
+                !shared.plugins_none && !shared.plugins.is_empty()
+            };
+            if wanted {
+                w.annotate_plugins_then(|_| {});
             }
         }
     };
@@ -254,18 +266,7 @@ fn plugin_switch_shared(
 impl Win {
     /// Every plugin on the system, with a switch each. See plugins.py.
     pub fn build_plugins_page(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let plugins_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&plugins_body));
-        page.append(&scroller);
+        let (page, plugins_body) = crate::ui::shell::page_body();
         {
             let mut st = self.plugins.borrow_mut();
             st.plugins_body = Some(plugins_body);
@@ -694,7 +695,7 @@ impl Win {
             self.edit_shortcut(&i.id, &i.name);
         } else if action == "folder" && i.folder.is_some() {
             if let Some(folder) = &i.folder {
-                self.open_url(&format!("file://{}", folder.display()));
+                self.open_path(folder);
             }
         } else if action == "page" && st.as_ref().is_some_and(|s| !s.url.is_empty()) {
             let url = st.as_ref().map(|s| s.url.clone()).unwrap_or_default();
@@ -759,7 +760,7 @@ impl Win {
                     let title = format!("Removing {}", i.name);
                     w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
                         if let Some(w) = wr.upgrade() {
-                            tasks::run(&w.window, &title, steps, Some(on_done));
+                            w.run_task(&title, steps, Some(on_done));
                         }
                     });
                 },
