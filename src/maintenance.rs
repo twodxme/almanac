@@ -1974,7 +1974,7 @@ fn _runtime_logs_in(runtime: &str) -> Finding {
         fix_label: if some { "Clear old session logs" } else { "" }.into(),
         fix: if some {
             Some(Fix::func(move |log| {
-                _clear_runtime_logs_in(&at, &_hyprctl_instances(), crate::util::now(), log)
+                _clear_runtime_logs_in(&at, _hyprctl_instances().as_deref(), _current_instance().as_deref(), crate::util::now(), log)
             }))
         } else {
             None
@@ -1987,22 +1987,28 @@ fn _runtime_logs_in(runtime: &str) -> Finding {
     }
 }
 
-/// `hyprctl instances -j` stdout, or "" when it cannot run.
-fn _hyprctl_instances() -> String {
-    // Undecodable output raises in the Python, inside the `except Exception`
-    // that leaves `live` empty -- which "" does here too.
-    match _run_bytes(&["hyprctl", "instances", "-j"], 20) {
-        Some((out, err)) => match (_py_decode(&out), _py_decode(&err)) {
-            (Ok(o), Ok(_)) => o,
-            _ => String::new(),
+/// `hyprctl instances -j` stdout, or None when it cannot run, fails, or
+/// prints what cannot be read. (The Python read every failure as "no
+/// instance is running", and so unlinked the running compositor's log.)
+fn _hyprctl_instances() -> Option<String> {
+    match _run_status(&["hyprctl", "instances", "-j"], std::time::Duration::from_secs(20)) {
+        Some((out, err, true)) => match (_py_decode(&out), _py_decode(&err)) {
+            (Ok(o), Ok(_)) => Some(o),
+            _ => None,
         },
-        None => String::new(),
+        _ => None,
     }
+}
+
+/// The Hyprland instance this session runs in, which is live whatever
+/// hyprctl says.
+fn _current_instance() -> Option<std::ffi::OsString> {
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").filter(|s| !s.is_empty())
 }
 
 fn _clear_runtime_logs(log: LogFn<'_>) -> Result<(), String> {
     let runtime = PathBuf::from(_runtime_dir());
-    _clear_runtime_logs_in(&runtime, &_hyprctl_instances(), crate::util::now(), log)
+    _clear_runtime_logs_in(&runtime, _hyprctl_instances().as_deref(), _current_instance().as_deref(), crate::util::now(), log)
 }
 
 /// `{i.get("instance") for i in json.loads(text)}`, keeping only the str
@@ -2279,12 +2285,21 @@ fn _live_instances(text: &str) -> Option<Vec<Vec<u32>>> {
 }
 
 /// The body of `_clear_runtime_logs`, given what `hyprctl instances -j`
-/// printed and the time now.
-fn _clear_runtime_logs_in(runtime: &Path, instances: &str, now: f64, log: LogFn<'_>) -> Result<(), String> {
-    // live = {i.get("instance") for i in json.loads(out.stdout or "[]")},
-    // left empty on any failure.
-    let text = if instances.is_empty() { "[]" } else { instances };
-    let live: Vec<Vec<u32>> = _live_instances(text).unwrap_or_default();
+/// printed (None: it could not be asked), this session's instance, and the
+/// time now.
+fn _clear_runtime_logs_in(
+    runtime: &Path,
+    instances: Option<&str>,
+    current: Option<&std::ffi::OsStr>,
+    now: f64,
+    log: LogFn<'_>,
+) -> Result<(), String> {
+    // live = {i.get("instance") for i in json.loads(out.stdout or "[]")}.
+    // When that cannot be read every instance may be live: a live log is
+    // truncated, never unlinked, since unlinking frees nothing while the
+    // compositor still writes to it.
+    let live: Option<Vec<Vec<u32>>> =
+        instances.and_then(|t| _live_instances(if t.is_empty() { "[]" } else { t }));
 
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(runtime.join("hypr")) {
         Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
@@ -2297,7 +2312,8 @@ fn _clear_runtime_logs_in(runtime: &Path, instances: &str, now: f64, log: LogFn<
         }
         // d.name in live: code points, so a name that is not UTF-8 matches
         // the same lone surrogates in the JSON.
-        let is_live = live.contains(&_sort_key(&d));
+        let is_live = live.as_ref().is_none_or(|l| l.contains(&_sort_key(&d)))
+            || current.is_some_and(|c| d.file_name() == Some(c));
         for f in _glob_suffix_unsorted(&d, ".log") {
             let size = if f.exists() {
                 std::fs::metadata(&f).map_err(|e| _oserror(&e, &f))?.len() as f64 / 1048576.0
@@ -2308,7 +2324,8 @@ fn _clear_runtime_logs_in(runtime: &Path, instances: &str, now: f64, log: LogFn<
                 // The session is still running: truncate rather than unlink,
                 // so the compositor keeps a valid file to write to.
                 std::fs::File::create(&f).map_err(|e| _oserror(&e, &f))?;
-                log(&format!("truncated {} ({}, live session)", _name(&f), fmt_size(size)));
+                let why = if live.is_some() { "live session" } else { "its session may still be running" };
+                log(&format!("truncated {} ({}, {why})", _name(&f), fmt_size(size)));
             } else {
                 match std::fs::remove_file(&f) {
                     Ok(()) => {}
@@ -3151,6 +3168,36 @@ mod tests {
         // Everything asked and answered: a pass.
         let all = known(&["yay", "foo", "bar"], &["yay", "foo", "bar"]);
         assert_eq!(_unmaintained_aur_with(&run, &|_n| Ok(Some(all.clone()))).unwrap().severity, OK);
+    }
+
+    #[test]
+    fn the_live_hyprland_log_is_truncated_when_hyprctl_cannot_say() {
+        let d = tempfile::tempdir().unwrap();
+        let add = |sig: &str| {
+            let dir = d.path().join("hypr").join(sig);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hyprland.log"), b"x").unwrap();
+            dir.join("hyprland.log")
+        };
+        let lines = std::sync::Mutex::new(Vec::new());
+        let log = |l: &str| lines.lock().unwrap().push(l.to_string());
+        // hyprctl not there (or failing): nothing is unlinked.
+        let (a, b) = (add("aaa_1"), add("bbb_2"));
+        _clear_runtime_logs_in(d.path(), None, None, 0.0, &log).unwrap();
+        assert!(a.exists() && b.exists());
+        assert_eq!(std::fs::metadata(&a).unwrap().len(), 0, "truncated instead");
+        // Output that cannot be read is no list either.
+        _clear_runtime_logs_in(d.path(), Some("not json"), None, 0.0, &log).unwrap();
+        assert!(a.exists() && b.exists());
+        // This session's own instance is live whatever hyprctl says.
+        _clear_runtime_logs_in(d.path(), Some("[]"), Some(std::ffi::OsStr::new("aaa_1")), 0.0, &log).unwrap();
+        assert!(a.exists(), "the current instance is kept");
+        assert!(!b.exists(), "an ended one goes");
+        // And a live list read from hyprctl is still believed.
+        let c = add("ccc_3");
+        _clear_runtime_logs_in(d.path(), Some(r#"[{"instance": "ccc_3"}]"#), None, 0.0, &log).unwrap();
+        assert!(c.exists() && !a.exists());
+        assert!(lines.lock().unwrap().iter().any(|l| l.contains("its session may still be running")));
     }
 
     #[test]
