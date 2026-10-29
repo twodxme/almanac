@@ -1443,8 +1443,9 @@ pub fn installed_since(before: &Before, after: &After) -> Vec<String> {
 }
 
 /// "Show log": the update's section of pacman.log, then the terminal's
-/// output as `script` recorded it.
-pub fn log_text(section: Option<&str>, output: &str) -> String {
+/// output as `script` recorded it. `unrecorded`: why there is no terminal
+/// output to show, when there was none to read.
+pub fn log_text(section: Option<&str>, output: &str, unrecorded: Option<&str>) -> String {
     let mut t = match section {
         Some(s) if !s.trim().is_empty() => format!("{PACMAN_LOG}\n\n{}", s.trim_end()),
         Some(_) => format!("Nothing was written to {PACMAN_LOG}."),
@@ -1453,8 +1454,21 @@ pub fn log_text(section: Option<&str>, output: &str) -> String {
     let out = clean_output(output);
     if !out.trim().is_empty() {
         t += &format!("\n\nIn the terminal\n\n{}", out.trim());
+    } else if let Some(why) = unrecorded {
+        t += &format!("\n\nIn the terminal\n\nNot recorded: {why}.");
     }
     t
+}
+
+/// Why the terminal's output of a run is not there to show, or None when
+/// it should be: the run's files could not be made (`files_error`), or
+/// `script`, which records it, is not installed.
+pub fn unrecorded_why(files_error: Option<&str>, have_script: bool) -> Option<String> {
+    match files_error {
+        Some(e) => Some(format!("Almanac could not create the files for this run ({e})")),
+        None if !have_script => Some("`script` (util-linux) is not installed to record it".to_string()),
+        None => None,
+    }
 }
 
 /// `yay -S --rebuild`: build the targets even though they are installed
@@ -2002,9 +2016,18 @@ mod tests {
 
     #[test]
     fn the_log_shown_is_the_section_then_the_terminal() {
-        let t = log_text(Some("[x] [ALPM] upgraded a (1 -> 2)\n"), "\x1b[1mdone\x1b[0m\r\n");
+        let t = log_text(Some("[x] [ALPM] upgraded a (1 -> 2)\n"), "\x1b[1mdone\x1b[0m\r\n", None);
         assert_eq!(t, "/var/log/pacman.log\n\n[x] [ALPM] upgraded a (1 -> 2)\n\nIn the terminal\n\ndone");
-        assert_eq!(log_text(None, ""), "/var/log/pacman.log could not be read.");
+        assert_eq!(log_text(None, "", None), "/var/log/pacman.log could not be read.");
+        // The run's files could not be made: said, not "Nothing was logged".
+        let why = unrecorded_why(Some("[Errno 28] No space left on device"), true);
+        assert_eq!(
+            log_text(None, "", why.as_deref()),
+            "/var/log/pacman.log could not be read.\n\nIn the terminal\n\nNot recorded: Almanac could not \
+             create the files for this run ([Errno 28] No space left on device)."
+        );
+        assert!(unrecorded_why(None, false).unwrap().contains("script"));
+        assert_eq!(unrecorded_why(None, true), None);
         let b = Before { pending: Some(set(&["a", "b"])), ..Default::default() };
         let a = After { pending: Some(set(&["b", "c"])), ..Default::default() };
         assert_eq!(installed_since(&b, &a), strs(&["a"]));

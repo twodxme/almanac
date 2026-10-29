@@ -366,14 +366,15 @@ impl Win {
     fn run_system_update(&self, command: &str, pacman: bool, rest: Vec<App>, run: SharedRun) {
         // Where the script reports back. Without it the update still runs;
         // how it ended is then not known.
-        let files = match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
-            Ok(f) => Some(f),
+        let (files, files_error) = match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
+            Ok(f) => (Some(f), None),
             Err(e) => {
                 eprintln!("almanac: {e}");
-                None
+                (None, Some(e))
             }
         };
         let recorder = Path::new("/usr/bin/script");
+        let unrecorded = postupdate::unrecorded_why(files_error.as_deref(), recorder.exists());
         let script = postupdate::terminal_script(command, files.as_ref(), recorder.exists().then_some(recorder));
         let Some(argv) = xdg::terminal_argv(&["bash", "-lc", script.as_str()]) else {
             self.say(&tr("No terminal found to run the update in"), 5);
@@ -472,7 +473,7 @@ impl Win {
                 });
                 let inputs = Inputs { system: pacman, exit, log, before: before.clone(), after: after.clone() };
                 let mut report = postupdate::build_report(&inputs);
-                report.log = postupdate::log_text(section.as_deref(), &output);
+                report.log = postupdate::log_text(section.as_deref(), &output, unrecorded.as_deref());
                 // The snapshot is looked for over the whole run, the
                 // password prompt included.
                 let snapshot =

@@ -1579,6 +1579,10 @@ msgstr ""
 msgid "Tidying up after the update"
 msgstr ""
 
+#: src/ui/update_report.rs:294
+msgid "Tidy up"
+msgstr ""
+
 #: src/util/human.rs:117 src/util/human.rs:193
 msgid "The file is not valid UTF-8"
 msgstr ""
