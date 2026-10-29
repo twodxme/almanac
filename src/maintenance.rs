@@ -2466,6 +2466,14 @@ pub fn check_by_id(finding_id: &str) -> Option<Check> {
     CHECK_BY_ID.iter().find(|(id, _)| *id == finding_id).map(|(_, f)| *f)
 }
 
+/// The check behind `finding_id` run again the way `run_all` runs it:
+/// guarded, and given until its deadline. None when there is no such check
+/// (or in demo mode).
+pub fn recheck_by_id(finding_id: &str) -> Option<Finding> {
+    let check = check_by_id(finding_id)?;
+    _run_checks(&[(finding_id, check)]).pop()
+}
+
 /// Every check. Read-only; safe to run on a timer.
 pub fn run_all() -> Vec<Finding> {
     if crate::demo::active() {
@@ -2520,17 +2528,19 @@ pub fn checked_ago(age: std::time::Duration) -> String {
 /// How long `run_all` waits for a check: its own commands' time limits
 /// with room to spare. Past it the check is left running on its own and
 /// reported as not finished, so one stuck read (a network share, a FIFO, a
-/// process hung on either) cannot hold back every other answer.
+/// process hung on either) cannot hold back every other answer. Takes the
+/// check's name or its finding id (`recheck` has only the id).
 fn _deadline(name: &str) -> std::time::Duration {
     let secs = match name {
         // pacman -Qq (60 s), then pacman -Qk (240 s) over every installed file.
-        "package_integrity" => 330,
+        "package_integrity" | "integrity" => 330,
         // A walk of the cache, then two paccache dry runs of up to 60 s each.
-        "pacman_cache" => 180,
+        "pacman_cache" | "pacman-cache" => 180,
         // Two systemctl calls of up to 60 s each.
-        "failed_units" => 150,
+        "failed_units" | "failed-units" => 150,
         // pacman, then the network.
-        "unmaintained_aur" | "known_vulnerabilities" | "orphan_packages" => 120,
+        "unmaintained_aur" | "aur-health" | "known_vulnerabilities" | "vulnerabilities" | "orphan_packages"
+        | "orphans" => 120,
         // One command of up to 60 s, or reading files.
         _ => 90,
     };
@@ -3244,4 +3254,15 @@ mod tests {
         _rmtree(&d.path().join("real"), false).unwrap();
         assert!(!d.path().join("real").exists());
     }
+    #[test]
+    fn a_check_asked_again_by_id_gets_the_same_deadline() {
+        // verify::recheck runs one check by its finding id; the id must find
+        // the deadline its check has in run_all.
+        assert_eq!(CHECKS.len(), CHECK_BY_ID.len());
+        for ((name, by_name), (id, by_id)) in CHECKS.iter().zip(CHECK_BY_ID) {
+            assert_eq!(*by_name as usize, *by_id as usize, "{name} and {id} are not the same check");
+            assert_eq!(_deadline(id), _deadline(name), "{id}");
+        }
+    }
+
 }

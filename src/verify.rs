@@ -557,6 +557,13 @@ fn judge_finding_any(before: Option<&PyFinding>, after: Option<&PyFinding>) -> R
     // Python numbers: an int size stays exact, so 2**53 + 1 - 2**53 is 1.
     let freed = py_sub(&before.size_mb, &after.size_mb)?;
     let title = before.title.py_str();
+    // Not actionable either, but it says nothing about whether the fix worked.
+    if py_eq(&after.severity, &Py::Str(m::UNKNOWN.into())) {
+        return Ok(Outcome::new(
+            None,
+            format!("{title}: done, but the check could not tell whether it worked — {}", after.detail.py_str()),
+        ));
+    }
     if py_eq(&after.severity, &Py::Str(m::OK.into())) || !after.actionable() {
         let tail = if py_ge1(&freed) { format!(" — freed {}", m::fmt_size(freed.as_f64())) } else { String::new() };
         return Ok(Outcome::new(Some(true), format!("{title}: resolved{tail}")));
@@ -579,20 +586,11 @@ fn judge_finding_any(before: Option<&PyFinding>, after: Option<&PyFinding>) -> R
     Ok(Outcome::new(Some(true), format!("{title}: changed, but it still needs attention")))
 }
 
-/// `recheck` with "the check raised" kept apart from "no such check", so the
-/// parity hook can tell a check that is still a stub from a real `None`.
-fn recheck_inner(finding_id: &str) -> Result<Option<crate::maintenance::Finding>, ()> {
-    let Some(f) = crate::maintenance::check_by_id(finding_id) else {
-        return Ok(None);
-    };
-    // `except Exception`: a Rust check cannot raise, so a panic is the only
-    // failure there is to catch.
-    std::panic::catch_unwind(f).map(Some).map_err(|_| ())
-}
-
-/// Run the one health check that produced `finding_id` again.
+/// Run the one health check that produced `finding_id` again, within the
+/// deadline it has in a full run: a check stuck on a network share must not
+/// leave the fix waiting for its verdict.
 pub fn recheck(finding_id: &str) -> Option<crate::maintenance::Finding> {
-    recheck_inner(finding_id).ok().flatten()
+    crate::maintenance::recheck_by_id(finding_id)
 }
 
 // ---- Python values ProbeValue and the typed structs cannot hold -------------
@@ -1075,4 +1073,24 @@ mod tests {
     fn test_binary_version_raises_on_nul() {
         assert!(binary_version_try("a\0b")().is_err());
     }
+    #[test]
+    fn a_recheck_that_could_not_run_is_not_resolved() {
+        // A check that could not run has no fix, so it read as "resolved".
+        let before = crate::maintenance::Finding {
+            id: "journal".into(),
+            title: "Journal".into(),
+            severity: crate::maintenance::WARN.into(),
+            size_mb: 900.0,
+            ..Default::default()
+        };
+        let after = crate::maintenance::Finding {
+            severity: crate::maintenance::UNKNOWN.into(),
+            detail: "Could not run journalctl.".into(),
+            ..before.clone()
+        };
+        let out = judge_finding(&before, Some(&after));
+        assert_eq!(out.changed, None, "{}", out.message);
+        assert!(!out.message.contains("resolved"), "{}", out.message);
+    }
+
 }

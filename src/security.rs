@@ -1778,7 +1778,7 @@ pub fn finding() -> crate::maintenance::Finding {
                 id: name.into(),
                 title: crate::util::py_title(&name.replace('_', " ")),
                 detail: format!("Check failed: {exc}"),
-                severity: crate::maintenance::INFO.into(),
+                severity: crate::maintenance::UNKNOWN.into(),
                 ..Default::default()
             }
         }
@@ -1842,7 +1842,7 @@ fn _finding_exact(vulns: Option<Vec<Vuln>>) -> Result<(crate::maintenance::Findi
             detail: "The Arch Security Tracker could not be reached, so \
                      installed versions could not be checked."
                 .into(),
-            severity: m::INFO.into(),
+            severity: m::UNKNOWN.into(),
             ..Default::default()
         }, Vec::new()));
     };
@@ -2029,8 +2029,9 @@ mod tests {
 
     #[test]
     fn test_an_unreachable_tracker_is_not_a_clean_bill() {
+        // Nor a finding about the system: the check could not run.
         let f = _finding_for(None).unwrap();
-        assert_ne!(f.severity, m::OK);
+        assert_eq!(f.severity, m::UNKNOWN);
     }
 
     #[test]
