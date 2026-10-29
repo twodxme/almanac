@@ -254,18 +254,7 @@ fn plugin_switch_shared(
 impl Win {
     /// Every plugin on the system, with a switch each. See plugins.py.
     pub fn build_plugins_page(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let plugins_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&plugins_body));
-        page.append(&scroller);
+        let (page, plugins_body) = crate::ui::shell::page_body();
         {
             let mut st = self.plugins.borrow_mut();
             st.plugins_body = Some(plugins_body);
@@ -694,7 +683,7 @@ impl Win {
             self.edit_shortcut(&i.id, &i.name);
         } else if action == "folder" && i.folder.is_some() {
             if let Some(folder) = &i.folder {
-                self.open_url(&format!("file://{}", folder.display()));
+                self.open_path(folder);
             }
         } else if action == "page" && st.as_ref().is_some_and(|s| !s.url.is_empty()) {
             let url = st.as_ref().map(|s| s.url.clone()).unwrap_or_default();

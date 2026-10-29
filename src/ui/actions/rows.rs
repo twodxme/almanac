@@ -228,7 +228,7 @@ impl Win {
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             if let Some(repo) = app.extra.get("repo").filter(|v| truthy(v)) {
-                self.open_url(&format!("file://{}", py_str(repo)));
+                self.open_path(std::path::Path::new(&py_str(repo)));
             }
         }
     }

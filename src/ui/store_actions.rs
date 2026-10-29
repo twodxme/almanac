@@ -902,15 +902,14 @@ impl Win {
             let Some(win) = w.upgrade() else { return };
             if resp == "script" {
                 if let Some(script) = cut.first() {
-                    win.open_url(&gtk::gio::File::for_path(script).uri());
+                    win.open_path(std::path::Path::new(script));
                 }
             } else if resp == "readme" {
-                let url = if !p.repo.is_empty() {
-                    format!("{}#readme", p.repo)
+                if !p.repo.is_empty() {
+                    win.open_url(&format!("{}#readme", p.repo));
                 } else {
-                    format!("file://{}", py_join(&plan.plugin_dir, &plan.readme).display())
-                };
-                win.open_url(&url);
+                    win.open_path(&py_join(&plan.plugin_dir, &plan.readme));
+                }
             } else if resp == "run" {
                 win.run_setup(&p, &plan);
             }

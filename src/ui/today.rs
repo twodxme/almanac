@@ -15,7 +15,7 @@ use crate::picks::{self as picks_mod, Pick};
 use crate::store::{self as store_mod, Plugin};
 use crate::theming;
 use crate::ui::history::severity_css;
-use crate::ui::shell::{name, spawn_bg, AppItem, Win, INSTALL_ICON};
+use crate::ui::shell::{name, page_body, severity_pill, spawn_bg, AppItem, Win, INSTALL_ICON};
 
 pub const HERO_HEIGHT: i32 = 120;
 pub const PICK_HEIGHT: i32 = 176;
@@ -48,22 +48,10 @@ impl Win {
 
     /// The landing page: what deserves attention, assembled from live data.
     pub fn build_featured(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let feat_page = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(16)
-            .build();
+        let (page, feat_page) = page_body();
         self.today.borrow_mut().feat_page = Some(feat_page.clone());
         feat_page.append(&self.build_hero());
         feat_page.append(&self.build_picks());
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&feat_page));
-        page.append(&scroller);
         page.upcast()
     }
 
@@ -81,9 +69,10 @@ impl Win {
                       forks in the last 24 hours, downloads, and how much people \
                       are talking about it this week — measured on GitHub, and \
                       each figure says what it counts.");
-        head.set_tooltip_text(Some(&why));
         head.update_property(&[gtk::accessible::Property::Description(&why)]);
         picks_area.append(&head);
+        // Said under the heading, as every section's note is (`section`).
+        picks_area.append(&crate::ui::shell::section_note(&why));
         // Two across when there is room, stacked when there is not.
         let picks_flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -690,27 +679,16 @@ impl Win {
         row.set_subtitle_lines(1);
         row.set_tooltip_text(Some(&crate::util::human_error(&item.detail)));
 
-        if !item.severity.is_empty() {
-            let (label, css) = severity_css(if item.severity == "crit" {
-                maintenance::CRIT
-            } else {
-                maintenance::WARN
-            })
-            .unwrap_or((String::new(), "pill"));
-            let pill = gtk::Label::builder().label(label).valign(gtk::Align::Center).build();
-            pill.add_css_class(css);
-            row.add_prefix(&pill);
-        }
-
+        // The art keeps its place on every row, so the titles of a shelf
+        // start at one x. A finding has none of its own: its slot stays
+        // empty rather than holding a "!" that says what its pill says.
         let art = gtk::Image::builder().pixel_size(24).valign(gtk::Align::Center).build();
+        art.set_accessible_role(gtk::AccessibleRole::Presentation);
         if let Some(plugin) = &item.plugin {
             art.set_icon_name(Some("application-x-addon-symbolic"));
             self.plugin_icon(&art, plugin);
         } else if let Some(app) = &item.app {
             self.app_icon(&art, app, 48);
-        } else {
-            art.set_icon_name(Some("emblem-important-symbolic"));
-            art.add_css_class("dim-label");
         }
         row.add_prefix(&art);
 
@@ -748,6 +726,18 @@ impl Win {
                 }
             });
             row.add_suffix(&btn);
+        }
+
+        // Last, nearest the edge: the pills of a list are one column, on
+        // every page (see `severity_pill`).
+        if !item.severity.is_empty() {
+            let (label, css) = severity_css(if item.severity == "crit" {
+                maintenance::CRIT
+            } else {
+                maintenance::WARN
+            })
+            .unwrap_or((String::new(), "pill"));
+            row.add_suffix(&severity_pill(&label, css));
         }
 
         row.set_activatable(true);

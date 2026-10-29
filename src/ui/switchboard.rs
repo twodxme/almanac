@@ -167,18 +167,7 @@ impl Win {
     /// Plugins page, beside their state and actions; here they get one row
     /// that says how many are on and goes there.
     pub fn build_switchboard(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let switch_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&switch_body));
-        page.append(&scroller);
+        let (page, switch_body) = crate::ui::shell::page_body();
         let old = {
             let mut st = self.switchboard.borrow_mut();
             (st.switch_body.replace(switch_body), std::mem::take(&mut st.switch_rows))

@@ -72,6 +72,10 @@ row:selected .count-badge.is-crit {
 .pill-quiet {
   opacity: var(--dim-opacity);
 }
+/* A severity pill (Critical, Attention, Optional, OK): one width for all of
+   them -- a size group makes each as wide as the widest -- with its word
+   centred, so a list's pills line up whatever the word or language. */
+.severity-pill { padding-left: 6px; padding-right: 6px; }
 .link-ish {
   color: @accent_color;
 }
@@ -180,3 +184,13 @@ columnview.almanac-table > listview > row > cell { padding-top: 4px; padding-bot
 /* Provenance chips. Four states rather than a tick, because "reviewed",
    "verified", "reviewed but upstream has moved since" and "nobody checked"
    are four different promises. */
+
+/* An opened History event's detail: set in under its event and on a quieter
+   tint, so it reads as belonging to the row above and it is plain where one
+   event's detail ends and the next event begins. */
+row.history-detail {
+  padding-left: 24px;
+  background-color: alpha(@window_fg_color, 0.035);
+}
+row.history-detail .title,
+row.history-detail .subtitle { font-size: 0.92em; }

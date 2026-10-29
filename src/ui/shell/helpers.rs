@@ -316,21 +316,85 @@ pub fn exc_str(e: &str) -> String {
 /// like this one. Reserved, not used.
 const BG_STACK: usize = 8 << 20;
 
+/// What a panic says: its message, or "" for a payload that is not text
+/// (as `str(exc)` of a bare exception).
+pub fn panic_text(err: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// A window's handler for failed background work (see `on_bg_failure`).
+type BgFailed = Box<dyn Fn(&str)>;
+
+thread_local! {
+    /// What the window does when background work handed to [`spawn_bg`]
+    /// panics: its `done` cannot be called without a value, so this stands
+    /// in for it (the window clears its busy state and says so).
+    static BG_FAILED: std::cell::RefCell<Option<BgFailed>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set what [`spawn_bg`] does on the main thread when its work panics.
+pub fn on_bg_failure(f: impl Fn(&str) + 'static) {
+    BG_FAILED.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+}
+
+fn bg_failed(msg: &str) {
+    eprintln!("almanac: background work failed: {msg}");
+    // Taken out while it runs, so a handler that starts more work (and has
+    // it fail) cannot borrow it twice.
+    let handler = BG_FAILED.with(|h| h.borrow_mut().take());
+    if let Some(f) = handler {
+        f(msg);
+        BG_FAILED.with(|h| {
+            let mut slot = h.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(f);
+            }
+        });
+    }
+}
+
 /// `threading.Thread(target=work) + GLib.idle_add(done, result)`: run `work`
-/// off the main thread, then `done` with its result on the main thread. If
-/// `work` panics, `done` is not called (as a Python thread that raised never
-/// reached its idle_add).
+/// off the main thread, then `done` with its result on the main thread.
+///
+/// If `work` panics there is no result for `done`; the window's failure
+/// handler ([`on_bg_failure`]) runs instead, so a page that set itself busy
+/// for the work is not left spinning forever with nothing said. Work whose
+/// caller has its own way to report a failure uses [`spawn_bg_checked`].
 pub fn spawn_bg<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(T) + 'static,
 ) {
+    spawn_bg_checked(work, move |result| match result {
+        Ok(value) => done(value),
+        Err(msg) => bg_failed(&msg),
+    });
+}
+
+/// [`spawn_bg`], with `done` always called: `Err` with the panic's message
+/// when `work` panicked.
+pub fn spawn_bg_checked<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(Result<T, String>) + 'static,
+) {
     // On a stack of its own, so its size does not hang on `ulimit -s` (the
     // pool thread's, and an overflow there aborts the app).
-    let handle = gio::spawn_blocking(move || crate::util::with_stack(BG_STACK, work));
+    let handle = gio::spawn_blocking(move || {
+        crate::util::with_stack(BG_STACK, move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).map_err(|e| panic_text(&*e))
+        })
+    });
     glib::spawn_future_local(async move {
-        if let Ok(value) = handle.await {
-            done(value);
-        }
+        let result = match handle.await {
+            Ok(result) => result,
+            Err(e) => Err(panic_text(&*e)),
+        };
+        done(result);
     });
 }
 
@@ -356,8 +420,9 @@ pub fn thumb_bg<T: Send + 'static>(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
         glib::MainContext::default().invoke(move || {
             let done = done.into_inner();
-            if let Ok(value) = result {
-                done(value);
+            match result {
+                Ok(value) => done(value),
+                Err(e) => bg_failed(&panic_text(&*e)),
             }
         });
     });
@@ -402,6 +467,34 @@ mod tests {
         assert!(sw.is_active() && sw.state());
         sw.set_active(false);
         assert_eq!(calls.get(), 2);
+    }
+
+    /// Work that panics still reaches the main thread: `spawn_bg_checked`'s
+    /// `done` gets the panic as `Err`, and `spawn_bg` runs the window's
+    /// failure handler in place of a `done` it has no value for -- before,
+    /// both were skipped and a busy page spun forever.
+    #[test]
+    fn background_work_that_panics_still_reports_back() {
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let g = got.clone();
+            spawn_bg_checked(|| -> i32 { panic!("boom") }, move |r| g.borrow_mut().push(format!("{r:?}")));
+            let g = got.clone();
+            spawn_bg_checked(|| 7, move |r| g.borrow_mut().push(format!("{r:?}")));
+            let g = got.clone();
+            on_bg_failure(move |msg| g.borrow_mut().push(format!("failed: {msg}")));
+            let g = got.clone();
+            spawn_bg(|| -> i32 { panic!("bang") }, move |v| g.borrow_mut().push(format!("done {v}")));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while got.borrow().len() < 3 && std::time::Instant::now() < deadline {
+                ctx.iteration(true);
+            }
+            let mut got = got.borrow().clone();
+            got.sort();
+            assert_eq!(got, ["Err(\"boom\")", "Ok(7)", "failed: bang"]);
+        })
+        .expect("a fresh main context");
     }
 
     #[test]

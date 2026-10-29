@@ -448,6 +448,7 @@ impl Win {
         scroller.set_child(Some(&store_grid));
         scroller.set_margin_start(12);
         scroller.set_margin_end(12);
+        scroller.set_margin_top(crate::ui::shell::PAGE_MARGIN);
         scroller.set_margin_bottom(12);
         // Cards arrive a page at a time as you reach the end of the list.
         // GridView recycles the widgets, but building 5,600 PluginItems on

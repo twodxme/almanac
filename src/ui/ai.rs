@@ -87,17 +87,7 @@ impl Win {
     /// stopped authenticating, a hook whose script was deleted, a marketplace
     /// three weeks stale -- and this is where that shows.
     pub fn build_ai(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-        let ai_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        ai_page.set_margin_start(12);
-        ai_page.set_margin_end(12);
-        ai_page.set_margin_bottom(16);
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_vexpand(true);
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&ai_page));
-        page.append(&scroller);
+        let (page, ai_page) = shell::page_body();
         self.ai.borrow_mut().ai_page = Some(ai_page);
         page.upcast()
     }
@@ -183,9 +173,11 @@ impl Win {
             bx.append(&head);
         }
         if !description.is_empty() {
-            // What the section is, a hover away rather than a line per section:
-            // on a full page those lines were a fifth of the height.
-            head.set_tooltip_text(Some(description));
+            // What the section is, said under its heading. It used to be a
+            // tooltip on the heading, which hid it twice over: nobody hovers
+            // a heading, and Health check's section has no heading at all, so
+            // its explanation could not be reached.
+            bx.append(&shell::section_note(description));
             head.update_property(&[gtk::accessible::Property::Description(description)]);
         }
         let rows = gtk::ListBox::new();
@@ -439,12 +431,6 @@ impl Win {
             .find(|(k, _)| *k == e.severity)
             .map(|(_, v)| *v)
             .unwrap_or(("", ""));
-        if !label.is_empty() {
-            let pill = gtk::Label::new(Some(label));
-            pill.set_valign(gtk::Align::Center);
-            pill.add_css_class(css);
-            row.add_prefix(&pill);
-        }
 
         if !e.status.is_empty() {
             // A status can be a whole server error ("Failed to connect — HTTP
@@ -478,11 +464,11 @@ impl Win {
         }
 
         if !e.action_label.is_empty() && e.action.is_some() {
+            // A neutral row button, as on every other page: blue is the
+            // header's, for the page's one primary action ("Update 2 agent
+            // CLIs"), and a blue button on every row competed with it.
             let btn = gtk::Button::with_label(&e.action_label);
             btn.set_valign(gtk::Align::Center);
-            if e.severity == "warn" {
-                btn.add_css_class("suggested-action");
-            }
             let e = e.clone();
             btn.connect_clicked(move |_b| ai_act(&e));
             row.add_suffix(&btn);
@@ -494,6 +480,10 @@ impl Win {
             hint.add_css_class("caption");
             hint.set_tooltip_text(Some(&e.action_note));
             row.add_suffix(&hint);
+        }
+        // Last, nearest the edge, as on every page (see `severity_pill`).
+        if !label.is_empty() {
+            row.add_suffix(&shell::severity_pill(&tr(label), css));
         }
         row
     }
@@ -775,9 +765,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
-                    &label,
+                tasks::run(&win.window, &label,
                     vec![tasks::Step::argv(label.clone(), cmd.clone())],
                     Some(Box::new(move |ok| {
                         if let Some(w) = w2.upgrade() {
@@ -899,9 +887,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
-                    "Updating agent CLIs",
+                tasks::run(&win.window, "Updating agent CLIs",
                     steps.clone(),
                     Some(Box::new(move |ok| {
                         if let Some(w) = w2.upgrade() {
