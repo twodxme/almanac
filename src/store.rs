@@ -337,6 +337,36 @@ impl Plugin {
         Ok(Plugin::lenient(row))
     }
 
+    /// `from_row`, taking the row: its values move into the plugin rather
+    /// than being copied (what loading 6,000 of them costs).
+    pub fn from_row_owned(row: Row) -> Result<Plugin, String> {
+        for k in row.keys() {
+            if !FIELDS.iter().any(|f| f == k) {
+                return Err(format!("TypeError: Plugin.__init__() got an unexpected keyword argument '{k}'"));
+            }
+        }
+        if !(row.contains_key("id") && row.contains_key("name")) {
+            return Plugin::from_row(&row);
+        }
+        let mut typed = Row::new();
+        let mut raw = BTreeMap::new();
+        for (k, v) in row {
+            let Some(default) = DEFAULTS.get(&k) else { continue };
+            match fit(default, &v) {
+                None => {
+                    typed.insert(k, v);
+                }
+                Some(near) => {
+                    typed.insert(k.clone(), near);
+                    raw.insert(k, v);
+                }
+            }
+        }
+        let mut p = Plugin::deserialize(Value::Object(typed)).unwrap_or_default();
+        p.raw = raw;
+        Ok(p)
+    }
+
     /// The fields of `row` the dataclass has, whatever their types (see
     /// `raw`); other keys are ignored.
     fn lenient(row: &Row) -> Plugin {
@@ -1967,20 +1997,16 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
         Err(_) => TTL,
     };
     if age < TTL && !force {
-        if let Ok(Value::Object(blob)) = read_blob(&path) {
+        if let Ok(Value::Object(mut blob)) = read_blob(&path) {
             if blob.get("schema").and_then(Value::as_f64) == Some(SCHEMA as f64)
                 && !matches!(blob.get("schema"), Some(Value::Bool(_)))
             {
-                rows = blob.get("rows").cloned().filter(|v| !v.is_null());
-                if age >= RETRY {
-                    let scan = rows.clone().unwrap_or(Value::Null);
-                    let scan = if truthy(Some(&scan)) { py_iter(&scan)? } else { Vec::new() };
-                    for r in scan {
-                        if truthy(as_dict(&r)?.get("unchecked")) {
-                            rows = None;
-                            break;
-                        }
-                    }
+                // Taken out of the file's JSON, not copied: the catalogue is
+                // 6,000 rows, and each copy of it was 40 MB more at the peak.
+                rows = blob.remove("rows").filter(|v| !v.is_null());
+                drop(blob);
+                if age >= RETRY && any_unchecked(rows.as_ref())? {
+                    rows = None;
                 }
             }
         }
@@ -2032,17 +2058,42 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
     }
 }
 
+/// Whether any of `rows` is marked unchecked (`for r in rows or []:
+/// if r.get("unchecked")`), read in place. `Err` for a row that is not a
+/// dict, where the Python's `.get` raises.
+fn any_unchecked(rows: Option<&Value>) -> Result<bool, String> {
+    let Some(rows) = rows.filter(|r| truthy(Some(r))) else { return Ok(false) };
+    let check = |r: &Value| -> Result<bool, String> { Ok(truthy(as_dict(r)?.get("unchecked"))) };
+    match rows {
+        Value::Array(list) => {
+            for r in list {
+                if check(r)? {
+                    return Ok(true);
+                }
+            }
+        }
+        other => {
+            for r in py_iter(other)? {
+                if check(&r)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// The rows a market's cache file holds and what identifies the download
 /// they came from, when they can stand for an unchanged download: this
 /// schema, a list of rows, none of them marked unchecked, and an ETag or
 /// Last-Modified to ask with. None otherwise; Err where reading the rows
 /// raises, as the fresh-cache check does.
 fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, String> {
-    let Ok(Value::Object(blob)) = read_blob(path) else { return Ok(None) };
+    let Ok(Value::Object(mut blob)) = read_blob(path) else { return Ok(None) };
     if blob.get("schema").and_then(Value::as_f64) != Some(SCHEMA as f64) || matches!(blob.get("schema"), Some(Value::Bool(_))) {
         return Ok(None);
     }
-    let Some(rows @ Value::Array(list)) = blob.get("rows") else { return Ok(None) };
+    let Some(Value::Array(list)) = blob.get("rows") else { return Ok(None) };
     for r in list {
         if truthy(as_dict(r)?.get("unchecked")) {
             return Ok(None);
@@ -2050,7 +2101,11 @@ fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, Stri
     }
     let text = |k: &str| blob.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let v = Validators { etag: text("etag"), modified: text("modified") };
-    Ok((!v.is_empty()).then(|| (rows.clone(), v)))
+    if v.is_empty() {
+        return Ok(None);
+    }
+    // Taken, not copied (see `_load_market`).
+    Ok(blob.remove("rows").map(|rows| (rows, v)))
 }
 
 /// Every listed plugin from every enabled marketplace.
@@ -2064,11 +2119,22 @@ fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, Stri
 /// `Plugin(**r)` rejects -- and then nothing is cached, so the next call
 /// tries again.
 pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
-    let _loading = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+    try_load_catalog(force)?;
     if let Some(c) = CACHED.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        if !force {
-            return Ok(c.clone());
-        }
+        return Ok(c.clone());
+    }
+    // Only a test clearing the cache in between gets here: load it again.
+    try_load_catalog(false)?;
+    Ok(CACHED.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default())
+}
+
+/// Load the catalogue into the cache (unless it is there already and not
+/// `force`d), without handing out a copy: `try_catalog` copies it once for
+/// its caller, and `try_catalog_annotated` marks it first.
+fn try_load_catalog(force: bool) -> Result<(), String> {
+    let _loading = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+    if CACHED.lock().unwrap_or_else(|e| e.into_inner()).is_some() && !force {
+        return Ok(());
     }
     let markets = try_enabled_markets()?;
     // The markets load side by side: one is a download, the others runs of
@@ -2094,17 +2160,24 @@ pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
     });
     let mut out: Vec<Plugin> = Vec::new();
     for rows in loaded {
-        let rows = rows?;
-        for r in py_iter(&rows)? {
+        // Each market's rows are consumed as they become plugins, so the
+        // JSON and the plugins made from it are not both held in full.
+        let rows = match rows? {
+            Value::Array(list) => list,
+            other => py_iter(&other)?,
+        };
+        out.reserve(rows.len());
+        for r in rows {
             let Value::Object(r) = r else {
                 return Err(format!("TypeError: store.Plugin() argument after ** must be a mapping, not {}",
                                    py_type(&r)));
             };
-            out.push(Plugin::from_row(&r)?);
+            out.push(Plugin::from_row_owned(r)?);
         }
     }
-    *CACHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(out.clone());
-    Ok(out)
+    out.shrink_to_fit();
+    *CACHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(out);
+    Ok(())
 }
 
 /// `subprocess.run(argv, capture_output=True, text=True, timeout=secs).stdout`,
@@ -2190,6 +2263,189 @@ pub fn installed_appimages() -> BTreeMap<String, Value> {
     out
 }
 
+/// What `annotate` reads of the system to mark the catalogue: which
+/// plugins Omarchy has (and which are on), which AppImages are tracked,
+/// which themes are installed and which of those are removable. Reading it
+/// runs `omarchy plugin list` and `omarchy theme list`, so it is gathered
+/// on its own, off the window's thread; marking with it is quick.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Facts {
+    /// ALMANAC_DEMO: what counts as installed comes from the fixtures.
+    demo: bool,
+    have: Vec<(String, Value, bool)>,
+    images: BTreeMap<String, Value>,
+    themes: BTreeSet<String>,
+    mine: BTreeSet<String>,
+}
+
+/// Read the [`Facts`] for marking `plugins` (the theme lists only if any of
+/// them is a theme). `Err` where `installed_ids` raises in the Python.
+pub fn annotation_facts(plugins: &[Plugin]) -> Result<Facts, String> {
+    gather_facts(plugins.iter().any(|p| p.install_kind == "theme"))
+}
+
+fn gather_facts(has_themes: bool) -> Result<Facts, String> {
+    if crate::demo::active() {
+        // The catalogue stays real -- it is public data -- but what counts
+        // as installed comes from the fixtures, so a screenshot never
+        // discloses what is actually on the machine taking it.
+        return Ok(Facts { demo: true, ..Facts::default() });
+    }
+    let have = installed_id_keys()?;
+    let images = installed_appimages();
+    let themes = if has_themes { installed_themes() } else { BTreeSet::new() };
+    let mine = if has_themes { removable_themes() } else { BTreeSet::new() };
+    Ok(Facts { demo: false, have, images, themes, mine })
+}
+
+/// What `annotate` sets on one plugin. `None` leaves a field as it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marks {
+    installed: bool,
+    enabled: bool,
+    /// (the typed value, the raw value kept beside it, if any)
+    local_version: Option<(String, Option<Value>)>,
+    built_in: Option<bool>,
+}
+
+impl Marks {
+    /// The marks `facts` give `p`. `Err` where the Python's loop raises:
+    /// an id that cannot be looked up, a name that is not a str.
+    fn of(p: &Plugin, facts: &Facts) -> Result<Marks, String> {
+        if facts.demo {
+            // `p.id in {...}` (a set: a list id cannot be looked up), then
+            // `p.name.lower()`.
+            let id = p.pv("id");
+            let listed = match &id {
+                Value::String(s) => crate::demo::INSTALLED_PLUGIN_IDS.contains(&s.as_str()),
+                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
+                _ => false,
+            };
+            let installed = listed
+                || (p.install_kind == "theme"
+                    && crate::demo::INSTALLED_THEMES.contains(&p.ps("name", "lower")?.to_lowercase().as_str()));
+            // p.version, as it is: it may be a raw value.
+            let local = if installed { (p.version.clone(), p.raw.get("version").cloned()) } else { (String::new(), None) };
+            return Ok(Marks {
+                installed,
+                enabled: installed,
+                local_version: Some(local),
+                built_in: (p.install_kind == "theme").then_some(false),
+            });
+        }
+        if p.install_kind == "theme" {
+            let name = p.ps("name", "lower")?.to_lowercase();
+            let installed = facts.themes.contains(&name);
+            // A stock theme is "built in" in exactly the sense a built-in
+            // plugin is: it is there, it works, and Remove does not apply.
+            return Ok(Marks {
+                installed,
+                enabled: installed,
+                local_version: None,
+                built_in: Some(installed && !facts.mine.contains(&name)),
+            });
+        }
+        if p.install_kind == "appimage" {
+            // The registry's keys are str: an id of any other type is in it
+            // only if it cannot be looked up at all (and then raises).
+            let id = p.pv("id");
+            let found = match &id {
+                Value::String(s) => facts.images.get(s),
+                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
+                _ => None,
+            };
+            let local = match found {
+                Some(Value::String(v)) => (v.clone(), None),
+                Some(v) => (py_str(v), Some(v.clone())),
+                None => (String::new(), None),
+            };
+            return Ok(Marks {
+                installed: found.is_some(),
+                enabled: found.is_some(),
+                local_version: Some(local),
+                built_in: None,
+            });
+        }
+        let id = p.pv("id");
+        let key = py_hash_key(&id).ok_or_else(|| unhashable(&id))?;
+        let on = facts.have.iter().find(|(k, _, _)| *k == key).map(|(_, _, on)| *on);
+        Ok(Marks { installed: on.is_some(), enabled: on.unwrap_or(false), local_version: None, built_in: None })
+    }
+
+    /// Whether putting these marks on `p` would change it.
+    fn differ(&self, p: &Plugin) -> bool {
+        if p.installed != self.installed
+            || p.enabled != self.enabled
+            || p.raw.contains_key("installed")
+            || p.raw.contains_key("enabled")
+        {
+            return true;
+        }
+        if let Some((typed, raw)) = &self.local_version {
+            if p.local_version != *typed || p.raw.get("local_version") != raw.as_ref() {
+                return true;
+            }
+        }
+        matches!(self.built_in, Some(b) if p.built_in != b || p.raw.contains_key("built_in"))
+    }
+
+    fn apply(&self, p: &mut Plugin) {
+        p.installed = self.installed;
+        p.enabled = self.enabled;
+        p.clear_raw("installed");
+        p.clear_raw("enabled");
+        if let Some((typed, raw)) = &self.local_version {
+            p.local_version = typed.clone();
+            match raw {
+                Some(v) => {
+                    p.raw.insert("local_version".into(), v.clone());
+                }
+                None => p.clear_raw("local_version"),
+            }
+        }
+        if let Some(b) = self.built_in {
+            p.built_in = b;
+            p.clear_raw("built_in");
+        }
+    }
+}
+
+/// The marks `facts` change on `plugins`, by position, in order: everything
+/// a full `annotate` would change, worked out without touching (or copying)
+/// the list. `Err` where the Python's loop raises, with the changes before
+/// it -- the plugins it had marked by then.
+pub fn mark_changes(plugins: &[Plugin], facts: &Facts) -> (Vec<(usize, Marks)>, Result<(), String>) {
+    let mut changes = Vec::new();
+    for (i, p) in plugins.iter().enumerate() {
+        match Marks::of(p, facts) {
+            Ok(m) => {
+                if m.differ(p) {
+                    changes.push((i, m));
+                }
+            }
+            Err(e) => return (changes, Err(e)),
+        }
+    }
+    (changes, Ok(()))
+}
+
+/// Put `changes` (from [`mark_changes`] on this same list) on `plugins`,
+/// and carry them to the cached entries they are copies of.
+pub fn apply_mark_changes(plugins: &mut [Plugin], changes: &[(usize, Marks)]) {
+    for (i, m) in changes {
+        if let Some(p) = plugins.get_mut(*i) {
+            m.apply(p);
+        }
+    }
+    let mut changed: Vec<Plugin> = Vec::new();
+    for (i, _) in changes {
+        if let Some(p) = plugins.get(*i) {
+            changed.push(p.clone());
+        }
+    }
+    sync_cache(&mut changed);
+}
+
 /// Mark what is already on the system, so cards can say so.
 ///
 /// `Err` where the Python raises: `installed_ids` past its `try`, before
@@ -2200,99 +2456,21 @@ pub fn installed_appimages() -> BTreeMap<String, Value> {
 /// themselves, so marking them marks the cache every later `catalog()`
 /// caller sees. Here `catalog()` hands out copies, so the marks are carried
 /// back to the cached entries these plugins were copied from.
+///
+/// It runs `omarchy`: the window gathers [`annotation_facts`] off its own
+/// thread and puts the [`mark_changes`] on with [`apply_mark_changes`].
 pub fn try_annotate(plugins: &mut [Plugin]) -> Result<(), String> {
+    let facts = annotation_facts(plugins)?;
     let mut done = 0;
-    let r = annotate_marks(plugins, &mut done);
-    sync_cache(&plugins[..done]);
+    let r = annotate_marks(plugins, &facts, &mut done);
+    sync_cache(&mut plugins[..done]);
     r
 }
 
-/// The body of `try_annotate`; `done` counts the plugins it got through.
-fn annotate_marks(plugins: &mut [Plugin], done: &mut usize) -> Result<(), String> {
-    if crate::demo::active() {
-        // The catalogue stays real -- it is public data -- but what counts as
-        // installed comes from the fixtures, so a screenshot never discloses
-        // what is actually on the machine taking it.
-        for p in plugins.iter_mut() {
-            // `p.id in {...}` (a set: a list id cannot be looked up), then
-            // `p.name.lower()`.
-            let id = p.pv("id");
-            let listed = match &id {
-                Value::String(s) => crate::demo::INSTALLED_PLUGIN_IDS.contains(&s.as_str()),
-                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
-                _ => false,
-            };
-            p.installed = listed
-                || (p.install_kind == "theme"
-                    && crate::demo::INSTALLED_THEMES.contains(&p.ps("name", "lower")?.to_lowercase().as_str()));
-            p.enabled = p.installed;
-            p.local_version = if p.installed { p.version.clone() } else { String::new() };
-            // p.version, as it is: it may be a raw value.
-            match p.raw.get("version").cloned() {
-                Some(v) if p.installed => {
-                    p.raw.insert("local_version".into(), v);
-                }
-                _ => p.clear_raw("local_version"),
-            }
-            p.clear_raw("installed");
-            p.clear_raw("enabled");
-            if p.install_kind == "theme" {
-                p.built_in = false;
-                p.clear_raw("built_in");
-            }
-            *done += 1;
-        }
-        return Ok(());
-    }
-
-    let have = installed_id_keys()?;
-    let images = installed_appimages();
-    let has_themes = plugins.iter().any(|p| p.install_kind == "theme");
-    let themes = if has_themes { installed_themes() } else { BTreeSet::new() };
-    let mine = if has_themes { removable_themes() } else { BTreeSet::new() };
+/// Mark `plugins` with `facts`; `done` counts the plugins it got through.
+fn annotate_marks(plugins: &mut [Plugin], facts: &Facts, done: &mut usize) -> Result<(), String> {
     for p in plugins.iter_mut() {
-        if p.install_kind == "theme" {
-            let name = p.ps("name", "lower")?.to_lowercase();
-            p.installed = themes.contains(&name);
-            p.enabled = p.installed;
-            // A stock theme is "built in" in exactly the sense a built-in
-            // plugin is: it is there, it works, and Remove does not apply.
-            p.built_in = p.installed && !mine.contains(&name);
-            p.clear_raw("built_in");
-        } else if p.install_kind == "appimage" {
-            // The registry's keys are str: an id of any other type is in it
-            // only if it cannot be looked up at all (and then raises).
-            let id = p.pv("id");
-            let found = match &id {
-                Value::String(s) => images.get(s),
-                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
-                _ => None,
-            };
-            p.installed = found.is_some();
-            p.enabled = p.installed;
-            match found {
-                Some(Value::String(v)) => {
-                    p.local_version = v.clone();
-                    p.clear_raw("local_version");
-                }
-                Some(v) => {
-                    p.local_version = py_str(v);
-                    p.raw.insert("local_version".into(), v.clone());
-                }
-                None => {
-                    p.local_version = String::new();
-                    p.clear_raw("local_version");
-                }
-            }
-        } else {
-            let id = p.pv("id");
-            let key = py_hash_key(&id).ok_or_else(|| unhashable(&id))?;
-            let on = have.iter().find(|(k, _, _)| *k == key).map(|(_, _, on)| *on);
-            p.installed = on.is_some();
-            p.enabled = on.unwrap_or(false);
-        }
-        p.clear_raw("installed");
-        p.clear_raw("enabled");
+        Marks::of(p, facts)?.apply(p);
         *done += 1;
     }
     Ok(())
@@ -2302,53 +2480,75 @@ fn annotate_marks(plugins: &mut [Plugin], done: &mut usize) -> Result<(), String
 /// plugin is.
 const MARKS: &[&str] = &["installed", "enabled", "local_version", "built_in"];
 
-/// `p` with its marks cleared, to compare listings by.
-fn unmarked(p: &Plugin) -> Plugin {
-    let mut q = Plugin { installed: false, enabled: false, local_version: String::new(), ..p.clone() };
-    if q.install_kind == "theme" {
-        q.built_in = false;
+/// A plugin's marks, as taken off it by [`take_marks`].
+type Taken = (bool, bool, String, bool, Vec<(&'static str, Value)>);
+
+/// Clear `p`'s marks (as `unmarked` did to a copy), returning them so
+/// [`put_marks`] can restore them: listings are compared this way in place,
+/// without copying either plugin.
+fn take_marks(p: &mut Plugin) -> Taken {
+    let theme = p.install_kind == "theme";
+    let built_in = p.built_in;
+    if theme {
+        p.built_in = false;
     }
-    for m in MARKS {
-        q.raw.remove(*m);
+    let raw = MARKS.iter().filter_map(|m| p.raw.remove(*m).map(|v| (*m, v))).collect();
+    (std::mem::take(&mut p.installed), std::mem::take(&mut p.enabled), std::mem::take(&mut p.local_version), built_in, raw)
+}
+
+fn put_marks(p: &mut Plugin, taken: Taken) {
+    let (installed, enabled, local_version, built_in, raw) = taken;
+    p.installed = installed;
+    p.enabled = enabled;
+    p.local_version = local_version;
+    p.built_in = built_in;
+    for (m, v) in raw {
+        p.raw.insert(m.to_string(), v);
     }
-    q
 }
 
 /// Carry the marks of freshly annotated plugins back to the cached entries
 /// they are copies of (same listing, whatever it was marked before).
-fn sync_cache(plugins: &[Plugin]) {
+///
+/// The listings are compared with their marks taken off in place and put
+/// back: comparing copies made two clones per plugin, 6,000 of them for one
+/// install.
+fn sync_cache(plugins: &mut [Plugin]) {
     if plugins.is_empty() {
         return;
     }
     let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
     let Some(cache) = cached.as_mut() else { return };
-    let mut by_id: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    let mut by_id: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, c) in cache.iter().enumerate() {
-        by_id.entry((c.market.as_str(), c.id.as_str())).or_default().push(i);
+        by_id.entry((c.market.clone(), c.id.clone())).or_default().push(i);
     }
-    let mut hits: Vec<(usize, &Plugin)> = Vec::new();
-    for p in plugins {
-        let Some(candidates) = by_id.get(&(p.market.as_str(), p.id.as_str())) else { continue };
-        let me = unmarked(p);
+    for p in plugins.iter_mut() {
+        let Some(candidates) = by_id.get(&(p.market.clone(), p.id.clone())) else { continue };
+        let mine = take_marks(p);
+        let mut hits = Vec::new();
         for &i in candidates {
-            if unmarked(&cache[i]) == me {
-                hits.push((i, p));
+            let theirs = take_marks(&mut cache[i]);
+            if cache[i] == *p {
+                hits.push(i);
             }
+            put_marks(&mut cache[i], theirs);
         }
-    }
-    for (i, p) in hits {
-        let c = &mut cache[i];
-        c.installed = p.installed;
-        c.enabled = p.enabled;
-        c.local_version = p.local_version.clone();
-        c.built_in = p.built_in;
-        for m in MARKS {
-            match p.raw.get(*m) {
-                Some(v) => {
-                    c.raw.insert((*m).to_string(), v.clone());
-                }
-                None => {
-                    c.raw.remove(*m);
+        put_marks(p, mine);
+        for i in hits {
+            let c = &mut cache[i];
+            c.installed = p.installed;
+            c.enabled = p.enabled;
+            c.local_version = p.local_version.clone();
+            c.built_in = p.built_in;
+            for m in MARKS {
+                match p.raw.get(*m) {
+                    Some(v) => {
+                        c.raw.insert((*m).to_string(), v.clone());
+                    }
+                    None => {
+                        c.raw.remove(*m);
+                    }
                 }
             }
         }
@@ -2367,21 +2567,32 @@ pub fn annotate(plugins: &mut [Plugin]) {
 /// This marks the cached entries in place (under the cache's lock) and
 /// returns a copy of them as marked.
 ///
+/// The system is read first, with the cache's lock let go: reading it runs
+/// `omarchy`, and the window's thread takes the same lock to carry marks
+/// after an install. `catalog()`'s own copy is not made here (it was made
+/// and thrown away): the cache is marked, then copied once.
+///
 /// `Err` where either step raises in the Python; marks made before an
 /// `annotate` failure stay on the cache, as they do on the Python's objects.
 pub fn try_catalog_annotated(force: bool) -> Result<Vec<Plugin>, String> {
-    let fresh = try_catalog(force)?;
+    try_load_catalog(force)?;
+    let has_themes = CACHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|cache| cache.iter().any(|p| p.install_kind == "theme"));
+    let facts = gather_facts(has_themes)?;
     let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
     let Some(cache) = cached.as_mut() else {
-        // Only a test clearing the cache in between gets here: annotate the
-        // list catalog() returned, as the Python would.
+        // Only a test clearing the cache in between gets here: annotate what
+        // catalog() returns, as the Python would.
         drop(cached);
-        let mut plugins = fresh;
+        let mut plugins = try_catalog(force)?;
         try_annotate(&mut plugins)?;
         return Ok(plugins);
     };
     let mut done = 0;
-    annotate_marks(cache, &mut done)?;
+    annotate_marks(cache, &facts, &mut done)?;
     Ok(cache.clone())
 }
 
@@ -3457,6 +3668,44 @@ mod tests {
         assert_eq!(run_text(&["sh", "-c", "echo hi"], 5).as_deref(), Some("hi\n"));
     }
 
+    /// What loading the catalogue costs in memory. A measurement, not a check:
+    /// `XDG_CACHE_HOME=<a copy of the cache> ALMANAC_DEMO=1 cargo test --release
+    /// --lib catalogue_memory_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    fn catalogue_memory_probe() {
+        fn kb(key: &str) -> u64 {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            status
+                .lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        }
+        let show = |when: &str| {
+            eprintln!(
+                "probe {when:>14}: VmRSS {:>7} kB  RssAnon {:>7} kB  VmHWM {:>7} kB",
+                kb("VmRSS:"),
+                kb("RssAnon:"),
+                kb("VmHWM:")
+            )
+        };
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+        show("before");
+        let t = std::time::Instant::now();
+        let plugins = try_catalog_annotated(false).expect("the catalogue");
+        let took = t.elapsed();
+        show("loaded");
+        eprintln!("probe {} plugins in {:.0} ms", plugins.len(), took.as_secs_f64() * 1000.0);
+        let one = serde_json::to_string(&plugins).map(|s| s.len()).unwrap_or(0);
+        let raw: usize = plugins.iter().map(|p| p.raw.len()).sum();
+        eprintln!("probe raw values kept beside the typed fields: {raw}");
+        eprintln!("probe the list as JSON: {} kB", one / 1024);
+        drop(plugins);
+        show("list dropped");
+    }
+
     /// The two tests that plant a catalog in `CACHED` let go of its lock in
     /// the middle, so without this one could read the other's plant.
     static CACHE_PLANT: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3475,12 +3724,111 @@ mod tests {
         q.enabled = true;
         let mut o = other;
         o.installed = true;
-        sync_cache(&[q, o]);
+        sync_cache(&mut [q, o]);
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let c = &cached.as_ref().expect("cache")[0];
         assert!(c.installed && c.enabled);
         assert_eq!(c.description, "");
         *cached = before;
+    }
+
+    /// Taking the row makes the same plugin as reading it, odd types and
+    /// refusals included.
+    #[test]
+    fn from_row_owned_is_from_row() {
+        for r in [
+            json!({"id": "a", "name": "A", "stars": 3, "tags": ["x"]}),
+            json!({"id": 5, "name": null, "stars": "many", "tags": "ab", "installed": 1}),
+            json!({"id": "a"}),
+            json!({"name": "A", "nonsense": 1}),
+            json!({"id": "a", "name": "A", "description": null, "unchecked": "yes"}),
+        ] {
+            let row = r.as_object().expect("row").clone();
+            assert_eq!(Plugin::from_row_owned(row.clone()), Plugin::from_row(&row), "{r}");
+        }
+    }
+
+    /// Working out the marks apart from the list, then putting on only the
+    /// ones that change, leaves the list as marking it in full does -- the
+    /// window does the first (off its thread), the workers the second.
+    #[test]
+    fn mark_changes_are_what_a_full_annotate_does() {
+        let row = |r: Value| Plugin::from_row(r.as_object().expect("row")).expect("plugin");
+        let mut plugins = vec![
+            row(json!({"id": "on", "name": "On"})),
+            row(json!({"id": "off", "name": "Off", "installed": true, "enabled": true})),
+            row(json!({"id": "gone", "name": "Gone", "installed": true})),
+            row(json!({"id": "img", "name": "Img", "install_kind": "appimage"})),
+            row(json!({"id": "img2", "name": "Img2", "install_kind": "appimage", "local_version": "old"})),
+            row(json!({"id": "t", "name": "Tokyo", "install_kind": "theme"})),
+            row(json!({"id": "t2", "name": "Mine", "install_kind": "theme", "built_in": true})),
+            row(json!({"id": 5, "name": "Int id"})),
+            row(json!({"id": "same", "name": "Same", "installed": true, "enabled": true})),
+        ];
+        plugins.push(Plugin { installed: true, ..plugins[0].clone() });
+        let facts = Facts {
+            demo: false,
+            have: vec![
+                ("s:on".into(), json!("on"), true),
+                ("s:off".into(), json!("off"), false),
+                ("s:same".into(), json!("same"), true),
+                ("i:5".into(), json!(5), true),
+            ]
+            .into_iter()
+            .map(|(_, id, on): (String, Value, bool)| (py_hash_key(&id).expect("key"), id, on))
+            .collect(),
+            images: [("img".to_string(), json!("1.2")), ("img2".to_string(), json!(3))].into(),
+            themes: ["tokyo".to_string(), "mine".to_string()].into(),
+            mine: ["mine".to_string()].into(),
+        };
+        let mut full = plugins.clone();
+        let mut done = 0;
+        annotate_marks(&mut full, &facts, &mut done).expect("marks");
+        assert_eq!(done, full.len());
+
+        let (changes, r) = mark_changes(&plugins, &facts);
+        r.expect("marks");
+        // "same" is marked already: nothing to put on it.
+        assert!(!changes.iter().any(|(i, _)| plugins[*i].id == "same"), "{changes:?}");
+        let mut piecemeal = plugins.clone();
+        apply_mark_changes(&mut piecemeal, &changes);
+        assert_eq!(piecemeal, full);
+        assert!(full[0].installed && full[0].enabled && full[1].installed && !full[1].enabled);
+        assert!(!full[2].installed && full[3].installed && full[3].local_version == "1.2");
+        assert_eq!(full[4].local_version, "3");
+        assert_eq!(full[4].raw.get("local_version"), Some(&json!(3)));
+        assert!(full[5].installed && full[5].built_in && full[6].installed && !full[6].built_in);
+        assert!(full[7].installed, "an int id matches an int id");
+
+        // A plugin that cannot be looked up stops both at the same place.
+        let mut bad = plugins.clone();
+        bad.insert(2, row(json!({"id": ["a"], "name": "List id"})));
+        let mut full = bad.clone();
+        let mut done = 0;
+        let err = annotate_marks(&mut full, &facts, &mut done).expect_err("unhashable");
+        let (changes, r) = mark_changes(&bad, &facts);
+        assert_eq!(r.expect_err("unhashable"), err);
+        let mut piecemeal = bad.clone();
+        apply_mark_changes(&mut piecemeal, &changes);
+        assert_eq!(piecemeal, full);
+    }
+
+    /// `try_catalog_annotated` reads the system (which runs `omarchy`) with
+    /// the cache's lock let go: the window's thread takes the same lock.
+    #[test]
+    fn the_cache_is_not_held_while_the_system_is_read() {
+        let body = include_str!("store.rs")
+            .split("pub fn try_catalog_annotated(")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("try_catalog_annotated");
+        let facts = body.find("gather_facts(").expect("reads the system");
+        let lock = body.find("let mut cached = CACHED.lock()").expect("marks under the lock");
+        assert!(facts < lock, "the system is read under the cache's lock");
+        // ...and the lock taken before it is a statement's temporary.
+        let before = &body[..facts];
+        assert!(!before.contains("let cached = CACHED.lock()"), "a held guard before reading");
+        assert!(!body.contains("let fresh = try_catalog("), "a catalogue copy made and thrown away");
     }
 
     #[test]
