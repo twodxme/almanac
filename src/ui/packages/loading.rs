@@ -352,6 +352,12 @@ impl Win {
                 icon = "system-search-symbolic";
                 title = "Nothing matches".to_string();
                 body = format!("No installed software matches “{query}”.");
+            } else if filter_key == "updates" {
+                // An empty list from a check that could not run is not
+                // "Everything is up to date".
+                if let Some(why) = inventory::pending_problem() {
+                    (icon, title, body) = check_failed(&why);
+                }
             }
             self.list_empty.set_icon_name(Some(icon));
             self.list_empty.set_title(&title);
@@ -399,11 +405,47 @@ impl Win {
         } else {
             Vec::new()
         };
+        // A check that could not run, above all: what is listed may not be
+        // everything. (With nothing listed, the empty page says it.)
+        let failed = (filter_key == "updates" && query.is_empty())
+            .then(inventory::pending_problem)
+            .flatten()
+            .filter(|_| self.list_stack.visible_child_name().as_deref() != Some("empty"));
+        if let Some(why) = &failed {
+            let (icon, title, body) = check_failed(why);
+            self.update_notes.append(&Win::note_row(icon, &title, &body));
+        }
         // Arch news first: it can say not to update yet.
         let news = if filter_key == "updates" && query.is_empty() { self.news_into(&self.update_notes) } else { 0 };
         for note in &notes {
             self.update_notes.append(&Win::note_row(note.icon, &note.title, &note.body));
         }
-        self.update_notes.set_visible(!notes.is_empty() || news > 0);
+        self.update_notes.set_visible(!notes.is_empty() || news > 0 || failed.is_some());
+    }
+}
+
+/// What the Updates page says when the last look for updates could not run:
+/// never "Everything is up to date".
+pub(super) fn check_failed(why: &str) -> (&'static str, String, String) {
+    (
+        "dialog-warning-symbolic",
+        tr("Could not check for updates"),
+        format!("{}. Updates waiting may not be listed; rescan to try again.", why.trim_end_matches('.')),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// checkupdates offline exits 1 with nothing on stdout, which used to
+    /// read as "no updates" and showed "Everything is up to date".
+    #[test]
+    fn a_check_that_could_not_run_does_not_say_up_to_date() {
+        let (icon, title, body) = check_failed("checkupdates could not check (exit status 1): offline, or a mirror is down");
+        assert_eq!(icon, "dialog-warning-symbolic");
+        assert!(!title.to_lowercase().contains("up to date"));
+        assert!(body.starts_with("checkupdates could not check"));
+        assert!(body.contains("rescan"));
     }
 }

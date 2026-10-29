@@ -576,6 +576,10 @@ msgstr ""
 msgid "Duplicate software installed"
 msgstr ""
 
+#: src/ui/packages/loading.rs:432
+msgid "Could not check for updates"
+msgstr ""
+
 #: src/ui/plugins/controls.rs:98
 msgid "Press the keys, e.g. Super + Alt + V"
 msgstr ""

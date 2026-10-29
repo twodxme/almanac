@@ -315,7 +315,7 @@ pub fn collect() -> Vec<App> {
 pub fn try_details(app: &App) -> Result<Extra, String> {
     let mut out = app.extra_dict();
     if [REPO, AUR, SYSTEM, ORPHAN].contains(&app.source.as_str()) {
-        let text = run(&["pacman", "-Qi", &app.name], 20)?;
+        let text = run(&[PACMAN, "-Qi", &app.name], 20)?;
         let mut field: Option<String> = None;
         let mut acc: HashMap<String, String> = HashMap::new();
         for line in py_splitlines(&text) {
@@ -343,7 +343,7 @@ pub fn try_details(app: &App) -> Result<Extra, String> {
                 }
             }
         }
-        let files = py_splitlines(&run(&["pacman", "-Qlq", &app.name], 20)?).len();
+        let files = py_splitlines(&run(&[PACMAN, "-Qlq", &app.name], 20)?).len();
         out.insert("files".into(), json!(files));
     }
     Ok(out)
