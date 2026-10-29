@@ -531,7 +531,7 @@ impl Host for WeakWin {
     }
     fn run(&self, title: &str, steps: Vec<Step>, on_done: tasks::OnDone) {
         if let Some(win) = self.upgrade() {
-            tasks::run(&win.window, title, steps, Some(on_done));
+            win.run_task(title, steps, Some(on_done));
         }
     }
     fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
@@ -918,6 +918,9 @@ impl Win {
     }
 
     pub fn run_setup(&self, p: &Plugin, plan: &SetupPlan) {
+        if self.demo_refuses() {
+            return;
+        }
         let commands = {
             let w = self.downgrade();
             let p = p.clone();
@@ -995,9 +998,7 @@ impl Win {
                 }
             };
             let w = self.downgrade();
-            tasks::run(
-                &self.window,
-                &format!("Setting up {}", p.name),
+            self.run_task(&format!("Setting up {}", p.name),
                 steps,
                 Some(Box::new(move |ok| {
                     if let Some(win) = w.upgrade() {
@@ -1049,6 +1050,9 @@ impl Win {
     }
 
     pub fn apply_theme_now(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         let p = p.clone();
         tasks::confirm(
@@ -1063,9 +1067,7 @@ impl Win {
                 let Some(win) = w.upgrade() else { return };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
-                    &format!("Applying {}", p.name),
+                win.run_task(&format!("Applying {}", p.name),
                     vec![Step::argv(format!("Applying {}", p.name), theme_set_argv(&p.name))],
                     Some(Box::new(move |ok| {
                         if let Some(win) = w.upgrade() {
@@ -1093,6 +1095,9 @@ impl Win {
 
     // ---- store entries that are AppImages, not plugins ----
     pub fn install_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let dest = store_appimage_path(p);
         let t = or_log!(p.try_trust());
         let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
@@ -1139,9 +1144,7 @@ impl Win {
                 };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
-                    &format!("Installing {}", p.name),
+                win.run_task(&format!("Installing {}", p.name),
                     vec![Step::call(format!("Downloading {} {}", p.name, p.version), fetch)],
                     Some(Box::new(move |ok| {
                         let Some(win) = w.upgrade() else { return };
@@ -1202,6 +1205,9 @@ impl Win {
     }
 
     pub fn remove_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let p = &self.live(p);
         let version = if p.local_version.is_empty() { &p.version } else { &p.local_version };
         let mut extra = serde_json::Map::new();

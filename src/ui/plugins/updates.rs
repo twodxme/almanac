@@ -317,7 +317,7 @@ impl Win {
                 let wr = w.downgrade();
                 w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
                     if let Some(w) = wr.upgrade() {
-                        tasks::run(&w.window, &tr("Updating plugins"), steps, Some(on_done));
+                        w.run_task(&tr("Updating plugins"), steps, Some(on_done));
                     }
                 });
             },

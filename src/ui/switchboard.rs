@@ -409,6 +409,16 @@ impl Win {
         let w = self.downgrade();
         let keep = guard.clone();
         guard.connect(&switch, move |sw, on| {
+            if w.upgrade().is_some_and(|w| w.demo_refuses()) {
+                // Back where it was, once this handler has returned.
+                let (sw, keep) = (sw.downgrade(), keep.clone());
+                glib::idle_add_local_once(move || {
+                    if let Some(sw) = sw.upgrade() {
+                        keep.set(&sw, !on);
+                    }
+                });
+                return glib::Propagation::Stop;
+            }
             if !on && !confirm_off.is_empty() {
                 let dialog = adw::AlertDialog::new(
                     Some(&format!("Switch off {title}?")),

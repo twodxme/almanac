@@ -531,6 +531,9 @@ impl Win {
 
     /// Ask, then clear Almanac's own log; History reads itself again after.
     pub fn on_clear_log(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let dialog = adw::AlertDialog::new(
             Some(&tr("Clear Almanac's log?")),
             Some(&tr("Removes the record of what Almanac did. Package history from pacman and your \
@@ -733,6 +736,9 @@ impl Win {
     }
 
     pub fn maint_fix(&self, f: &maintenance::Finding) {
+        if self.demo_refuses() {
+            return;
+        }
         let mut detail = f.fix_note.clone();
         if !f.items.is_empty() {
             let items: Vec<&str> = f.items.iter().take(40).map(String::as_str).collect();
@@ -767,13 +773,16 @@ impl Win {
     /// The free space is read first, off the main thread, so History can
     /// say what the run actually freed.
     fn run_fixes(&self, title: &str, summary: &str, steps: Vec<Step>, fixed: Vec<maintenance::Finding>) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         let (title, summary) = (title.to_string(), summary.to_string());
         spawn_bg(free_bytes, move |free_before| {
             let Some(w) = w.upgrade() else { return };
             let run = FixRun::of(&summary, &steps, free_before);
             let on_done = w.findings_done(fixed, run);
-            tasks::run(&w.window, &title, steps, Some(on_done));
+            w.run_task(&title, steps, Some(on_done));
         });
     }
 
@@ -829,6 +838,9 @@ impl Win {
 
     /// The three cleanups that only ever free cached or logged data.
     pub fn reclaim_space(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let wanted = ["pacman-cache", "yay-cache", "journal"];
         let (mut steps, mut detail, mut total) = (Vec::new(), Vec::new(), 0.0);
         let findings = self.shared.borrow().findings.get();

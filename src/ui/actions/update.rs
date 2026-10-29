@@ -293,6 +293,9 @@ impl Win {
     /// (whatever came of it): it runs off the main thread, so what reads
     /// the registry after it waits for it here.
     pub fn remove_appimage_then(&self, app: &App, then: impl FnOnce(&Win) + 'static) {
+        if self.demo_refuses() {
+            return;
+        }
         // Its read and its write of the registry as one, under the lock;
         // let go before anything (the reload) reads the registry again.
         // Off the main thread: the lock waits for whoever holds it (the
@@ -322,6 +325,9 @@ impl Win {
 
     /// Update one thing, with whatever tool owns it.
     pub fn on_update_one(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let argv = match update_one(app, inventory::synced_version) {
             UpdateOne::Agent => {
                 self.update_agent(app);
@@ -388,7 +394,7 @@ impl Win {
                 let log = Some(UpdateLog::new(&app, &argv));
                 win.checked_logged(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, log, move |done| {
                     if let Some(win) = w.upgrade() {
-                        tasks::run(&win.window, &title, steps, Some(done));
+                        win.run_task(&title, steps, Some(done));
                     }
                 });
             },
@@ -397,6 +403,9 @@ impl Win {
 
     /// Agents update themselves, or their version manager does it.
     pub fn update_agent(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let cmd = update_cmd(app);
         if cmd.as_ref().is_ok_and(|c| c.is_empty()) {
             self.say(
@@ -474,7 +483,7 @@ impl Win {
             let log = Some(UpdateLog::new(&app, &cmd));
             win.checked_logged(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, log, move |done| {
                 if let Some(win) = w.upgrade() {
-                    tasks::run(&win.window, &title, vec![Step::argv(title.clone(), cmd)], Some(done));
+                    win.run_task(&title, vec![Step::argv(title.clone(), cmd)], Some(done));
                 }
             });
         });
@@ -487,6 +496,9 @@ impl Win {
     /// is dropped, one that still applies is carried over, and one that
     /// conflicts is set aside as a stash. Edits are never discarded.
     pub fn on_git_pull(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let Some(repo) = app.extra.get("repo").filter(|v| truthy(v)).cloned() else {
             return;
         };
@@ -547,7 +559,7 @@ impl Win {
     /// `confirm_pull`, once the checkout's head before the pull is known.
     fn confirm_pull_with(&self, app: &App, state: &PatchState, steps: Vec<Step>, done: Rc<dyn Fn(bool)>) {
         if state.kind == patches::CLEAN || state.kind == patches::UNKNOWN {
-            tasks::run(&self.window, &format!("Updating {}", app.name), steps, Some(Box::new(move |ok| done(ok))));
+            self.run_task(&format!("Updating {}", app.name), steps, Some(Box::new(move |ok| done(ok))));
             return;
         }
         let (heading, body, action) = patches::explain(state, &app.name);
@@ -566,12 +578,15 @@ impl Win {
         tasks::confirm(&self.window, &heading, &body, &detail, &action, false, move || {
             let Some(win) = w.upgrade() else { return };
             let done = done.clone();
-            tasks::run(&win.window, &title, steps.clone(), Some(Box::new(move |ok| done(ok))));
+            win.run_task(&title, steps.clone(), Some(Box::new(move |ok| done(ok))));
         });
     }
 
     /// Download the newer AppImage and swap it in, off the UI thread.
     pub fn on_update_appimage(&self, button: &gtk::Button, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         if !app.extra.get("download").is_some_and(truthy) {
             self.say(&format!("No download URL for {}", app.name), 5);
             return;

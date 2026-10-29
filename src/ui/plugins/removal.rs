@@ -186,6 +186,9 @@ impl Win {
     }
 
     pub fn on_launch(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if let Err(e) = popen_detached(std::slice::from_ref(&app.exec_path)) {
             self.say(&format!("Could not launch {}: {}", app.name, py_oserror(&e, &app.exec_path)), 5);
         }
@@ -196,6 +199,9 @@ impl Win {
     /// Build tooling and debug packages are excluded: the next AUR build pulls
     /// rust straight back, so removing it is churn rather than cleanup.
     pub fn on_clean_orphans(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let store = self.shared.borrow().store.clone();
         let mut rows: Vec<(String, String, String)> = Vec::new();
         for i in 0..store.n_items() {
@@ -254,7 +260,7 @@ impl Win {
         std::rc::Rc::new(move |title: &str, steps: Vec<tasks::Step>| {
             let Some(w) = w.upgrade() else { return };
             let wt = w.downgrade();
-            tasks::run(&w.window, title,
+            w.run_task(title,
                 steps,
                 Some(Box::new(move |ok| {
                     if let Some(w) = wt.upgrade() {
@@ -267,6 +273,9 @@ impl Win {
 
     /// Install one result, through the tool that owns that kind of thing.
     pub fn on_install_item(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if app.source == inventory::PLUGIN {
             let url = extra_str(app, "repo");
             if url.is_empty() {
@@ -286,7 +295,7 @@ impl Win {
                 move || {
                     let Some(w) = w.upgrade() else { return };
                     let wt = w.downgrade();
-                    tasks::run(&w.window, &format!("Installing {nm}"),
+                    w.run_task(&format!("Installing {nm}"),
                         vec![tasks::Step::argv(
                             format!("Installing {nm}"),
                             ["omarchy", "plugin", "add", &u, "--enable", "--yes"]
@@ -334,6 +343,9 @@ impl Win {
     /// yay's own interactive picker is better than anything reimplemented
     /// here, and it is the tool that owns the transaction.
     pub fn on_install(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         // Only the search box this page shows: a hidden one still holds
         // whatever another page left in it (the action is off there too;
         // a shortcut or a race must not get past it either).
@@ -372,6 +384,9 @@ impl Win {
 
     /// Install through yay: snapshot first, then check what changed.
     pub fn install_package(&self, name: &str, argv: Vec<String>) {
+        if self.demo_refuses() {
+            return;
+        }
         let holder = match self.try_watch_defaults() {
             Ok(holder) => holder,
             Err(e) => return uncaught_err(&e),
@@ -413,7 +428,7 @@ impl Win {
         let title = format!("Installing {name}");
         self.checked(Some(verify::installed_package_try(name)), judge, Some(after), uncaught_err, move |on_done| {
             if let Some(w) = w.upgrade() {
-                tasks::run(&w.window, &title, steps, Some(on_done));
+                w.run_task(&title, steps, Some(on_done));
             }
         });
     }
@@ -424,6 +439,9 @@ impl Win {
     /// expected, so the terminal shows the full list before confirming --
     /// no --noconfirm here, deliberately.
     pub fn on_remove(&self, app: &inventory::App) {
+        if self.demo_refuses() {
+            return;
+        }
         if app.source == inventory::APPIMAGE {
             // The file and its rollback copy are deleted outright, so the
             // row menu's "Remove…" asks first, as the App Store does.
@@ -463,7 +481,7 @@ impl Win {
                 move || {
                     let Some(w) = w.upgrade() else { return };
                     let wt = w.downgrade();
-                    tasks::run(&w.window, &format!("Removing {nm}"),
+                    w.run_task(&format!("Removing {nm}"),
                         vec![tasks::Step::argv(
                             format!("Removing {nm}"),
                             vec!["flatpak".into(), "uninstall".into(), "--assumeyes".into(), id.clone()],

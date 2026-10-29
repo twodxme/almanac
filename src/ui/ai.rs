@@ -713,6 +713,9 @@ impl Win {
     }
 
     pub fn ai_act(&self, e: &Entry) {
+        if self.demo_refuses() {
+            return;
+        }
         let cmd = e.action.clone();
         if let Some(cmd) = cmd.as_ref().filter(|_| {
             e.kind == ai::HARNESS
@@ -765,7 +768,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(&win.window, &label,
+                win.run_task(&label,
                     vec![tasks::Step::argv(label.clone(), cmd.clone())],
                     Some(Box::new(move |ok| {
                         if let Some(w) = w2.upgrade() {
@@ -887,7 +890,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(&win.window, "Updating agent CLIs",
+                win.run_task("Updating agent CLIs",
                     steps.clone(),
                     Some(Box::new(move |ok| {
                         if let Some(w) = w2.upgrade() {

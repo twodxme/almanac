@@ -171,6 +171,16 @@ fn plugin_switch_shared(
     guard: &SwitchGuard,
     i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
 ) -> glib::Propagation {
+    if w.upgrade().is_some_and(|w| w.demo_refuses()) {
+        // Back where it was, once this handler has returned.
+        let (sw, g) = (switch.downgrade(), guard.clone());
+        glib::idle_add_local_once(move || {
+            if let Some(sw) = sw.upgrade() {
+                g.set(&sw, !on);
+            }
+        });
+        return glib::Propagation::Stop;
+    }
     switch.set_sensitive(false);
 
     let id = i.borrow().id.clone();
@@ -750,7 +760,7 @@ impl Win {
                     let title = format!("Removing {}", i.name);
                     w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
                         if let Some(w) = wr.upgrade() {
-                            tasks::run(&w.window, &title, steps, Some(on_done));
+                            w.run_task(&title, steps, Some(on_done));
                         }
                     });
                 },

@@ -162,6 +162,9 @@ fn version_output(dest: &Path) -> Result<Option<String>, String> {
 
 impl Win {
     pub fn on_add_appimage(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let dialog = gtk::FileDialog::builder().title(tr("Choose an AppImage to track")).build();
         let w = self.downgrade();
         dialog.open(Some(&self.window), None::<&gio::Cancellable>, move |result| {
