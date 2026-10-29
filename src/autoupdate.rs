@@ -170,6 +170,14 @@ pub fn omarchy_installed() -> bool {
     crate::agents::which("omarchy").is_some()
 }
 
+/// Why the scheduled update cannot be switched on without Omarchy.
+pub fn needs_omarchy() -> String {
+    crate::i18n::tr(
+        "Needs Omarchy: the scheduled run installs updates with omarchy update, which is not \
+         installed here. Update by hand with sudo pacman -Syu.",
+    )
+}
+
 /// Where the timer's schedule can live: a full user copy of the unit, the
 /// packaged unit, and a drop-in overriding the packaged one.
 struct TimerFiles<'a> {
@@ -1281,7 +1289,7 @@ fn is_enabled_with(sys: Sys) -> Result<bool, String> {
 /// `set_enabled(on)`; Err where the Python raises.
 pub fn try_set_enabled(on: bool) -> Result<(bool, String), String> {
     imported()?;
-    set_enabled_with(on, &mut real_sys())
+    set_enabled_with(on, omarchy_installed(), &mut real_sys())
 }
 
 /// [`try_set_enabled`], reporting the error as the failure message.
@@ -1290,7 +1298,12 @@ pub fn set_enabled(on: bool) -> (bool, String) {
     try_set_enabled(on).unwrap_or_else(|e| (false, e))
 }
 
-fn set_enabled_with(on: bool, sys: Sys) -> Result<(bool, String), String> {
+/// Switching on needs Omarchy (see [`needs_omarchy`]); switching off never
+/// does, so a schedule left on from before can always be turned off.
+fn set_enabled_with(on: bool, omarchy: bool, sys: Sys) -> Result<(bool, String), String> {
+    if on && !omarchy {
+        return Ok((false, needs_omarchy()));
+    }
     let args: &[&str] = if on { &["enable", "--now", UNIT] } else { &["disable", "--now", UNIT] };
     let (code, out) = sys(args, 30)?;
     Ok((code == 0, out))
@@ -1855,6 +1868,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn without_omarchy_the_schedule_is_not_switched_on_from_anywhere() {
+        // Preferences checked; the Switchboard switch did not. The refusal now
+        // lives where the timer is enabled, so every switch gets it.
+        let mut called: Vec<String> = Vec::new();
+        let mut sys = |a: &[&str], _t: u64| {
+            called.push(a.join(" "));
+            Ok((0, String::new()))
+        };
+        let (ok, msg) = set_enabled_with(true, false, &mut sys).unwrap();
+        assert!(!ok);
+        assert!(msg.contains("Omarchy"), "{msg}");
+        let (ok, _) = set_enabled_with(false, false, &mut sys).unwrap();
+        assert!(ok, "switching it off always works");
+        let (ok, _) = set_enabled_with(true, true, &mut sys).unwrap();
+        assert!(ok);
+        assert_eq!(called, vec![format!("disable --now {UNIT}"), format!("enable --now {UNIT}")]);
     }
 
     const TIMER: &str = "[Unit]\nDescription=x\n\n[Timer]\nOnCalendar=Sun 11:00\nPersistent=true\nRandomizedDelaySec=30m\n";

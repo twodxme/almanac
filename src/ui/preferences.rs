@@ -98,12 +98,6 @@ fn switch(
     Ok(row)
 }
 
-/// Why the scheduled update cannot be switched on without Omarchy.
-fn needs_omarchy() -> String {
-    tr("Needs Omarchy: the scheduled run installs updates with omarchy update, which is not \
-        installed here. Update by hand with sudo pacman -Syu.")
-}
-
 // ---- settings ---------------------------------------------------------
 impl Win {
     /// Almanac's preferences: General, Updates, Privacy, Background.
@@ -216,7 +210,7 @@ impl Win {
         // to switch on (a timer switched on some other way can still be
         // switched off).
         if !omarchy {
-            enabled.set_subtitle(&needs_omarchy());
+            enabled.set_subtitle(&autoupdate::needs_omarchy());
             enabled.set_sensitive(st.enabled);
         }
         sched.add(&enabled);
@@ -354,7 +348,7 @@ impl Win {
         if demo || !omarchy {
             run_btn.set_sensitive(false);
             if !omarchy {
-                run_row.set_subtitle(&needs_omarchy());
+                run_row.set_subtitle(&autoupdate::needs_omarchy());
             }
         }
         {
