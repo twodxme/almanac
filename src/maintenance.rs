@@ -859,6 +859,22 @@ fn _failed(name: &str, exc: &str) -> Finding {
         ..Default::default()
     }
 }
+
+/// The finding `run_all` builds for a check still running at its deadline.
+fn _unfinished(name: &str, after: std::time::Duration) -> Finding {
+    Finding {
+        id: name.to_string(),
+        title: crate::util::py_title(&name.replace('_', " ")),
+        detail: format!(
+            "This check did not finish within {} seconds, so the others went \
+             ahead without it. Something it reads is not answering: often a \
+             network share, or a process stuck waiting on one.",
+            after.as_secs()
+        ),
+        severity: UNKNOWN.to_string(),
+        ..Default::default()
+    }
+}
 // ---- checks ------------------------------------------------------------------
 
 /// `_SAVED = re.compile(r"disk space saved:\s*([\d.]+)\s*([KMGT]?)i?B")`
@@ -1348,8 +1364,9 @@ fn _dangling_rows(data_home: &Path) -> Result<Vec<Vec<u8>>, String> {
         }
         for f in _glob_suffix(&d, ".desktop") {
             let mut target = String::new();
-            // f.read_text(errors="replace"); OSError skips the file.
-            let Ok(bytes) = std::fs::read(&f) else { continue };
+            // f.read_text(errors="replace"); OSError skips the file, and so
+            // does anything that is not a regular file.
+            let Some(bytes) = _read_regular(&f) else { continue };
             let text = String::from_utf8_lossy(&bytes);
             for line in _py_splitlines(&text) {
                 if let Some(rest) = line.strip_prefix("TryExec=") {
@@ -1385,6 +1402,30 @@ fn _dangling_rows(data_home: &Path) -> Result<Vec<Vec<u8>>, String> {
         }
     }
     Ok(bad)
+}
+
+/// The bytes of `p` when it is a regular file (a symlink to one counts:
+/// launcher entries often are), None otherwise. A FIFO named like a
+/// .desktop file would hold the read, and the whole Health check, forever,
+/// and a device may never end or may act on being opened: the type is
+/// checked before opening, and again on what was opened, without blocking.
+fn _read_regular(p: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    if !std::fs::metadata(p).ok()?.is_file() {
+        return None;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(p)
+        .ok()?;
+    if !f.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut out = Vec::new();
+    f.read_to_end(&mut out).ok()?;
+    Some(out)
 }
 
 fn _remove_dangling_in(data_home: &Path, log: LogFn<'_>) -> Result<(), String> {
@@ -2453,59 +2494,124 @@ pub fn checked_ago(age: std::time::Duration) -> String {
     }
 }
 
-/// `checks`, each guarded, all at once; sorted by severity, then size.
-fn _run_checks(checks: &[(&str, Check)]) -> Vec<Finding> {
-    // `except Exception` around each check: a check that fails (here, one
-    // that panics) becomes a finding saying so instead of losing the rest.
-    // Quiet: the failure is reported as a finding, not on stderr. QUIET is
-    // per thread, so each check sets it on the thread it runs on.
-    let guarded = |name: &str, check: &Check| -> Finding {
-        _quiet_panics();
-        QUIET.with(|q| q.set(true));
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(check));
-        QUIET.with(|q| q.set(false));
-        match caught {
-            Ok(f) => f,
-            Err(payload) => {
-                let exc = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                _failed(name, &exc)
-            }
-        }
+/// How long `run_all` waits for a check: its own commands' time limits
+/// with room to spare. Past it the check is left running on its own and
+/// reported as not finished, so one stuck read (a network share, a FIFO, a
+/// process hung on either) cannot hold back every other answer.
+fn _deadline(name: &str) -> std::time::Duration {
+    let secs = match name {
+        // pacman -Qq (60 s), then pacman -Qk (240 s) over every installed file.
+        "package_integrity" => 330,
+        // A walk of the cache, then two paccache dry runs of up to 60 s each.
+        "pacman_cache" => 180,
+        // Two systemctl calls of up to 60 s each.
+        "failed_units" => 150,
+        // pacman, then the network.
+        "unmaintained_aur" | "known_vulnerabilities" | "orphan_packages" => 120,
+        // One command of up to 60 s, or reading files.
+        _ => 90,
     };
+    std::time::Duration::from_secs(secs)
+}
+
+/// `checks`, each guarded, all at once, each given until its deadline;
+/// sorted by severity, then size.
+fn _run_checks(checks: &[(&str, Check)]) -> Vec<Finding> {
+    _run_checks_within(checks, &_deadline)
+}
+
+/// One check, guarded: `except Exception` around it. A check that fails
+/// (here, one that panics) becomes a finding saying so instead of losing the
+/// rest. Quiet: the failure is reported as a finding, not on stderr. QUIET
+/// is per thread, so each check sets it on the thread it runs on.
+fn _guarded(name: &str, check: Check) -> Finding {
+    _quiet_panics();
+    QUIET.with(|q| q.set(true));
+    let caught = std::panic::catch_unwind(check);
+    QUIET.with(|q| q.set(false));
+    match caught {
+        Ok(f) => f,
+        Err(payload) => {
+            let exc = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            _failed(name, &exc)
+        }
+    }
+}
+
+fn _run_checks_within(checks: &[(&str, Check)], deadline: &dyn Fn(&str) -> std::time::Duration) -> Vec<Finding> {
+    use std::sync::mpsc::RecvTimeoutError;
     // Every check at once: they only read, and most of the time is spent
     // waiting on pacman, the disk or the network, so the whole run takes as
     // long as its slowest check rather than all of them added up. Gathered
     // in `checks` order, so the sort below sees what a sequential run gave it.
+    // Not scoped: a check that does not finish by its deadline has to be
+    // left behind, still running, and a scope would wait for it.
+    let started = std::time::Instant::now();
     let caller = std::thread::current().name().map(str::to_owned);
-    let mut out: Vec<Finding> = std::thread::scope(|s| {
-        let handles: Vec<_> = checks
-            .iter()
-            .map(|(name, check)| {
-                // The caller's name and the stack the main thread would have
-                // had: some checks recurse as deep as the files they read, and
-                // their limits depend on which thread they run on
-                // (`util::with_stack` does the same).
-                let mut b = std::thread::Builder::new().stack_size(8 << 20);
-                if let Some(n) = &caller {
-                    b = b.name(n.clone());
-                }
-                let spawned = b.spawn_scoped(s, move || guarded(name, check));
-                (*name, check, spawned)
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|(name, check, spawned)| match spawned {
-                Ok(h) => h.join().unwrap_or_else(|_| _failed(name, "")),
-                // No thread to be had: run it here.
-                Err(_) => guarded(name, check),
-            })
-            .collect()
-    });
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Finding)>();
+    let mut got: Vec<Option<Finding>> = vec![None; checks.len()];
+    for (i, (name, check)) in checks.iter().enumerate() {
+        // The caller's name and the stack the main thread would have had:
+        // some checks recurse as deep as the files they read, and their
+        // limits depend on which thread they run on (`util::with_stack` does
+        // the same).
+        let mut b = std::thread::Builder::new().stack_size(8 << 20);
+        if let Some(n) = &caller {
+            b = b.name(n.clone());
+        }
+        let (tx, owned, check) = (tx.clone(), name.to_string(), *check);
+        if b.spawn(move || {
+            // Nobody is listening once the run has moved on without it.
+            let _ = tx.send((i, _guarded(&owned, check)));
+        })
+        .is_err()
+        {
+            // No thread to be had: run it here.
+            got[i] = Some(_guarded(name, check));
+        }
+    }
+    drop(tx);
+    loop {
+        let waited = started.elapsed();
+        let mut next: Option<std::time::Duration> = None;
+        for (i, (name, _)) in checks.iter().enumerate() {
+            if got[i].is_some() {
+                continue;
+            }
+            let limit = deadline(name);
+            if waited >= limit {
+                got[i] = Some(_unfinished(name, limit));
+            } else {
+                next = Some(next.map_or(limit, |n| n.min(limit)));
+            }
+        }
+        let Some(next) = next else { break };
+        match rx.recv_timeout(next - waited) {
+            Ok((i, f)) => {
+                got[i].get_or_insert(f);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            // Every thread is gone and these never said: lost, as a check
+            // whose thread died was before.
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let mut out: Vec<Finding> = got
+        .into_iter()
+        .zip(checks)
+        .map(|(f, (name, _))| f.unwrap_or_else(|| _failed(name, "")))
+        .collect();
+    _sort_findings(&mut out);
+    out
+}
+
+/// Worst first, then the most space; equal ones keep their order. A check
+/// that could not run sits below every finding and above the passes.
+fn _sort_findings(out: &mut [Finding]) {
     let rank = |s: &str| match s {
         CRIT => 0,
         WARN => 1,
@@ -2518,7 +2624,6 @@ fn _run_checks(checks: &[(&str, Check)]) -> Vec<Finding> {
             .cmp(&rank(&b.severity))
             .then((-a.size_mb).partial_cmp(&-b.size_mb).unwrap_or(std::cmp::Ordering::Equal))
     });
-    out
 }
 
 /// How much space the actionable cleanups would actually free.
@@ -2927,6 +3032,50 @@ mod tests {
     }
 
     // ---- A check that cannot finish, or cannot run ----
+
+    fn stuck() -> Finding {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        Finding { id: "stuck".into(), severity: OK.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_stuck_check_is_left_behind_and_the_rest_arrive() {
+        let checks: &[(&str, Check)] = &[("stuck", stuck), ("big_warn", big_warn), ("tie_b", tie_b)];
+        let t = std::time::Instant::now();
+        let deadline = |name: &str| std::time::Duration::from_millis(if name == "stuck" { 300 } else { 5000 });
+        let out = _run_checks_within(checks, &deadline);
+        assert!(t.elapsed() < std::time::Duration::from_secs(3), "the run does not wait for the stuck check");
+        let ids: Vec<&str> = out.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, ["big", "tie-b", "stuck"]);
+        assert_eq!(out[2].severity, UNKNOWN);
+        assert!(out[2].detail.contains("did not finish"), "{}", out[2].detail);
+        // Every real check has a deadline, the slow ones longer.
+        assert!(_deadline("package_integrity") > _deadline("dangling_desktop"));
+    }
+
+    #[test]
+    fn a_fifo_named_like_a_launcher_entry_does_not_block_the_check() {
+        let d = tempfile::tempdir().unwrap();
+        let apps = d.path().join("applications");
+        std::fs::create_dir(&apps).unwrap();
+        let fifo = apps.join("stuck.desktop");
+        rustix::fs::mknodat(rustix::fs::CWD, &fifo, rustix::fs::FileType::Fifo, rustix::fs::Mode::from_raw_mode(0o600), 0)
+            .unwrap();
+        std::os::unix::fs::symlink(&fifo, apps.join("link-to-fifo.desktop")).unwrap();
+        std::fs::write(apps.join("broken.desktop"), "[Desktop Entry]\nExec=/nonexistent/almanac-test\n").unwrap();
+        std::fs::write(d.path().join("real"), "[Desktop Entry]\nExec=/nonexistent/linked\n").unwrap();
+        std::os::unix::fs::symlink(d.path().join("real"), apps.join("linked.desktop")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let home = d.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = tx.send(_dangling_rows(&home));
+        });
+        let rows = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the check finished").unwrap();
+        let rows: Vec<String> = rows.iter().map(|r| _pystr(r)).collect();
+        // The FIFOs are skipped; a symlinked entry is still read.
+        assert_eq!(rows, ["broken.desktop → /nonexistent/almanac-test", "linked.desktop → /nonexistent/linked"]);
+        assert_eq!(_read_regular(Path::new("/dev/null")), None, "a device is not read");
+    }
 
     #[test]
     fn a_command_that_cannot_run_is_not_one_that_printed_nothing() {
