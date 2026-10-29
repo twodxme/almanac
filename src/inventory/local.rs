@@ -51,6 +51,20 @@ pub struct GitBehind {
 /// Err is what the Python raises outside its try: a cached entry that is
 /// truthy but not a dict (AttributeError), or a non-numeric cached
 /// `fetched_at` (ValueError).
+/// ssh as git runs it for a fetch: the user's own GIT_SSH_COMMAND when one
+/// is set (as the plugin checks keep it), else one that never asks.
+pub(super) fn git_ssh_command() -> String {
+    std::env::var_os("GIT_SSH_COMMAND")
+        .map(|c| c.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ssh -oBatchMode=yes".to_string())
+}
+
+/// What git is run with here: no terminal prompt for a password, and ssh
+/// in batch mode, so neither waits on a person who is not there.
+pub(super) fn git_env(ssh: &str) -> [(&'static str, &str); 2] {
+    [("GIT_TERMINAL_PROMPT", "0"), ("GIT_SSH_COMMAND", ssh)]
+}
+
 pub(super) fn git_behind_raw(repo: &Path, cache: &mut Map<String, Value>) -> Result<Map<String, Value>, String> {
     // str(repo): a name that is not UTF-8 keeps its bytes (surrogateescape),
     // so the key is the one the Python writes.
@@ -70,10 +84,14 @@ pub(super) fn git_behind_raw(repo: &Path, cache: &mut Map<String, Value>) -> Res
     // OSError (no git), TimeoutExpired and ValueError (output that is not
     // UTF-8 is a UnicodeDecodeError) are the exceptions the Python catches.
     // Text mode also turns a "\r" in a subject into "\n".
+    // Never a prompt: a fetch that wants a password or a host key fails
+    // at once rather than stopping the scan for its whole timeout.
+    let ssh = git_ssh_command();
+    let env = git_env(&ssh);
     let git = |args: &[&str], timeout: u64| -> Result<RunResult, ()> {
         let mut v: Vec<&std::ffi::OsStr> = vec!["git".as_ref(), "-C".as_ref(), repo.as_os_str()];
         v.extend(args.iter().map(std::ffi::OsStr::new));
-        subprocess_run(&v, timeout).map_err(|_| ())
+        subprocess_run_env(&v, timeout, &env).map_err(|_| ())
     };
 
     let attempt = (|| -> Result<Map<String, Value>, ()> {
@@ -421,6 +439,19 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fetch over ssh that wanted a password or a new host key waited on a
+    /// prompt nobody saw, holding the scan for 45 s per checkout.
+    #[test]
+    fn a_fetch_never_waits_on_a_prompt() {
+        let ssh = "ssh -oBatchMode=yes";
+        let out = subprocess_run_env(&["/usr/bin/env"], 5, &git_env(ssh)).unwrap();
+        assert!(out.stdout.lines().any(|l| l == "GIT_TERMINAL_PROMPT=0"));
+        assert!(out.stdout.lines().any(|l| l == "GIT_SSH_COMMAND=ssh -oBatchMode=yes"));
+        let code = include_str!("local.rs");
+        let body = code.split("fn git_behind_raw(").nth(1).and_then(|s| s.split("\n}\n").next()).unwrap_or("");
+        assert!(body.contains("subprocess_run_env(&v, timeout, &env)"), "git runs with that environment");
+    }
 
     // ---- UpdatesClearAfterUpdating
     #[test]

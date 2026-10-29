@@ -55,6 +55,15 @@ pub(super) fn py_decode(bytes: &[u8]) -> Result<String, RunError> {
 /// the child) and the child reaped. stdin is inherited, as subprocess.run
 /// leaves it.
 pub(super) fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64) -> Result<RunResult, RunError> {
+    subprocess_run_env(cmd, timeout, &[])
+}
+
+/// `subprocess_run` with `env` set on top of this process's environment.
+pub(super) fn subprocess_run_env<S: AsRef<std::ffi::OsStr>>(
+    cmd: &[S],
+    timeout: u64,
+    env: &[(&str, &str)],
+) -> Result<RunResult, RunError> {
     use std::os::unix::ffi::OsStrExt;
     // subprocess checks every argument before it forks.
     if cmd.iter().any(|a| a.as_ref().as_bytes().contains(&0)) {
@@ -63,6 +72,7 @@ pub(super) fn subprocess_run<S: AsRef<std::ffi::OsStr>>(cmd: &[S], timeout: u64)
     let out = crate::util::run_bytes(cmd, &crate::util::RunOpts {
         timeout: Some(std::time::Duration::from_secs(timeout)),
         stdin: crate::util::Stdin::Inherit,
+        env: env.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect(),
         ..Default::default()
     });
     if out.failed_to_start {
