@@ -40,6 +40,10 @@ pub const OK: &str = "ok";
 pub const INFO: &str = "info";
 pub const WARN: &str = "warn";
 pub const CRIT: &str = "crit";
+/// A check that could not run (a command missing or timed out, the network
+/// down, a check that never finished): not a pass, and not a problem found
+/// either. The page shows it as "Couldn't check", never among the passes.
+pub const UNKNOWN: &str = "unknown";
 
 /// The log function a callable fix (and a `tasks` step) is handed: one line
 /// of output per call.
@@ -187,24 +191,51 @@ impl Finding {
     }
 }
 
-fn _run(cmd: &[&str], timeout: u64) -> Result<String, String> {
-    // subprocess.run(..., text=True).stdout, or "" on OSError /
-    // TimeoutExpired. Output that is not UTF-8 raises UnicodeDecodeError,
-    // which the except clause does not catch: the check fails.
-    match _run_bytes(cmd, timeout) {
-        Some((out, err)) => {
+/// What a command printed, and whether it exited 0. Some commands exit
+/// non-zero as a matter of course (`find` on directories it may not read,
+/// `pacman -Qmq` with nothing foreign), so each check decides what a
+/// failed exit means.
+#[derive(Debug, Clone, PartialEq)]
+struct Ran {
+    stdout: String,
+    ok: bool,
+}
+
+impl Ran {
+    /// A run that exited 0 with this output (for tests and stand-ins).
+    #[cfg(test)]
+    fn ok(stdout: &str) -> Option<Ran> {
+        Some(Ran { stdout: stdout.into(), ok: true })
+    }
+}
+
+fn _run(cmd: &[&str], timeout: u64) -> Result<Option<Ran>, String> {
+    // subprocess.run(..., text=True).stdout. Output that is not UTF-8
+    // raises UnicodeDecodeError, which the except clause does not catch:
+    // the check fails. None where the command could not run at all (not
+    // installed, or timed out): the Python read that as "", which made a
+    // check that never ran look like one that found nothing.
+    match _run_status(cmd, std::time::Duration::from_secs(timeout)) {
+        Some((out, err, ok)) => {
             let out = _py_decode(&out)?;
             _py_decode(&err)?;
-            Ok(out)
+            Ok(Some(Ran { stdout: out, ok }))
         }
-        None => Ok(String::new()),
+        None => Ok(None),
     }
 }
 
 /// The `_run` a check is handed, so tests and parity can stand in for the
 /// commands the way test_app.py patches `maintenance._run`. Err is the
-/// exception `_run` lets through (a UnicodeDecodeError).
-type RunFn<'a> = &'a dyn Fn(&[&str], u64) -> Result<String, String>;
+/// exception `_run` lets through (a UnicodeDecodeError); Ok(None) a command
+/// that could not run.
+type RunFn<'a> = &'a dyn Fn(&[&str], u64) -> Result<Option<Ran>, String>;
+
+/// A finding for a check that could not get its answer: shown as "Couldn't
+/// check", with nothing offered to run.
+fn _unchecked(id: &str, title: &str, detail: String) -> Finding {
+    Finding { id: id.into(), title: title.into(), detail, severity: UNKNOWN.into(), ..Default::default() }
+}
 
 /// The device a directory is on, or None if it cannot be read. Walks call it
 /// on their root, which may be a symlink (a ~/.cache/yay kept on another
@@ -772,12 +803,18 @@ fn _run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
 /// stdin is inherited, as subprocess.run leaves it; the limit covers
 /// reading the output too, as communicate(timeout=...)'s does.
 fn run_bytes_within(cmd: &[&str], timeout: std::time::Duration) -> Option<(Vec<u8>, Vec<u8>)> {
+    _run_status(cmd, timeout).map(|(out, err, _ok)| (out, err))
+}
+
+/// `run_bytes_within`, with whether the command exited 0.
+fn _run_status(cmd: &[&str], timeout: std::time::Duration) -> Option<(Vec<u8>, Vec<u8>, bool)> {
     let out = crate::util::run_bytes(cmd, &crate::util::RunOpts {
         timeout: Some(timeout),
         stdin: crate::util::Stdin::Inherit,
         ..Default::default()
     });
-    (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
+    let ok = out.ok();
+    (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr, ok))
 }
 
 /// `shutil.which(cmd)` for a bare name: PATH (or, when unset,
@@ -811,13 +848,14 @@ fn _which(cmd: &str) -> Option<PathBuf> {
     None
 }
 
-/// The finding `run_all` builds when a check raises.
+/// The finding `run_all` builds when a check raises. It got no answer, so
+/// it is "Couldn't check", not a pass (the Python marked it info).
 fn _failed(name: &str, exc: &str) -> Finding {
     Finding {
         id: name.to_string(),
         title: crate::util::py_title(&name.replace('_', " ")),
         detail: format!("Check failed: {exc}"),
-        severity: INFO.to_string(),
+        severity: UNKNOWN.to_string(),
         ..Default::default()
     }
 }
@@ -835,12 +873,14 @@ static SAVED_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(_SA
 static JOURNAL_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"([\d.]+)([KMGT])").unwrap());
 static TOTAL_FILES_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(\d+) total files").unwrap());
 
-fn _paccache_reclaimable_with(flags: &[&str], run: RunFn<'_>) -> Result<f64, String> {
+/// What a dry run with `flags` would free, in MB; None where paccache could
+/// not run (pacman-contrib not installed, or it timed out).
+fn _paccache_reclaimable_with(flags: &[&str], run: RunFn<'_>) -> Result<Option<f64>, String> {
     let mut cmd = vec!["paccache", "-d"];
     cmd.extend_from_slice(flags);
-    let out = run(&cmd, 60)?;
-    let Some(m) = SAVED_RE.captures(&out) else {
-        return Ok(0.0); // "no candidate packages found"
+    let Some(out) = run(&cmd, 60)? else { return Ok(None) };
+    let Some(m) = SAVED_RE.captures(&out.stdout) else {
+        return Ok(Some(0.0)); // "no candidate packages found"
     };
     let mult = match &m[2] {
         "" => 1.0 / 1048576.0,
@@ -849,7 +889,7 @@ fn _paccache_reclaimable_with(flags: &[&str], run: RunFn<'_>) -> Result<f64, Str
         "G" => 1024.0,
         _ => 1048576.0, // "T"
     };
-    Ok(_py_float(&m[1])? * mult)
+    Ok(Some(_py_float(&m[1])? * mult))
 }
 
 pub fn pacman_cache() -> Finding {
@@ -867,7 +907,24 @@ fn _pacman_cache_with(du: (f64, i64), run: RunFn<'_>) -> Result<Finding, String>
     // cache is still gigabytes -- two versions of every installed package --
     // and rating it by size kept it critical after a trim that had nothing
     // left to remove.
-    let free = _paccache_reclaimable_with(&["-k2"], run)? + _paccache_reclaimable_with(&["-uk0"], run)?;
+    let (Some(old), Some(gone)) = (_paccache_reclaimable_with(&["-k2"], run)?, _paccache_reclaimable_with(&["-uk0"], run)?)
+    else {
+        return Ok(Finding {
+            size_mb: 0.0,
+            count: n,
+            .._unchecked(
+                "pacman-cache",
+                "Package cache",
+                format!(
+                    "{} in {n} downloaded packages. How much a trim would free \
+                     could not be worked out: paccache (from pacman-contrib) \
+                     did not run.",
+                    fmt_size(mb)
+                ),
+            )
+        });
+    };
+    let free = old + gone;
     if free < 256.0 {
         return Ok(Finding {
             id: "pacman-cache".into(),
@@ -1001,7 +1058,16 @@ pub fn journal() -> Finding {
 
 /// `journal()`, Err where the Python raises.
 fn _journal() -> Result<Finding, String> {
-    _journal_from(&_run(&["journalctl", "--disk-usage"], 60)?)
+    _journal_with(&_run)
+}
+
+fn _journal_with(run: RunFn<'_>) -> Result<Finding, String> {
+    let out = run(&["journalctl", "--disk-usage"], 60)?;
+    match out {
+        Some(r) if r.ok || JOURNAL_RE.is_match(&r.stdout) => _journal_from(&r.stdout),
+        // Not installed, timed out, or refused: "0 B of logs" would be a guess.
+        _ => Ok(_unchecked("journal", "Systemd journal", "Could not ask journalctl how much the journal holds.".into())),
+    }
 }
 
 fn _journal_from(out: &str) -> Result<Finding, String> {
@@ -1137,11 +1203,21 @@ pub fn failed_units() -> Finding {
 
 fn _failed_units_with(run: RunFn<'_>) -> Result<Finding, String> {
     let mut rows: Vec<String> = Vec::new();
+    // The scopes systemd did not answer for: not running, its bus not
+    // reachable, or too slow. "No failed units" is only said of the ones
+    // that answered.
+    let mut unread: Vec<&str> = Vec::new();
     for scope in [&[][..], &["--user"][..]] {
         let mut cmd = vec!["systemctl"];
         cmd.extend_from_slice(scope);
         cmd.extend_from_slice(&["--failed", "--no-legend", "--plain", "--no-pager"]);
-        let out = run(&cmd, 60)?;
+        let out = match run(&cmd, 60)? {
+            Some(r) if r.ok || !_py_strip(&r.stdout).is_empty() => r.stdout,
+            _ => {
+                unread.push(if scope.is_empty() { "system" } else { "user" });
+                continue;
+            }
+        };
         for line in _py_splitlines(&out) {
             let name = _py_split(line).first().copied().unwrap_or("");
             if !name.is_empty() {
@@ -1150,16 +1226,31 @@ fn _failed_units_with(run: RunFn<'_>) -> Result<Finding, String> {
         }
     }
     let any = !rows.is_empty();
+    let unread_note = match unread.as_slice() {
+        [] => "",
+        ["system"] => " System services could not be checked: systemd did not answer.",
+        [_] => " Your own services could not be checked: systemd did not answer for them.",
+        _ => " Neither system nor user services could be checked: systemd did not answer.",
+    };
+    if !any && !unread.is_empty() {
+        let detail = if unread.len() == 2 {
+            _py_strip(unread_note).to_string()
+        } else {
+            format!("No failed units among the ones read.{unread_note}")
+        };
+        return Ok(_unchecked("failed-units", "Failed services", detail));
+    }
     Ok(Finding {
         id: "failed-units".into(),
         title: "Failed services".into(),
         detail: if any {
-            "Units that exited with an error and were not restarted. \
-             A failed unit is something that was supposed to be running."
+            format!(
+                "Units that exited with an error and were not restarted. \
+                 A failed unit is something that was supposed to be running.{unread_note}"
+            )
         } else {
-            "No failed units."
-        }
-        .into(),
+            "No failed units.".into()
+        },
         severity: if any { WARN } else { OK }.into(),
         count: rows.len() as i64,
         items: rows,
@@ -1179,11 +1270,16 @@ pub fn pacnew() -> Finding {
 }
 
 fn _pacnew_with(run: RunFn<'_>) -> Result<Finding, String> {
-    let mut files: Vec<String> = Vec::new();
-    for pat in ["*.pacnew", "*.pacsave"] {
-        let out = run(&["find", "/etc", "-name", pat, "-type", "f"], 40)?;
-        files.extend(_py_splitlines(&out).into_iter().filter(|f| !_py_strip(f).is_empty()).map(String::from));
-    }
+    // One walk of /etc for both. find exits 1 there as a matter of course
+    // (root-only directories), so only a find that did not run is no answer.
+    let pattern = ["find", "/etc", "(", "-name", "*.pacnew", "-o", "-name", "*.pacsave", ")", "-type", "f"];
+    let Some(out) = run(&pattern, 40)? else {
+        return Ok(_unchecked("pacnew", "Unmerged config files", "Could not look through /etc: find did not finish.".into()));
+    };
+    let mut files: Vec<String> =
+        _py_splitlines(&out.stdout).into_iter().filter(|f| !_py_strip(f).is_empty()).map(String::from).collect();
+    // .pacnew files first, then .pacsave, as the two walks listed them.
+    files.sort_by_key(|f| !f.ends_with(".pacnew"));
     let any = !files.is_empty();
     Ok(Finding {
         id: "pacnew".into(),
@@ -1404,20 +1500,25 @@ pub fn unmaintained_aur() -> Finding {
     // The foreign list is the one the inventory keeps while pacman's
     // databases stand still (reading it means reading every sync database),
     // and the AUR's answer is the one the inventory's scan already asked.
-    let run = |cmd: &[&str], timeout: u64| -> Result<String, String> {
+    let run = |cmd: &[&str], timeout: u64| -> Result<Option<Ran>, String> {
         if cmd == ["pacman", "-Qmq"] {
-            return crate::inventory::foreign_packages().map(|names| names.join("\n"));
+            return crate::inventory::foreign_packages().map(|names| Some(Ran { stdout: names.join("\n"), ok: true }));
         }
         _run(cmd, timeout)
     };
-    _raise(_unmaintained_aur_with(&run, &crate::inventory::aur_health))
+    _raise(_unmaintained_aur_with(&run, &crate::inventory::aur_health_known))
 }
 
-fn _unmaintained_aur_with(
-    run: RunFn<'_>,
-    aur_health: &dyn Fn(&[String]) -> std::collections::BTreeMap<String, crate::inventory::AurHealth>,
-) -> Result<Finding, String> {
-    let names: Vec<String> = _py_split(&run(&["pacman", "-Qmq"], 60)?).into_iter().map(String::from).collect();
+/// What the AUR is known to say about some names (see `aur_health_known`).
+type AurKnown<'a> = &'a dyn Fn(&[String]) -> Result<Option<crate::inventory::AurAnswer>, String>;
+
+fn _unmaintained_aur_with(run: RunFn<'_>, aur_health: AurKnown<'_>) -> Result<Finding, String> {
+    // pacman -Qmq exits 1 when nothing is foreign: only one that did not run
+    // is no answer.
+    let Some(listed) = run(&["pacman", "-Qmq"], 60)? else {
+        return Ok(_unchecked("aur-health", "AUR packages", "Could not ask pacman which packages came from the AUR.".into()));
+    };
+    let names: Vec<String> = _py_split(&listed.stdout).into_iter().map(String::from).collect();
     if names.is_empty() {
         return Ok(Finding {
             id: "aur-health".into(),
@@ -1427,11 +1528,27 @@ fn _unmaintained_aur_with(
             ..Default::default()
         });
     }
-    let health = aur_health(&names);
+    // No answer (offline, rate-limited, a reply that made no sense) is not
+    // "every package left the AUR": those names are not checked at all.
+    let Some(health) = aur_health(&names).ok().flatten() else {
+        return Ok(_unchecked(
+            "aur-health",
+            "AUR package health",
+            format!(
+                "The AUR could not be reached, so {} AUR package(s) could not be \
+                 checked. They are checked again the next time it can be.",
+                names.len()
+            ),
+        ));
+    };
     let mut gone: Vec<String> = Vec::new();
     let mut flagged: Vec<String> = Vec::new();
+    let mut unasked: Vec<String> = Vec::new();
     for n in &names {
-        match health.get(n) {
+        match health.results.get(n) {
+            // Asked about and not answered for: the AUR no longer has it. A
+            // name the answer never asked about is one it cannot speak for.
+            None if !health.asked.contains(n) => unasked.push(n.clone()),
             None => gone.push(n.clone()),
             Some(h) if h.out_of_date => flagged.push(n.clone()),
             Some(h) if h.maintainer.is_empty() => flagged.push(format!("{n} (orphaned upstream)")),
@@ -1440,6 +1557,25 @@ fn _unmaintained_aur_with(
     }
     let mut rows: Vec<String> = gone.iter().map(|n| format!("{n} — no longer in the AUR")).collect();
     rows.extend(flagged.iter().cloned());
+    let unasked_note = if unasked.is_empty() {
+        String::new()
+    } else {
+        format!(" {} could not be checked: the AUR could not be reached.", unasked.len())
+    };
+    if rows.is_empty() && !unasked.is_empty() {
+        let detail = format!(
+            "The AUR could not be reached, so {} of {} AUR packages could not be \
+             checked. The rest are still listed and maintained.",
+            unasked.len(),
+            names.len()
+        );
+        return Ok(Finding {
+            count: unasked.len() as i64,
+            items: unasked.iter().map(|n| format!("{n} — not checked")).collect(),
+            .._unchecked("aur-health", "AUR package health", detail)
+        });
+    }
+    rows.extend(unasked.iter().map(|n| format!("{n} — not checked")));
     Ok(Finding {
         id: "aur-health".into(),
         title: "AUR package health".into(),
@@ -1448,7 +1584,7 @@ fn _unmaintained_aur_with(
                 "{} package(s) are installed from the AUR but no \
                  longer listed there, and {} are flagged \
                  out-of-date or have no maintainer. Neither will ever \
-                 update again on its own.",
+                 update again on its own.{unasked_note}",
                 gone.len(),
                 flagged.len()
             )
@@ -1467,7 +1603,7 @@ fn _unmaintained_aur_with(
             OK
         }
         .into(),
-        count: rows.len() as i64,
+        count: (rows.len() - unasked.len()) as i64,
         items: rows,
         fix_label: String::new(),
         fix: None,
@@ -1507,6 +1643,7 @@ fn _package_integrity() -> Result<Finding, String> {
     // summary to stdout. Reading only stdout silently reports full coverage
     // of a check that could not open a quarter of what it looked at.
     // (text=True: output that is not UTF-8 raises, uncaught.)
+    // None: pacman did not run or did not finish, which is no answer.
     let out = match _pacman_qk() {
         Some((o, e)) => _py_decode(&o)? + &_py_decode(&e)?,
         None => String::new(),
@@ -1552,13 +1689,12 @@ fn _pacman_qk() -> Option<(Vec<u8>, Vec<u8>)> {
 
 fn _package_integrity_from(out: &str) -> Result<Finding, String> {
     if _py_strip(out).is_empty() {
-        return Ok(Finding {
-            id: "integrity".into(),
-            title: "Package files".into(),
-            detail: "Could not run the integrity check.".into(),
-            severity: OK.into(),
-            ..Default::default()
-        });
+        // Not a pass: nothing was checked.
+        return Ok(_unchecked(
+            "integrity",
+            "Package files",
+            "Could not run the integrity check: pacman did not answer in time.".into(),
+        ));
     }
 
     let mut missing: Vec<String> = Vec::new();
@@ -1683,8 +1819,11 @@ fn _disk_space_with(usage: DiskUsage<'_>) -> Result<Finding, String> {
         worst_pct = worst_pct.max(pct);
     }
 
+    if rows.is_empty() {
+        return Ok(_unchecked("disk", "Disk space", "Could not read filesystem stats.".into()));
+    }
     let root = usage("/").unwrap_or((0.0, 0.0, 0.0));
-    let mut detail = if rows.is_empty() { "Could not read filesystem stats.".to_string() } else { rows.join(" · ") };
+    let mut detail = rows.join(" · ");
     if worst == CRIT {
         detail.push_str("  A filesystem is nearly full; an update will fail before it starts.");
     }
@@ -2371,7 +2510,8 @@ fn _run_checks(checks: &[(&str, Check)]) -> Vec<Finding> {
         CRIT => 0,
         WARN => 1,
         INFO => 2,
-        _ => 3,
+        UNKNOWN => 3,
+        _ => 4,
     };
     out.sort_by(|a, b| {
         rank(&a.severity)
@@ -2486,10 +2626,13 @@ mod tests {
         assert!(t.elapsed() < std::time::Duration::from_millis(550), "the two slow checks overlap");
         let ids: Vec<&str> = out.iter().map(|f| f.id.as_str()).collect();
         // Severity, then size; equal ones keep the order of `checks`
-        // whichever finished first -- tie_a sleeps, tie_b does not.
-        assert_eq!(ids, ["big", "small", "tie-a", "raises_here", "tie-b", "slow", "slow"]);
-        let failed = &out[3];
+        // whichever finished first -- tie_a sleeps, tie_b does not. One that
+        // raised could not check, which is below every finding and above
+        // the passes.
+        assert_eq!(ids, ["big", "small", "tie-a", "tie-b", "raises_here", "slow", "slow"]);
+        let failed = &out[4];
         assert_eq!(failed.detail, "Check failed: boom", "a check that raises is a finding, not a lost run");
+        assert_eq!(failed.severity, UNKNOWN, "and not a pass");
     }
 
     #[test]
@@ -2593,7 +2736,7 @@ mod tests {
     fn test_a_trimmed_package_cache_is_not_a_finding() {
         // 4.4 GB, but every byte is the two newest versions of something
         // installed: paccache has no candidates and the button would do nothing.
-        let run = |_c: &[&str], _t: u64| Ok("==> no candidate packages found for pruning".to_string());
+        let run = |_c: &[&str], _t: u64| Ok(Ran::ok("==> no candidate packages found for pruning"));
         let f = _pacman_cache_with((4500.0, 522), &run).unwrap();
         assert_eq!(f.severity, OK);
         assert!(!f.actionable());
@@ -2602,7 +2745,7 @@ mod tests {
     #[test]
     fn test_cache_severity_follows_what_a_trim_would_free() {
         let dry = "==> finished dry run: 26 candidates (disk space saved: 1.23 GiB)";
-        let run = |_c: &[&str], _t: u64| Ok(dry.to_string());
+        let run = |_c: &[&str], _t: u64| Ok(Ran::ok(dry));
         let f = _pacman_cache_with((4500.0, 522), &run).unwrap();
         // Two dry runs (-k2 and -uk0), each 1.23 GiB here.
         assert!((f.size_mb - 2.0 * 1.23 * 1024.0).abs() < 0.5);
@@ -2781,6 +2924,98 @@ mod tests {
             "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"
         );
         assert_eq!(_py_decode(b"a\r\nb\rc").unwrap(), "a\nb\nc");
+    }
+
+    // ---- A check that cannot finish, or cannot run ----
+
+    #[test]
+    fn a_command_that_cannot_run_is_not_one_that_printed_nothing() {
+        assert_eq!(_run(&["almanac-no-such-command"], 5), Ok(None));
+        assert_eq!(_run(&["sh", "-c", "exit 3"], 5), Ok(Some(Ran { stdout: String::new(), ok: false })));
+        assert_eq!(_run(&["true"], 5), Ok(Ran::ok("")));
+    }
+
+    fn not_run(_c: &[&str], _t: u64) -> Result<Option<Ran>, String> {
+        Ok(None)
+    }
+
+    #[test]
+    fn checks_that_could_not_run_are_not_passes() {
+        let pending = |f: Finding| {
+            assert_eq!(f.severity, UNKNOWN, "{}: {}", f.id, f.detail);
+            assert!(f.fix.is_none() && !f.actionable(), "{}", f.id);
+        };
+        pending(_package_integrity_from("").unwrap());
+        pending(_disk_space_with(&|_p| None).unwrap());
+        pending(_journal_with(&not_run).unwrap());
+        pending(_failed_units_with(&not_run).unwrap());
+        pending(_pacnew_with(&not_run).unwrap());
+        pending(_pacman_cache_with((4500.0, 522), &not_run).unwrap());
+        pending(_unmaintained_aur_with(&not_run, &|_n| unreachable!()).unwrap());
+        // systemctl refusing (no bus) prints nothing and exits 1.
+        let refused = |_c: &[&str], _t: u64| Ok(Some(Ran { stdout: String::new(), ok: false }));
+        pending(_failed_units_with(&refused).unwrap());
+        pending(_journal_with(&refused).unwrap());
+        // One scope answering with a failed unit is still a warning, and says
+        // what it could not read.
+        let half = |c: &[&str], _t: u64| {
+            Ok(if c.contains(&"--user") { None } else { Ran::ok("cups.service loaded failed failed CUPS\n") })
+        };
+        let f = _failed_units_with(&half).unwrap();
+        assert_eq!((f.severity.as_str(), f.items.clone()), (WARN, vec!["system cups.service".to_string()]));
+        assert!(f.detail.contains("Your own services could not be checked"), "{}", f.detail);
+        // The passes still pass.
+        assert_eq!(_failed_units_with(&|_c, _t| Ok(Ran::ok(""))).unwrap().severity, OK);
+        assert_eq!(_journal_with(&|_c, _t| Ok(Ran::ok("Archived and active journals take up 56.0M in the file system."))).unwrap().severity, OK);
+    }
+
+    fn known(asked: &[&str], results: &[&str]) -> crate::inventory::AurAnswer {
+        crate::inventory::AurAnswer {
+            at: 0.0,
+            asked: asked.iter().map(|s| s.to_string()).collect(),
+            results: results
+                .iter()
+                .map(|s| (s.to_string(), crate::inventory::AurHealth { maintainer: "m".into(), ..Default::default() }))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_unreachable_aur_is_not_every_package_gone() {
+        let run = |_c: &[&str], _t: u64| Ok(Ran::ok("yay\nfoo\nbar"));
+        // Offline with nothing kept, or a reply that made no sense.
+        for aur in [&(|_n: &[String]| Ok(None)) as AurKnown<'_>, &|_n: &[String]| Err("bad reply".into())] {
+            let f = _unmaintained_aur_with(&run, aur).unwrap();
+            assert_eq!(f.severity, UNKNOWN, "{}", f.detail);
+            assert!(f.detail.contains("could not be reached") && !f.detail.contains("no longer listed"), "{}", f.detail);
+        }
+        // A kept answer that never asked about bar: bar is not checked, the
+        // rest are judged.
+        let f = _unmaintained_aur_with(&run, &|_n| Ok(Some(known(&["yay", "foo"], &["yay", "foo"])))).unwrap();
+        assert_eq!(f.severity, UNKNOWN);
+        assert_eq!(f.items, ["bar — not checked"]);
+        let f = _unmaintained_aur_with(&run, &|_n| Ok(Some(known(&["yay", "foo"], &["yay"])))).unwrap();
+        assert_eq!(f.severity, WARN, "foo was asked about and is gone");
+        assert_eq!(f.items, ["foo — no longer in the AUR", "bar — not checked"]);
+        assert_eq!(f.count, 1);
+        assert!(f.detail.contains("1 could not be checked"), "{}", f.detail);
+        // Everything asked and answered: a pass.
+        let all = known(&["yay", "foo", "bar"], &["yay", "foo", "bar"]);
+        assert_eq!(_unmaintained_aur_with(&run, &|_n| Ok(Some(all.clone()))).unwrap().severity, OK);
+    }
+
+    #[test]
+    fn pacnew_and_pacsave_are_found_in_one_walk_of_etc() {
+        let calls = std::sync::Mutex::new(Vec::new());
+        let run = |c: &[&str], _t: u64| {
+            calls.lock().unwrap().push(c.join(" "));
+            // find exits 1 on the root-only directories it could not enter.
+            Ok(Some(Ran { stdout: "/etc/a.pacsave\n/etc/b.pacnew\n/etc/c.pacnew\n".into(), ok: false }))
+        };
+        let f = _pacnew_with(&run).unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["find /etc ( -name *.pacnew -o -name *.pacsave ) -type f"]);
+        assert_eq!(f.items, ["/etc/b.pacnew", "/etc/c.pacnew", "/etc/a.pacsave"]);
+        assert_eq!(f.severity, WARN);
     }
 
     #[test]

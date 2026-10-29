@@ -131,6 +131,7 @@ fn severity_css_uncached(severity: &str) -> Option<(String, &'static str)> {
         s if s == maintenance::WARN => Some((tr("Attention"), "pill-warn")),
         s if s == maintenance::INFO => Some((tr("Optional"), "pill")),
         s if s == maintenance::OK => Some((tr("OK"), "pill-ok")),
+        s if s == maintenance::UNKNOWN => Some((tr("Couldn't check"), "pill")),
         _ => None,
     }
 }
