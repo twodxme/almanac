@@ -294,7 +294,8 @@ mod tests {
         let script = format!("ps -o sid= -p $$ > {}.tmp && mv {0}.tmp {0}", out.display());
         popen_detached(&["sh".into(), "-c".into(), script]).unwrap();
         let mut text = String::new();
-        for _ in 0..200 {
+        // Up to 5 s: on a loaded machine `ps` alone has taken over 2 s.
+        for _ in 0..500 {
             if let Ok(t) = std::fs::read_to_string(&out) {
                 text = t;
                 break;

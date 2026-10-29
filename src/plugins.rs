@@ -2071,10 +2071,13 @@ mod tests {
     #[test]
     fn test_plugins_are_synthetic() {
         // DemoModeHidesTheMachine: in demo mode the fixtures answer, not omarchy.
-        with_env(&[("ALMANAC_DEMO", "1")], || {
-            assert!(!installed(true, None).is_empty());
-            assert!(!enabled().is_empty());
-        });
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let r = std::panic::catch_unwind(|| (installed(true, None), enabled()));
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (installed, enabled) = r.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert!(!installed.is_empty());
+        assert!(!enabled.is_empty());
     }
 
     #[test]

@@ -216,8 +216,17 @@ mod iso_date {
 }
 
 fn _log_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(p) = TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return p;
+    }
     crate::xdg::state_home().join("almanac").join("history.jsonl")
 }
+
+/// Where tests put the log, instead of setting XDG_STATE_HOME (see
+/// `demo::TEST_DEMO` for why tests leave the environment alone).
+#[cfg(test)]
+static TEST_LOG: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 /// Python's `str.splitlines()`: every Unicode line boundary, and no empty
 /// last line after a trailing terminator.
@@ -1844,13 +1853,9 @@ mod tests {
     fn test_history_is_synthetic() {
         // Demo mode must never read the real log: timeline returns demo::history().
         let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let old = std::env::var_os("ALMANAC_DEMO");
-        std::env::set_var("ALMANAC_DEMO", "1");
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
         let r = std::panic::catch_unwind(|| timeline(DAYS));
-        match old {
-            Some(v) => std::env::set_var("ALMANAC_DEMO", v),
-            None => std::env::remove_var("ALMANAC_DEMO"),
-        }
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
         assert!(!r.expect("timeline panicked (demo::history still a stub?)").is_empty());
     }
 
@@ -1966,18 +1971,11 @@ mod tests {
     fn with_log<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
         let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
-        let old = std::env::var_os("XDG_STATE_HOME");
-        let demo = std::env::var_os("ALMANAC_DEMO");
-        std::env::set_var("XDG_STATE_HOME", d.path());
-        std::env::remove_var("ALMANAC_DEMO");
+        *TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()) = Some(d.path().join("almanac").join("history.jsonl"));
+        crate::demo::TEST_DEMO.store(2, std::sync::atomic::Ordering::SeqCst);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&_log_path())));
-        match old {
-            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-            None => std::env::remove_var("XDG_STATE_HOME"),
-        }
-        if let Some(v) = demo {
-            std::env::set_var("ALMANAC_DEMO", v);
-        }
+        *TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
         r.unwrap_or_else(|e| std::panic::resume_unwind(e))
     }
 

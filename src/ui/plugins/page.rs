@@ -841,6 +841,9 @@ mod tests {
 
     #[test]
     fn a_plugins_cache_that_is_not_a_dict_fails_like_python() {
+        // Demo mode answers before the cache is looked at: held so a test
+        // switching it on meanwhile cannot change the answer.
+        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let reached = plugins_mod::Installed {
             state: Some(plugins_mod::State::new("a", "update", "behind", 1, "u")),
             ..Default::default()

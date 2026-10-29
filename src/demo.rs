@@ -22,6 +22,12 @@ use serde_json::{json, Map, Value};
 
 /// True when `ALMANAC_DEMO` is set to anything but "", "0" or "false".
 pub fn active() -> bool {
+    #[cfg(test)]
+    match TEST_DEMO.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
     let Some(v) = std::env::var_os("ALMANAC_DEMO") else { return false };
     // Python decodes a value that is not UTF-8 with surrogateescape: never
     // "", "0" or "false" after strip(), so demo mode is on.
@@ -30,6 +36,14 @@ pub fn active() -> bool {
     let v = v.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c));
     !matches!(v, "" | "0" | "false")
 }
+
+/// Tests switch demo mode here rather than with ALMANAC_DEMO: changing the
+/// environment while another test's thread is in C code that reads it
+/// (GLib, the C library's time zone) is undefined behaviour, and crashed a
+/// parallel run. 0 reads the environment, 1 is on, 2 is off. Set it under
+/// `util::TEST_ENV`, and put it back to 0.
+#[cfg(test)]
+pub static TEST_DEMO: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub const HOME: &str = "/home/user";
 
