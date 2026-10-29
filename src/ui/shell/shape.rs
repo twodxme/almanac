@@ -78,6 +78,16 @@ pub fn severity_pill(label: &str, css: &str) -> gtk::Label {
     pill
 }
 
+/// The width an expander row's arrow takes, and nothing to see: a row that
+/// does not expand ends with it, so in a list that mixes the two the pills
+/// still end in one column.
+pub fn arrow_space() -> gtk::Image {
+    let space = gtk::Image::from_icon_name("adw-expander-arrow-symbolic");
+    space.set_opacity(0.0);
+    space.set_accessible_role(gtk::AccessibleRole::Presentation);
+    space
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +136,15 @@ mod tests {
     }
 
     /// The severity pills are one helper, and no page makes its own.
+    #[test]
+    fn rows_that_do_not_expand_keep_the_arrows_room() {
+        // Health mixes expander rows and plain ones; without the space the
+        // plain rows' pills sat an arrow's width further right.
+        let src = include_str!("../history.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(code.contains("arrow_space()"), "history.rs maint_row does not use arrow_space");
+    }
+
     #[test]
     fn severity_pills_come_from_one_helper() {
         for (file, src) in [

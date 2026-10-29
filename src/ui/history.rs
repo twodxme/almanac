@@ -8,7 +8,7 @@ use crate::i18n::tr;
 use crate::inventory;
 use crate::maintenance;
 use crate::tasks::{self, OnDone, Step};
-use crate::ui::shell::{page_body, severity_pill, spawn_bg, spawn_bg_checked, Win};
+use crate::ui::shell::{arrow_space, page_body, severity_pill, spawn_bg, spawn_bg_checked, Win};
 use crate::verify::{self, Outcome};
 
 /// Widgets and data only the History and Health check pages use.
@@ -683,13 +683,10 @@ impl Win {
         row.set_subtitle_lines(if f.severity == maintenance::OK { 1 } else { 3 });
         row.row().set_tooltip_text(Some(&crate::util::human_error(&f.detail)));
 
-        // The pill goes last, nearest the edge, on every row (Today and AI
-        // too), so a list's pills are one column. An expander row puts each
-        // suffix before the ones it has, so there it goes first.
-        let pill = severity_pill(&label, css);
-        if matches!(row, Row::Expander(_)) {
-            row.add_suffix(&pill);
-        }
+        // Suffixes in the order they read, left to right: size, the fix (or
+        // what to do by hand), then the pill nearest the edge on every row
+        // (Today and AI too), so a list's pills are one column.
+        let mut suffixes: Vec<gtk::Widget> = Vec::new();
 
         if f.size_mb != 0.0 && f.id != "disk" {
             let size = gtk::Label::builder()
@@ -698,7 +695,7 @@ impl Win {
                 .build();
             size.add_css_class("dim-label");
             size.add_css_class("caption");
-            row.add_suffix(&size);
+            suffixes.push(size.upcast());
         }
 
         if f.actionable() && !f.fix_label.is_empty() {
@@ -716,7 +713,7 @@ impl Win {
                     w.maint_fix(&f);
                 }
             });
-            row.add_suffix(&btn);
+            suffixes.push(btn.upcast());
         } else if !f.fix_note.is_empty()
             && !matches!(&f.fix, Some(maintenance::Fix::Func(_)))
             && !f.fix.as_ref().is_some_and(|x| x.commands().iter().any(|a| !a.is_empty()))
@@ -730,10 +727,19 @@ impl Win {
             hint.add_css_class("dim-label");
             hint.add_css_class("caption");
             hint.set_tooltip_text(Some(&f.fix_note));
-            row.add_suffix(&hint);
+            suffixes.push(hint.upcast());
         }
-        if !matches!(row, Row::Expander(_)) {
-            row.add_suffix(&pill);
+        suffixes.push(severity_pill(&label, css).upcast());
+        if matches!(row, Row::Expander(_)) {
+            // An expander row puts each suffix before the ones it has.
+            for w in suffixes.iter().rev() {
+                row.add_suffix(w);
+            }
+        } else {
+            for w in &suffixes {
+                row.add_suffix(w);
+            }
+            row.add_suffix(&arrow_space());
         }
         row.row()
     }

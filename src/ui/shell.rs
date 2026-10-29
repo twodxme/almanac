@@ -35,7 +35,7 @@ pub use helpers::{
     SOURCE_LABEL,
 };
 pub use items::{AppItem, PluginItem};
-pub use shape::{page_body, section_note, severity_pill, PAGE_MARGIN, PAGE_MARGIN_BOTTOM, PAGE_SPACING};
+pub use shape::{arrow_space, page_body, section_note, severity_pill, PAGE_MARGIN, PAGE_MARGIN_BOTTOM, PAGE_SPACING};
 pub use tables::{
     page_accel, page_spec, sorts_discover, sorts_installed, GroupItem, PageSpec, COLLAPSED_BY_DEFAULT,
     GROUPS, PAGES, PAGE_KEYS,
