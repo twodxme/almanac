@@ -269,7 +269,7 @@ impl Win {
             .title(tr("On"))
             .model(&gtk::StringList::new(
                 &autoupdate::DAY_NAMES
-                    .map(|d| tr(d))
+                    .map(tr)
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>(),
