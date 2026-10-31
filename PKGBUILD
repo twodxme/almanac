@@ -3,7 +3,7 @@
 # is packaging/aur/almanac.
 pkgname=almanac-git
 _pkgname=almanac
-pkgver=2.1.7.r0
+pkgver=2.2.0.r0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('x86_64' 'aarch64')
