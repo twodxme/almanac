@@ -26,7 +26,14 @@ const UNDECIDED: i32 = 3;
 
 fn core_holds(rest: &[String]) -> i32 {
     let names = match rest {
-        [] => almanac::autorun::core_holds_checked(&almanac::util::run(&["checkupdates"], 120)),
+        [] => almanac::autorun::core_holds_checked(&almanac::util::run_with(
+            &["/usr/bin/checkupdates"],
+            &almanac::util::RunOpts {
+                timeout: Some(std::time::Duration::from_secs(120)),
+                env: vec![("PATH".into(), almanac::inventory::SYSTEM_PATH.into())],
+                ..Default::default()
+            },
+        )),
         [flag] if flag == "--stdin" => {
             let mut raw = Vec::new();
             std::io::stdin()

@@ -409,6 +409,9 @@ pub(super) const CHECKUPDATES_BIN: &str = "/usr/bin/checkupdates";
 /// Package tools by path: PATH puts user-writable folders (npm and mise
 /// bins) first, and a `pacman` or `yay` planted there must not be what runs.
 pub const PACMAN: &str = "/usr/bin/pacman";
+/// The PATH checkupdates runs with. It is a script that finds pacman and
+/// fakeroot through PATH; only folders root alone can write are on it.
+pub const SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/bin";
 pub const YAY: &str = "/usr/bin/yay";
 
 /// What checkupdates' run says. Its exit status tells the answers apart:
@@ -467,7 +470,11 @@ pub(super) fn aur_answer(
 /// system's databases), or why it could not tell.
 pub fn check_repo() -> Result<BTreeMap<String, String>, String> {
     let _one = CHECKUPDATES.lock().unwrap_or_else(|e| e.into_inner());
-    repo_answer(subprocess_run(&[CHECKUPDATES_BIN], 60))
+    repo_answer(subprocess_run_env(
+        &[CHECKUPDATES_BIN],
+        60,
+        &[("PATH", SYSTEM_PATH)],
+    ))
 }
 
 /// Pending AUR updates from `yay -Qua`, or why it could not tell. Without
@@ -1116,6 +1123,32 @@ pub fn orphans() -> Vec<App> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn checkupdates_finds_its_tools_only_where_root_alone_writes() {
+        use std::os::unix::fs::MetadataExt;
+        for dir in std::env::split_paths(SYSTEM_PATH) {
+            let Ok(m) = std::fs::metadata(&dir) else {
+                continue;
+            };
+            assert_eq!(m.uid(), 0, "{} is not root's", dir.display());
+            assert_eq!(
+                m.mode() & 0o022,
+                0,
+                "{} is writable by others",
+                dir.display()
+            );
+        }
+        let here = include_str!("pacman.rs");
+        let here = here.split("#[cfg(test)]").next().unwrap_or(here);
+        let flat: String = here.split_whitespace().collect();
+        assert!(flat.contains("&[CHECKUPDATES_BIN],60,&[(\"PATH\",SYSTEM_PATH)]"));
+        let autorun = include_str!("../bin/almanac-autorun.rs");
+        assert!(
+            autorun.contains("SYSTEM_PATH"),
+            "the scheduled run's checkupdates"
+        );
+    }
+
     use super::*;
 
     // ---- pending updates
