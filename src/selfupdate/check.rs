@@ -263,6 +263,7 @@ pub(super) fn check_as(
         };
         info.note = package_note(&pkg, origin);
         info.origin = Some(origin);
+        info.package = Some(pkg);
         return Ok(info);
     }
 

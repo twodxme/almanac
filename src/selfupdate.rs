@@ -128,6 +128,9 @@ pub struct Info {
     /// never serialized.
     #[serde(skip)]
     pub origin: Option<PackageOrigin>,
+    /// The package that owns the running binary, for a package install.
+    #[serde(skip)]
+    pub package: Option<String>,
 }
 
 /// Almanac as an entry in its own inventory.
@@ -144,7 +147,7 @@ pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> 
         check_updates && !(exe.starts_with(&*ROOT) && fetched_within(&ROOT, SCAN_FETCH_SECONDS));
     let mut info = compiled_check_in(&ROOT, &exe, fetch)?;
     note_release(&mut info, check_updates);
-    app_with_home(&ROOT, info)
+    app_with_exe(&ROOT, info, &exe)
 }
 
 /// How recent a checkout's last fetch must be for a scan to skip its own.
@@ -179,13 +182,19 @@ pub fn compiled_as_app_in(
     check_updates: bool,
 ) -> Result<crate::inventory::App, String> {
     let info = compiled_check_in(root, exe, check_updates)?;
-    app_with_home(root, info)
+    app_with_exe(root, info, exe)
 }
 
-fn app_with_home(root: &Path, info: Info) -> Result<crate::inventory::App, String> {
-    let exec_path = py_path_join(&py_home()?, ".local/bin/almanac")
-        .to_string_lossy()
-        .into_owned();
+/// The row, launched as a checkout's link in ~/.local/bin, or as the binary
+/// that is running (a package's, wherever pacman put it).
+fn app_with_exe(root: &Path, info: Info, exe: &Path) -> Result<crate::inventory::App, String> {
+    let exec_path = if info.kind == GIT {
+        py_path_join(&py_home()?, ".local/bin/almanac")
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        exe.to_string_lossy().into_owned()
+    };
     Ok(app_from(root, info, exec_path))
 }
 
@@ -214,6 +223,9 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
     extra.insert("git_behind".into(), py_int_json::to_value(&info.behind));
     extra.insert("git_dirty".into(), json!(info.dirty));
     extra.insert("is_app".into(), json!(true));
+    if let Some(pkg) = &info.package {
+        extra.insert("package".into(), json!(pkg));
+    }
     crate::inventory::App {
         name: NAME.to_string(),
         version: info.version.clone(),
@@ -284,6 +296,24 @@ mod tests {
             ..info
         };
         assert_eq!(app_from(Path::new("/x"), current, String::new()).update, "");
+    }
+
+    /// A package install is launched from where pacman put it, and the row
+    /// names that package so the inventory can list Almanac once.
+    #[test]
+    fn a_package_row_launches_the_installed_binary_and_names_its_package() {
+        let info = super::Info {
+            kind: super::PACKAGE.into(),
+            package: Some("almanac".into()),
+            ..Default::default()
+        };
+        let app =
+            super::app_with_exe(Path::new("/x"), info, Path::new("/usr/bin/almanac")).unwrap();
+        assert_eq!(app.exec_path, "/usr/bin/almanac");
+        assert_eq!(
+            app.extra_dict().get("package").and_then(|v| v.as_str()),
+            Some("almanac")
+        );
     }
 
     #[test]
