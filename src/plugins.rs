@@ -1537,15 +1537,25 @@ fn _manifests(root: &Path) -> Result<PyDict<(Py, PathBuf)>, String> {
 /// missing, timed out, output that is not UTF-8 or not JSON), `Err` for the
 /// RecursionError it lets through.
 fn omarchy_list() -> Result<Option<Py>, String> {
-    let argv = ["omarchy", "plugin", "list", "--json"].map(OsStr::new);
-    let Ok(out) = py_run(&argv, &[], 25) else {
+    let Some(out) = omarchy_list_text() else {
         return Ok(None);
     };
-    match py_loads(&out.stdout) {
+    match py_loads(&out) {
         Ok(v) => Ok(Some(v)),
         Err(LoadErr::Value) => Ok(None),
         Err(LoadErr::Recursion(e)) => Err(e),
     }
+}
+
+/// One `omarchy plugin list --json` at a time: the scan and the Store both
+/// ask for it at launch, and it is a script run of its own. Its stdout, or
+/// None when it did not start, timed out or printed what is not UTF-8.
+pub fn omarchy_list_text() -> Option<String> {
+    static LIST: crate::agents::SingleFlight<Option<String>> = crate::agents::SingleFlight::new();
+    LIST.run(|| {
+        let argv = ["omarchy", "plugin", "list", "--json"].map(OsStr::new);
+        py_run(&argv, &[], 25).ok().map(|r| r.stdout)
+    })
 }
 
 /// Iterating the parsed list: a list's items, a string's characters or a

@@ -2784,9 +2784,10 @@ pub fn try_installed_ids() -> Result<BTreeMap<String, bool>, String> {
 /// enabled), in insertion order. The id keeps its JSON type: an int id is
 /// not the str id of the same digits, so `p.id in have` never matches it.
 fn installed_id_keys() -> Result<Vec<(String, Value, bool)>, String> {
-    let Some(out) = run_text(&["omarchy", "plugin", "list", "--json"], 25) else {
+    let Some(out) = crate::plugins::omarchy_list_text() else {
         return Ok(Vec::new());
     };
+    let out = out.replace("\r\n", "\n").replace('\r', "\n");
     let Ok(items) = py_json_loads(&out) else {
         return Ok(Vec::new());
     };
@@ -4109,6 +4110,19 @@ pub fn installed_themes() -> BTreeSet<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_plugin_list_is_one_run_shared_with_the_scan() {
+        // The scan and the Store asked Omarchy for its plugins at the same
+        // moment at launch, two runs of the same script.
+        let code = include_str!("store.rs");
+        let code = code.split("#[cfg(test)]").next().unwrap_or(code);
+        assert!(
+            !code.contains("\"plugin\", \"list\""),
+            "store.rs runs omarchy plugin list itself"
+        );
+        assert!(code.contains("plugins::omarchy_list_text()"));
+    }
+
     use super::*;
 
     // The tests point XDG_CACHE_HOME / XDG_STATE_HOME at temp dirs; one at a time.
