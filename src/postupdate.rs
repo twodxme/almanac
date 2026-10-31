@@ -486,6 +486,9 @@ pub struct After {
     pub kernel_gone: Option<bool>,
     /// db.lck there with nothing running that holds it
     pub stale_lock: bool,
+    /// db.lck there, and other users' programs are hidden: whether anything
+    /// holds it cannot be told
+    pub lock_unclear: bool,
 }
 
 pub fn probe_pending() -> Option<BTreeSet<String>> {
@@ -555,6 +558,7 @@ pub fn probe_after(pending: bool) -> After {
             rebuild_tool,
             kernel_gone: probe_kernel(),
             stale_lock: lock_is_stale(),
+            lock_unclear: lock_is_unclear(),
         }
     })
 }
@@ -746,6 +750,11 @@ pub fn lockers_in(proc_root: &Path) -> Vec<String> {
 }
 
 /// Whether pacman's lock file is there and nothing uses it.
+/// db.lck is there, and the processes that might hold it are out of view.
+pub fn lock_is_unclear() -> bool {
+    Path::new(DB_LOCK).exists() && lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).hidden
+}
+
 pub fn lock_is_stale() -> bool {
     Path::new(DB_LOCK).exists()
         && lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).nothing_uses_it()
@@ -857,6 +866,7 @@ fn demo_after() -> After {
         rebuild_tool: false,
         kernel_gone: Some(false),
         stale_lock: false,
+        lock_unclear: false,
     }
 }
 
@@ -1129,6 +1139,22 @@ pub fn build_report(i: &Inputs) -> Report {
             )
             .repair(Repair::RemoveLock),
         );
+    }
+
+    if i.after.lock_unclear && !i.after.stale_lock {
+        // The preflight says this before the update; the report has to say
+        // it after one too, or the next update fails without a reason.
+        checks.push(Check::new(
+            CheckId::Lock,
+            Status::Unknown,
+            "pacman’s lock file is still there",
+            format!(
+                "{DB_LOCK} is there, and this system hides other users’ programs, so Almanac \
+                 cannot tell whether a package manager is still using it. If none is, the \
+                 update was interrupted, and the file has to be removed by hand before \
+                 pacman will run again."
+            ),
+        ));
     }
 
     checks.push(units_check(&i.before.units, &i.after.units));
@@ -1524,7 +1550,7 @@ impl Report {
                 }
                 CheckId::Rebuild => rebuild_check(&before.rebuild, &after.rebuild),
                 CheckId::Lock => {
-                    if after.stale_lock {
+                    if after.stale_lock || after.lock_unclear {
                         c.clone()
                     } else {
                         Check::new(CheckId::Lock, Status::Pass, c.title.clone(), "Removed.")
@@ -2258,8 +2284,26 @@ mod tests {
                 rebuild_tool: true,
                 kernel_gone: Some(false),
                 stale_lock: false,
+                lock_unclear: false,
             },
         }
+    }
+
+    #[test]
+    fn a_lock_that_may_still_be_held_is_reported_after_the_update() {
+        let mut i = inputs();
+        i.after.lock_unclear = true;
+        let r = build_report(&i);
+        let lock = r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Lock)
+            .expect("no lock check");
+        assert_eq!(lock.status, Status::Unknown);
+        assert!(
+            r.repairs().is_empty(),
+            "a lock that may be held is never removed for you"
+        );
     }
 
     #[test]
