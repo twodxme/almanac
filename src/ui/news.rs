@@ -29,6 +29,8 @@ thread_local! {
     /// Headlines already shown before an Update all, and updated past: not
     /// asked about again this session.
     static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The news is being read or asked about before an Update all.
+    static ASKING: Cell<bool> = const { Cell::new(false) };
     /// Today's slot for the news card and the restart banner.
     static TODAY: RefCell<Option<glib::WeakRef<gtk::Box>>> = const { RefCell::new(None) };
 }
@@ -271,6 +273,11 @@ impl Win {
         if !news::enabled() {
             return false;
         }
+        // A second click while the news is read or on screen: the first
+        // one's answer decides, not a second dialog.
+        let Some(asking) = Asking::take() else {
+            return true;
+        };
         let known = UNREAD.with(|u| u.borrow().clone());
         let Some(items) = known else {
             // Not read yet this session: read it (at most a 10 s fetch), then
@@ -279,6 +286,7 @@ impl Win {
             let w = self.downgrade();
             spawn_bg(news::unread_now, move |items| {
                 UNREAD.with(|u| *u.borrow_mut() = Some(items));
+                drop(asking);
                 if let Some(w) = w.upgrade() {
                     // Read now: ask, or go straight on when there is nothing
                     // to ask.
@@ -318,7 +326,9 @@ impl Win {
         dialog.set_default_response(Some("read"));
         dialog.set_close_response("cancel");
         let w = self.downgrade();
+        let asking = RefCell::new(Some(asking));
         dialog.connect_response(None, move |_d, resp| {
+            asking.borrow_mut().take();
             let Some(w) = w.upgrade() else { return };
             match resp {
                 "read" => {
@@ -393,9 +403,40 @@ impl Win {
     }
 }
 
+/// Held while the news is read or asked about before an Update all; one
+/// at a time.
+struct Asking;
+
+impl Asking {
+    fn take() -> Option<Asking> {
+        (!ASKING.with(|a| a.replace(true))).then_some(Asking)
+    }
+}
+
+impl Drop for Asking {
+    fn drop(&mut self) {
+        ASKING.with(|a| a.set(false));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_update_all_click_does_not_ask_again() {
+        // Two quick clicks opened two news dialogs.
+        let first = Asking::take().expect("nothing is asking yet");
+        assert!(
+            Asking::take().is_none(),
+            "a second ask while the first is open"
+        );
+        drop(first);
+        assert!(
+            Asking::take().is_some(),
+            "answered: the next Update all asks"
+        );
+    }
 
     fn item(title: &str) -> NewsItem {
         NewsItem {
