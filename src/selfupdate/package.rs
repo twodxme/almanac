@@ -77,11 +77,7 @@ fn download_dir() -> PathBuf {
 
 /// Download release `version`'s package to `dest`, through `get` (a URL to
 /// its body), and keep it only if it hashes to what SHA256SUMS says.
-pub fn fetch_verified(
-    version: &str,
-    dest: &Path,
-    get: Get<'_>,
-) -> Result<(), String> {
+pub fn fetch_verified(version: &str, dest: &Path, get: Get<'_>) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     let version =
         plain_version(version).ok_or_else(|| format!("{version:?} is not a release version"))?;
