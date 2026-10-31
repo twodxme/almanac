@@ -80,6 +80,33 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--core-holds") => std::process::exit(core_holds(&args[1..])),
+        // For the scheduled update: the newer release of the package
+        // downloaded from GitHub (exit 3: none), and that release downloaded
+        // and checked (its path, for pacman -U).
+        Some("--almanac-release") => match almanac::selfupdate::package::newer_release() {
+            Some(v) => {
+                println!("{v}");
+                std::process::exit(0)
+            }
+            None => std::process::exit(3),
+        },
+        Some("--almanac-download") => {
+            let [version] = &args[1..] else {
+                eprintln!("usage: almanac-autorun --almanac-download VERSION");
+                std::process::exit(2)
+            };
+            let path = almanac::selfupdate::package::package_path(version);
+            match almanac::selfupdate::package::download_checked(version, &path) {
+                Ok(_) => {
+                    println!("{}", path.display());
+                    std::process::exit(0)
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1)
+                }
+            }
+        }
         Some("--record-hold") => {
             let code = record_hold(&args[1..]);
             almanac::history::flush();

@@ -237,21 +237,109 @@ impl TimerFiles<'_> {
     }
 }
 
-/// label -> OnCalendar: `(key, label, OnCalendar)`.
+/// label -> OnCalendar: `(key, label, OnCalendar)`. The calendars are the
+/// defaults (Sunday, 11:00), as the timer was first written; Preferences
+/// sets the day and time with [`Slot`].
 pub const SCHEDULES: &[(&str, &str, &str)] = &[
-    ("daily", "Every day at 11:00", "*-*-* 11:00:00"),
-    ("weekly", "Every Sunday at 11:00", "Sun 11:00"),
+    ("daily", "Every day", "*-*-* 11:00:00"),
+    ("weekly", "Every week", "Sun 11:00"),
     (
         "fortnightly",
-        "Every other Sunday",
+        "Every other week",
         "Sun *-*-1..7,15..21 11:00:00",
     ),
-    (
-        "monthly",
-        "First Sunday of the month",
-        "Sun *-*-1..7 11:00:00",
-    ),
+    ("monthly", "Once a month", "Sun *-*-1..7 11:00:00"),
 ];
+
+/// systemd's weekday names, Monday first.
+pub const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/// The same, as Preferences shows them.
+pub const DAY_NAMES: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// When the scheduled run starts: how often (a [`SCHEDULES`] key), on
+/// which day (`DAYS` index; a daily run ignores it) and at what time. The
+/// fortnightly and monthly runs are that weekday in the month's first and
+/// third weeks, or its first week.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slot {
+    pub key: String,
+    pub day: usize,
+    pub hour: u8,
+    pub minute: u8,
+}
+
+impl Default for Slot {
+    fn default() -> Self {
+        Slot {
+            key: "weekly".into(),
+            day: 6,
+            hour: 11,
+            minute: 0,
+        }
+    }
+}
+
+/// The OnCalendar= for `slot`; None for a key that is not a schedule or a
+/// time that is not one.
+pub fn calendar(slot: &Slot) -> Option<String> {
+    let day = DAYS.get(slot.day)?;
+    if slot.hour > 23 || slot.minute > 59 {
+        return None;
+    }
+    let time = format!("{:02}:{:02}:00", slot.hour, slot.minute);
+    Some(match slot.key.as_str() {
+        "daily" => format!("*-*-* {time}"),
+        "weekly" => format!("{day} *-*-* {time}"),
+        "fortnightly" => format!("{day} *-*-1..7,15..21 {time}"),
+        "monthly" => format!("{day} *-*-1..7 {time}"),
+        _ => return None,
+    })
+}
+
+/// The [`Slot`] an OnCalendar= written by Almanac (any version) stands for;
+/// None for one it did not write.
+pub fn parse_calendar(cal: &str) -> Option<Slot> {
+    let parts: Vec<&str> = cal.split_whitespace().collect();
+    let (day, date, time) = match parts.as_slice() {
+        [date, time] if *date == "*-*-*" => (None, *date, *time),
+        // "Sun 11:00": the first weekly timer, with no date.
+        [day, time] => (Some(*day), "*-*-*", *time),
+        [day, date, time] => (Some(*day), *date, *time),
+        _ => return None,
+    };
+    let key = match (day.is_some(), date) {
+        (false, "*-*-*") => "daily",
+        (true, "*-*-*") => "weekly",
+        (true, "*-*-1..7,15..21") => "fortnightly",
+        (true, "*-*-1..7") => "monthly",
+        _ => return None,
+    };
+    let day = match day {
+        None => 6,
+        Some(d) => DAYS.iter().position(|x| *x == d)?,
+    };
+    let mut hms = time.split(':');
+    let hour: u8 = hms.next()?.parse().ok()?;
+    let minute: u8 = hms.next()?.parse().ok()?;
+    if !matches!(hms.next(), None | Some("00")) || hms.next().is_some() {
+        return None;
+    }
+    let slot = Slot {
+        key: key.into(),
+        day,
+        hour,
+        minute,
+    };
+    calendar(&slot).map(|_| slot)
+}
 
 // --- Python values, as json.loads builds them -----------------------------
 
@@ -536,6 +624,9 @@ impl Default for Config {
         // AUR updates build and install what anyone can publish, as root:
         // off unless chosen, and the run only announces them.
         c.set("aur", false);
+        // A newer Almanac (the package from GitHub): announced, and
+        // installed only when chosen, as root like the packages.
+        c.set("almanac", false);
         c.set("notify", true);
         c
     }
@@ -1541,13 +1632,48 @@ pub fn set_schedule(key: &str) -> Result<(bool, String), String> {
 /// packaged unit, a drop-in: /usr/lib is the package's, and a package update
 /// would put an edit there back.
 fn set_schedule_in(key: &str, files: &TimerFiles, sys: Sys) -> Result<(bool, String), String> {
-    if !files.uses_dropin() {
-        return set_schedule_with(key, files.user, sys);
+    match SCHEDULES.iter().find(|(k, _l, _c)| *k == key) {
+        Some((_k, _l, cal)) => set_calendar_in(cal, files, sys),
+        None => Ok((false, format!("unknown schedule {}", py_repr(key)))),
     }
-    let calendar = match SCHEDULES.iter().find(|(k, _l, _c)| *k == key) {
-        Some((_k, _l, cal)) => *cal,
-        None => return Ok((false, format!("unknown schedule {}", py_repr(key)))),
-    };
+}
+
+/// [`set_schedule`] on one unit file, by key.
+#[cfg(test)]
+fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, String), String> {
+    match SCHEDULES.iter().find(|(k, _l, _c)| *k == key) {
+        Some((_k, _l, cal)) => set_calendar_with(cal, timer_file, sys),
+        None => Ok((false, format!("unknown schedule {}", py_repr(key)))),
+    }
+}
+
+/// The schedule key one unit file runs on; "weekly" for one Almanac did
+/// not write.
+#[cfg(test)]
+fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
+    Ok(current_calendar_in(timer_file)?
+        .and_then(|cal| parse_calendar(&cal))
+        .unwrap_or_default()
+        .key)
+}
+
+/// Run the timer at `slot`: [`set_schedule`] with a day and time.
+pub fn set_slot(slot: &Slot) -> Result<(bool, String), String> {
+    imported()?;
+    set_slot_in(slot, &TimerFiles::real(), &mut real_sys())
+}
+
+fn set_slot_in(slot: &Slot, files: &TimerFiles, sys: Sys) -> Result<(bool, String), String> {
+    match calendar(slot) {
+        Some(cal) => set_calendar_in(&cal, files, sys),
+        None => Ok((false, format!("not a schedule: {slot:?}"))),
+    }
+}
+
+fn set_calendar_in(calendar: &str, files: &TimerFiles, sys: Sys) -> Result<(bool, String), String> {
+    if !files.uses_dropin() {
+        return set_calendar_with(calendar, files.user, sys);
+    }
     if let Some(dir) = files.dropin.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             return Ok((false, py_oserror(&e, dir)));
@@ -1568,11 +1694,11 @@ fn set_schedule_in(key: &str, files: &TimerFiles, sys: Sys) -> Result<(bool, Str
     Ok((true, calendar.to_owned()))
 }
 
-fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, String), String> {
-    let calendar = match SCHEDULES.iter().find(|(k, _l, _c)| *k == key) {
-        Some((_k, _l, cal)) => *cal,
-        None => return Ok((false, format!("unknown schedule {}", py_repr(key)))),
-    };
+fn set_calendar_with(
+    calendar: &str,
+    timer_file: &Path,
+    sys: Sys,
+) -> Result<(bool, String), String> {
     let text = match read_text(timer_file) {
         Ok(t) => t,
         Err(Ok(e)) => return Ok((false, e)),
@@ -1621,8 +1747,26 @@ pub fn current_schedule() -> Result<String, String> {
 }
 
 /// The schedule in effect: the drop-in's, over the user's copy of the unit,
-/// over the packaged unit.
+/// over the packaged unit. "weekly" for one Almanac did not write.
 fn current_schedule_of(files: &TimerFiles) -> Result<String, String> {
+    Ok(current_slot_of(files)?.key)
+}
+
+/// The day and time the timer runs at, as [`current_schedule`] reads it;
+/// the default slot for a schedule Almanac did not write.
+pub fn current_slot() -> Result<Slot, String> {
+    imported()?;
+    current_slot_of(&TimerFiles::real())
+}
+
+fn current_slot_of(files: &TimerFiles) -> Result<Slot, String> {
+    Ok(current_calendar_of(files)?
+        .and_then(|cal| parse_calendar(&cal))
+        .unwrap_or_default())
+}
+
+/// The OnCalendar= in effect.
+fn current_calendar_of(files: &TimerFiles) -> Result<Option<String>, String> {
     match read_text(files.dropin) {
         Ok(text) => {
             // systemd's reading: an empty OnCalendar= clears those before it,
@@ -1637,40 +1781,29 @@ fn current_schedule_of(files: &TimerFiles) -> Result<String, String> {
                 }
             }
             if let Some(cal) = cals.last() {
-                let key = SCHEDULES
-                    .iter()
-                    .find(|(_k, _l, c)| c == cal)
-                    .map_or("weekly", |(k, _l, _c)| *k);
-                return Ok(key.to_owned());
+                return Ok(Some((*cal).to_owned()));
             }
         }
         Err(Ok(_)) => {}
         Err(Err(e)) => return Err(e),
     }
     if std::fs::symlink_metadata(files.user).is_ok() || !files.shipped.exists() {
-        current_schedule_in(files.user)
+        current_calendar_in(files.user)
     } else {
-        current_schedule_in(files.shipped)
+        current_calendar_in(files.shipped)
     }
 }
 
-fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
+fn current_calendar_in(timer_file: &Path) -> Result<Option<String>, String> {
     let text = match read_text(timer_file) {
         Ok(t) => t,
-        Err(Ok(_)) => return Ok("weekly".to_owned()),
+        Err(Ok(_)) => return Ok(None),
         Err(Err(e)) => return Err(e),
     };
-    for line in py_splitlines(&text) {
-        if line.starts_with("OnCalendar=") {
-            let cal = py_strip(line.split_once('=').map(|(_, v)| v).unwrap_or(""));
-            for (key, _label, c) in SCHEDULES {
-                if *c == cal {
-                    return Ok((*key).to_owned());
-                }
-            }
-        }
-    }
-    Ok("weekly".to_owned())
+    Ok(py_splitlines(&text)
+        .into_iter()
+        .find(|l| l.starts_with("OnCalendar="))
+        .map(|l| py_strip(l.split_once('=').map(|(_, v)| v).unwrap_or("")).to_owned()))
 }
 
 // --- Units an earlier Almanac left in ~/.config ----------------------------
@@ -1757,7 +1890,7 @@ fn our_timer_schedule(text: &str) -> Option<String> {
         .map(str::trim)
         .collect();
     let [cal] = cals.as_slice() else { return None };
-    let known = SCHEDULES.iter().any(|(_k, _l, c)| c == cal);
+    let known = SCHEDULES.iter().any(|(_k, _l, c)| c == cal) || parse_calendar(cal).is_some();
     let ours = known
         && lines.contains(&OUR_TIMER_LINES[1])
         && lines
@@ -2066,6 +2199,51 @@ mod tests {
     // test_app.py has no tests for autoupdate; these pin the behaviour the
     // parity cases also check, so `cargo test` covers it without Python.
     use super::*;
+
+    #[test]
+    fn a_schedule_runs_on_the_day_and_at_the_time_chosen() {
+        let slot = |key: &str, day, hour, minute| Slot {
+            key: key.into(),
+            day,
+            hour,
+            minute,
+        };
+        let cases = [
+            (slot("daily", 6, 7, 30), "*-*-* 07:30:00"),
+            (slot("weekly", 0, 18, 5), "Mon *-*-* 18:05:00"),
+            (slot("fortnightly", 2, 9, 0), "Wed *-*-1..7,15..21 09:00:00"),
+            (slot("monthly", 5, 23, 59), "Sat *-*-1..7 23:59:00"),
+        ];
+        for (s, cal) in cases {
+            assert_eq!(calendar(&s).as_deref(), Some(cal));
+            // Read back as it was set (a daily run keeps no day of its own).
+            let back = parse_calendar(cal).unwrap();
+            assert_eq!(
+                (back.key.as_str(), back.hour, back.minute),
+                (s.key.as_str(), s.hour, s.minute)
+            );
+            if s.key != "daily" {
+                assert_eq!(back.day, s.day);
+            }
+        }
+        assert_eq!(calendar(&slot("weekly", 7, 11, 0)), None, "no eighth day");
+        assert_eq!(calendar(&slot("weekly", 6, 24, 0)), None);
+        assert_eq!(calendar(&slot("hourly", 6, 11, 0)), None);
+    }
+
+    #[test]
+    fn every_schedule_an_earlier_almanac_wrote_is_still_read() {
+        for (key, _label, cal) in SCHEDULES {
+            let s = parse_calendar(cal).unwrap_or_else(|| panic!("{cal}"));
+            assert_eq!((s.key.as_str(), s.day, s.hour, s.minute), (*key, 6, 11, 0));
+        }
+        assert_eq!(parse_calendar("hourly"), None);
+        assert_eq!(
+            parse_calendar("Sun *-*-* 11:00:30"),
+            None,
+            "not one Almanac writes"
+        );
+    }
 
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!(
@@ -2580,6 +2758,40 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         )
     }
 
+    #[test]
+    fn a_chosen_day_and_time_is_written_and_read_back() {
+        let d = tmp("sched-slot");
+        let (user, shipped, dropin) = files(&d);
+        std::fs::write(&shipped, TIMER).unwrap();
+        let f = TimerFiles {
+            user: &user,
+            shipped: &shipped,
+            dropin: &dropin,
+        };
+        assert_eq!(current_slot_of(&f).unwrap(), Slot::default());
+        let want = Slot {
+            key: "fortnightly".into(),
+            day: 1,
+            hour: 6,
+            minute: 45,
+        };
+        let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
+        assert_eq!(
+            set_slot_in(&want, &f, &mut none).unwrap(),
+            (true, "Tue *-*-1..7,15..21 06:45:00".to_owned())
+        );
+        assert_eq!(current_slot_of(&f).unwrap(), want);
+        assert_eq!(current_schedule_of(&f).unwrap(), "fortnightly");
+        // The user's own copy of the unit gets the same line.
+        std::fs::write(&user, TIMER).unwrap();
+        std::fs::remove_file(&dropin).unwrap();
+        set_slot_in(&want, &f, &mut none).unwrap();
+        assert!(std::fs::read_to_string(&user)
+            .unwrap()
+            .contains("OnCalendar=Tue *-*-1..7,15..21 06:45:00\n"));
+        assert_eq!(current_slot_of(&f).unwrap(), want);
+    }
+
     /// With only the packaged unit, the schedule goes in a drop-in in the
     /// user's directory; the packaged file is left as it was.
     #[test]
@@ -2789,9 +3001,25 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let both = format!("{}:{}", bad.display(), good.display()).into_bytes();
-        let run = |path: Vec<u8>| run_capture_in(&["prog"], Duration::from_secs(5), Some(path));
-        let Ok(Ran::Exited { stdout, .. }) = run(both) else {
-            panic!("prog did not run")
+        // A test forking at the moment the scripts were written holds them
+        // open for writing until it execs: ETXTBSY for that moment, so
+        // that one error is tried again.
+        let run = |path: Vec<u8>| {
+            let mut tries = 0;
+            loop {
+                let r = run_capture_in(&["prog"], Duration::from_secs(5), Some(path.clone()));
+                match &r {
+                    Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 100 => {
+                        tries += 1;
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    _ => return r,
+                }
+            }
+        };
+        let ran = run(both);
+        let Ok(Ran::Exited { stdout, .. }) = ran else {
+            panic!("prog did not run: {:?}", ran.map(|_| "not exited"))
         };
         assert_eq!(stdout, b"good\n"); // past the ENOEXEC entry
         let Err(e) = run(bad.as_os_str().as_bytes().to_vec()) else {

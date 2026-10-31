@@ -22,8 +22,8 @@ type After = Rc<dyn Fn()>;
 struct Scheduled {
     cfg: autoupdate::Config,
     st: autoupdate::Status,
-    /// The schedule key in effect (`autoupdate::current_schedule`).
-    current: String,
+    /// When the timer runs (`autoupdate::current_slot`).
+    current: autoupdate::Slot,
     /// Old units in ~/.config, and what became of them.
     legacy: autoupdate::Legacy,
     /// The scheduled run installs with `omarchy update`.
@@ -47,7 +47,7 @@ impl Scheduled {
         Ok(Scheduled {
             cfg: autoupdate::load()?,
             st: autoupdate::try_status()?,
-            current: autoupdate::current_schedule()?,
+            current: autoupdate::current_slot()?,
             legacy,
             omarchy: autoupdate::omarchy_installed(),
             demo: false,
@@ -64,7 +64,7 @@ impl Scheduled {
                 next: "Sun 2026-11-01 11:14:02 UTC".into(),
                 last: "Sun 2026-10-25 11:06:51 UTC".into(),
             },
-            current: "weekly".into(),
+            current: autoupdate::Slot::default(),
             legacy: autoupdate::Legacy::None,
             omarchy: true,
             demo: true,
@@ -255,8 +255,65 @@ impl Win {
             .title(tr("How often"))
             .model(&gtk::StringList::new(&sched_labels))
             .build();
-        combo.set_selected(sched_keys.iter().position(|k| *k == current).unwrap_or(1) as u32);
+        combo.set_selected(
+            sched_keys
+                .iter()
+                .position(|k| *k == current.key)
+                .unwrap_or(1) as u32,
+        );
         sched.add(&combo);
+        // Which day and what time: the weekly runs are that weekday (the
+        // fortnightly and monthly ones in the month's first weeks); a daily
+        // run has no day to choose.
+        let day = adw::ComboRow::builder()
+            .title(tr("On"))
+            .model(&gtk::StringList::new(
+                &autoupdate::DAY_NAMES
+                    .map(|d| tr(d))
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            ))
+            .selected(current.day as u32)
+            .build();
+        let daily = sched_keys
+            .iter()
+            .position(|k| *k == "daily")
+            .map(|i| i as u32);
+        day.set_sensitive(Some(combo.selected()) != daily);
+        {
+            let day = day.clone();
+            combo.connect_selected_notify(move |c| day.set_sensitive(Some(c.selected()) != daily));
+        }
+        sched.add(&day);
+        let two_digits = |spin: &gtk::SpinButton| {
+            spin.connect_output(|s| {
+                s.set_text(&format!("{:02}", s.value() as u32));
+                gtk::glib::Propagation::Stop
+            });
+        };
+        let hour = gtk::SpinButton::with_range(0.0, 23.0, 1.0);
+        let minute = gtk::SpinButton::with_range(0.0, 59.0, 5.0);
+        for (spin, v, name) in [
+            (&hour, current.hour, tr("Hour")),
+            (&minute, current.minute, tr("Minute")),
+        ] {
+            spin.set_value(f64::from(v));
+            spin.set_wrap(true);
+            spin.set_numeric(true);
+            spin.set_valign(gtk::Align::Center);
+            spin.update_property(&[gtk::accessible::Property::Label(&name)]);
+            two_digits(spin);
+        }
+        let at = adw::ActionRow::builder().title(tr("At")).build();
+        let clock = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        clock.append(&hour);
+        let colon = gtk::Label::new(Some(":"));
+        colon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        clock.append(&colon);
+        clock.append(&minute);
+        at.add_suffix(&clock);
+        sched.add(&at);
         for (title, value) in [
             (tr("Next run"), st.next.as_str()),
             (tr("Last run"), st.last.as_str()),
@@ -303,6 +360,14 @@ impl Win {
                 "Tracked AppImages",
                 "Downloads the newer build and keeps the previous one so an update can be \
                  reverted.",
+            ),
+            (
+                "almanac",
+                "Almanac itself",
+                "Installs a newer release of the package from Almanac's GitHub page, checked \
+                 against its published checksums. Like repository packages it needs \
+                 passwordless sudo; without it, or left off, the run tells you a new Almanac \
+                 is out. An Almanac from the AUR updates with the AUR packages instead.",
             ),
             (
                 "plugins",
@@ -585,20 +650,26 @@ impl Win {
                 return;
             };
             new.set("schedule", want);
+            let slot = autoupdate::Slot {
+                key: want.to_string(),
+                day: day.selected() as usize,
+                hour: hour.value_as_int() as u8,
+                minute: minute.value_as_int() as u8,
+            };
             if let Err(e) = autoupdate::save(&new) {
                 eprintln!("almanac: {e}");
                 return;
             }
             // The timer changes are systemctl calls (a daemon-reload among
             // them): made off the main thread, reported when they are done.
-            let schedule = (want != current).then(|| want.to_string());
+            let schedule = (slot != current).then_some(slot);
             let timer = (enabled.is_active() != st_enabled).then(|| enabled.is_active());
             let w = w.clone();
             spawn_bg(
                 move || -> Result<Vec<String>, String> {
                     let mut said = Vec::new();
-                    if let Some(want) = schedule {
-                        if let (false, msg) = autoupdate::set_schedule(&want)? {
+                    if let Some(slot) = schedule {
+                        if let (false, msg) = autoupdate::set_slot(&slot)? {
                             said.push(format!("Could not change the schedule: {msg}"));
                         }
                     }
