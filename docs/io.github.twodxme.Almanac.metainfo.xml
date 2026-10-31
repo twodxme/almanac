@@ -96,6 +96,13 @@
   </requires>
 
   <releases>
+    <release version="2.2.4" date="2026-10-31">
+      <description>
+        <p>Almanac lists itself once. Installed as a package it showed up as
+        that package and as itself, and a copy of its source code counted as
+        a third install.</p>
+      </description>
+    </release>
     <release version="2.2.3" date="2026-10-31">
       <description>
         <p>A new Almanac release now shows on the Updates page within

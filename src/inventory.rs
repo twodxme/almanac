@@ -367,7 +367,42 @@ pub fn collect() -> Vec<App> {
             }
         }
     });
-    out
+    list_almanac_once(out)
+}
+
+/// Installed as a package, Almanac would be listed twice: by pacman, and
+/// by its own row. One goes. The own row stays (it is what updates the
+/// package downloaded from GitHub) unless pacman's row is the one carrying
+/// an update (an AUR helper's), which then stays instead.
+fn list_almanac_once(apps: Vec<App>) -> Vec<App> {
+    let is_own = |a: &App| {
+        let e = a.extra_dict();
+        e.get("self").and_then(|v| v.as_bool()) == Some(true)
+            && e.get("kind").and_then(|v| v.as_str()) == Some(crate::selfupdate::PACKAGE)
+    };
+    let Some(own) = apps.iter().find(|a| is_own(a)) else {
+        return apps;
+    };
+    let Some(pkg) = own
+        .extra_dict()
+        .get("package")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+    else {
+        return apps;
+    };
+    let is_pacmans = |a: &App| a.name == pkg && [REPO, AUR].contains(&a.source.as_str());
+    let keep_pacmans =
+        own.update.is_empty() && apps.iter().any(|a| is_pacmans(a) && !a.update.is_empty());
+    apps.into_iter()
+        .filter(|a| {
+            if keep_pacmans {
+                !is_own(a)
+            } else {
+                !is_pacmans(a)
+            }
+        })
+        .collect()
 }
 
 /// Everything worth showing in a detail view, fetched on demand.
@@ -656,5 +691,76 @@ mod tests {
             .join()
             .unwrap();
         assert!(ok);
+    }
+}
+
+#[cfg(test)]
+mod one_almanac_tests {
+    use super::*;
+
+    fn row(name: &str, source: &str, extra: serde_json::Value) -> App {
+        App {
+            name: name.into(),
+            source: source.into(),
+            extra: serde_json::from_value(extra).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    /// Installed as a package, Almanac is one row: its own, which knows how
+    /// to update it. pacman's row for the same package is dropped.
+    #[test]
+    fn almanac_installed_as_a_package_is_listed_once() {
+        let apps = vec![
+            row("almanac", AUR, serde_json::json!({})),
+            row("firefox", REPO, serde_json::json!({})),
+            row(
+                "Almanac",
+                SYSTEM,
+                serde_json::json!({"self": true, "kind": "package", "package": "almanac"}),
+            ),
+        ];
+        let names: Vec<_> = list_almanac_once(apps)
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(names, ["firefox", "Almanac"]);
+    }
+
+    /// An update an AUR helper offers is on pacman's row: that row stays,
+    /// and the own row (with nothing to offer) goes.
+    #[test]
+    fn an_aur_update_for_almanac_is_not_hidden() {
+        let mut aur = row("almanac", AUR, serde_json::json!({}));
+        aur.update = "2.2.4-1".into();
+        let apps = vec![
+            aur,
+            row(
+                "Almanac",
+                SYSTEM,
+                serde_json::json!({"self": true, "kind": "package", "package": "almanac"}),
+            ),
+        ];
+        let kept = list_almanac_once(apps);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            (kept[0].source.as_str(), kept[0].update.as_str()),
+            (AUR, "2.2.4-1")
+        );
+    }
+
+    /// Run from a checkout, there is no package to fold away: a package of
+    /// that name installed beside it is a second Almanac and stays listed.
+    #[test]
+    fn a_checkout_build_leaves_an_installed_package_listed() {
+        let apps = vec![
+            row("almanac", AUR, serde_json::json!({})),
+            row(
+                "Almanac",
+                SYSTEM,
+                serde_json::json!({"self": true, "kind": "git"}),
+            ),
+        ];
+        assert_eq!(list_almanac_once(apps).len(), 2);
     }
 }

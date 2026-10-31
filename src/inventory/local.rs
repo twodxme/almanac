@@ -214,6 +214,13 @@ pub(super) fn own_checkout() -> PathBuf {
     }
 }
 
+/// Whether a checkout's remote is Almanac's own repository.
+pub(super) fn is_almanac_source(origin: &str) -> bool {
+    let o = origin.trim().trim_end_matches('/').to_ascii_lowercase();
+    let o = o.strip_suffix(".git").unwrap_or(&o);
+    o.ends_with("github.com/twodxme/almanac") || o.ends_with("github.com:twodxme/almanac")
+}
+
 /// `Path.resolve()` (non-strict): never fails.
 pub(super) fn resolve(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
@@ -317,6 +324,11 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         .to_string();
         let origin =
             py_strip(&run_os(&git_argv(&["remote", "get-url", "origin"]), 25)?).to_string();
+        // Almanac's own source, run from somewhere else (the package): not
+        // a second Almanac. The running one is listed as itself.
+        if is_almanac_source(&origin) {
+            continue;
+        }
         let g = git_extra(&repo, &mut cache, &mut dirty_cache)?;
         let launcher = crate::xdg::bin_home().join(repo.file_name().unwrap_or_default());
         let mut extra = g.clone();
@@ -610,5 +622,28 @@ mod tests {
             }
         }
         assert!(names.contains(&"some-driver".to_string()), "{names:?}");
+    }
+}
+
+#[cfg(test)]
+mod almanac_source_tests {
+    /// Almanac's own source, wherever it is cloned, is not another app.
+    #[test]
+    fn a_checkout_of_almanac_is_recognised_by_its_remote() {
+        for o in [
+            "https://github.com/twodxme/almanac",
+            "https://github.com/twodxme/almanac.git",
+            "git@github.com:twodxme/almanac.git",
+            "https://github.com/TwoDXMe/Almanac/",
+        ] {
+            assert!(super::is_almanac_source(o), "{o}");
+        }
+        for o in [
+            "",
+            "https://github.com/twodxme/almanac-plugins",
+            "https://github.com/other/almanac",
+        ] {
+            assert!(!super::is_almanac_source(o), "{o}");
+        }
     }
 }
