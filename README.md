@@ -462,7 +462,9 @@ cargo build --release
 mkdir -p ~/.local/bin ~/.local/lib/almanac
 ln -sf "$PWD/target/release/almanac" ~/.local/bin/almanac
 ln -sf "$PWD/target/release/almanac-autorun" ~/.local/lib/almanac/almanac-autorun
-install -Dm644 docs/almanac.desktop ~/.local/share/applications/almanac.desktop
+install -Dm644 docs/io.github.twodxme.Almanac.desktop \
+  ~/.local/share/applications/io.github.twodxme.Almanac.desktop
+rm -f ~/.local/share/applications/almanac.desktop   # the name before 2.2.0
 install -Dm644 docs/io.github.twodxme.Almanac.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.twodxme.Almanac.svg
 gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor

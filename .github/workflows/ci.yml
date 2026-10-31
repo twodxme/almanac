@@ -77,7 +77,7 @@ jobs:
       - name: Metadata
         run: |
           appstreamcli validate --no-net docs/io.github.twodxme.Almanac.metainfo.xml
-          desktop-file-validate docs/almanac.desktop
+          desktop-file-validate docs/io.github.twodxme.Almanac.desktop
 
   # rust-version in Cargo.toml is a promise: build with exactly that Rust.
   msrv:

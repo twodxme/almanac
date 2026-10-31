@@ -2,7 +2,7 @@
 <!-- AppStream metadata: what software centres read to describe Almanac. -->
 <component type="desktop-application">
   <id>io.github.twodxme.Almanac</id>
-  <launchable type="desktop-id">almanac.desktop</launchable>
+  <launchable type="desktop-id">io.github.twodxme.Almanac.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 

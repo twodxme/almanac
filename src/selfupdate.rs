@@ -232,6 +232,28 @@ pub(crate) mod et;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_file_is_named_after_the_app() {
+        // Notifications, portals and software centres find an app's desktop
+        // file by its id; under another name they show it without its own.
+        let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        let id = "io.github.twodxme.Almanac";
+        assert!(docs.join(format!("{id}.desktop")).is_file());
+        let meta = std::fs::read_to_string(docs.join(METAINFO)).unwrap();
+        assert!(meta.contains(&format!(
+            "<launchable type=\"desktop-id\">{id}.desktop</launchable>"
+        )));
+        for pkgbuild in ["PKGBUILD", "packaging/aur/almanac/PKGBUILD"] {
+            let text =
+                std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(pkgbuild))
+                    .unwrap();
+            assert!(
+                text.contains(&format!("applications/{id}.desktop")),
+                "{pkgbuild}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
