@@ -96,6 +96,18 @@
   </requires>
 
   <releases>
+    <release version="2.2.1" date="2026-10-31">
+      <description>
+        <p>Almanac can update itself when installed from the package on its
+        GitHub releases page.</p>
+        <ul>
+          <li>A newer release shows in Updates and is part of Update all.</li>
+          <li>The package is downloaded for that exact version, checked
+          against the checksums published with it, and installed with
+          pacman -U after asking for your password.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.0" date="2026-10-30">
       <description>
         <p>Arch news, a checked Update all, a scheduled update in the
