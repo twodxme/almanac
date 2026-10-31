@@ -1,6 +1,6 @@
 pkgbase = almanac
 	pkgdesc = See everything installed, where it came from, and what needs you
-	pkgver = 2.2.2
+	pkgver = 2.2.3
 	pkgrel = 1
 	url = https://github.com/twodxme/almanac
 	arch = x86_64
@@ -34,7 +34,7 @@ pkgbase = almanac
 	optdepends = python: the scheduled update (its settings and the Arch news check)
 	conflicts = almanac-git
 	options = !lto
-	source = almanac-2.2.2.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v2.2.2.tar.gz
-	sha256sums = e36361770cb671691788af3a661dd4f4fc2f8a2b1e576c18dc5edb64ca5df9e1
+	source = almanac-2.2.3.tar.gz::https://github.com/twodxme/almanac/archive/refs/tags/v2.2.3.tar.gz
+	sha256sums = ade06ae6531807ea7ee5fe33796d320c07f07001d2d8349da905eebb86916bfd
 
 pkgname = almanac
