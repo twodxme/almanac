@@ -1178,8 +1178,14 @@ mod tests {
         assert_eq!(checkout_of(&checkout.join("almanac")), None);
         std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"other\"\n").unwrap();
         assert_eq!(checkout_of(&exe), None);
-        // The test binary itself runs from this checkout.
-        assert!(build_checkout().is_some_and(|c| c.join("Cargo.toml").is_file()));
+        // The test binary itself runs from this checkout: found, when the
+        // folders above it are ones this user can trust (CI's runner owns
+        // its workspace's parents, and there it is rightly refused).
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(build_checkout(), trusted_dir(here));
+        if trusted_dir(here).is_some() {
+            assert!(build_checkout().is_some_and(|c| c.join("Cargo.toml").is_file()));
+        }
     }
 
     /// No path of the build tree is compiled into the program (makepkg:
