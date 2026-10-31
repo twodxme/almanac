@@ -114,6 +114,7 @@ impl Sandbox {
                 "#!/bin/sh\ncase \"$1\" in\n\
              --core-holds) grep -E '^linux ' | cut -d' ' -f1 ;;\n\
              --record-hold) printf 'record %s | %s\\n' \"$2\" \"$3\" >>'{c}' ;;\n\
+             --almanac-*) exit 3 ;;\n\
              *) echo autorun-run >>'{c}' ;;\nesac\n",
                 c = calls.display()
             ),
@@ -762,4 +763,108 @@ fn record_hold_writes_a_warning_to_the_history_log() {
         log
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Almanac's own release, as almanac-autorun answers for it: `newer` is
+/// the release out (None: nothing newer, or not the GitHub package).
+fn almanac_release(sb: &Sandbox, newer: Option<&str>) {
+    let c = sb.path("calls");
+    let release = match newer {
+        Some(v) => format!("echo {v}"),
+        None => "exit 3".into(),
+    };
+    sb.stub(
+        "almanac-autorun",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             --core-holds) grep -E '^linux ' | cut -d' ' -f1 ;;\n\
+             --record-hold) printf 'record %s | %s\\n' \"$2\" \"$3\" >>'{c}' ;;\n\
+             --almanac-release) {release} ;;\n\
+             --almanac-download) echo \"autorun download $2\" >>'{c}'; echo /cache/almanac-$2.pkg.tar.zst ;;\n\
+             *) echo autorun-run >>'{c}' ;;\nesac\n",
+            c = c.display()
+        ),
+    );
+    // sudo writes down what it was asked to run as root.
+    sb.stub(
+        "sudo",
+        &format!(
+            "#!/bin/sh\n[ \"$*\" = '-n true' ] && exit 0\nprintf 'sudo %s\\n' \"$*\" >>'{}'\n",
+            c.display()
+        ),
+    );
+}
+
+#[test]
+fn a_newer_almanac_is_announced_unless_allowed() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("almanac-announce");
+    almanac_release(&sb, Some("2.3.0"));
+    sb.run(&[]);
+    let calls = sb.calls();
+    assert!(
+        calls.contains("notify -u normal Almanac 2.3.0 is out"),
+        "{calls}"
+    );
+    assert!(
+        !calls.contains("autorun download"),
+        "downloaded unasked:\n{calls}"
+    );
+    assert!(!calls.contains("sudo -n /usr/bin/pacman"), "{calls}");
+    // The packages still update as usual.
+    assert_applied(&sb);
+}
+
+#[test]
+fn a_newer_almanac_is_installed_when_allowed() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("almanac-install");
+    almanac_release(&sb, Some("2.3.0"));
+    sb.write("config/auto-update.json", r#"{"almanac": true}"#);
+    sb.run(&[]);
+    let calls = sb.calls();
+    assert!(calls.contains("autorun download 2.3.0"), "{calls}");
+    assert!(
+        calls.contains("sudo -n /usr/bin/pacman -U --noconfirm /cache/almanac-2.3.0.pkg.tar.zst"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("notify -u normal Almanac updated to 2.3.0"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn without_passwordless_sudo_a_newer_almanac_is_only_announced() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("almanac-nosudo");
+    almanac_release(&sb, Some("2.3.0"));
+    sb.stub("sudo", "#!/bin/sh\nexit 1\n");
+    sb.write("config/auto-update.json", r#"{"almanac": true}"#);
+    sb.run(&[]);
+    let calls = sb.calls();
+    assert!(!calls.contains("autorun download"), "{calls}");
+    assert!(calls.contains("Almanac 2.3.0 is out"), "{calls}");
+    assert!(calls.contains("passwordless sudo"), "{calls}");
+}
+
+#[test]
+fn with_no_newer_almanac_nothing_is_said_about_it() {
+    if !runnable() {
+        return;
+    }
+    let sb = Sandbox::new("almanac-current");
+    almanac_release(&sb, None);
+    sb.write("config/auto-update.json", r#"{"almanac": true}"#);
+    sb.run(&[]);
+    let calls = sb.calls();
+    assert!(!calls.contains("Almanac 2"), "{calls}");
+    assert!(!calls.contains("autorun download"), "{calls}");
+    assert_applied(&sb);
 }

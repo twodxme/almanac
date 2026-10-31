@@ -96,6 +96,19 @@
   </requires>
 
   <releases>
+    <release version="2.2.2" date="2026-10-31">
+      <description>
+        <p>Choose when the scheduled update runs, and let it update Almanac.</p>
+        <ul>
+          <li>Preferences, Updates: pick the day and the time the scheduled
+          update runs, as well as how often.</li>
+          <li>A new "Almanac itself" switch lets the scheduled update install
+          a newer Almanac release, checked against its published checksums.
+          It is off by default; left off, the run tells you a new release is
+          out.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.1" date="2026-10-31">
       <description>
         <p>Almanac can update itself when installed from the package on its

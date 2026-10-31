@@ -102,7 +102,19 @@ pub fn fetch_verified(version: &str, dest: &Path, get: Get<'_>) -> Result<(), St
     // under the name pacman is given.
     let tmp = dest.with_extension("part");
     std::fs::write(&tmp, &body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, dest).map_err(|e| format!("{}: {e}", dest.display()))
+    std::fs::rename(&tmp, dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    // One package is kept: the one about to be installed. Earlier ones
+    // were installed or given up on.
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("almanac-") && name.ends_with(".pkg.tar.zst") && e.path() != dest {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `dir`, made if needed, entered by this user alone.
@@ -137,6 +149,29 @@ pub fn http_get(url: &str, limit: u64) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("{url}: {e}"))
 }
 
+/// [`fetch_verified`] over the network to `dest`, then `pacman -Qp` on it:
+/// what pacman read ("almanac 2.3.0-1"), or why it was refused (and the
+/// file removed).
+pub fn download_checked(version: &str, dest: &Path) -> Result<String, String> {
+    fetch_verified(version, dest, &http_get)?;
+    let out = crate::util::run(&["/usr/bin/pacman", "-Qp", &dest.to_string_lossy()], 30);
+    let qp = out.stdout.trim().to_owned();
+    if let Err(e) = check_contents(&qp, plain_version(version).unwrap_or(version)) {
+        let _ = std::fs::remove_file(dest);
+        return Err(e);
+    }
+    Ok(qp)
+}
+
+/// The newer release the GitHub package can update to; None when there is
+/// none, or Almanac is not that package (a repository or AUR one updates
+/// with the rest, a checkout pulls).
+pub fn newer_release() -> Option<String> {
+    let info = super::try_check(true).ok()?;
+    (super::offers_download(&info) && plain_version(&info.latest).is_some())
+        .then(|| info.latest.clone())
+}
+
 /// The task that updates the GitHub package to `version`: download and
 /// check it, then install it as root. Empty for a version that is not one.
 pub fn update_steps(version: &str) -> Vec<crate::tasks::Step> {
@@ -151,15 +186,9 @@ pub fn update_steps(version: &str) -> Vec<crate::tasks::Step> {
         Step::call(
             format!("Downloading Almanac {version} and checking it"),
             Arc::new(move |log: LogFn<'_>| {
-                fetch_verified(&v, &p, &http_get)?;
+                let what = download_checked(&v, &p)?;
                 log(&format!("sha256 matches {SUMS} for v{v}"));
-                let out = crate::util::run(&["/usr/bin/pacman", "-Qp", &p.to_string_lossy()], 30);
-                let qp = out.stdout.clone();
-                if let Err(e) = check_contents(&qp, &v) {
-                    let _ = std::fs::remove_file(&p);
-                    return Err(e);
-                }
-                log(qp.trim());
+                log(&what);
                 Ok(())
             }),
         ),
@@ -256,6 +285,21 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o077, 0, "others can enter the download folder");
+    }
+
+    #[test]
+    fn an_older_download_is_cleared_by_the_next() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("self-update");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("almanac-2.2.0-x86_64.pkg.tar.zst"), b"old").unwrap();
+        std::fs::write(dir.join("keep.txt"), b"not ours").unwrap();
+        let dest = dir.join("almanac-2.2.1-x86_64.pkg.tar.zst");
+        let digest = hex::encode(Sha256::digest(b"package"));
+        fetch_verified("2.2.1", &dest, &release(b"package", digest)).unwrap();
+        assert!(!dir.join("almanac-2.2.0-x86_64.pkg.tar.zst").exists());
+        assert!(dir.join("keep.txt").exists());
+        assert!(dest.exists());
     }
 
     #[test]

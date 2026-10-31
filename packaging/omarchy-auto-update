@@ -270,6 +270,49 @@ upgraded_by_hand_since() {
   ((stamp > since))
 }
 
+# --- Almanac itself ---------------------------------------------------------
+# Only the package downloaded from GitHub: no repository carries it, so
+# nothing else updates it (an AUR or repository Almanac updates with the
+# rest, and almanac-autorun answers "nothing newer" for it). Installed only
+# when the setting "almanac" allows it and sudo needs no password; otherwise
+# the release is announced. almanac-autorun downloads that version and checks
+# it against the release's SHA256SUMS and what pacman reads inside it.
+almanac_itself() {
+  [[ -x $AUTORUN ]] || return 0
+  local v pkg
+  v="$("$AUTORUN" --almanac-release 2>/dev/null)" || return 0
+  [[ $v =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 0
+  if [[ "$(setting almanac false)" != "true" ]]; then
+    echo "Almanac $v is out — announced (not allowed unattended)"
+    notify normal "Almanac $v is out" \
+      "Update it from Almanac's Updates page, or let the scheduled update install it (Preferences, Updates)."
+    return 0
+  fi
+  if ! sudo -n true 2>/dev/null; then
+    echo "Almanac $v: no passwordless sudo — notify only"
+    notify normal "Almanac $v is out" \
+      "Not installed automatically: that needs passwordless sudo. Update it from Almanac's Updates page."
+    return 0
+  fi
+  if ((DRY_RUN)); then
+    echo "would install Almanac $v"
+    return 0
+  fi
+  if ! pkg="$("$AUTORUN" --almanac-download "$v" 2>&1)"; then
+    hold normal "Almanac not updated" "Almanac $v could not be downloaded and checked: $pkg" \
+      "FAILED — Almanac $v: $pkg"
+    return 0
+  fi
+  echo "installing Almanac $v"
+  if sudo -n /usr/bin/pacman -U --noconfirm "$pkg" 2>&1; then
+    notify normal "Almanac updated to $v" "Restart Almanac to use it."
+  else
+    hold normal "Almanac not updated" \
+      "pacman could not install Almanac $v. Update it from Almanac's Updates page." \
+      "FAILED — pacman -U Almanac $v"
+  fi
+}
+
 main() {
   local mode=""
   ((DRY_RUN)) && mode=" (dry run)"
@@ -320,6 +363,8 @@ main() {
       "HELD — python3 not found"
     return 0
   fi
+
+  almanac_itself
 
   if [[ "$(setting packages true)" != "true" ]]; then
     echo "package updates disabled in $CONFIG"
