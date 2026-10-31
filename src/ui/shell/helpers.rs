@@ -453,20 +453,12 @@ pub fn thumb_bg<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gtk::gdk;
 
     #[test]
     fn a_guarded_switch_runs_its_handler_for_user_flips_only() {
-        // As `ui::packages`' widget test: skip with no display (a package
-        // build's check()), or when GTK belongs to another test thread.
-        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
-        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
-            return;
-        }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
-            || gdk::Display::default().is_none()
-        {
+        // Skip with no display (a package build's check()), or when GTK
+        // belongs to another test thread.
+        if !crate::test_gtk() {
             return;
         }
         let sw = gtk::Switch::new();

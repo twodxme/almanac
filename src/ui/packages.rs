@@ -250,16 +250,7 @@ mod tests {
 
         // A package build's check() has no display: adw::init can still
         // answer Ok there, and building a row then crashes the test binary.
-        // Looking first keeps adw::init's NULL-display criticals out of the
-        // build log; CI's Broadway sets GDK_BACKEND and neither variable.
-        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
-        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
-            return;
-        }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
-            || gtk::gdk::Display::default().is_none()
-        {
+        if !crate::test_gtk() {
             return; // no display, or GTK already belongs to another test thread
         }
         let text = "glibc>=2.40 lib<foo> a&b";

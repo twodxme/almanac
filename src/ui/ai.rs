@@ -1127,9 +1127,7 @@ mod tests {
         // A package build runs check() as another user, with no display
         // to reach; building a widget there crashes rather than fails.
         // (GTK also refuses a second initialising thread; skip then too.)
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
-            || gtk::gdk::Display::default().is_none()
-        {
+        if !crate::test_gtk() {
             return; // no display, or GTK already belongs to another test thread
         }
         let e = Entry {
