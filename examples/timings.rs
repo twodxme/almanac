@@ -17,40 +17,106 @@ fn main() {
     if std::env::var_os("BREAKDOWN").is_some() {
         use almanac::inventory as inv;
         let _ = time("  packages", inv::packages);
-        let names: Vec<String> = String::from_utf8(std::process::Command::new("pacman").arg("-Qeq").output().unwrap().stdout).unwrap().lines().map(String::from).collect();
+        let names: Vec<String> = String::from_utf8(
+            std::process::Command::new("pacman")
+                .arg("-Qeq")
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
         let _ = time("    pending_both", inv::pending_both);
         let _ = time("    package_info", || inv::package_info(&names));
         let _ = time("    desktop_map", || inv::desktop_map(&names));
-        let aur: Vec<String> = String::from_utf8(std::process::Command::new("pacman").arg("-Qmq").output().unwrap().stdout).unwrap().lines().map(String::from).collect();
+        let aur: Vec<String> = String::from_utf8(
+            std::process::Command::new("pacman")
+                .arg("-Qmq")
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
         let _ = time("    try_aur_health", || inv::try_aur_health(&aur));
         let _ = time("    foreign_packages", inv::foreign_packages);
-        let _ = time("    security::vulnerabilities", || almanac::security::vulnerabilities(None, None));
+        let _ = time("    security::vulnerabilities", || {
+            almanac::security::vulnerabilities(None, None)
+        });
         let _ = time("  appimages", || inv::appimages(true));
         let _ = time("  flatpaks", inv::flatpaks);
         let _ = time("  local_builds", || inv::local_builds(true));
         let _ = time("  local_builds (no fetch)", || inv::local_builds(false));
         let _ = time("    plugins::enabled", almanac::plugins::enabled);
         let _ = time("  agents::try_detect", || almanac::agents::try_detect(true));
-        let _ = time("  agents::try_mise_tools", || almanac::agents::try_mise_tools(true));
-        let _ = time("  selfupdate::try_as_app", || almanac::selfupdate::try_as_app(true));
+        let _ = time("  agents::try_mise_tools", || {
+            almanac::agents::try_mise_tools(true)
+        });
+        let _ = time("  selfupdate::try_as_app", || {
+            almanac::selfupdate::try_as_app(true)
+        });
         let _ = time("  try_orphans", inv::try_orphans);
     }
     time("restart::reboot_needed", almanac::restart::reboot_needed);
-    let (stale, scanned) = time("restart::scan /proc", || almanac::restart::scan(std::path::Path::new("/proc")));
-    println!("{:32} {:>8} processes, {} stale", "  restart", scanned, stale.len());
+    let (stale, scanned) = time("restart::scan /proc", || {
+        almanac::restart::scan(std::path::Path::new("/proc"))
+    });
+    println!(
+        "{:32} {:>8} processes, {} stale",
+        "  restart",
+        scanned,
+        stale.len()
+    );
     for s in &stale {
-        println!("    {} {} {:?} {}", s.pid, s.name, s.unit.as_ref().map(|u| &u.name), s.files.join(" "));
+        println!(
+            "    {} {} {:?} {}",
+            s.pid,
+            s.name,
+            s.unit.as_ref().map(|u| &u.name),
+            s.files.join(" ")
+        );
     }
     if std::env::var_os("BREAKDOWN").is_some() {
         // The Today page's other half: the store catalogue, from its cache
         // while that is fresh.
         let _ = time("store::try_catalog", || almanac::store::try_catalog(false));
-        let _ = time("store::try_catalog_annotated", || almanac::store::try_catalog_annotated(false));
+        let _ = time("store::try_catalog_annotated", || {
+            almanac::store::try_catalog_annotated(false)
+        });
     }
-    let found = time("maintenance::run_all (first)", almanac::maintenance::run_all);
-    time("maintenance::run_all (again)", almanac::maintenance::run_all);
+    let found = time(
+        "maintenance::run_all (first)",
+        almanac::maintenance::run_all,
+    );
+    time(
+        "maintenance::run_all (again)",
+        almanac::maintenance::run_all,
+    );
     println!("{:32} {:>8}", "  findings", found.len());
-    for id in ["disk", "runtime-logs", "integrity", "pacman-cache", "journal", "yay-cache", "orphans", "aur-health", "failed-units", "pacnew", "dangling-desktop", "broken-symlinks", "rollbacks", "trash", "config-reset", "snapshot", "vulnerabilities", "restart-needed"] {
+    for id in [
+        "disk",
+        "runtime-logs",
+        "integrity",
+        "pacman-cache",
+        "journal",
+        "yay-cache",
+        "orphans",
+        "aur-health",
+        "failed-units",
+        "pacnew",
+        "dangling-desktop",
+        "broken-symlinks",
+        "rollbacks",
+        "trash",
+        "config-reset",
+        "snapshot",
+        "vulnerabilities",
+        "restart-needed",
+    ] {
         if let Some(check) = almanac::maintenance::check_by_id(id) {
             time(&format!("  check {id}"), check);
         }

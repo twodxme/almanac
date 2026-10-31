@@ -40,12 +40,18 @@ fn unread() -> Vec<NewsItem> {
 /// The headlines to ask about before Update all: unread ones not already
 /// updated past this session.
 fn to_ask(items: &[NewsItem], asked: &[String]) -> Vec<NewsItem> {
-    items.iter().filter(|i| !asked.contains(&i.title)).take(SHOWN).cloned().collect()
+    items
+        .iter()
+        .filter(|i| !asked.contains(&i.title))
+        .take(SHOWN)
+        .cloned()
+        .collect()
 }
 
 /// "1 more unread post" / "4 more unread posts".
 fn more_news_title(more: usize) -> String {
-    crate::i18n::ngettext("{n} more unread post", "{n} more unread posts", more as u64).replace("{n}", &more.to_string())
+    crate::i18n::ngettext("{n} more unread post", "{n} more unread posts", more as u64)
+        .replace("{n}", &more.to_string())
 }
 
 /// The line under a headline: its date, then the start of the post.
@@ -92,7 +98,9 @@ impl Win {
     }
 
     fn news_show_today(&self, reboot: Option<String>) {
-        let Some(slot) = TODAY.with(|t| t.borrow().as_ref().and_then(|w| w.upgrade())) else { return };
+        let Some(slot) = TODAY.with(|t| t.borrow().as_ref().and_then(|w| w.upgrade())) else {
+            return;
+        };
         while let Some(child) = slot.first_child() {
             slot.remove(&child);
         }
@@ -106,8 +114,10 @@ impl Win {
             let more = (items.len() > SHOWN).then(|| self.all_news_button());
             let section = Win::section(
                 &format!("{} ({})", tr("Arch news"), items.len()),
-                &tr("Announcements from archlinux.org you have not read. Updates that need manual \
-                     steps are announced here and nowhere else."),
+                &tr(
+                    "Announcements from archlinux.org you have not read. Updates that need manual \
+                     steps are announced here and nowhere else.",
+                ),
                 more.as_ref().map(|b| b.upcast_ref::<gtk::Widget>()),
             );
             for item in items.iter().take(SHOWN) {
@@ -120,7 +130,10 @@ impl Win {
 
     /// "All news": the rest of the headlines, on archlinux.org.
     fn all_news_button(&self) -> gtk::Button {
-        let b = gtk::Button::builder().label(tr("All news")).valign(gtk::Align::Center).build();
+        let b = gtk::Button::builder()
+            .label(tr("All news"))
+            .valign(gtk::Align::Center)
+            .build();
         b.add_css_class("flat");
         b.set_tooltip_text(Some(NEWS_PAGE));
         let w = self.downgrade();
@@ -145,10 +158,21 @@ impl Win {
         icon.set_accessible_role(gtk::AccessibleRole::Presentation);
         row.add_prefix(&icon);
 
-        let read = gtk::Button::builder().label(tr("Read")).valign(gtk::Align::Center).build();
+        let read = gtk::Button::builder()
+            .label(tr("Read"))
+            .valign(gtk::Align::Center)
+            .build();
         read.set_tooltip_text(Some(&tr("Open the post on archlinux.org")));
-        read.update_property(&[gtk::accessible::Property::Label(&format!("{} {}", tr("Read"), item.title))]);
-        let link = if item.link.is_empty() { NEWS_PAGE.to_string() } else { item.link.clone() };
+        read.update_property(&[gtk::accessible::Property::Label(&format!(
+            "{} {}",
+            tr("Read"),
+            item.title
+        ))]);
+        let link = if item.link.is_empty() {
+            NEWS_PAGE.to_string()
+        } else {
+            item.link.clone()
+        };
         let w = self.downgrade();
         read.connect_clicked(move |_| {
             if let Some(w) = w.upgrade() {
@@ -157,7 +181,10 @@ impl Win {
         });
         row.add_suffix(&read);
 
-        let mark = gtk::Button::builder().label(tr("Mark as read")).valign(gtk::Align::Center).build();
+        let mark = gtk::Button::builder()
+            .label(tr("Mark as read"))
+            .valign(gtk::Align::Center)
+            .build();
         mark.add_css_class("flat");
         mark.set_tooltip_text(Some(&tr(
             "Marks this read here and for the scheduled update, which holds updates while \
@@ -226,7 +253,8 @@ impl Win {
     /// Below the headlines the Updates list shows: how many more are
     /// unread, and "All news".
     fn more_news_row(&self, more: usize) -> adw::ActionRow {
-        let row: adw::ActionRow = Win::plain(&more_news_title(more), &tr("Read them on archlinux.org"));
+        let row: adw::ActionRow =
+            Win::plain(&more_news_title(more), &tr("Read them on archlinux.org"));
         row.add_suffix(&self.all_news_button());
         row
     }
@@ -265,9 +293,14 @@ impl Win {
         if ask.is_empty() {
             return false;
         }
-        let body = tr("Arch announces updates that need manual steps on its news page. Read \
-                       these before updating:");
-        let detail: Vec<String> = ask.iter().map(|i| format!("{} — {}", i.date(), i.title)).collect();
+        let body = tr(
+            "Arch announces updates that need manual steps on its news page. Read \
+                       these before updating:",
+        );
+        let detail: Vec<String> = ask
+            .iter()
+            .map(|i| format!("{} — {}", i.date(), i.title))
+            .collect();
         // Unread recent posts: what was read before the last update does not
         // show, and what came out before it but was never read does.
         let dialog = adw::AlertDialog::new(Some(&tr("Unread Arch news")), Some(&body));
@@ -323,7 +356,10 @@ impl Win {
             .build();
         icon.set_accessible_role(gtk::AccessibleRole::Presentation);
         row.add_prefix(&icon);
-        let btn = gtk::Button::builder().label(tr("Restart now")).valign(gtk::Align::Center).build();
+        let btn = gtk::Button::builder()
+            .label(tr("Restart now"))
+            .valign(gtk::Align::Center)
+            .build();
         btn.set_tooltip_text(Some(&tr("Restart the computer, after asking")));
         let w = self.downgrade();
         let why = why.to_string();
@@ -362,7 +398,11 @@ mod tests {
     use super::*;
 
     fn item(title: &str) -> NewsItem {
-        NewsItem { title: title.into(), published: 1_790_000_000, ..Default::default() }
+        NewsItem {
+            title: title.into(),
+            published: 1_790_000_000,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -397,7 +437,11 @@ mod tests {
     fn a_headline_row_says_when_then_what() {
         let mut i = item("x");
         i.summary = "Remove it first.".into();
-        assert!(subtitle(&i).ends_with(" · Remove it first."), "{}", subtitle(&i));
+        assert!(
+            subtitle(&i).ends_with(" · Remove it first."),
+            "{}",
+            subtitle(&i)
+        );
         i.published = i64::MAX;
         assert_eq!(subtitle(&i), "Remove it first.");
     }

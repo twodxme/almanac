@@ -3,13 +3,15 @@
 use adw::prelude::*;
 use gtk::{gdk, glib};
 
-use crate::{history, plugins as plugins_mod, shortcuts, tasks};
 use crate::i18n::tr;
 use crate::ui::actions::Judge;
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
 use crate::verify::{Outcome, ProbeValue, TryProbe};
+use crate::{history, plugins as plugins_mod, shortcuts, tasks};
 
-use super::pyisms::{extra_str, popen_detached, py_oserror, py_oserror_class, uncaught, uncaught_err};
+use super::pyisms::{
+    extra_str, popen_detached, py_oserror, py_oserror_class, uncaught, uncaught_err,
+};
 
 impl Win {
     pub fn row_toggle(&self, name: &str) {
@@ -35,10 +37,17 @@ impl Win {
         if self.demo_refuses() {
             return;
         }
-        let label = if label.is_empty() { pid.to_string() } else { label.to_string() };
+        let label = if label.is_empty() {
+            pid.to_string()
+        } else {
+            label.to_string()
+        };
         let p = pid.to_string();
-        let probe: TryProbe =
-            std::sync::Arc::new(move || Ok(plugins_mod::try_enabled()?.get(&p).map(|b| ProbeValue::Bool(*b))));
+        let probe: TryProbe = std::sync::Arc::new(move || {
+            Ok(plugins_mod::try_enabled()?
+                .get(&p)
+                .map(|b| ProbeValue::Bool(*b)))
+        });
         let lb = label.clone();
         let judge: Judge = Box::new(move |_b, a| {
             let a = match a {
@@ -67,15 +76,24 @@ impl Win {
         // before the task starts.
         let title = format!("{} {label}", if on { "Turning on" } else { "Turning off" });
         let steps = vec![tasks::Step::argv(
-            format!("omarchy plugin {} {pid}", if on { "enable" } else { "disable" }),
+            format!(
+                "omarchy plugin {} {pid}",
+                if on { "enable" } else { "disable" }
+            ),
             plugins_mod::toggle_argv(pid, on),
         )];
         let w = self.downgrade();
-        self.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
-            if let Some(w) = w.upgrade() {
-                w.run_task(&title, steps, Some(on_done));
-            }
-        });
+        self.checked(
+            Some(probe),
+            judge,
+            Some(then),
+            uncaught_err,
+            move |on_done| {
+                if let Some(w) = w.upgrade() {
+                    w.run_task(&title, steps, Some(on_done));
+                }
+            },
+        );
     }
 
     pub fn row_shortcut(&self, name: &str) {
@@ -109,12 +127,22 @@ impl Win {
 
         let weak_entry = entry.downgrade();
         keys.connect_key_pressed(move |_c, keyval, _code, state| {
-            let Some(entry) = weak_entry.upgrade() else { return glib::Propagation::Proceed };
+            let Some(entry) = weak_entry.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             let name = keyval.name().map(|n| n.to_uppercase()).unwrap_or_default();
             if matches!(
                 name.as_str(),
-                "SUPER_L" | "SUPER_R" | "CONTROL_L" | "CONTROL_R" | "ALT_L" | "ALT_R" | "SHIFT_L"
-                    | "SHIFT_R" | "META_L" | "META_R"
+                "SUPER_L"
+                    | "SUPER_R"
+                    | "CONTROL_L"
+                    | "CONTROL_R"
+                    | "ALT_L"
+                    | "ALT_R"
+                    | "SHIFT_L"
+                    | "SHIFT_R"
+                    | "META_L"
+                    | "META_R"
             ) {
                 return glib::Propagation::Proceed; // wait for the actual key
             }
@@ -140,9 +168,11 @@ impl Win {
 
         let dialog = adw::AlertDialog::new(
             Some(&format!("Keyboard shortcut for {label}")),
-            Some(&tr("Opens the plugin's panel. Checked against every binding \
+            Some(&tr(
+                "Opens the plugin's panel. Checked against every binding \
                       Hyprland has now; written to its own block in \
-                      bindings.lua, and put back if Hyprland rejects it.")),
+                      bindings.lua, and put back if Hyprland rejects it.",
+            )),
         );
         dialog.set_extra_child(Some(&entry));
         dialog.add_response("cancel", &tr("Cancel"));
@@ -162,7 +192,11 @@ impl Win {
             if resp != "save" && resp != "remove" {
                 return;
             }
-            let combo = if resp == "remove" { None } else { Some(entry_c.text().to_string()) };
+            let combo = if resp == "remove" {
+                None
+            } else {
+                Some(entry_c.text().to_string())
+            };
             let pid = pid.clone();
             let w = w.clone();
             spawn_bg(
@@ -171,7 +205,10 @@ impl Win {
                 move || match shortcuts::set_shortcut(&pid, combo.as_deref()) {
                     Ok(msg) => match history::record_checked(history::ALMANAC, &msg, "", "", &[]) {
                         Ok(()) => (msg, true),
-                        Err(exc) => (format!("Shortcut not saved: {}", crate::ui::shell::exc_str(&exc)), false),
+                        Err(exc) => (
+                            format!("Shortcut not saved: {}", crate::ui::shell::exc_str(&exc)),
+                            false,
+                        ),
                     },
                     Err(exc) => (format!("Shortcut not saved: {exc}"), false),
                 },
@@ -197,7 +234,9 @@ impl Win {
             let argv = plugins_mod::restart_argv(true);
             match popen_detached(&argv) {
                 Ok(()) => {
-                    if let Err(e) = history::record_checked(history::ALMANAC, "Shell restarted", "", "", &[]) {
+                    if let Err(e) =
+                        history::record_checked(history::ALMANAC, "Shell restarted", "", "", &[])
+                    {
                         uncaught_err(&e);
                     }
                 }
@@ -215,9 +254,11 @@ impl Win {
         tasks::confirm(
             &self.window,
             &tr("Restart the shell?"),
-            &tr("Restarts the Omarchy shell and clears its compiled QML cache. \
+            &tr(
+                "Restarts the Omarchy shell and clears its compiled QML cache. \
                  Use it when a plugin behaves as if it had not been updated. \
-                 Your bar and settings are not touched."),
+                 Your bar and settings are not touched.",
+            ),
             &format!("$ {}", argv.get(3..).unwrap_or(&[]).join(" ")),
             &tr("Restart"),
             false,

@@ -96,7 +96,9 @@ pub fn try_aur_health(names: &[String]) -> Result<BTreeMap<String, AurHealth>, S
 /// AUR answered with an error) and nothing kept from before covers every
 /// name.
 pub fn aur_health_answer(names: &[String]) -> Result<Option<BTreeMap<String, AurHealth>>, String> {
-    Ok(aur_health_known(names)?.filter(|k| k.covers(names)).map(|k| k.results))
+    Ok(aur_health_known(names)?
+        .filter(|k| k.covers(names))
+        .map(|k| k.results))
 }
 
 /// What is known about `names`, for a caller that must tell "not in the
@@ -113,10 +115,14 @@ pub fn aur_health_known(names: &[String]) -> Result<Option<AurAnswer>, String> {
     let path = aur_health_cache_path();
     if kept.as_ref().is_none_or(|(p, _)| *p != path) {
         // First use, or the cache directory moved (a test's XDG_CACHE_HOME).
-        let disk = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<AurAnswer>(&b).ok());
+        let disk = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<AurAnswer>(&b).ok());
         *kept = Some((path.clone(), disk));
     }
-    let Some((_, answer)) = kept.as_mut() else { return Ok(None) };
+    let Some((_, answer)) = kept.as_mut() else {
+        return Ok(None);
+    };
     let fetch = |url: &str| http_json(url, 15).map_err(|e| e.to_string());
     let (out, fresh) = aur_known_from(answer.as_ref(), names, util::now(), &fetch)?;
     if let Some(fresh) = fresh {
@@ -148,13 +154,16 @@ pub struct AurAnswer {
 }
 
 /// The kept answer, with the file it was read from.
-static AUR_KEPT: std::sync::Mutex<Option<(PathBuf, Option<AurAnswer>)>> = std::sync::Mutex::new(None);
+static AUR_KEPT: std::sync::Mutex<Option<(PathBuf, Option<AurAnswer>)>> =
+    std::sync::Mutex::new(None);
 
 /// `$XDG_CACHE_HOME/almanac/aur-health.json`.
 pub fn aur_health_cache_path() -> PathBuf {
     match std::env::var_os("XDG_CACHE_HOME") {
         Some(v) => PathBuf::from(v).join("almanac/aur-health.json"),
-        None => crate::util::home().join(".cache").join("almanac/aur-health.json"),
+        None => crate::util::home()
+            .join(".cache")
+            .join("almanac/aur-health.json"),
     }
 }
 
@@ -167,14 +176,26 @@ impl AurAnswer {
     /// This answer cut down to `names`: what it asked of them, and said.
     /// None when it asked about none of them.
     fn part(&self, names: &[String]) -> Option<AurAnswer> {
-        let asked: BTreeSet<String> = names.iter().filter(|n| self.asked.contains(*n)).cloned().collect();
-        (!asked.is_empty() || names.is_empty()).then(|| AurAnswer { at: self.at, results: self.only(names), asked })
+        let asked: BTreeSet<String> = names
+            .iter()
+            .filter(|n| self.asked.contains(*n))
+            .cloned()
+            .collect();
+        (!asked.is_empty() || names.is_empty()).then(|| AurAnswer {
+            at: self.at,
+            results: self.only(names),
+            asked,
+        })
     }
 
     /// What this answer says about `names`, and nothing else.
     fn only(&self, names: &[String]) -> BTreeMap<String, AurHealth> {
         let want: HashSet<&str> = names.iter().map(String::as_str).collect();
-        self.results.iter().filter(|(k, _)| want.contains(k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.results
+            .iter()
+            .filter(|(k, _)| want.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 }
 
@@ -222,7 +243,10 @@ fn aur_known_from(
     };
     let mut out = BTreeMap::new();
     let Value::Object(data) = data else {
-        return Err(format!("'{}' object has no attribute 'get'", py_type(&data)));
+        return Err(format!(
+            "'{}' object has no attribute 'get'",
+            py_type(&data)
+        ));
     };
     for rec in py_iter(data.get("results").unwrap_or(&json!([])))? {
         let Value::Object(rec) = &rec else {
@@ -245,7 +269,11 @@ fn aur_known_from(
             },
         );
     }
-    let fresh = AurAnswer { at: now, asked: names.iter().cloned().collect(), results: out };
+    let fresh = AurAnswer {
+        at: now,
+        asked: names.iter().cloned().collect(),
+        results: out,
+    };
     Ok((Some(fresh.clone()), Some(fresh)))
 }
 
@@ -264,7 +292,9 @@ pub fn size_mb(value: &str) -> f64 {
     }
     // The Python builds the whole unit table first, so a bad number is a
     // ValueError whatever the unit.
-    let Some(num) = py_float_text(parts[0]) else { return 0.0 };
+    let Some(num) = py_float_text(parts[0]) else {
+        return 0.0;
+    };
     match parts[1] {
         "B" => num / 1048576.0,
         "KiB" => num / 1024.0,
@@ -295,11 +325,16 @@ pub(super) fn strptime(text: &str, with_time: bool) -> Option<chrono::NaiveDateT
         ))
         .unwrap()
     });
-    const MONTHS: [&str; 12] =
-        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
     // `\d` is any Unicode decimal digit, in Python's re as in this one, and
     // int() reads them all; the literal ranges ([12], 0[1-9], ...) are ASCII.
-    let caps = if with_time { FULL.captures(text)? } else { DATE.captures(text)? };
+    let caps = if with_time {
+        FULL.captures(text)?
+    } else {
+        DATE.captures(text)?
+    };
     let num = |i: usize| -> u32 { ascii_digits(caps[i].trim()).parse().unwrap_or(0) };
     let day = num(1);
     let month = MONTHS.iter().position(|m| *m == caps[2].to_lowercase())? as u32 + 1;
@@ -307,7 +342,11 @@ pub(super) fn strptime(text: &str, with_time: bool) -> Option<chrono::NaiveDateT
     if year < 1 {
         return None; // datetime: year 0 is out of range
     }
-    let (mut hour, minute, second) = if with_time { (num(4), num(5), num(6)) } else { (0, 0, 0) };
+    let (mut hour, minute, second) = if with_time {
+        (num(4), num(5), num(6))
+    } else {
+        (0, 0, 0)
+    };
     if with_time {
         let pm = caps[7].eq_ignore_ascii_case("pm");
         if pm && hour != 12 {
@@ -331,7 +370,10 @@ pub(super) fn local_timestamp(naive: chrono::NaiveDateTime) -> Option<f64> {
     let t = naive.and_utc().timestamp();
     let local = |u: i64| -> Option<i64> {
         let utc = chrono::DateTime::from_timestamp(u, 0)?.naive_utc();
-        let off = chrono::Local.offset_from_utc_datetime(&utc).fix().local_minus_utc() as i64;
+        let off = chrono::Local
+            .offset_from_utc_datetime(&utc)
+            .fix()
+            .local_minus_utc() as i64;
         let lt = utc + chrono::Duration::seconds(off);
         if !(1..=9999).contains(&lt.year()) {
             return None;
@@ -375,7 +417,11 @@ pub fn date_ts(value: &str) -> f64 {
     let words = py_split(value);
     for (with_time, count) in [(true, 6usize), (false, 4usize)] {
         let end = count.min(words.len());
-        let text = if words.len() > 1 { words[1..end.max(1)].join(" ") } else { String::new() };
+        let text = if words.len() > 1 {
+            words[1..end.max(1)].join(" ")
+        } else {
+            String::new()
+        };
         // (A ValueError from .timestamp() is caught like strptime's.)
         if let Some(ts) = strptime(&text, with_time).and_then(local_timestamp) {
             return ts;
@@ -401,7 +447,13 @@ pub fn versions_behind(current: &str, latest: &str) -> (i64, String) {
     let (n, kind) = versions_behind_big(current, latest);
     let max = i64::MAX.to_bigint().unwrap_or_default();
     let min = i64::MIN.to_bigint().unwrap_or_default();
-    let clamped = if n > max { i64::MAX } else if n < min { i64::MIN } else { i64::try_from(&n).unwrap_or(0) };
+    let clamped = if n > max {
+        i64::MAX
+    } else if n < min {
+        i64::MIN
+    } else {
+        i64::try_from(&n).unwrap_or(0)
+    };
     (clamped, kind)
 }
 
@@ -470,7 +522,10 @@ pub(super) fn big_json(n: &num_bigint::BigInt) -> Value {
     if let Ok(u) = u64::try_from(n) {
         return json!(u);
     }
-    n.to_string().parse::<f64>().map(|f| json!(f)).unwrap_or(Value::Null)
+    n.to_string()
+        .parse::<f64>()
+        .map(|f| json!(f))
+        .unwrap_or(Value::Null)
 }
 
 #[cfg(test)]
@@ -493,7 +548,10 @@ mod tests {
         ]})
     }
 
-    fn counting(calls: &std::cell::Cell<u32>, answer: Result<Value, String>) -> impl Fn(&str) -> Result<Value, String> + '_ {
+    fn counting(
+        calls: &std::cell::Cell<u32>,
+        answer: Result<Value, String>,
+    ) -> impl Fn(&str) -> Result<Value, String> + '_ {
         move |_| {
             calls.set(calls.get() + 1);
             answer.clone()
@@ -510,8 +568,12 @@ mod tests {
         let kept = kept.expect("a fetch makes an answer to keep");
         assert_eq!(calls.get(), 1);
         assert!(first["old-thing"].out_of_date && first["old-thing"].maintainer.is_empty());
-        assert!(!first.contains_key("gone-pkg"), "a name the AUR does not carry stays absent");
-        let (again, none) = aur_health_from(Some(&kept), &asked, 1000.0 + AUR_HEALTH_TTL - 1.0, &fetch).unwrap();
+        assert!(
+            !first.contains_key("gone-pkg"),
+            "a name the AUR does not carry stays absent"
+        );
+        let (again, none) =
+            aur_health_from(Some(&kept), &asked, 1000.0 + AUR_HEALTH_TTL - 1.0, &fetch).unwrap();
         assert_eq!(calls.get(), 1, "a fresh answer is not asked again");
         assert!(none.is_none());
         assert_eq!(again, Some(first));
@@ -521,10 +583,18 @@ mod tests {
     fn a_kept_answer_serves_any_subset_of_what_it_asked() {
         let calls = std::cell::Cell::new(0);
         let fetch = counting(&calls, Ok(reply()));
-        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing", "gone-pkg"]), 0.0, &fetch).unwrap();
-        let sub = aur_health_from(kept.as_ref(), &names(&["yay"]), 10.0, &fetch).unwrap().0.unwrap();
+        let (_, kept) =
+            aur_health_from(None, &names(&["yay", "old-thing", "gone-pkg"]), 0.0, &fetch).unwrap();
+        let sub = aur_health_from(kept.as_ref(), &names(&["yay"]), 10.0, &fetch)
+            .unwrap()
+            .0
+            .unwrap();
         assert_eq!(calls.get(), 1);
-        assert_eq!(sub.keys().collect::<Vec<_>>(), ["yay"], "only what was asked comes back");
+        assert_eq!(
+            sub.keys().collect::<Vec<_>>(),
+            ["yay"],
+            "only what was asked comes back"
+        );
         // A name it never asked about needs a new call.
         aur_health_from(kept.as_ref(), &names(&["yay", "new-pkg"]), 10.0, &fetch).unwrap();
         assert_eq!(calls.get(), 2);
@@ -533,13 +603,29 @@ mod tests {
     #[test]
     fn an_old_answer_is_asked_again_but_stands_in_when_offline() {
         let calls = std::cell::Cell::new(0);
-        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let (_, kept) = aur_health_from(
+            None,
+            &names(&["yay", "old-thing"]),
+            0.0,
+            &counting(&calls, Ok(reply())),
+        )
+        .unwrap();
         let offline = counting(&calls, Err("offline".into()));
         let later = AUR_HEALTH_TTL * 30.0;
-        let (out, none) = aur_health_from(kept.as_ref(), &names(&["yay", "old-thing"]), later, &offline).unwrap();
+        let (out, none) = aur_health_from(
+            kept.as_ref(),
+            &names(&["yay", "old-thing"]),
+            later,
+            &offline,
+        )
+        .unwrap();
         assert_eq!(calls.get(), 2, "an old answer is asked again");
         assert!(none.is_none(), "nothing new is kept from a failed fetch");
-        assert_eq!(out.map(|o| o.len()), Some(2), "offline, the old answer stands in");
+        assert_eq!(
+            out.map(|o| o.len()),
+            Some(2),
+            "offline, the old answer stands in"
+        );
         // An answer from the future (the clock went back) is not trusted as fresh.
         aur_health_from(kept.as_ref(), &names(&["yay"]), -100.0, &offline).unwrap();
         assert_eq!(calls.get(), 3);
@@ -548,49 +634,98 @@ mod tests {
     #[test]
     fn offline_with_nothing_kept_is_no_answer() {
         let calls = std::cell::Cell::new(0);
-        let (out, none) = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Err("offline".into()))).unwrap();
+        let (out, none) = aur_health_from(
+            None,
+            &names(&["yay"]),
+            0.0,
+            &counting(&calls, Err("offline".into())),
+        )
+        .unwrap();
         assert!(out.is_none() && none.is_none());
     }
 
     #[test]
     fn an_error_reply_is_no_answer_rather_than_every_package_gone() {
         let calls = std::cell::Cell::new(0);
-        let (_, kept) = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
-        let limited = counting(&calls, Ok(json!({"type": "error", "results": [], "error": "Rate limit reached"})));
+        let (_, kept) =
+            aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let limited = counting(
+            &calls,
+            Ok(json!({"type": "error", "results": [], "error": "Rate limit reached"})),
+        );
         let (out, none) = aur_health_from(None, &names(&["yay"]), 0.0, &limited).unwrap();
         assert!(out.is_none() && none.is_none());
-        let (out, none) = aur_health_from(kept.as_ref(), &names(&["yay"]), AUR_HEALTH_TTL * 2.0, &limited).unwrap();
-        assert!(out.is_some_and(|o| o.contains_key("yay")) && none.is_none(), "the old answer stands in");
+        let (out, none) = aur_health_from(
+            kept.as_ref(),
+            &names(&["yay"]),
+            AUR_HEALTH_TTL * 2.0,
+            &limited,
+        )
+        .unwrap();
+        assert!(
+            out.is_some_and(|o| o.contains_key("yay")) && none.is_none(),
+            "the old answer stands in"
+        );
     }
 
     #[test]
     fn offline_a_kept_answer_speaks_only_for_what_it_asked() {
         let calls = std::cell::Cell::new(0);
-        let (_, kept) = aur_health_from(None, &names(&["yay", "gone-pkg"]), 0.0, &counting(&calls, Ok(reply()))).unwrap();
+        let (_, kept) = aur_health_from(
+            None,
+            &names(&["yay", "gone-pkg"]),
+            0.0,
+            &counting(&calls, Ok(reply())),
+        )
+        .unwrap();
         let offline = counting(&calls, Err("offline".into()));
         let asked = names(&["yay", "gone-pkg", "new-pkg"]);
         let (known, none) = aur_known_from(kept.as_ref(), &asked, 10.0, &offline).unwrap();
         let known = known.expect("what was asked before is still known");
         assert!(none.is_none());
-        assert_eq!(known.asked, ["yay", "gone-pkg"].map(String::from).into_iter().collect());
+        assert_eq!(
+            known.asked,
+            ["yay", "gone-pkg"].map(String::from).into_iter().collect()
+        );
         assert!(known.results.contains_key("yay") && !known.results.contains_key("gone-pkg"));
         // As a plain map that would read new-pkg as gone: there is none.
-        assert_eq!(aur_health_from(kept.as_ref(), &asked, 10.0, &offline).unwrap().0, None);
+        assert_eq!(
+            aur_health_from(kept.as_ref(), &asked, 10.0, &offline)
+                .unwrap()
+                .0,
+            None
+        );
         // Nothing it asked about: nothing known.
-        assert!(aur_known_from(kept.as_ref(), &names(&["new-pkg"]), 10.0, &offline).unwrap().0.is_none());
+        assert!(
+            aur_known_from(kept.as_ref(), &names(&["new-pkg"]), 10.0, &offline)
+                .unwrap()
+                .0
+                .is_none()
+        );
     }
 
     #[test]
     fn a_malformed_reply_is_an_error_and_is_not_kept() {
         let calls = std::cell::Cell::new(0);
-        let r = aur_health_from(None, &names(&["yay"]), 0.0, &counting(&calls, Ok(json!([1, 2]))));
+        let r = aur_health_from(
+            None,
+            &names(&["yay"]),
+            0.0,
+            &counting(&calls, Ok(json!([1, 2]))),
+        );
         assert!(r.is_err());
     }
 
     #[test]
     fn a_kept_answer_round_trips_through_its_file() {
         let calls = std::cell::Cell::new(0);
-        let (_, kept) = aur_health_from(None, &names(&["yay", "old-thing"]), 5.0, &counting(&calls, Ok(reply()))).unwrap();
+        let (_, kept) = aur_health_from(
+            None,
+            &names(&["yay", "old-thing"]),
+            5.0,
+            &counting(&calls, Ok(reply())),
+        )
+        .unwrap();
         let kept = kept.unwrap();
         let back: AurAnswer = serde_json::from_slice(&serde_json::to_vec(&kept).unwrap()).unwrap();
         assert_eq!(back, kept);

@@ -9,7 +9,7 @@ use gtk::{gio, glib};
 
 use crate::i18n::tr;
 use crate::inventory;
-use crate::ui::shell::{Win, name, page_spec, sorts_installed};
+use crate::ui::shell::{name, page_spec, sorts_installed, Win};
 
 use super::PrimaryAction;
 
@@ -44,7 +44,9 @@ impl Win {
 
     /// Apply one page's chrome. The only place that touches it.
     pub fn show_page(&self, key: &str, category: &str) {
-        let Some(spec) = page_spec(key).or_else(|| page_spec("packages")) else { return };
+        let Some(spec) = page_spec(key).or_else(|| page_spec("packages")) else {
+            return;
+        };
         self.shared.borrow_mut().page = Some(key.to_string());
         self.content_stack.set_visible_child_name(spec.view);
         let title = tr(spec.title);
@@ -57,7 +59,11 @@ impl Win {
         self.sort_btn.set_visible(spec.sort || drawer);
         name(
             &self.sort_btn,
-            &if drawer { tr("Filter and sort the marketplace") } else { tr("Sort by") },
+            &if drawer {
+                tr("Filter and sort the marketplace")
+            } else {
+                tr("Sort by")
+            },
         );
         if drawer {
             self.sort_btn.set_menu_model(None::<&gio::MenuModel>);
@@ -73,7 +79,11 @@ impl Win {
         self.search_bar.set_visible(spec.search.is_some());
         if let Some(search) = spec.search {
             if !search.is_empty() {
-                let text = if spec.search_translated { tr(search) } else { search.to_string() };
+                let text = if spec.search_translated {
+                    tr(search)
+                } else {
+                    search.to_string()
+                };
                 self.search.set_placeholder_text(Some(&text));
             }
         }
@@ -125,7 +135,9 @@ impl Win {
         }
         let wanted = page_spec(page).and_then(|s| s.market).unwrap_or("");
         let keys = self.store_market_keys();
-        let Some(market) = self.shared.borrow().store_market.clone() else { return };
+        let Some(market) = self.shared.borrow().store_market.clone() else {
+            return;
+        };
         // Themes is one catalogue already; the App Store chooses among the rest.
         market.set_visible(page != "themes" && keys.len() > 2);
         let index = keys.iter().position(|k| k == wanted).unwrap_or(0) as u32;
@@ -154,7 +166,9 @@ impl Win {
         if keys.len() <= 1 {
             return;
         }
-        let Some(store_market) = self.shared.borrow().store_market.clone() else { return };
+        let Some(store_market) = self.shared.borrow().store_market.clone() else {
+            return;
+        };
         let i = store_market.selected() as usize;
         let market = keys.get(i).cloned().unwrap_or_default();
         let page = self.shared.borrow().page_or("discover");
@@ -164,7 +178,9 @@ impl Win {
             // Un-pinned from the Themes page: it is the whole store now.
             self.title.set_title(&tr("App Store"));
         } else {
-            let title = page_spec(&page).map(|s| tr(s.title)).unwrap_or_else(|| "App Store".into());
+            let title = page_spec(&page)
+                .map(|s| tr(s.title))
+                .unwrap_or_else(|| "App Store".into());
             self.title.set_title(&title);
         }
     }
@@ -206,7 +222,11 @@ impl Win {
                         && e.action.as_ref().is_some_and(|a| !a.is_empty())
                 })
                 .count();
-            (harnesses, crate::maintenance::reclaimable_mb(&sh.findings.get()), sh.plugin_updates)
+            (
+                harnesses,
+                crate::maintenance::reclaimable_mb(&sh.findings.get()),
+                sh.plugin_updates,
+            )
         };
         let mut out = BTreeMap::new();
         out.insert(
@@ -229,7 +249,10 @@ impl Win {
             inventory::AGENT.to_string(),
             PrimaryAction {
                 label: if harnesses != 0 {
-                    format!("Update {harnesses} agent CLI{}", if harnesses != 1 { "s" } else { "" })
+                    format!(
+                        "Update {harnesses} agent CLI{}",
+                        if harnesses != 1 { "s" } else { "" }
+                    )
                 } else {
                     "Agents current".to_string()
                 },
@@ -293,7 +316,11 @@ impl Win {
     pub(in crate::ui) fn toast(&self, message: &str, timeout: u32) {
         // Messages carry names and error text from outside the app, so they
         // are shown as written rather than parsed as markup.
-        let toast = adw::Toast::builder().title(message).use_markup(false).timeout(timeout).build();
+        let toast = adw::Toast::builder()
+            .title(message)
+            .use_markup(false)
+            .timeout(timeout)
+            .build();
         self.toasts.add_toast(toast);
     }
 
@@ -338,9 +365,13 @@ impl Win {
         // Translucent colours are flattened onto the window first:
         // libadwaita's dark card is white at 8%, and read as plain white
         // it measured "black text" onto a dark card.
-        let base = ctx
-            .lookup_color("window_bg_color")
-            .map(|u| (f64::from(u.red()), f64::from(u.green()), f64::from(u.blue())));
+        let base = ctx.lookup_color("window_bg_color").map(|u| {
+            (
+                f64::from(u.red()),
+                f64::from(u.green()),
+                f64::from(u.blue()),
+            )
+        });
         for (role, color) in [
             ("error", "error_bg_color"),
             ("warning", "warning_bg_color"),

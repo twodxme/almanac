@@ -36,7 +36,15 @@ pub(super) fn py_splitlines(s: &str) -> Vec<&str> {
     while let Some((i, c)) = it.next() {
         let brk = matches!(
             c,
-            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if brk {
             out.push(&s[start..i]);
@@ -61,7 +69,10 @@ pub(super) fn py_splitlines(s: &str) -> Vec<&str> {
 /// slashes; "" is ".".
 fn py_path_os(value: &std::ffi::OsStr) -> PathBuf {
     use std::os::unix::ffi::OsStrExt;
-    let p: PathBuf = Path::new(value).components().filter(|c| *c != Component::CurDir).collect();
+    let p: PathBuf = Path::new(value)
+        .components()
+        .filter(|c| *c != Component::CurDir)
+        .collect();
     if p.as_os_str().is_empty() {
         return PathBuf::from(".");
     }
@@ -104,7 +115,12 @@ pub(super) fn py_with_suffix(p: &Path, suffix: &str) -> Result<PathBuf, String> 
     let name: &[u8] = match p.components().next_back() {
         Some(Component::Normal(n)) if p.as_os_str() != "." => n.as_bytes(),
         Some(Component::ParentDir) => b"..",
-        _ => return Err(format!("ValueError: {:?} has an empty name", p.to_string_lossy())),
+        _ => {
+            return Err(format!(
+                "ValueError: {:?} has an empty name",
+                p.to_string_lossy()
+            ))
+        }
     };
     // pathlib's stem: the name up to its last '.', provided that leaves at
     // least one non-dot character ("app." -> "app", ".hidden" stays).
@@ -151,7 +167,10 @@ fn py_number(n: &serde_json::Number) -> String {
         return u.to_string();
     }
     let f = n.as_f64().unwrap_or(0.0);
-    if f.is_finite() && f.fract() == 0.0 && (f >= 18446744073709551616.0 || f < -9223372036854775808.0) {
+    if f.is_finite()
+        && f.fract() == 0.0
+        && (f >= 18446744073709551616.0 || f < -9223372036854775808.0)
+    {
         return format!("{f:.0}");
     }
     util::py_float_repr(f)
@@ -168,7 +187,10 @@ fn py_repr(v: &Value) -> String {
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!(
             "{{{}}}",
-            o.iter().map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")
+            o.iter()
+                .map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }
@@ -185,7 +207,11 @@ fn py_printable(c: char) -> bool {
 
 /// `repr(str)`: single quotes unless the text has one and no double quote.
 pub(super) fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -262,7 +288,12 @@ pub(super) const INT_MAX_STR_DIGITS: usize = 4300;
 /// a number of more than 4300 digits (Python's integer string limit).
 /// Unbounded, like Python's int.
 pub(super) fn py_int(text: &str) -> Result<BigInt, String> {
-    let err = || format!("ValueError: invalid literal for int() with base 10: {}", py_str_repr(text));
+    let err = || {
+        format!(
+            "ValueError: invalid literal for int() with base 10: {}",
+            py_str_repr(text)
+        )
+    };
     let s = py_strip(text);
     let (neg, body) = match s.chars().next() {
         Some('-') => (true, &s[1..]),
@@ -396,7 +427,12 @@ fn fnmatch_translate(pat: &str) -> String {
                 // Hyphens that create ranges shouldn't be escaped.
                 chunks
                     .iter()
-                    .map(|s| s.iter().collect::<String>().replace('\\', "\\\\").replace('-', "\\-"))
+                    .map(|s| {
+                        s.iter()
+                            .collect::<String>()
+                            .replace('\\', "\\\\")
+                            .replace('-', "\\-")
+                    })
                     .collect::<Vec<_>>()
                     .join("-")
             };
@@ -444,31 +480,47 @@ fn fnmatch_translate(pat: &str) -> String {
 /// *and* the end of its output. A helper the child leaves running that
 /// keeps the pipes open runs the clock out too; `util::run_bytes` then
 /// kills the child's whole process group.
-pub(super) fn run_bytes(argv: &[&std::ffi::OsStr], timeout_secs: u64, cwd: Option<&Path>) -> Option<Vec<u8>> {
+pub(super) fn run_bytes(
+    argv: &[&std::ffi::OsStr],
+    timeout_secs: u64,
+    cwd: Option<&Path>,
+) -> Option<Vec<u8>> {
     run_bytes_within(argv, Duration::from_secs(timeout_secs), cwd)
 }
 
 /// `run_bytes` with any timeout (the tests use a fraction of a second).
-fn run_bytes_within(argv: &[&std::ffi::OsStr], timeout: Duration, cwd: Option<&Path>) -> Option<Vec<u8>> {
-    let out = crate::util::run_bytes(argv, &crate::util::RunOpts {
-        timeout: Some(timeout),
-        stdin: crate::util::Stdin::Inherit,
-        cwd,
-        ..Default::default()
-    });
+fn run_bytes_within(
+    argv: &[&std::ffi::OsStr],
+    timeout: Duration,
+    cwd: Option<&Path>,
+) -> Option<Vec<u8>> {
+    let out = crate::util::run_bytes(
+        argv,
+        &crate::util::RunOpts {
+            timeout: Some(timeout),
+            stdin: crate::util::Stdin::Inherit,
+            cwd,
+            ..Default::default()
+        },
+    );
     (!out.failed_to_start && !out.timed_out).then_some(out.stdout)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
     use serde_json::json;
+    use std::time::Instant;
 
     #[test]
     fn test_with_suffix_matches_pathlib() {
-        let w = |p: &str, s: &str| py_with_suffix(Path::new(p), s).map(|p| p.to_string_lossy().into_owned());
-        assert_eq!(w("/a/app.AppImage", ".previous").unwrap(), "/a/app.previous");
+        let w = |p: &str, s: &str| {
+            py_with_suffix(Path::new(p), s).map(|p| p.to_string_lossy().into_owned())
+        };
+        assert_eq!(
+            w("/a/app.AppImage", ".previous").unwrap(),
+            "/a/app.previous"
+        );
         assert_eq!(w("/a/app", ".previous").unwrap(), "/a/app.previous");
         assert_eq!(w("/a/.hidden", ".previous").unwrap(), "/a/.hidden.previous");
         assert_eq!(w("/a/x.tar.gz", ".download").unwrap(), "/a/x.tar.download");
@@ -492,21 +544,34 @@ mod tests {
     fn test_run_bytes_times_out_on_a_held_pipe() {
         let sh = std::ffi::OsStr::new("sh");
         let started = Instant::now();
-        let argv = [sh, std::ffi::OsStr::new("-c"), std::ffi::OsStr::new("(sleep 5) & echo x")];
-        assert_eq!(run_bytes_within(&argv, Duration::from_millis(200), None), None);
+        let argv = [
+            sh,
+            std::ffi::OsStr::new("-c"),
+            std::ffi::OsStr::new("(sleep 5) & echo x"),
+        ];
+        assert_eq!(
+            run_bytes_within(&argv, Duration::from_millis(200), None),
+            None
+        );
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
     fn test_printable_knows_unassigned_code_points() {
-        assert_eq!(py_str(&json!(["\u{378}", "\u{2065}", "é"])), "['\\u0378', '\\u2065', 'é']");
+        assert_eq!(
+            py_str(&json!(["\u{378}", "\u{2065}", "é"])),
+            "['\\u0378', '\\u2065', 'é']"
+        );
     }
 
     #[test]
     fn test_py_str_formats_like_python() {
         assert_eq!(py_str(&json!({"a": 1})), "{'a': 1}");
         assert_eq!(py_str(&json!([1, "x'y", null])), "[1, \"x'y\", None]");
-        assert_eq!(py_str(&serde_json::from_str::<Value>("100000000000000000000").unwrap()), "100000000000000000000");
+        assert_eq!(
+            py_str(&serde_json::from_str::<Value>("100000000000000000000").unwrap()),
+            "100000000000000000000"
+        );
         assert_eq!(py_str(&json!("\u{a0}")), "\u{a0}");
         assert_eq!(py_str(&json!(["\u{a0}\n"])), "['\\xa0\\n']");
     }

@@ -125,12 +125,18 @@ impl Limit {
     /// Containers nest at most `depth` deep (CPython's C scanner checks
     /// on entering each array or object).
     pub const fn containers(depth: usize) -> Limit {
-        Limit { depth, scalars: false }
+        Limit {
+            depth,
+            scalars: false,
+        }
     }
 
     /// No value, scalar or container, sits deeper than level `depth`.
     pub const fn values(depth: usize) -> Limit {
-        Limit { depth, scalars: true }
+        Limit {
+            depth,
+            scalars: true,
+        }
     }
 }
 
@@ -246,7 +252,10 @@ impl<'de, S: Sink> Visitor<'de> for Fast<'_, S> {
         // serde_json reads `-0`, and an int too long for 64 bits, as a
         // float; so is `-0.0` or `1e19`, and only the text tells them
         // apart. Python's int is no float: the scanner decides.
-        if S::EXACT_INTS && f.fract() == 0.0 && (f.abs() >= TWO_63 || (f == 0.0 && f.is_sign_negative())) {
+        if S::EXACT_INTS
+            && f.fract() == 0.0
+            && (f.abs() >= TWO_63 || (f == 0.0 && f.is_sign_negative()))
+        {
             return Err(E::custom("an integral float: maybe an int"));
         }
         Ok(self.0.num(Num::Float(f)))
@@ -296,7 +305,9 @@ impl Text {
             (Text::Plain(s), Some(c)) => s.push(c),
             (Text::Wide(w), _) => w.push(cp),
             (t @ Text::Plain(_), None) => {
-                let Text::Plain(s) = std::mem::replace(t, Text::Wide(Vec::new())) else { return };
+                let Text::Plain(s) = std::mem::replace(t, Text::Wide(Vec::new())) else {
+                    return;
+                };
                 let mut w: Vec<u32> = s.chars().map(u32::from).collect();
                 w.push(cp);
                 *t = Text::Wide(w);
@@ -328,7 +339,9 @@ impl Scan<'_> {
             Some(nl) => before[nl..].chars().count() - 1,
             None => pos,
         } + 1;
-        Err(Error::Value(format!("{msg}: line {line} column {col} (char {pos})")))
+        Err(Error::Value(format!(
+            "{msg}: line {line} column {col} (char {pos})"
+        )))
     }
 
     fn ws(&self, mut i: usize) -> usize {
@@ -344,7 +357,8 @@ impl Scan<'_> {
 
     fn hex4(&self, at: usize) -> Option<u32> {
         let h = self.b.get(at..at + 4)?;
-        h.iter().try_fold(0, |v, &c| Some(v << 4 | char::from(c).to_digit(16)?))
+        h.iter()
+            .try_fold(0, |v, &c| Some(v << 4 | char::from(c).to_digit(16)?))
     }
 
     /// The str whose opening quote is at `start`, and the index after its
@@ -395,7 +409,11 @@ impl Scan<'_> {
                     let mut next = end;
                     // A high surrogate joins a following `\uXXXX` low one;
                     // otherwise both stay lone, as Python keeps them.
-                    if (0xd800..=0xdbff).contains(&cp) && end + 6 < b.len() && b[end] == b'\\' && b[end + 1] == b'u' {
+                    if (0xd800..=0xdbff).contains(&cp)
+                        && end + 6 < b.len()
+                        && b[end] == b'\\'
+                        && b[end + 1] == b'u'
+                    {
                         let Some(lo) = self.hex4(end + 2) else {
                             return self.err("Invalid \\uXXXX escape", end + 1);
                         };
@@ -415,7 +433,14 @@ impl Scan<'_> {
     /// A number or a constant at `*i`.
     fn scalar<S: Sink>(&self, i: &mut usize, sink: &mut S) -> Result<S::Value, Error> {
         let at = *i;
-        for (word, v) in [("null", 0), ("true", 1), ("false", 2), ("NaN", 3), ("Infinity", 4), ("-Infinity", 5)] {
+        for (word, v) in [
+            ("null", 0),
+            ("true", 1),
+            ("false", 2),
+            ("NaN", 3),
+            ("Infinity", 4),
+            ("-Infinity", 5),
+        ] {
             if self.at(at, word) {
                 *i = at + word.len();
                 return Ok(match v {
@@ -520,7 +545,10 @@ enum Frame<S: Sink> {
 
 /// CPython's C scanner, without recursion.
 fn scan<S: Sink>(text: &str, limit: Limit, sink: &mut S) -> Result<S::Value, Error> {
-    let p = Scan { text, b: text.as_bytes() };
+    let p = Scan {
+        text,
+        b: text.as_bytes(),
+    };
     if text.starts_with('\u{feff}') {
         return p.err("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0);
     }
@@ -584,7 +612,9 @@ fn scan<S: Sink>(text: &str, limit: Limit, sink: &mut S) -> Result<S::Value, Err
                     match p.b.get(i) {
                         Some(b']') => {
                             i += 1;
-                            let Some(Frame::List(items)) = stack.pop() else { unreachable!("the top frame is a list") };
+                            let Some(Frame::List(items)) = stack.pop() else {
+                                unreachable!("the top frame is a list")
+                            };
                             v = sink.list(items);
                         }
                         Some(b',') => {
@@ -606,7 +636,9 @@ fn scan<S: Sink>(text: &str, limit: Limit, sink: &mut S) -> Result<S::Value, Err
                     match p.b.get(i) {
                         Some(b'}') => {
                             i += 1;
-                            let Some(Frame::Dict(pairs, _)) = stack.pop() else { unreachable!("the top frame is a dict") };
+                            let Some(Frame::Dict(pairs, _)) = stack.pop() else {
+                                unreachable!("the top frame is a dict")
+                            };
                             v = sink.dict(pairs);
                         }
                         Some(b',') => {
@@ -753,16 +785,50 @@ mod tests {
     #[test]
     fn reads_what_python_reads_and_serde_does_not() {
         let f = |x: f64| V::Float(x.to_bits());
-        assert_eq!(both("[NaN, Infinity, -Infinity, 1e400, -1e400]"), V::List(vec![f(f64::NAN), f(f64::INFINITY), f(f64::NEG_INFINITY), f(f64::INFINITY), f(f64::NEG_INFINITY)]));
+        assert_eq!(
+            both("[NaN, Infinity, -Infinity, 1e400, -1e400]"),
+            V::List(vec![
+                f(f64::NAN),
+                f(f64::INFINITY),
+                f(f64::NEG_INFINITY),
+                f(f64::INFINITY),
+                f(f64::NEG_INFINITY)
+            ])
+        );
         assert_eq!(both("-0"), V::Int(0));
-        assert_eq!(both("[-0.0, 1e19, 18446744073709551616]"), V::List(vec![f(-0.0), f(1e19), V::Big("18446744073709551616".into())]));
-        assert_eq!(both("-9223372036854775809"), V::Big("-9223372036854775809".into()));
+        assert_eq!(
+            both("[-0.0, 1e19, 18446744073709551616]"),
+            V::List(vec![
+                f(-0.0),
+                f(1e19),
+                V::Big("18446744073709551616".into())
+            ])
+        );
+        assert_eq!(
+            both("-9223372036854775809"),
+            V::Big("-9223372036854775809".into())
+        );
         assert_eq!(both(r#""a\ud800b""#), V::WStr(vec![0x61, 0xd800, 0x62]));
         assert_eq!(both(r#""\udc00\ud800""#), V::WStr(vec![0xdc00, 0xd800]));
-        assert_eq!(both(r#""\ud83d\ude00\ud83d""#), V::WStr(vec![0x1f600, 0xd83d]));
-        assert_eq!(both(r#"{"\ud800": 1, "k": 2, "k": 3}"#), V::Dict(vec![(Err(vec![0xd800]), V::Int(1)), (Ok("k".into()), V::Int(2)), (Ok("k".into()), V::Int(3))]));
-        assert_eq!(both(&format!("-{}", "1".repeat(4300))), V::Big(format!("-{}", "1".repeat(4300))));
-        assert!(matches!(scan_v(&"1".repeat(4301), BIG), Err(Error::Value(m)) if m.contains("4301 digits")));
+        assert_eq!(
+            both(r#""\ud83d\ude00\ud83d""#),
+            V::WStr(vec![0x1f600, 0xd83d])
+        );
+        assert_eq!(
+            both(r#"{"\ud800": 1, "k": 2, "k": 3}"#),
+            V::Dict(vec![
+                (Err(vec![0xd800]), V::Int(1)),
+                (Ok("k".into()), V::Int(2)),
+                (Ok("k".into()), V::Int(3))
+            ])
+        );
+        assert_eq!(
+            both(&format!("-{}", "1".repeat(4300))),
+            V::Big(format!("-{}", "1".repeat(4300)))
+        );
+        assert!(
+            matches!(scan_v(&"1".repeat(4301), BIG), Err(Error::Value(m)) if m.contains("4301 digits"))
+        );
     }
 
     #[test]
@@ -772,7 +838,10 @@ mod tests {
         assert_eq!(s("-0"), f(-0.0));
         assert_eq!(s("[-0, NaN]"), V::List(vec![f(-0.0), f(f64::NAN)]));
         assert_eq!(s("100000000000000000000"), f(1e20));
-        assert_eq!(s("[100000000000000000000, NaN]"), V::List(vec![f(1e20), f(f64::NAN)]));
+        assert_eq!(
+            s("[100000000000000000000, NaN]"),
+            V::List(vec![f(1e20), f(f64::NAN)])
+        );
         assert_eq!(s("18446744073709551615"), V::UInt(u64::MAX));
     }
 
@@ -783,19 +852,54 @@ mod tests {
             other => panic!("{t}: {other:?}"),
         };
         assert_eq!(err(""), "Expecting value: line 1 column 1 (char 0)");
-        assert_eq!(err("[1,]"), "Illegal trailing comma before end of array: line 1 column 3 (char 2)");
-        assert_eq!(err("{\"a\": 1,}"), "Illegal trailing comma before end of object: line 1 column 8 (char 7)");
-        assert_eq!(err("{\"a\" 1}"), "Expecting ':' delimiter: line 1 column 6 (char 5)");
-        assert_eq!(err("{1: 1}"), "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)");
-        assert_eq!(err("[1 2]"), "Expecting ',' delimiter: line 1 column 4 (char 3)");
-        assert_eq!(err("\"é\n\"x"), "Invalid control character at: line 1 column 3 (char 2)");
-        assert_eq!(err("[\"é\",\n 1] x"), "Extra data: line 2 column 5 (char 10)");
-        assert_eq!(err("\"ab"), "Unterminated string starting at: line 1 column 1 (char 0)");
+        assert_eq!(
+            err("[1,]"),
+            "Illegal trailing comma before end of array: line 1 column 3 (char 2)"
+        );
+        assert_eq!(
+            err("{\"a\": 1,}"),
+            "Illegal trailing comma before end of object: line 1 column 8 (char 7)"
+        );
+        assert_eq!(
+            err("{\"a\" 1}"),
+            "Expecting ':' delimiter: line 1 column 6 (char 5)"
+        );
+        assert_eq!(
+            err("{1: 1}"),
+            "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+        );
+        assert_eq!(
+            err("[1 2]"),
+            "Expecting ',' delimiter: line 1 column 4 (char 3)"
+        );
+        assert_eq!(
+            err("\"é\n\"x"),
+            "Invalid control character at: line 1 column 3 (char 2)"
+        );
+        assert_eq!(
+            err("[\"é\",\n 1] x"),
+            "Extra data: line 2 column 5 (char 10)"
+        );
+        assert_eq!(
+            err("\"ab"),
+            "Unterminated string starting at: line 1 column 1 (char 0)"
+        );
         assert_eq!(err(r#""\x""#), "Invalid \\escape: line 1 column 2 (char 1)");
-        assert_eq!(err(r#""\u12""#), "Invalid \\uXXXX escape: line 1 column 3 (char 2)");
-        assert_eq!(err(r#""\ud800\uzzzz""#), "Invalid \\uXXXX escape: line 1 column 9 (char 8)");
-        assert_eq!(err("\u{feff}1"), "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)");
-        for t in ["01", "-", "1.", ".5", "+1", "-NaN", "nul", "[", "{", "{\"a\"", "NaNx", "1e", "tru"] {
+        assert_eq!(
+            err(r#""\u12""#),
+            "Invalid \\uXXXX escape: line 1 column 3 (char 2)"
+        );
+        assert_eq!(
+            err(r#""\ud800\uzzzz""#),
+            "Invalid \\uXXXX escape: line 1 column 9 (char 8)"
+        );
+        assert_eq!(
+            err("\u{feff}1"),
+            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+        );
+        for t in [
+            "01", "-", "1.", ".5", "+1", "-NaN", "nul", "[", "{", "{\"a\"", "NaNx", "1e", "tru",
+        ] {
             err(t);
             assert!(loads::<V>(t, BIG).is_err(), "{t}");
         }
@@ -816,13 +920,22 @@ mod tests {
                     assert!(fast_v(&deep(SERDE_DEPTH, "1")).is_some());
                     assert!(fast_v(&deep(SERDE_DEPTH + 1, "1")).is_none());
                     assert_eq!(ok(loads(&deep(60_000, ""), lim)), Ok(()));
-                    assert_eq!(ok(loads(&deep(60_001, ""), lim)), Err(Error::Recursion(false)));
+                    assert_eq!(
+                        ok(loads(&deep(60_001, ""), lim)),
+                        Err(Error::Recursion(false))
+                    );
                     let mixed = format!("[{}]", deep(5, "{\"a\": {}}"));
-                    assert_eq!(ok(loads(&mixed, Limit::containers(7))), Err(Error::Recursion(true)));
+                    assert_eq!(
+                        ok(loads(&mixed, Limit::containers(7))),
+                        Err(Error::Recursion(true))
+                    );
                     assert_eq!(ok(loads(&mixed, Limit::containers(8))), Ok(()));
                     // Scalars count too: level 3 holds the 1.
                     assert_eq!(ok(loads(&deep(2, "1"), Limit::values(3))), Ok(()));
-                    assert_eq!(ok(loads(&deep(2, "1"), Limit::values(2))), Err(Error::Recursion(false)));
+                    assert_eq!(
+                        ok(loads(&deep(2, "1"), Limit::values(2))),
+                        Err(Error::Recursion(false))
+                    );
                     assert_eq!(ok(loads(&deep(2, ""), Limit::values(2))), Ok(()));
                     assert_eq!(ok(loads(&deep(2, "1"), Limit::containers(2))), Ok(()));
                 })

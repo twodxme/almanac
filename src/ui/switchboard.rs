@@ -17,8 +17,8 @@ use crate::history;
 use crate::i18n::tr;
 use crate::plugins as plugins_mod;
 use crate::services;
-use crate::util;
 use crate::ui::shell::{self, exc_str, spawn_bg, Win};
+use crate::util;
 use crate::watcher;
 
 /// Switchboard state (`self.switch_body`, `self._switch_rows`).
@@ -47,7 +47,12 @@ pub struct SwitchOpts {
 
 impl Default for SwitchOpts {
     fn default() -> Self {
-        SwitchOpts { prefix: None, pills: Vec::new(), confirm_off: String::new(), sensitive: true }
+        SwitchOpts {
+            prefix: None,
+            pills: Vec::new(),
+            confirm_off: String::new(),
+            sensitive: true,
+        }
     }
 }
 
@@ -58,14 +63,20 @@ fn py_strip(s: &str) -> &str {
 
 /// `str.splitlines()[-1]`.
 fn py_last_line(s: &str) -> &str {
-    s.rsplit(['\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}'])
-        .next()
-        .unwrap_or("")
+    s.rsplit([
+        '\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}',
+    ])
+    .next()
+    .unwrap_or("")
 }
 
 /// Python's `repr(str)`.
 fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -118,19 +129,35 @@ fn service_apply(unit: &str, on: bool) -> ApplyResult {
     let args: Vec<&str> = argv.iter().map(String::as_str).collect();
     let r = util::run(&args, 60);
     if r.failed_to_start {
-        return Err(format!("[Errno 2] No such file or directory: {}", py_repr(&argv[0])));
+        return Err(format!(
+            "[Errno 2] No such file or directory: {}",
+            py_repr(&argv[0])
+        ));
     }
     if r.timed_out {
         let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
-        return Err(format!("Command '[{}]' timed out after 60 seconds", list.join(", ")));
+        return Err(format!(
+            "Command '[{}]' timed out after 60 seconds",
+            list.join(", ")
+        ));
     }
     if r.code != Some(0) {
-        let text = py_strip(if !r.stderr.is_empty() { &r.stderr } else { &r.stdout });
-        return Err(if !text.is_empty() { py_last_line(text).to_string() } else { "systemctl failed".to_string() });
+        let text = py_strip(if !r.stderr.is_empty() {
+            &r.stderr
+        } else {
+            &r.stdout
+        });
+        return Err(if !text.is_empty() {
+            py_last_line(text).to_string()
+        } else {
+            "systemctl failed".to_string()
+        });
     }
     // What is_enabled raises (output that does not decode, a NUL in the
     // name) is a ValueError: caught by the switch, which says why.
-    Ok(Some(services::try_is_enabled(unit).map_err(|e| exc_str(&e))?))
+    Ok(Some(
+        services::try_is_enabled(unit).map_err(|e| exc_str(&e))?,
+    ))
 }
 
 fn autostart_apply(e: &autostart::Entry, on: bool) -> ApplyResult {
@@ -156,7 +183,9 @@ fn schedule(on: bool) -> ApplyResult {
     if !ok {
         return Err(msg);
     }
-    Ok(Some(autoupdate::try_status().map_err(|e| exc_str(&e))?.enabled))
+    Ok(Some(
+        autoupdate::try_status().map_err(|e| exc_str(&e))?.enabled,
+    ))
 }
 
 impl Win {
@@ -170,7 +199,10 @@ impl Win {
         let (page, switch_body) = crate::ui::shell::page_body();
         let old = {
             let mut st = self.switchboard.borrow_mut();
-            (st.switch_body.replace(switch_body), std::mem::take(&mut st.switch_rows))
+            (
+                st.switch_body.replace(switch_body),
+                std::mem::take(&mut st.switch_rows),
+            )
         };
         drop(old);
         page.upcast()
@@ -226,7 +258,10 @@ impl Win {
             let bx = Win::section(&format!("{title} ({})", rows.len()), &note, None);
             for (row, text) in rows {
                 bx.rows.append(&row);
-                self.switchboard.borrow_mut().switch_rows.push((row.upcast(), text));
+                self.switchboard
+                    .borrow_mut()
+                    .switch_rows
+                    .push((row.upcast(), text));
             }
             switch_body.append(&bx.root);
         };
@@ -262,7 +297,9 @@ impl Win {
                     w.select_category("plugins");
                 }
             });
-            let links = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+            let links = gtk::ListBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .build();
             links.add_css_class("boxed-list");
             links.append(&row);
             switch_body.append(&links);
@@ -278,7 +315,12 @@ impl Win {
                 per-user override; the system's copy is never touched."),
             starts
                 .iter()
-                .map(|e| (self.switch_autostart_row(e), format!("{} {} {}", e.name, e.filename, e.comment)))
+                .map(|e| {
+                    (
+                        self.switch_autostart_row(e),
+                        format!("{} {} {}", e.name, e.filename, e.comment),
+                    )
+                })
                 .collect(),
         );
         section(
@@ -287,7 +329,12 @@ impl Win {
                 now and at every login. Essential ones ask first."),
             units
                 .iter()
-                .map(|u| (self.switch_service_row(u), format!("{} {}", u.description, u.unit)))
+                .map(|u| {
+                    (
+                        self.switch_service_row(u),
+                        format!("{} {}", u.description, u.unit),
+                    )
+                })
                 .collect(),
         );
         // `autoupdate.status()` raising stops `_switchboard_show` here.
@@ -302,7 +349,11 @@ impl Win {
 
         let switches = starts.len() + units.len() + 2;
         self.summarize(
-            &format!("{switches} switches · {} startup apps · {} services", starts.len(), units.len()),
+            &format!(
+                "{switches} switches · {} startup apps · {} services",
+                starts.len(),
+                units.len()
+            ),
             Some("switchboard"),
         );
         self.switchboard_filter(&self.search.text());
@@ -333,7 +384,12 @@ impl Win {
     where
         F: Fn(bool) -> ApplyResult + Send + Sync + 'static,
     {
-        let SwitchOpts { prefix, pills, confirm_off, sensitive } = opts;
+        let SwitchOpts {
+            prefix,
+            pills,
+            confirm_off,
+            sensitive,
+        } = opts;
         let row: adw::ActionRow = Win::plain(title, subtitle);
         row.set_subtitle_lines(1);
         row.set_tooltip_text(Some(subtitle));
@@ -341,7 +397,10 @@ impl Win {
             row.add_prefix(prefix);
         }
         for (label, css) in &pills {
-            let pill = gtk::Label::builder().label(label.as_str()).valign(gtk::Align::Center).build();
+            let pill = gtk::Label::builder()
+                .label(label.as_str())
+                .valign(gtk::Align::Center)
+                .build();
             pill.add_css_class(css);
             row.add_suffix(&pill);
         }
@@ -350,7 +409,14 @@ impl Win {
             .valign(gtk::Align::Center)
             .sensitive(sensitive)
             .build();
-        shell::name(&switch, &if active { format!("{title} on") } else { format!("{title} off") });
+        shell::name(
+            &switch,
+            &if active {
+                format!("{title} on")
+            } else {
+                format!("{title} off")
+            },
+        );
 
         let title = title.to_string();
         let apply = Arc::new(apply);
@@ -367,20 +433,35 @@ impl Win {
                     switch.set_sensitive(sensitive);
                     // Quietly: snapping back must not apply the change again.
                     guard.set(&switch, held);
-                    shell::name(&switch, &if held { format!("{title} on") } else { format!("{title} off") });
+                    shell::name(
+                        &switch,
+                        &if held {
+                            format!("{title} on")
+                        } else {
+                            format!("{title} off")
+                        },
+                    );
                 }
                 let word = if on { "on" } else { "off" };
                 if now == Some(on) {
                     if let Some(w) = w.upgrade() {
                         w.say(&format!("{title} {word}"), 5);
                     }
-                    if let Err(e) =
-                        history::record_checked(history::ALMANAC, &format!("{title} switched {word}"), "", "", &[])
-                    {
+                    if let Err(e) = history::record_checked(
+                        history::ALMANAC,
+                        &format!("{title} switched {word}"),
+                        "",
+                        "",
+                        &[],
+                    ) {
                         eprintln!("almanac: {e}");
                     }
                 } else if let Some(w) = w.upgrade() {
-                    let body = if err.is_empty() { tr("The change did not take effect") } else { err };
+                    let body = if err.is_empty() {
+                        tr("The change did not take effect")
+                    } else {
+                        err
+                    };
                     w.notify(&format!("{title} was not switched {word}"), &body, "normal");
                 }
             }
@@ -454,7 +535,10 @@ impl Win {
     }
 
     pub fn switch_autostart_row(&self, e: &autostart::Entry) -> adw::ActionRow {
-        let icon = gtk::Image::builder().pixel_size(28).valign(gtk::Align::Center).build();
+        let icon = gtk::Image::builder()
+            .pixel_size(28)
+            .valign(gtk::Align::Center)
+            .build();
         if e.icon.starts_with('/') {
             icon.set_from_file(Some(&e.icon));
         } else {
@@ -468,13 +552,20 @@ impl Win {
 
         let entry = e.clone();
         let apply = move |on: bool| autostart_apply(&entry, on);
-        let subtitle = if e.comment.is_empty() { &e.filename } else { &e.comment };
+        let subtitle = if e.comment.is_empty() {
+            &e.filename
+        } else {
+            &e.comment
+        };
         self.switch_row(
             &e.name,
             subtitle,
             e.enabled,
             apply,
-            SwitchOpts { prefix: Some(icon.upcast()), ..Default::default() },
+            SwitchOpts {
+                prefix: Some(icon.upcast()),
+                ..Default::default()
+            },
         )
     }
 
@@ -493,8 +584,10 @@ impl Win {
         if !u.essential.is_empty() {
             warn = format!("Without it: {} stops working.", u.essential.to_lowercase());
         } else if u.omarchy {
-            warn = tr("Omarchy set this up, and a later omarchy update may expect \
-                       it to be on.");
+            warn = tr(
+                "Omarchy set this up, and a later omarchy update may expect \
+                       it to be on.",
+            );
         }
 
         let unit = u.unit.clone();
@@ -510,13 +603,21 @@ impl Win {
             &u.unit,
             u.enabled,
             apply,
-            SwitchOpts { prefix: Some(icon.upcast()), pills, confirm_off: warn, ..Default::default() },
+            SwitchOpts {
+                prefix: Some(icon.upcast()),
+                pills,
+                confirm_off: warn,
+                ..Default::default()
+            },
         )
     }
 
     /// `Err` where `autoupdate.status()` raised (`scheduled`, asked by the
     /// worker), after the first row is made.
-    pub fn switch_almanac_rows(&self, scheduled: Result<bool, String>) -> Result<Vec<(adw::ActionRow, String)>, String> {
+    pub fn switch_almanac_rows(
+        &self,
+        scheduled: Result<bool, String>,
+    ) -> Result<Vec<(adw::ActionRow, String)>, String> {
         let icon = || -> gtk::Widget {
             gtk::Image::builder()
                 .icon_name("io.github.twodxme.Almanac")
@@ -526,16 +627,19 @@ impl Win {
                 .upcast()
         };
         let guard_row = (
-                self.switch_row(
-                    &tr("Settings watcher"),
-                    &tr("Notices settings reset to defaults, and plugin updates, \
+            self.switch_row(
+                &tr("Settings watcher"),
+                &tr("Notices settings reset to defaults, and plugin updates, \
                          while Almanac is closed"),
-                    watcher::enabled(),
-                    guard,
-                    SwitchOpts { prefix: Some(icon()), ..Default::default() },
-                ),
-                "settings watcher guard".to_string(),
-            );
+                watcher::enabled(),
+                guard,
+                SwitchOpts {
+                    prefix: Some(icon()),
+                    ..Default::default()
+                },
+            ),
+            "settings watcher guard".to_string(),
+        );
         let enabled = scheduled?;
         Ok(vec![
             guard_row,
@@ -545,7 +649,10 @@ impl Win {
                     &tr("What runs and how often: Preferences → Updates"),
                     enabled,
                     schedule,
-                    SwitchOpts { prefix: Some(icon()), ..Default::default() },
+                    SwitchOpts {
+                        prefix: Some(icon()),
+                        ..Default::default()
+                    },
                 ),
                 "scheduled updates timer".to_string(),
             ),
@@ -577,7 +684,13 @@ mod tests {
     fn spacing_comes_from_the_scale() {
         let scale = [0, 2, 4, 6, 8, 12, 16, 20, 24];
         let mut offenders = Vec::new();
-        for prop in [".spacing(", ".margin_start(", ".margin_end(", ".margin_top(", ".margin_bottom("] {
+        for prop in [
+            ".spacing(",
+            ".margin_start(",
+            ".margin_end(",
+            ".margin_top(",
+            ".margin_bottom(",
+        ] {
             for part in SRC.split(prop).skip(1) {
                 let num: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
                 if let Ok(n) = num.parse::<i32>() {
@@ -594,13 +707,25 @@ mod tests {
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
         let css = std::fs::read_to_string(root().join("data/style.css")).expect("style.css");
-        let pills = ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+        let pills = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ];
         let re = regex::Regex::new(r#""(pill(?:-[a-z]+)?)""#).expect("regex");
-        let used: Vec<&str> =
-            re.captures_iter(SRC).filter_map(|c| c.get(1).map(|m| m.as_str())).collect();
+        let used: Vec<&str> = re
+            .captures_iter(SRC)
+            .filter_map(|c| c.get(1).map(|m| m.as_str()))
+            .collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(css.contains(&format!(".{name}")), "{name} is applied but never styled");
+            assert!(
+                css.contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
             assert!(pills.contains(name), "unknown pill variant {name}");
         }
     }
@@ -613,7 +738,9 @@ mod tests {
             return; // Adwaita icon theme not installed
         }
         fn stems(dir: &Path, out: &mut std::collections::BTreeSet<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {

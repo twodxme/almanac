@@ -97,7 +97,9 @@ impl AppItem {
     /// The `AppItem` inside a list-model row, or None if the row holds
     /// something else.
     pub fn of(obj: &glib::Object) -> Option<Ref<'_, AppItem>> {
-        obj.downcast_ref::<glib::BoxedAnyObject>()?.try_borrow::<AppItem>().ok()
+        obj.downcast_ref::<glib::BoxedAnyObject>()?
+            .try_borrow::<AppItem>()
+            .ok()
     }
 }
 
@@ -119,6 +121,8 @@ impl PluginItem {
 
     /// The `PluginItem` inside a list-model row, or None.
     pub fn of(obj: &glib::Object) -> Option<Ref<'_, PluginItem>> {
-        obj.downcast_ref::<glib::BoxedAnyObject>()?.try_borrow::<PluginItem>().ok()
+        obj.downcast_ref::<glib::BoxedAnyObject>()?
+            .try_borrow::<PluginItem>()
+            .ok()
     }
 }

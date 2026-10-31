@@ -69,8 +69,15 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     while let Some((i, c)) = it.next() {
         let sep = matches!(
             c,
-            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}'
-                | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\u{0b}'
+                | '\u{0c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if !sep {
             continue;
@@ -161,7 +168,11 @@ fn os_error(e: &std::io::Error, path: Option<&Path>, path2: Option<&Path>) -> St
     match e.raw_os_error() {
         Some(n) => {
             let msg = e.to_string();
-            let mut out = format!("[Errno {n}] {}", msg.strip_suffix(&format!(" (os error {n})")).unwrap_or(&msg));
+            let mut out = format!(
+                "[Errno {n}] {}",
+                msg.strip_suffix(&format!(" (os error {n})"))
+                    .unwrap_or(&msg)
+            );
             if let Some(p) = path {
                 out.push_str(&format!(": {}", py_str_repr(&p.to_string_lossy())));
                 if let Some(p2) = path2 {
@@ -186,7 +197,10 @@ fn utf8_error(bytes: &[u8], e: &std::str::Utf8Error) -> String {
     if end - start <= 1 {
         format!("'utf-8' codec can't decode byte 0x{first:02x} in position {start}: {reason}")
     } else {
-        format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
+        format!(
+            "'utf-8' codec can't decode bytes in position {start}-{}: {reason}",
+            end - 1
+        )
     }
 }
 
@@ -248,7 +262,11 @@ impl Drop for PyVal {
 
 /// A str value from code points: `Str` unless it holds a lone surrogate.
 fn str_from_units(units: Vec<u32>) -> PyVal {
-    match units.iter().map(|u| char::from_u32(*u)).collect::<Option<String>>() {
+    match units
+        .iter()
+        .map(|u| char::from_u32(*u))
+        .collect::<Option<String>>()
+    {
         Some(s) => PyVal::Str(s),
         None => PyVal::SurStr(units),
     }
@@ -261,7 +279,8 @@ fn str_from_units(units: Vec<u32>) -> PyVal {
 pub(crate) const REPR_LIST_COST: u64 = 30651;
 pub(crate) const REPR_DICT_COST: u64 = 37228;
 pub(crate) const REPR_BUDGET: u64 = 37228 * 30651;
-pub(crate) const REPR_OVERFLOW: &str = "Stack overflow (used 8148 kB) while getting the repr of an object";
+pub(crate) const REPR_OVERFLOW: &str =
+    "Stack overflow (used 8148 kB) while getting the repr of an object";
 
 impl PyVal {
     /// From a serde value (the parity hook's arguments).
@@ -277,7 +296,9 @@ impl PyVal {
             Value::String(s) => PyVal::Str(s.clone()),
             Value::Array(a) => PyVal::List(a.iter().map(PyVal::from_json).collect()),
             Value::Object(o) => PyVal::Dict(
-                o.iter().map(|(k, x)| (PyVal::Str(k.clone()), PyVal::from_json(x))).collect(),
+                o.iter()
+                    .map(|(k, x)| (PyVal::Str(k.clone()), PyVal::from_json(x)))
+                    .collect(),
             ),
         }
     }
@@ -285,7 +306,10 @@ impl PyVal {
     /// `dict.get(key)` (None when absent).
     fn get(&self, key: &str) -> Option<&PyVal> {
         match self {
-            PyVal::Dict(d) => d.iter().find(|(k, _)| matches!(k, PyVal::Str(s) if s == key)).map(|(_, v)| v),
+            PyVal::Dict(d) => d
+                .iter()
+                .find(|(k, _)| matches!(k, PyVal::Str(s) if s == key))
+                .map(|(_, v)| v),
             _ => None,
         }
     }
@@ -324,7 +348,10 @@ impl PyVal {
     fn py_str(&self) -> Result<String, String> {
         match self {
             PyVal::Str(s) => Ok(s.clone()),
-            PyVal::SurStr(u) => Ok(u.iter().map(|c| char::from_u32(*c).unwrap_or('\u{fffd}')).collect()),
+            PyVal::SurStr(u) => Ok(u
+                .iter()
+                .map(|c| char::from_u32(*c).unwrap_or('\u{fffd}'))
+                .collect()),
             other => other.py_repr(),
         }
     }
@@ -438,7 +465,10 @@ impl From<LoadErr> for String {
 
 impl From<String> for LoadErr {
     fn from(msg: String) -> LoadErr {
-        LoadErr { msg, recursion: false }
+        LoadErr {
+            msg,
+            recursion: false,
+        }
     }
 }
 
@@ -447,7 +477,10 @@ impl From<String> for LoadErr {
 fn py_json_loads(text: &str) -> Result<PyVal, LoadErr> {
     use crate::util::pyjson;
     pyjson::loads(text, pyjson::Limit::containers(JSON_MAX_DEPTH)).map_err(|e| match e {
-        pyjson::Error::Value(msg) => LoadErr { msg, recursion: false },
+        pyjson::Error::Value(msg) => LoadErr {
+            msg,
+            recursion: false,
+        },
         pyjson::Error::Recursion(is_obj) => LoadErr {
             msg: format!(
                 "Stack overflow (used 8144 kB) while decoding a JSON {} from a unicode string",
@@ -511,10 +544,15 @@ fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
         PyVal::Int(i) => Ok(Some(*i)),
         PyVal::BigInt(_) => Ok(None),
         PyVal::Float(f) if f.is_nan() => Err("cannot convert float NaN to integer".into()),
-        PyVal::Float(f) if f.is_infinite() => Err("cannot convert float infinity to integer".into()),
+        PyVal::Float(f) if f.is_infinite() => {
+            Err("cannot convert float infinity to integer".into())
+        }
         PyVal::Float(f) => Ok((f.abs() < 1e37).then(|| f.trunc() as i128)),
         // A lone surrogate is never a digit.
-        PyVal::SurStr(u) => Err(format!("invalid literal for int() with base 10: {}", py_units_repr(u))),
+        PyVal::SurStr(u) => Err(format!(
+            "invalid literal for int() with base 10: {}",
+            py_units_repr(u)
+        )),
         PyVal::Str(s) => {
             let bad = || format!("invalid literal for int() with base 10: {}", py_str_repr(s));
             // int() strips ASCII whitespace (space \t \n \v \f \r) and the
@@ -524,7 +562,11 @@ fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
                 Some(b) => (true, b),
                 None => (false, t.strip_prefix('+').unwrap_or(t)),
             };
-            if body.is_empty() || body.starts_with('_') || body.ends_with('_') || body.contains("__") {
+            if body.is_empty()
+                || body.starts_with('_')
+                || body.ends_with('_')
+                || body.contains("__")
+            {
                 return Err(bad());
             }
             let mut digits = String::new();
@@ -538,7 +580,10 @@ fn py_int(v: &PyVal) -> Result<Option<i128>, String> {
             if digits.len() > INT_MAX_STR_DIGITS {
                 return Err(int_limit_error(digits.len()));
             }
-            Ok(digits.parse::<i128>().ok().map(|n| if neg { -n } else { n }))
+            Ok(digits
+                .parse::<i128>()
+                .ok()
+                .map(|n| if neg { -n } else { n }))
         }
         other => Err(format!(
             "int() argument must be a string, a bytes-like object or a real number, not '{}'",
@@ -586,8 +631,10 @@ pub fn available() -> bool {
 /// with the message to show.
 pub fn normalise(value: &str) -> Result<(String, u32, String), String> {
     let is_mod = |p: &str| MODIFIERS.iter().any(|(m, _)| *m == p);
-    let parts: Vec<String> =
-        value.split('+').map(|p| py_strip(p).to_uppercase().replace("CONTROL", "CTRL")).collect();
+    let parts: Vec<String> = value
+        .split('+')
+        .map(|p| py_strip(p).to_uppercase().replace("CONTROL", "CTRL"))
+        .collect();
     let keys: Vec<&String> = parts.iter().filter(|p| !is_mod(p)).collect();
     let mods: Vec<&String> = parts.iter().filter(|p| is_mod(p)).collect();
     let unique: std::collections::HashSet<&String> = parts.iter().collect();
@@ -596,11 +643,18 @@ pub fn normalise(value: &str) -> Result<(String, u32, String), String> {
                     and one key, such as Super + Alt + V."
             .into());
     }
-    let ordered: Vec<(&str, u32)> =
-        MODIFIERS.iter().copied().filter(|(m, _)| mods.iter().any(|x| x.as_str() == *m)).collect();
+    let ordered: Vec<(&str, u32)> = MODIFIERS
+        .iter()
+        .copied()
+        .filter(|(m, _)| mods.iter().any(|x| x.as_str() == *m))
+        .collect();
     let mut names: Vec<&str> = ordered.iter().map(|(m, _)| *m).collect();
     names.push(keys[0]);
-    Ok((names.join(" + "), ordered.iter().map(|(_, v)| v).sum(), keys[0].clone()))
+    Ok((
+        names.join(" + "),
+        ordered.iter().map(|(_, v)| v).sum(),
+        keys[0].clone(),
+    ))
 }
 
 fn _block(pid: &str, combo: &str) -> String {
@@ -703,12 +757,18 @@ fn conflict_py(binds: &[PyVal], combo: &str, pid: &str) -> Result<String, String
         if bound == key && b.get("description") == Some(&PyVal::Str(format!("Almanac: {pid}"))) {
             continue; // our own, being replaced
         }
-        let what = match ["description", "arg", "dispatcher"].iter().filter_map(|k| b.get(k)).find(|v| v.truthy()) {
+        let what = match ["description", "arg", "dispatcher"]
+            .iter()
+            .filter_map(|k| b.get(k))
+            .find(|v| v.truthy())
+        {
             Some(v) => v.py_str()?,
             None => "another action".into(),
         };
         if unsure || truthy("submap") {
-            return Ok(format!("Cannot be sure it is free ({what}). Choose another."));
+            return Ok(format!(
+                "Cannot be sure it is free ({what}). Choose another."
+            ));
         }
         return Ok(format!("Already used by {what}."));
     }
@@ -746,7 +806,8 @@ pub fn _read() -> Result<(String, u32), String> {
         return Err("bindings.lua is not a regular file you own.".into());
     }
     let mut bytes = Vec::new();
-    fh.read_to_end(&mut bytes).map_err(|e| os_error(&e, None, None))?;
+    fh.read_to_end(&mut bytes)
+        .map_err(|e| os_error(&e, None, None))?;
     let text = decode_utf8(bytes)?;
     Ok((universal_newlines(&text), info.mode() & 0o7777))
 }
@@ -793,7 +854,8 @@ fn _write(raw: &str, mode: u32) -> Result<(), String> {
     let (mut fh, tmp) = mkstemp(&parent, ".almanac-shortcut-")?;
     let res = (|| {
         let err = |e: std::io::Error| os_error(&e, None, None);
-        fh.set_permissions(std::fs::Permissions::from_mode(mode)).map_err(err)?;
+        fh.set_permissions(std::fs::Permissions::from_mode(mode))
+            .map_err(err)?;
         fh.write_all(raw.as_bytes()).map_err(err)?;
         fh.flush().map_err(err)?;
         fh.sync_all().map_err(err)?;
@@ -814,14 +876,21 @@ fn _write(raw: &str, mode: u32) -> Result<(), String> {
 fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String), String> {
     // communicate(timeout=...): read both pipes to EOF and reap the child,
     // all within the one deadline. stdin is ours, as run() leaves it.
-    let out = crate::util::run_bytes(argv, &crate::util::RunOpts {
-        timeout: Some(std::time::Duration::from_secs(timeout)),
-        stdin: crate::util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = crate::util::run_bytes(
+        argv,
+        &crate::util::RunOpts {
+            timeout: Some(std::time::Duration::from_secs(timeout)),
+            stdin: crate::util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     if out.failed_to_start {
         return Err(match out.start_errno {
-            Some(n) => os_error(&std::io::Error::from_raw_os_error(n), argv.first().map(Path::new), None),
+            Some(n) => os_error(
+                &std::io::Error::from_raw_os_error(n),
+                argv.first().map(Path::new),
+                None,
+            ),
             None => out.start_error,
         });
     }
@@ -829,7 +898,10 @@ fn run_text(argv: &[&str], timeout: u64) -> Result<(Option<i32>, String, String)
         // run(): process.kill(); process.wait(); raise -- TimeoutExpired,
         // without decoding what was read.
         let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
-        return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
+        return Err(format!(
+            "Command '[{}]' timed out after {timeout} seconds",
+            list.join(", ")
+        ));
     }
     // Text mode decodes stdout, then stderr.
     let stdout = universal_newlines(&decode_utf8(out.stdout)?);
@@ -846,7 +918,11 @@ pub fn _hyprctl(args: &[&str]) -> Result<String, String> {
     if code != Some(0) {
         let msg = if !stderr.is_empty() { &stderr } else { &stdout };
         let msg = py_strip(msg);
-        return Err(if msg.is_empty() { "hyprctl failed".into() } else { msg.to_string() });
+        return Err(if msg.is_empty() {
+            "hyprctl failed".into()
+        } else {
+            msg.to_string()
+        });
     }
     Ok(py_strip(&stdout).to_string())
 }
@@ -901,7 +977,11 @@ pub fn set_shortcut_with(
             if !why.is_empty() {
                 return Err(why);
             }
-            new = format!("{}\n{}", stripped.trim_end_matches('\n'), _block(pid, &combo));
+            new = format!(
+                "{}\n{}",
+                stripped.trim_end_matches('\n'),
+                _block(pid, &combo)
+            );
             Some(combo)
         }
     };
@@ -964,9 +1044,10 @@ pub fn try_has_panel(plugin_dir: &Path) -> Result<bool, String> {
     if !matches!(points, PyVal::Dict(_)) {
         return Err(no_get(points));
     }
-    Ok(["panel", "barWidget", "overlay"].iter().any(|k| points.get(k).is_some_and(PyVal::truthy)))
+    Ok(["panel", "barWidget", "overlay"]
+        .iter()
+        .any(|k| points.get(k).is_some_and(PyVal::truthy)))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -984,7 +1065,9 @@ mod tests {
 
     impl Fixture {
         fn new() -> Fixture {
-            let lock = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = crate::util::TEST_ENV
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let hypr = tmp.path().join("hypr");
             std::fs::create_dir(&hypr).unwrap();
@@ -992,7 +1075,12 @@ mod tests {
             std::fs::write(&path, ORIGINAL).unwrap();
             let saved = std::env::var_os("XDG_CONFIG_HOME");
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            Fixture { _tmp: tmp, path, saved, _lock: lock }
+            Fixture {
+                _tmp: tmp,
+                path,
+                saved,
+                _lock: lock,
+            }
         }
 
         fn read(&self) -> String {
@@ -1027,7 +1115,11 @@ mod tests {
                 return Ok("ok".into());
             }
             if args == ["configerrors"] {
-                return Ok(if reloaded { errors_after_reload.into() } else { String::new() });
+                return Ok(if reloaded {
+                    errors_after_reload.into()
+                } else {
+                    String::new()
+                });
             }
             Ok(String::new())
         }
@@ -1062,7 +1154,12 @@ mod tests {
     #[test]
     fn test_a_rejected_change_is_rolled_back() {
         let f = Fixture::new();
-        assert!(set_shortcut_with("lxp.vitals", Some("super+alt+v"), &mut hyprctl("line 3: bad bind")).is_err());
+        assert!(set_shortcut_with(
+            "lxp.vitals",
+            Some("super+alt+v"),
+            &mut hyprctl("line 3: bad bind")
+        )
+        .is_err());
         assert_eq!(f.read(), ORIGINAL);
     }
 

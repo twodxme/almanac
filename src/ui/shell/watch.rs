@@ -20,18 +20,19 @@ impl Win {
     pub fn watch_pacman(&self) {
         self.shell.borrow_mut().pending_rescan = None;
         let gfile = gio::File::for_path("/var/log/pacman.log");
-        let monitor = match gfile.monitor_file(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>) {
-            Ok(m) => {
-                let w = self.downgrade();
-                m.connect_changed(move |_, _, _, _| {
-                    if let Some(w) = w.upgrade() {
-                        w.on_pacman_changed();
-                    }
-                });
-                Some(m)
-            }
-            Err(_) => None, // no watch is survivable; Rescan still works
-        };
+        let monitor =
+            match gfile.monitor_file(gio::FileMonitorFlags::NONE, None::<&gio::Cancellable>) {
+                Ok(m) => {
+                    let w = self.downgrade();
+                    m.connect_changed(move |_, _, _, _| {
+                        if let Some(w) = w.upgrade() {
+                            w.on_pacman_changed();
+                        }
+                    });
+                    Some(m)
+                }
+                Err(_) => None, // no watch is survivable; Rescan still works
+            };
         self.shell.borrow_mut().monitor = monitor;
     }
 
@@ -86,7 +87,9 @@ impl Win {
             .map(|r| r.backup.to_string_lossy().into_owned())
             .collect();
         self.shell.borrow_mut().config_reported = reported;
-        let Some(root) = crate::guard::defaults_root() else { return };
+        let Some(root) = crate::guard::defaults_root() else {
+            return;
+        };
         let mut subs: Vec<PathBuf> = if root.is_dir() {
             std::fs::read_dir(&root)
                 .map(|rd| rd.flatten().map(|e| e.path()).collect())
@@ -96,7 +99,9 @@ impl Win {
         };
         subs.sort();
         for sub in subs {
-            let Some(sub_name) = sub.file_name() else { continue };
+            let Some(sub_name) = sub.file_name() else {
+                continue;
+            };
             let target = crate::guard::config_home().join(sub_name);
             if !target.is_dir() {
                 continue;
@@ -122,7 +127,10 @@ impl Win {
         if event != gio::FileMonitorEvent::Created {
             return;
         }
-        let base = file.basename().map(|b| b.to_string_lossy().into_owned()).unwrap_or_default();
+        let base = file
+            .basename()
+            .map(|b| b.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if !crate::guard::BAK.is_match(&base) {
             return;
         }
@@ -166,8 +174,11 @@ impl Win {
                 .iter()
                 .filter(|r| !st.config_reported.contains(&*r.backup.to_string_lossy()))
                 .collect();
-            st.config_reported
-                .extend(found.iter().map(|r| r.backup.to_string_lossy().into_owned()));
+            st.config_reported.extend(
+                found
+                    .iter()
+                    .map(|r| r.backup.to_string_lossy().into_owned()),
+            );
             new
         };
         if new.is_empty() {
@@ -175,7 +186,8 @@ impl Win {
         }
         let names = new.iter().map(|r| r.name()).collect::<Vec<_>>().join(", ");
         let lost: usize = new.iter().map(|r| r.lost.len()).sum();
-        let body = format!(
+        let body =
+            format!(
             "{names} was replaced with the shipped defaults{}. Your version was kept — restore it \
              from Health check.",
             if lost != 0 { format!(", removing {lost} of your entries") } else { String::new() }

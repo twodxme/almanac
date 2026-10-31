@@ -14,7 +14,9 @@ use super::*;
 pub fn snapshot_path() -> PathBuf {
     match std::env::var_os("XDG_CACHE_HOME") {
         Some(v) => PathBuf::from(v).join("almanac/inventory.json"),
-        None => crate::util::home().join(".cache").join("almanac/inventory.json"),
+        None => crate::util::home()
+            .join(".cache")
+            .join("almanac/inventory.json"),
     }
 }
 
@@ -28,7 +30,11 @@ struct Snapshot {
 }
 
 fn stamp_secs() -> Option<(f64, f64)> {
-    let secs = |t: std::time::SystemTime| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let secs = |t: std::time::SystemTime| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    };
     pacman_db_stamp().map(|(local, sync)| (secs(local), secs(sync)))
 }
 
@@ -62,7 +68,10 @@ pub fn load_snapshot() -> Option<Vec<App>> {
 pub(super) fn save_snapshot_to(path: &Path, apps: &[App], stamp: Option<(f64, f64)>) {
     // Rows can hold values nested hundreds deep; serde recurses per level.
     let bytes = crate::util::with_stack(crate::util::DEEP_STACK, || {
-        serde_json::to_vec(&Snapshot { stamp, apps: apps.to_vec() })
+        serde_json::to_vec(&Snapshot {
+            stamp,
+            apps: apps.to_vec(),
+        })
     });
     if let Ok(bytes) = bytes {
         let _ = crate::util::atomic_write(path, bytes);
@@ -71,11 +80,15 @@ pub(super) fn save_snapshot_to(path: &Path, apps: &[App], stamp: Option<(f64, f6
 
 pub(super) fn load_snapshot_from(path: &Path, stamp: Option<(f64, f64)>) -> Option<Vec<App>> {
     let bytes = std::fs::read(path).ok()?;
-    let snap: Snapshot = crate::util::with_stack(crate::util::DEEP_STACK, || serde_json::from_slice(&bytes)).ok()?;
+    let snap: Snapshot =
+        crate::util::with_stack(crate::util::DEEP_STACK, || serde_json::from_slice(&bytes)).ok()?;
     let unchanged = stamp.is_some() && snap.stamp == stamp;
     let mut apps = snap.apps;
     for app in &mut apps {
-        let pacman = matches!(app.extra.get("real_source").and_then(Value::as_str), Some(REPO | AUR));
+        let pacman = matches!(
+            app.extra.get("real_source").and_then(Value::as_str),
+            Some(REPO | AUR)
+        );
         if !(unchanged && pacman) {
             forget_update(app);
         }
@@ -89,7 +102,11 @@ fn forget_update(app: &mut App) {
     if let Some(Value::Object(raw)) = app.extra.get_mut(app::RAW_FIELDS) {
         raw.remove("update");
     }
-    for (key, none) in [("critical", json!("")), ("behind", json!([0, ""])), ("git_behind", json!(0))] {
+    for (key, none) in [
+        ("critical", json!("")),
+        ("behind", json!([0, ""])),
+        ("git_behind", json!(0)),
+    ] {
         if app.extra.contains_key(key) {
             app.extra.insert(key.into(), none);
         }
@@ -103,16 +120,29 @@ mod tests {
     fn row(name: &str, source: &str, real: &str, update: &str) -> App {
         let mut extra = Map::new();
         extra.insert("real_source".into(), json!(real));
-        extra.insert("critical".into(), json!(if update.is_empty() { "" } else { "security" }));
+        extra.insert(
+            "critical".into(),
+            json!(if update.is_empty() { "" } else { "security" }),
+        );
         extra.insert("behind".into(), json!([1, "minor"]));
-        App { name: name.into(), version: "1.0".into(), source: source.into(), update: update.into(), extra: extra.into(), ..Default::default() }
+        App {
+            name: name.into(),
+            version: "1.0".into(),
+            source: source.into(),
+            update: update.into(),
+            extra: extra.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn the_last_scan_comes_back_as_it_was_while_pacman_is_unchanged() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("almanac/inventory.json");
-        let apps = vec![row("firefox", REPO, REPO, "2.0"), row("yay", AUR, AUR, "13.0")];
+        let apps = vec![
+            row("firefox", REPO, REPO, "2.0"),
+            row("yay", AUR, AUR, "13.0"),
+        ];
         save_snapshot_to(&path, &apps, Some((1.0, 2.0)));
         assert_eq!(load_snapshot_from(&path, Some((1.0, 2.0))).unwrap(), apps);
     }
@@ -121,7 +151,11 @@ mod tests {
     fn an_update_the_last_scan_saw_is_dropped_once_pacman_has_changed() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("inventory.json");
-        save_snapshot_to(&path, &[row("firefox", REPO, REPO, "2.0")], Some((1.0, 2.0)));
+        save_snapshot_to(
+            &path,
+            &[row("firefox", REPO, REPO, "2.0")],
+            Some((1.0, 2.0)),
+        );
         for now in [Some((5.0, 2.0)), Some((1.0, 9.0)), None] {
             let back = load_snapshot_from(&path, now).unwrap();
             assert_eq!(back[0].name, "firefox", "the row stays");
@@ -138,7 +172,11 @@ mod tests {
         let mut plugin = row("radar", LOCAL, "", "3 commits");
         plugin.extra.remove("real_source");
         plugin.extra.insert("git_behind".into(), json!(3));
-        save_snapshot_to(&path, &[plugin, row("omarchy", SYSTEM, REPO, "3.1")], Some((1.0, 2.0)));
+        save_snapshot_to(
+            &path,
+            &[plugin, row("omarchy", SYSTEM, REPO, "3.1")],
+            Some((1.0, 2.0)),
+        );
         let back = load_snapshot_from(&path, Some((1.0, 2.0))).unwrap();
         assert!(!back[0].has_update());
         assert_eq!(back[0].extra.get("git_behind"), Some(&json!(0)));

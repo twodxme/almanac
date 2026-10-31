@@ -55,14 +55,24 @@ impl From<Map<String, Value>> for Extra {
 
 impl Clone for Extra {
     fn clone(&self) -> Self {
-        Extra(self.0.iter().map(|(k, v)| (k.clone(), crate::util::tree::clone_value(v))).collect())
+        Extra(
+            self.0
+                .iter()
+                .map(|(k, v)| (k.clone(), crate::util::tree::clone_value(v)))
+                .collect(),
+        )
     }
 }
 
 impl PartialEq for Extra {
     fn eq(&self, other: &Self) -> bool {
         self.0.len() == other.0.len()
-            && self.0.iter().all(|(k, v)| other.0.get(k).is_some_and(|w| crate::util::tree::eq_value(v, w)))
+            && self.0.iter().all(|(k, v)| {
+                other
+                    .0
+                    .get(k)
+                    .is_some_and(|w| crate::util::tree::eq_value(v, w))
+            })
     }
 }
 
@@ -78,7 +88,14 @@ impl Drop for Extra {
 /// plain str (two noncharacters no JSON the app reads contains).
 pub(super) const RAW_FIELDS: &str = "\u{10FFFF}\u{FDD0}py:fields";
 
-pub(super) const APP_FIELDS: [&str; 6] = ["name", "version", "source", "description", "update", "exec_path"];
+pub(super) const APP_FIELDS: [&str; 6] = [
+    "name",
+    "version",
+    "source",
+    "description",
+    "update",
+    "exec_path",
+];
 
 impl App {
     fn field_mut(&mut self, field: &str) -> Option<&mut String> {
@@ -100,7 +117,11 @@ impl App {
         if let Some(f) = self.field_mut(field) {
             // A falsy update (None, 0) shows as no update, as `has_update`
             // reads it.
-            *f = if field == "update" && !truthy(v) { String::new() } else { py_str(v) };
+            *f = if field == "update" && !truthy(v) {
+                String::new()
+            } else {
+                py_str(v)
+            };
         }
         if plain {
             if let Some(Value::Object(r)) = self.extra.get_mut(RAW_FIELDS) {
@@ -108,8 +129,10 @@ impl App {
             }
             return;
         }
-        if let Value::Object(r) =
-            self.extra.entry(RAW_FIELDS.to_string()).or_insert_with(|| Value::Object(Map::new()))
+        if let Value::Object(r) = self
+            .extra
+            .entry(RAW_FIELDS.to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
         {
             r.insert(field.to_string(), v.clone());
         }
@@ -135,7 +158,12 @@ impl App {
     /// `App(name=..., version=..., source=...)` with every other field at
     /// its default; set the rest with struct update syntax.
     pub fn new(name: &str, version: &str, source: &str) -> App {
-        App { name: name.to_string(), version: version.to_string(), source: source.to_string(), ..Default::default() }
+        App {
+            name: name.to_string(),
+            version: version.to_string(),
+            source: source.to_string(),
+            ..Default::default()
+        }
     }
 
     /// `@property has_update`.
@@ -166,7 +194,14 @@ impl Serialize for App {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let raw = self.extra.get(RAW_FIELDS).and_then(Value::as_object);
-        let text = [&self.name, &self.version, &self.source, &self.description, &self.update, &self.exec_path];
+        let text = [
+            &self.name,
+            &self.version,
+            &self.source,
+            &self.description,
+            &self.update,
+            &self.exec_path,
+        ];
         let mut st = s.serialize_struct("App", 7)?;
         for (k, t) in APP_FIELDS.iter().zip(text) {
             match raw.and_then(|r| r.get(*k)) {
@@ -197,9 +232,19 @@ impl<'de> Deserialize<'de> for App {
             extra: Map<String, Value>,
         }
         let w = Wire::deserialize(d)?;
-        let mut app = App { extra: w.extra.into(), ..Default::default() };
+        let mut app = App {
+            extra: w.extra.into(),
+            ..Default::default()
+        };
         app.extra.remove(RAW_FIELDS);
-        for (k, v) in APP_FIELDS.iter().zip([w.name, w.version, w.source, w.description, w.update, w.exec_path]) {
+        for (k, v) in APP_FIELDS.iter().zip([
+            w.name,
+            w.version,
+            w.source,
+            w.description,
+            w.update,
+            w.exec_path,
+        ]) {
             if let Some(v) = v {
                 app.set_value(k, &v);
             }

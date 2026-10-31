@@ -12,7 +12,9 @@ fn start() -> Instant {
 
 fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("ALMANAC_TIMINGS").is_some_and(|v| !v.is_empty() && v != "0"))
+    *ON.get_or_init(|| {
+        std::env::var_os("ALMANAC_TIMINGS").is_some_and(|v| !v.is_empty() && v != "0")
+    })
 }
 
 /// The clock starts here: call it first thing.
@@ -32,5 +34,8 @@ pub fn mark(what: &str) {
         return;
     }
     seen.push(what.to_string());
-    eprintln!("almanac: {:>7.1} ms  {what}", start().elapsed().as_secs_f64() * 1000.0);
+    eprintln!(
+        "almanac: {:>7.1} ms  {what}",
+        start().elapsed().as_secs_f64() * 1000.0
+    );
 }

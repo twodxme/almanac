@@ -51,7 +51,10 @@ fn py_norm(p: &[u8]) -> Vec<u8> {
     } else {
         (b"//", &p[2..])
     };
-    let parts: Vec<&[u8]> = rest.split(|&c| c == b'/').filter(|x| !x.is_empty() && *x != b".").collect();
+    let parts: Vec<&[u8]> = rest
+        .split(|&c| c == b'/')
+        .filter(|x| !x.is_empty() && *x != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend_from_slice(&parts.join(&b'/'));
     if out.is_empty() {
@@ -74,7 +77,11 @@ fn py_home() -> Option<Vec<u8>> {
     while h.last() == Some(&b'/') {
         h = &h[..h.len() - 1];
     }
-    Some(if h.is_empty() { b"/".to_vec() } else { h.to_vec() })
+    Some(if h.is_empty() {
+        b"/".to_vec()
+    } else {
+        h.to_vec()
+    })
 }
 
 /// `pwd.getpwuid(os.getuid()).pw_dir`; None for KeyError (no entry).
@@ -106,23 +113,37 @@ fn to_path(b: Vec<u8>) -> PathBuf {
 fn config_root() -> Vec<u8> {
     match std::env::var_os("XDG_CONFIG_HOME") {
         Some(v) => v.into_vec(),
-        None => py_norm(&py_join(&py_norm(&py_home().unwrap_or_else(|| b"~".to_vec())), b".config")),
+        None => py_norm(&py_join(
+            &py_norm(&py_home().unwrap_or_else(|| b"~".to_vec())),
+            b".config",
+        )),
     }
 }
 
-pub static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| to_path(py_norm(&py_join(&config_root(), b"almanac"))));
-pub static CONFIG: LazyLock<PathBuf> =
-    LazyLock::new(|| to_path(py_norm(&py_join(CONFIG_DIR.as_os_str().as_bytes(), b"auto-update.json"))));
+pub static CONFIG_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| to_path(py_norm(&py_join(&config_root(), b"almanac"))));
+pub static CONFIG: LazyLock<PathBuf> = LazyLock::new(|| {
+    to_path(py_norm(&py_join(
+        CONFIG_DIR.as_os_str().as_bytes(),
+        b"auto-update.json",
+    )))
+});
 pub const UNIT: &str = "omarchy-auto-update.timer";
 pub static TIMER_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
-    to_path(py_norm(&py_join(&py_join(&config_root(), b"systemd/user"), UNIT.as_bytes())))
+    to_path(py_norm(&py_join(
+        &py_join(&config_root(), b"systemd/user"),
+        UNIT.as_bytes(),
+    )))
 });
 /// The timer as the package installs it. Never edited: a schedule chosen
 /// here goes in [`SCHEDULE_DROPIN`], which overrides only `OnCalendar=`.
 pub const SHIPPED_TIMER: &str = "/usr/lib/systemd/user/omarchy-auto-update.timer";
 /// The user's override of the shipped timer's schedule.
-pub static SCHEDULE_DROPIN: LazyLock<PathBuf> =
-    LazyLock::new(|| TIMER_FILE.with_file_name(format!("{UNIT}.d")).join("schedule.conf"));
+pub static SCHEDULE_DROPIN: LazyLock<PathBuf> = LazyLock::new(|| {
+    TIMER_FILE
+        .with_file_name(format!("{UNIT}.d"))
+        .join("schedule.conf")
+});
 /// The script the timer runs, as the package installs it.
 pub const SHIPPED_SCRIPT: &str = "/usr/lib/almanac/omarchy-auto-update";
 
@@ -142,7 +163,11 @@ pub fn script_path() -> PathBuf {
 }
 
 fn script_path_in(user_service: &Path, shipped: &Path, home: &Path) -> PathBuf {
-    if let Some(exec) = std::fs::read_to_string(user_service).ok().as_deref().and_then(|t| exec_start(t, home)) {
+    if let Some(exec) = std::fs::read_to_string(user_service)
+        .ok()
+        .as_deref()
+        .and_then(|t| exec_start(t, home))
+    {
         return exec;
     }
     if shipped.exists() {
@@ -155,8 +180,14 @@ fn script_path_in(user_service: &Path, shipped: &Path, home: &Path) -> PathBuf {
 /// The program a service's last `ExecStart=` runs, `%h` as the home
 /// folder; None when it has none or names it some other way.
 fn exec_start(unit: &str, home: &Path) -> Option<PathBuf> {
-    let line = unit.lines().rev().find_map(|l| l.trim().strip_prefix("ExecStart="))?;
-    let prog = line.split_whitespace().next()?.trim_start_matches(['-', '@', ':', '+', '!']);
+    let line = unit
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix("ExecStart="))?;
+    let prog = line
+        .split_whitespace()
+        .next()?
+        .trim_start_matches(['-', '@', ':', '+', '!']);
     let prog = match prog.strip_prefix("%h/") {
         Some(rest) => home.join(rest),
         None => PathBuf::from(prog),
@@ -188,7 +219,11 @@ struct TimerFiles<'a> {
 
 impl TimerFiles<'static> {
     fn real() -> Self {
-        TimerFiles { user: &TIMER_FILE, shipped: Path::new(SHIPPED_TIMER), dropin: &SCHEDULE_DROPIN }
+        TimerFiles {
+            user: &TIMER_FILE,
+            shipped: Path::new(SHIPPED_TIMER),
+            dropin: &SCHEDULE_DROPIN,
+        }
     }
 }
 
@@ -197,7 +232,8 @@ impl TimerFiles<'_> {
     /// overrides any unit file, the user's copy included), or when the
     /// packaged unit is the only one.
     fn uses_dropin(&self) -> bool {
-        self.dropin.exists() || (std::fs::symlink_metadata(self.user).is_err() && self.shipped.exists())
+        self.dropin.exists()
+            || (std::fs::symlink_metadata(self.user).is_err() && self.shipped.exists())
     }
 }
 
@@ -205,8 +241,16 @@ impl TimerFiles<'_> {
 pub const SCHEDULES: &[(&str, &str, &str)] = &[
     ("daily", "Every day at 11:00", "*-*-* 11:00:00"),
     ("weekly", "Every Sunday at 11:00", "Sun 11:00"),
-    ("fortnightly", "Every other Sunday", "Sun *-*-1..7,15..21 11:00:00"),
-    ("monthly", "First Sunday of the month", "Sun *-*-1..7 11:00:00"),
+    (
+        "fortnightly",
+        "Every other Sunday",
+        "Sun *-*-1..7,15..21 11:00:00",
+    ),
+    (
+        "monthly",
+        "First Sunday of the month",
+        "Sun *-*-1..7 11:00:00",
+    ),
 ];
 
 // --- Python values, as json.loads builds them -----------------------------
@@ -228,7 +272,10 @@ impl PyStr {
 
     /// The text with any surrogate replaced by U+FFFD.
     pub fn to_string_lossy(&self) -> String {
-        self.0.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+        self.0
+            .iter()
+            .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+            .collect()
     }
 }
 
@@ -334,7 +381,11 @@ fn float_str(f: f64) -> String {
     if f.is_nan() {
         "nan".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "inf".into() } else { "-inf".into() }
+        if f > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }
     } else {
         crate::util::py_float_repr(f)
     }
@@ -345,7 +396,11 @@ fn json_float(f: f64) -> String {
     if f.is_nan() {
         "NaN".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "Infinity".into() } else { "-Infinity".into() }
+        if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        }
     } else {
         crate::util::py_float_repr(f)
     }
@@ -367,7 +422,11 @@ fn json_str(s: &PyStr, out: &mut String) {
             0x20..=0x7e => out.push(char::from_u32(c).unwrap_or('?')),
             0x10000.. => {
                 let v = c - 0x10000;
-                out.push_str(&format!("\\u{:04x}\\u{:04x}", 0xd800 + (v >> 10), 0xdc00 + (v & 0x3ff)));
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xd800 + (v >> 10),
+                    0xdc00 + (v & 0x3ff)
+                ));
             }
             _ => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -418,7 +477,9 @@ impl crate::util::pyjson::Build for PyValue {
         match n {
             Num::Int(i) => PyValue::Int(BigInt::from(i)),
             Num::UInt(u) => PyValue::Int(BigInt::from(u)),
-            Num::Big(digits) => PyValue::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Big(digits) => {
+                PyValue::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default())
+            }
             Num::Float(f) => PyValue::Float(f),
         }
     }
@@ -502,7 +563,11 @@ fn to_value(v: &PyValue, depth: usize, limit: usize) -> Result<Value, ()> {
             if depth >= limit {
                 return Err(());
             }
-            Value::Array(a.iter().map(|x| to_value(x, depth + 1, limit)).collect::<Result<_, _>>()?)
+            Value::Array(
+                a.iter()
+                    .map(|x| to_value(x, depth + 1, limit))
+                    .collect::<Result<_, _>>()?,
+            )
         }
         PyValue::Dict(d) => {
             if depth >= limit {
@@ -525,7 +590,11 @@ fn int_value(n: &BigInt) -> Value {
         return Value::from(u);
     }
     let f: f64 = n.to_string().parse().unwrap_or(0.0);
-    Value::from(if f.is_finite() { f } else { f64::MAX.copysign(f) })
+    Value::from(if f.is_finite() {
+        f
+    } else {
+        f64::MAX.copysign(f)
+    })
 }
 
 /// A serde value (from a caller of [`Config::set`] or a parity arg) as Python.
@@ -544,7 +613,11 @@ fn from_value(v: &Value) -> PyValue {
         }
         Value::String(s) => PyValue::Str(PyStr::new(s)),
         Value::Array(a) => PyValue::List(a.iter().map(from_value).collect()),
-        Value::Object(m) => PyValue::Dict(m.iter().map(|(k, x)| (PyStr::new(k), from_value(x))).collect()),
+        Value::Object(m) => PyValue::Dict(
+            m.iter()
+                .map(|(k, x)| (PyStr::new(k), from_value(x)))
+                .collect(),
+        ),
     }
 }
 
@@ -561,7 +634,11 @@ fn key_str(k: &PyKey) -> String {
 
 impl Config {
     fn empty() -> Self {
-        Config { items: Vec::new(), index: HashMap::new(), view: Map::new() }
+        Config {
+            items: Vec::new(),
+            index: HashMap::new(),
+            view: Map::new(),
+        }
     }
 
     /// `cfg[key] = value`, with dict semantics: an equal key keeps its
@@ -626,7 +703,9 @@ impl Config {
 
 impl Serialize for Config {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.normalised().map_err(serde::ser::Error::custom)?.serialize(serializer)
+        self.normalised()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
 
@@ -645,7 +724,8 @@ pub struct Status {
 /// `json.dumps(cfg, indent=2)`. Iterative, like the depth it must reach;
 /// Err (RecursionError) past Python's own limit.
 fn dumps(cfg: &Config) -> Result<String, String> {
-    const RECURSION: &str = "RecursionError: maximum recursion depth exceeded while encoding a JSON object";
+    const RECURSION: &str =
+        "RecursionError: maximum recursion depth exceeded while encoding a JSON object";
     enum Frame<'a> {
         List(std::slice::Iter<'a, PyValue>),
         Dict(std::slice::Iter<'a, (PyStr, PyValue)>),
@@ -683,7 +763,11 @@ fn dumps(cfg: &Config) -> Result<String, String> {
     // Depth counts the top-level dict, and empty containers too. Measured
     // before anything is written: indenting a value nested that deep, only
     // to throw it away, would write gigabytes of spaces.
-    let deepest = cfg.items.iter().map(|(_, v)| crate::util::tree::depth(&**v, PyValue::tree_shape)).max();
+    let deepest = cfg
+        .items
+        .iter()
+        .map(|(_, v)| crate::util::tree::depth(&**v, PyValue::tree_shape))
+        .max();
     if deepest.unwrap_or(0) + 1 > ENCODE_MAX_DEPTH {
         return Err(RECURSION.into());
     }
@@ -708,7 +792,9 @@ fn dumps(cfg: &Config) -> Result<String, String> {
         }
         loop {
             let level = stack.len() + 1;
-            let Some((frame, first)) = stack.last_mut() else { break };
+            let Some((frame, first)) = stack.last_mut() else {
+                break;
+            };
             let was_first = std::mem::replace(first, false);
             let next = match frame {
                 Frame::List(it) => it.next().map(|x| (None, x)),
@@ -716,7 +802,11 @@ fn dumps(cfg: &Config) -> Result<String, String> {
             };
             match next {
                 None => {
-                    let close = if matches!(frame, Frame::List(_)) { ']' } else { '}' };
+                    let close = if matches!(frame, Frame::List(_)) {
+                        ']'
+                    } else {
+                        '}'
+                    };
                     stack.pop();
                     indent(&mut out, level - 1);
                     out.push(close);
@@ -752,7 +842,15 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     while let Some((i, c)) = it.next() {
         let is_break = matches!(
             c,
-            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if is_break {
             out.push(&s[start..i]);
@@ -872,7 +970,10 @@ fn py_oserror2(e: &std::io::Error, path: &Path, path2: Option<&Path>) -> String 
     let text = e.to_string();
     match e.raw_os_error() {
         Some(n) => {
-            let strerror = text.strip_suffix(&format!(" (os error {n})")).unwrap_or(&text).to_owned();
+            let strerror = text
+                .strip_suffix(&format!(" (os error {n})"))
+                .unwrap_or(&text)
+                .to_owned();
             let mut msg = format!("[Errno {n}] {strerror}: {}", py_repr_path(path));
             if let Some(p2) = path2 {
                 msg.push_str(&format!(" -> {}", py_repr_path(p2)));
@@ -898,7 +999,10 @@ fn py_decode(raw: Vec<u8>) -> Result<String, String> {
         if end - start == 1 {
             format!("'utf-8' codec can't decode byte 0x{b:02x} in position {start}: {reason}")
         } else {
-            format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
+            format!(
+                "'utf-8' codec can't decode bytes in position {start}-{}: {reason}",
+                end - 1
+            )
         }
     })
 }
@@ -934,7 +1038,10 @@ static LOCALE_CODEC: LazyLock<Codec> = LazyLock::new(|| {
     if utf8_mode.as_deref() == Some("1") {
         return Codec::Utf8;
     }
-    let name = var("LC_ALL").or_else(|| var("LC_CTYPE")).or_else(|| var("LANG")).unwrap_or_else(|| "C".to_owned());
+    let name = var("LC_ALL")
+        .or_else(|| var("LC_CTYPE"))
+        .or_else(|| var("LANG"))
+        .unwrap_or_else(|| "C".to_owned());
     let (ok, charmap) = if name == "C" || name == "POSIX" {
         (false, String::new())
     } else {
@@ -946,14 +1053,27 @@ static LOCALE_CODEC: LazyLock<Codec> = LazyLock::new(|| {
                 ..Default::default()
             },
         );
-        (out.ok() && out.stderr.trim().is_empty(), out.stdout.trim().to_owned())
+        (
+            out.ok() && out.stderr.trim().is_empty(),
+            out.stdout.trim().to_owned(),
+        )
     };
     let is_c = !ok || charmap.is_empty() || charmap == "ANSI_X3.4-1968";
-    codec_for(utf8_mode.as_deref(), (!is_c).then_some(charmap.as_str()), var("LC_ALL").is_some(), var("PYTHONCOERCECLOCALE").as_deref())
+    codec_for(
+        utf8_mode.as_deref(),
+        (!is_c).then_some(charmap.as_str()),
+        var("LC_ALL").is_some(),
+        var("PYTHONCOERCECLOCALE").as_deref(),
+    )
 });
 
 /// The decision above, given the facts: `charmap` is None for a "C" locale.
-fn codec_for(utf8_mode: Option<&str>, charmap: Option<&str>, lc_all: bool, coerce: Option<&str>) -> Codec {
+fn codec_for(
+    utf8_mode: Option<&str>,
+    charmap: Option<&str>,
+    lc_all: bool,
+    coerce: Option<&str>,
+) -> Codec {
     if utf8_mode == Some("1") {
         return Codec::Utf8;
     }
@@ -1052,7 +1172,12 @@ fn dict_update(cfg: &mut Config, mut data: PyValue) -> Result<(), Result<String,
         PyValue::List(a) => std::mem::take(a),
         // A str is a sequence of one-character strings.
         PyValue::Str(s) => one_char_strs(s),
-        other => return Err(Err(format!("'{}' object is not iterable", py_type_name(other)))),
+        other => {
+            return Err(Err(format!(
+                "'{}' object is not iterable",
+                py_type_name(other)
+            )))
+        }
     };
     for (i, mut item) in items.into_iter().enumerate() {
         // PySequence_Fast: any iterable; a dict iterates its keys.
@@ -1061,7 +1186,9 @@ fn dict_update(cfg: &mut Config, mut data: PyValue) -> Result<(), Result<String,
             PyValue::Str(s) => one_char_strs(s),
             PyValue::Dict(d) => d.drain(..).map(|(k, _)| PyValue::Str(k)).collect(),
             _ => {
-                return Err(Err(format!("cannot convert dictionary update sequence element #{i} to a sequence")))
+                return Err(Err(format!(
+                    "cannot convert dictionary update sequence element #{i} to a sequence"
+                )))
             }
         };
         if seq.len() != 2 {
@@ -1071,7 +1198,10 @@ fn dict_update(cfg: &mut Config, mut data: PyValue) -> Result<(), Result<String,
             )));
         }
         let mut it = seq.into_iter();
-        let (mut k, v) = (it.next().unwrap_or(PyValue::None), it.next().unwrap_or(PyValue::None));
+        let (mut k, v) = (
+            it.next().unwrap_or(PyValue::None),
+            it.next().unwrap_or(PyValue::None),
+        );
         let key = match &mut k {
             PyValue::None => PyKey::None,
             PyValue::Bool(b) => PyKey::Bool(*b),
@@ -1154,7 +1284,11 @@ fn save_to(dir: &Path, config: &Path, cfg: &Config) -> Result<(), String> {
 // --- systemctl --------------------------------------------------------------------
 
 enum Ran {
-    Exited { code: i32, stdout: Vec<u8>, stderr: Vec<u8> },
+    Exited {
+        code: i32,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
     TimedOut,
 }
 
@@ -1171,7 +1305,11 @@ enum Ran {
 /// file with no `#!`, EACCES) does not end the search. If none starts, the
 /// first such error is the one reported, else the last.
 fn run_capture(argv: &[&str], timeout: Duration) -> std::io::Result<Ran> {
-    run_capture_in(argv, timeout, std::env::var_os("PATH").map(OsString::into_vec))
+    run_capture_in(
+        argv,
+        timeout,
+        std::env::var_os("PATH").map(OsString::into_vec),
+    )
 }
 
 fn run_capture_in(argv: &[&str], timeout: Duration, path: Option<Vec<u8>>) -> std::io::Result<Ran> {
@@ -1206,7 +1344,11 @@ fn run_capture_in(argv: &[&str], timeout: Duration, path: Option<Vec<u8>>) -> st
                 return Ok(Ran::TimedOut);
             }
             let code = out.code.or(out.signal.map(|s| -s)).unwrap_or(-1);
-            return Ok(Ran::Exited { code, stdout: out.stdout, stderr: out.stderr });
+            return Ok(Ran::Exited {
+                code,
+                stdout: out.stdout,
+                stderr: out.stderr,
+            });
         }
         let e = match out.start_errno {
             Some(n) => std::io::Error::from_raw_os_error(n),
@@ -1219,12 +1361,16 @@ fn run_capture_in(argv: &[&str], timeout: Duration, path: Option<Vec<u8>>) -> st
             last = Some(e);
         }
     }
-    Err(first.or(last).unwrap_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT)))
+    Err(first
+        .or(last)
+        .unwrap_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT)))
 }
 
 /// `text=True`: decode, then universal newlines (`\r\n` and `\r` become `\n`).
 fn text_mode(raw: Vec<u8>) -> Result<String, String> {
-    Ok(locale_decode(raw)?.replace("\r\n", "\n").replace('\r', "\n"))
+    Ok(locale_decode(raw)?
+        .replace("\r\n", "\n")
+        .replace('\r', "\n"))
 }
 
 /// `systemctl --user <args>` -> (returncode, stdout+stderr stripped).
@@ -1243,9 +1389,19 @@ fn systemctl(args: &[&str], timeout: u64) -> Result<(i32, String), String> {
         Err(e) => Ok((1, py_oserror(&e, Path::new("systemctl")))),
         Ok(Ran::TimedOut) => {
             let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
-            Ok((1, format!("Command '[{}]' timed out after {timeout} seconds", list.join(", "))))
+            Ok((
+                1,
+                format!(
+                    "Command '[{}]' timed out after {timeout} seconds",
+                    list.join(", ")
+                ),
+            ))
         }
-        Ok(Ran::Exited { code, stdout, stderr }) => {
+        Ok(Ran::Exited {
+            code,
+            stdout,
+            stderr,
+        }) => {
             let out = text_mode(stdout)? + &text_mode(stderr)?;
             Ok((code, py_strip(&out).to_owned()))
         }
@@ -1276,7 +1432,9 @@ pub fn try_is_enabled() -> Result<bool, String> {
 
 /// [`try_is_enabled`], logging the error and answering false where the
 /// Python would raise.
-#[deprecated(note = "the Python raises out of is_enabled() (UnicodeDecodeError from systemctl output); use try_is_enabled and stop on Err")]
+#[deprecated(
+    note = "the Python raises out of is_enabled() (UnicodeDecodeError from systemctl output); use try_is_enabled and stop on Err"
+)]
 pub fn is_enabled() -> bool {
     report(try_is_enabled(), false)
 }
@@ -1293,7 +1451,9 @@ pub fn try_set_enabled(on: bool) -> Result<(bool, String), String> {
 }
 
 /// [`try_set_enabled`], reporting the error as the failure message.
-#[deprecated(note = "the Python raises out of set_enabled(): the switchboard switch reports str(exc), the Preferences close handler stops with a traceback; use try_set_enabled and return / stop on its Err")]
+#[deprecated(
+    note = "the Python raises out of set_enabled(): the switchboard switch reports str(exc), the Preferences close handler stops with a traceback; use try_set_enabled and return / stop on its Err"
+)]
 pub fn set_enabled(on: bool) -> (bool, String) {
     try_set_enabled(on).unwrap_or_else(|e| (false, e))
 }
@@ -1304,7 +1464,11 @@ fn set_enabled_with(on: bool, omarchy: bool, sys: Sys) -> Result<(bool, String),
     if on && !omarchy {
         return Ok((false, needs_omarchy()));
     }
-    let args: &[&str] = if on { &["enable", "--now", UNIT] } else { &["disable", "--now", UNIT] };
+    let args: &[&str] = if on {
+        &["enable", "--now", UNIT]
+    } else {
+        &["disable", "--now", UNIT]
+    };
     let (code, out) = sys(args, 30)?;
     Ok((code == 0, out))
 }
@@ -1318,14 +1482,29 @@ pub fn try_status() -> Result<Status, String> {
 
 /// [`try_status`], logging the error and answering "not scheduled" where
 /// the Python would raise.
-#[deprecated(note = "the Python raises out of status(): the switch reports str(exc), building the switchboard rows or the Preferences dialog stops; use try_status and propagate its Err")]
+#[deprecated(
+    note = "the Python raises out of status(): the switch reports str(exc), building the switchboard rows or the Preferences dialog stops; use try_status and propagate its Err"
+)]
 pub fn status() -> Status {
-    report(try_status(), Status { enabled: false, next: "not scheduled".into(), last: "never".into() })
+    report(
+        try_status(),
+        Status {
+            enabled: false,
+            next: "not scheduled".into(),
+            last: "never".into(),
+        },
+    )
 }
 
 fn status_with(sys: Sys) -> Result<Status, String> {
     let (_code, out) = sys(
-        &["show", UNIT, "--property=NextElapseUSecRealtime", "--property=LastTriggerUSec", "--property=Unit"],
+        &[
+            "show",
+            UNIT,
+            "--property=NextElapseUSecRealtime",
+            "--property=LastTriggerUSec",
+            "--property=Unit",
+        ],
         30,
     )?;
     let mut info: BTreeMap<&str, &str> = BTreeMap::new();
@@ -1431,7 +1610,8 @@ fn set_schedule_with(key: &str, timer_file: &Path, sys: Sys) -> Result<(bool, St
 /// 0644, what systemd units are installed with; a unit symlinked from a
 /// dotfiles checkout stays a link.
 fn write_unit(path: &Path, text: &str) -> Result<(), String> {
-    crate::util::atomic_write_mode(path, text.as_bytes(), Some(0o644)).map_err(|e| py_oserror(&e, path))
+    crate::util::atomic_write_mode(path, text.as_bytes(), Some(0o644))
+        .map_err(|e| py_oserror(&e, path))
 }
 
 /// `Err` where the Python raises: a timer unit that is not UTF-8.
@@ -1457,7 +1637,10 @@ fn current_schedule_of(files: &TimerFiles) -> Result<String, String> {
                 }
             }
             if let Some(cal) = cals.last() {
-                let key = SCHEDULES.iter().find(|(_k, _l, c)| c == cal).map_or("weekly", |(k, _l, _c)| *k);
+                let key = SCHEDULES
+                    .iter()
+                    .find(|(_k, _l, c)| c == cal)
+                    .map_or("weekly", |(k, _l, _c)| *k);
                 return Ok(key.to_owned());
             }
         }
@@ -1489,7 +1672,6 @@ fn current_schedule_in(timer_file: &Path) -> Result<String, String> {
     }
     Ok("weekly".to_owned())
 }
-
 
 // --- Units an earlier Almanac left in ~/.config ----------------------------
 
@@ -1528,8 +1710,10 @@ const OUR_SERVICE_LINES: &[&str] = &[
     "TimeoutStartSec=3h",
 ];
 /// The scripts an Almanac-written service has run.
-const OUR_EXEC_STARTS: &[&str] =
-    &["ExecStart=%h/.local/bin/omarchy-auto-update", "ExecStart=/usr/lib/almanac/omarchy-auto-update"];
+const OUR_EXEC_STARTS: &[&str] = &[
+    "ExecStart=%h/.local/bin/omarchy-auto-update",
+    "ExecStart=/usr/lib/almanac/omarchy-auto-update",
+];
 /// The same for the timer; its OnCalendar= is whichever schedule was set.
 const OUR_TIMER_LINES: &[&str] = &[
     "[Unit]",
@@ -1545,7 +1729,10 @@ const OUR_TIMER_LINES: &[&str] = &[
 
 /// A unit's lines that say something: trimmed, comments and blanks dropped.
 fn unit_lines(text: &str) -> Vec<&str> {
-    text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])).collect()
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with(['#', ';']))
+        .collect()
 }
 
 /// Whether `text` is a service an Almanac wrote: only its known lines, one
@@ -1555,19 +1742,27 @@ fn is_our_service(text: &str) -> bool {
     lines.iter().filter(|l| l.starts_with("ExecStart=")).count() == 1
         && lines.iter().any(|l| OUR_EXEC_STARTS.contains(l))
         && lines.contains(&OUR_SERVICE_LINES[1])
-        && lines.iter().all(|l| OUR_SERVICE_LINES.contains(l) || OUR_EXEC_STARTS.contains(l))
+        && lines
+            .iter()
+            .all(|l| OUR_SERVICE_LINES.contains(l) || OUR_EXEC_STARTS.contains(l))
 }
 
 /// The same for the timer, with its schedule: Some(OnCalendar) when it is
 /// Almanac's (one OnCalendar=, one of [`SCHEDULES`] or the first default).
 fn our_timer_schedule(text: &str) -> Option<String> {
     let lines = unit_lines(text);
-    let cals: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix("OnCalendar=")).map(str::trim).collect();
+    let cals: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.strip_prefix("OnCalendar="))
+        .map(str::trim)
+        .collect();
     let [cal] = cals.as_slice() else { return None };
     let known = SCHEDULES.iter().any(|(_k, _l, c)| c == cal);
     let ours = known
         && lines.contains(&OUR_TIMER_LINES[1])
-        && lines.iter().all(|l| l.starts_with("OnCalendar=") || OUR_TIMER_LINES.contains(l));
+        && lines
+            .iter()
+            .all(|l| l.starts_with("OnCalendar=") || OUR_TIMER_LINES.contains(l));
     ours.then(|| (*cal).to_owned())
 }
 
@@ -1597,7 +1792,10 @@ pub fn migrate_legacy_units() -> Result<Legacy, String> {
     if crate::demo::active() {
         return Ok(Legacy::None);
     }
-    let dir = TIMER_FILE.parent().map(Path::to_path_buf).unwrap_or_default();
+    let dir = TIMER_FILE
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     let files = LegacyFiles {
         dir: &dir,
         shipped_timer: Path::new(SHIPPED_TIMER),
@@ -1609,7 +1807,10 @@ pub fn migrate_legacy_units() -> Result<Legacy, String> {
 fn migrate_in(files: &LegacyFiles, sys: Sys) -> Result<Legacy, String> {
     let timer = files.dir.join(UNIT);
     let service = files.dir.join(SERVICE);
-    let present: Vec<&PathBuf> = [&timer, &service].into_iter().filter(|p| std::fs::symlink_metadata(p).is_ok()).collect();
+    let present: Vec<&PathBuf> = [&timer, &service]
+        .into_iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_ok())
+        .collect();
     if present.is_empty() || !files.shipped_timer.exists() || !files.shipped_service.exists() {
         return Ok(Legacy::None);
     }
@@ -1686,7 +1887,10 @@ fn backup_name(p: &Path) -> PathBuf {
     if std::fs::symlink_metadata(&first).is_err() {
         return first;
     }
-    (2..).map(|n| with(&format!(".bak.{n}"))).find(|c| std::fs::symlink_metadata(c).is_err()).unwrap_or(first)
+    (2..)
+        .map(|n| with(&format!(".bak.{n}")))
+        .find(|c| std::fs::symlink_metadata(c).is_err())
+        .unwrap_or(first)
 }
 
 /// Code points `str.isprintable()` rejects (Python 3.14, Unicode 16.0.0),
@@ -1864,7 +2068,10 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("almanac-autoupdate-test-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!(
+            "almanac-autoupdate-test-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1886,7 +2093,13 @@ mod tests {
         assert!(ok, "switching it off always works");
         let (ok, _) = set_enabled_with(true, true, &mut sys).unwrap();
         assert!(ok);
-        assert_eq!(called, vec![format!("disable --now {UNIT}"), format!("enable --now {UNIT}")]);
+        assert_eq!(
+            called,
+            vec![
+                format!("disable --now {UNIT}"),
+                format!("enable --now {UNIT}")
+            ]
+        );
     }
 
     const TIMER: &str = "[Unit]\nDescription=x\n\n[Timer]\nOnCalendar=Sun 11:00\nPersistent=true\nRandomizedDelaySec=30m\n";
@@ -1930,15 +2143,37 @@ mod tests {
     #[test]
     fn json_like_python() {
         // What json.loads accepts and json.dumps writes back.
-        let t = round_trip(r#"{"x": NaN, "y": -Infinity, "z": 1e400, "big": 123456789012345678901234567890, "n": -0, "f": -0.0, "s": "\ud800", "p": "\ud83d\ude00"}"#);
+        let t = round_trip(
+            r#"{"x": NaN, "y": -Infinity, "z": 1e400, "big": 123456789012345678901234567890, "n": -0, "f": -0.0, "s": "\ud800", "p": "\ud83d\ude00"}"#,
+        );
         assert!(t.contains("\"x\": NaN,\n  \"y\": -Infinity,\n  \"z\": Infinity,\n  \"big\": 123456789012345678901234567890,\n  \"n\": 0,\n  \"f\": -0.0,\n  \"s\": \"\\ud800\",\n  \"p\": \"\\ud83d\\ude00\""), "{t}");
         // Keys keep their Python type and equality: 1e16 == 10**16, True == 1.
-        let t = round_trip(r#"[[1e16, "a"], [10000000000000000, "b"], [1, "c"], ["1", "d"], [true, "e"], [null, 0]]"#);
-        assert!(t.contains("\"1e+16\": \"b\",\n  \"1\": \"e\",\n  \"1\": \"d\",\n  \"null\": 0\n}"), "{t}");
-        for bad in ["[1,]", "01", "1.", "\u{feff}{}", "{\"a\": \"\x01\"}", "nan", "-NaN", "\"\\ud800\\udc0\""] {
-            assert!(matches!(json_loads(bad), Err(LoadsError::Value(_))), "{bad}");
+        let t = round_trip(
+            r#"[[1e16, "a"], [10000000000000000, "b"], [1, "c"], ["1", "d"], [true, "e"], [null, 0]]"#,
+        );
+        assert!(
+            t.contains("\"1e+16\": \"b\",\n  \"1\": \"e\",\n  \"1\": \"d\",\n  \"null\": 0\n}"),
+            "{t}"
+        );
+        for bad in [
+            "[1,]",
+            "01",
+            "1.",
+            "\u{feff}{}",
+            "{\"a\": \"\x01\"}",
+            "nan",
+            "-NaN",
+            "\"\\ud800\\udc0\"",
+        ] {
+            assert!(
+                matches!(json_loads(bad), Err(LoadsError::Value(_))),
+                "{bad}"
+            );
         }
-        assert!(matches!(json_loads(&"1".repeat(4301)), Err(LoadsError::Value(_))));
+        assert!(matches!(
+            json_loads(&"1".repeat(4301)),
+            Err(LoadsError::Value(_))
+        ));
         assert!(json_loads(&"1".repeat(4300)).is_ok());
     }
 
@@ -1947,10 +2182,15 @@ mod tests {
         let deep = |n: usize| format!("{{\"a\": {}{}}}", "[".repeat(n), "]".repeat(n));
         let ok = json_loads(&deep(DECODE_MAX_DEPTH - 1));
         assert!(ok.is_ok());
-        assert!(matches!(json_loads(&deep(DECODE_MAX_DEPTH)), Err(LoadsError::Recursion(_))));
+        assert!(matches!(
+            json_loads(&deep(DECODE_MAX_DEPTH)),
+            Err(LoadsError::Recursion(_))
+        ));
         let mut c = Config::empty();
         let Ok(mut top) = ok else { unreachable!() };
-        let PyValue::Dict(d) = &mut top else { unreachable!() };
+        let PyValue::Dict(d) = &mut top else {
+            unreachable!()
+        };
         let (k, v) = d.pop().unwrap();
         c.insert(PyKey::Str(k), v);
         assert!(c.get_bool("a"));
@@ -1976,9 +2216,18 @@ mod tests {
 
     #[test]
     fn decode_errors_like_python() {
-        assert_eq!(py_decode(b"ab\xff".to_vec()).unwrap_err(), "'utf-8' codec can't decode byte 0xff in position 2: invalid start byte");
-        assert_eq!(py_decode(b"\xe2\x28".to_vec()).unwrap_err(), "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte");
-        assert_eq!(py_decode(b"\xe2\x82".to_vec()).unwrap_err(), "'utf-8' codec can't decode bytes in position 0-1: unexpected end of data");
+        assert_eq!(
+            py_decode(b"ab\xff".to_vec()).unwrap_err(),
+            "'utf-8' codec can't decode byte 0xff in position 2: invalid start byte"
+        );
+        assert_eq!(
+            py_decode(b"\xe2\x28".to_vec()).unwrap_err(),
+            "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"
+        );
+        assert_eq!(
+            py_decode(b"\xe2\x82".to_vec()).unwrap_err(),
+            "'utf-8' codec can't decode bytes in position 0-1: unexpected end of data"
+        );
     }
 
     #[test]
@@ -2008,7 +2257,11 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         std::fs::create_dir_all(d.join("usr")).unwrap();
         let (t, sv) = (d.join("usr").join(UNIT), d.join("usr").join(SERVICE));
         std::fs::write(&t, include_str!("../packaging/omarchy-auto-update.timer")).unwrap();
-        std::fs::write(&sv, include_str!("../packaging/omarchy-auto-update.service")).unwrap();
+        std::fs::write(
+            &sv,
+            include_str!("../packaging/omarchy-auto-update.service"),
+        )
+        .unwrap();
         (dir, t, sv)
     }
 
@@ -2040,22 +2293,46 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
         // Until then, the old timer runs the old script, and so does Run now.
         let home = dir.join("home");
-        assert_eq!(script_path_in(&dir.join(SERVICE), &t, &home), home.join(".local/bin/omarchy-auto-update"));
+        assert_eq!(
+            script_path_in(&dir.join(SERVICE), &t, &home),
+            home.join(".local/bin/omarchy-auto-update")
+        );
         let (calls, mut sys) = fake_systemctl(true);
-        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
-        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: true });
+        let files = LegacyFiles {
+            dir: &dir,
+            shipped_timer: &t,
+            shipped_service: &sv,
+        };
+        assert_eq!(
+            migrate_in(&files, &mut sys).unwrap(),
+            Legacy::Migrated { enabled: true }
+        );
         assert_eq!(
             *calls.borrow(),
-            vec![format!("is-enabled {UNIT}"), format!("disable --now {UNIT}"), "daemon-reload".into(), format!("enable --now {UNIT}")]
+            vec![
+                format!("is-enabled {UNIT}"),
+                format!("disable --now {UNIT}"),
+                "daemon-reload".into(),
+                format!("enable --now {UNIT}")
+            ]
         );
         assert!(!dir.join(UNIT).exists() && !dir.join(SERVICE).exists());
-        assert_eq!(std::fs::read_to_string(dir.join(format!("{SERVICE}.bak"))).unwrap(), OLD_SERVICE);
-        assert_eq!(std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(), OLD_TIMER);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{SERVICE}.bak"))).unwrap(),
+            OLD_SERVICE
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(),
+            OLD_TIMER
+        );
         // The default schedule needs no drop-in.
         assert!(!dir.join(format!("{UNIT}.d")).exists());
         // Run now and the timer run one script: the packaged one, now.
         assert_eq!(script_path_in(&dir.join(SERVICE), &t, &home), t);
-        assert_eq!(script_path_in(&dir.join(SERVICE), &dir.join("gone"), &home), home.join(".local/bin/omarchy-auto-update"));
+        assert_eq!(
+            script_path_in(&dir.join(SERVICE), &dir.join("gone"), &home),
+            home.join(".local/bin/omarchy-auto-update")
+        );
         // Nothing left to do the next time.
         let (calls, mut sys) = fake_systemctl(true);
         assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::None);
@@ -2068,12 +2345,22 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     fn the_shipped_units_and_the_readme_copies_count_as_almanacs() {
         let service = include_str!("../packaging/omarchy-auto-update.service");
         let timer = include_str!("../packaging/omarchy-auto-update.timer");
-        let local = |t: &str| t.replace("/usr/lib/almanac/omarchy-auto-update", "%h/.local/bin/omarchy-auto-update");
+        let local = |t: &str| {
+            t.replace(
+                "/usr/lib/almanac/omarchy-auto-update",
+                "%h/.local/bin/omarchy-auto-update",
+            )
+        };
         assert!(is_our_service(service) && is_our_service(&local(service)));
         assert_eq!(our_timer_schedule(timer).as_deref(), Some("Sun 11:00"));
-        assert_eq!(our_timer_schedule(&local(timer)).as_deref(), Some("Sun 11:00"));
+        assert_eq!(
+            our_timer_schedule(&local(timer)).as_deref(),
+            Some("Sun 11:00")
+        );
         let readme = include_str!("../README.md");
-        assert!(readme.contains("sed 's|/usr/lib/almanac/omarchy-auto-update|%h/.local/bin/omarchy-auto-update|'"));
+        assert!(readme.contains(
+            "sed 's|/usr/lib/almanac/omarchy-auto-update|%h/.local/bin/omarchy-auto-update|'"
+        ));
     }
 
     /// A timer that was off stays off; a schedule other than the default
@@ -2081,28 +2368,64 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     #[test]
     fn an_old_timer_keeps_its_schedule_and_its_state() {
         let (dir, t, sv) = legacy_setup("legacy-schedule");
-        std::fs::write(dir.join(UNIT), OLD_TIMER.replace("OnCalendar=Sun 11:00", "OnCalendar=*-*-* 11:00:00")).unwrap();
+        std::fs::write(
+            dir.join(UNIT),
+            OLD_TIMER.replace("OnCalendar=Sun 11:00", "OnCalendar=*-*-* 11:00:00"),
+        )
+        .unwrap();
         std::fs::write(dir.join(format!("{UNIT}.bak")), "the user's own").unwrap();
         let (calls, mut sys) = fake_systemctl(false);
-        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
-        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: false });
-        assert_eq!(*calls.borrow(), vec![format!("is-enabled {UNIT}"), "daemon-reload".to_string()]);
+        let files = LegacyFiles {
+            dir: &dir,
+            shipped_timer: &t,
+            shipped_service: &sv,
+        };
+        assert_eq!(
+            migrate_in(&files, &mut sys).unwrap(),
+            Legacy::Migrated { enabled: false }
+        );
+        assert_eq!(
+            *calls.borrow(),
+            vec![format!("is-enabled {UNIT}"), "daemon-reload".to_string()]
+        );
         let dropin = dir.join(format!("{UNIT}.d/schedule.conf"));
-        let files_now = TimerFiles { user: &dir.join(UNIT), shipped: &t, dropin: &dropin };
+        let files_now = TimerFiles {
+            user: &dir.join(UNIT),
+            shipped: &t,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&files_now).unwrap(), "daily");
         // A backup never replaces a file already there.
-        assert_eq!(std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(), "the user's own");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{UNIT}.bak"))).unwrap(),
+            "the user's own"
+        );
         assert!(dir.join(format!("{UNIT}.bak.2")).exists());
 
         let (dir, t, sv) = legacy_setup("legacy-dropin");
         std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
         std::fs::create_dir_all(dir.join(format!("{UNIT}.d"))).unwrap();
-        std::fs::write(dir.join(format!("{UNIT}.d/schedule.conf")), "[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n").unwrap();
+        std::fs::write(
+            dir.join(format!("{UNIT}.d/schedule.conf")),
+            "[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n",
+        )
+        .unwrap();
         let (_calls, mut sys) = fake_systemctl(true);
-        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
-        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Migrated { enabled: true });
+        let files = LegacyFiles {
+            dir: &dir,
+            shipped_timer: &t,
+            shipped_service: &sv,
+        };
+        assert_eq!(
+            migrate_in(&files, &mut sys).unwrap(),
+            Legacy::Migrated { enabled: true }
+        );
         let dropin = dir.join(format!("{UNIT}.d/schedule.conf"));
-        let files_now = TimerFiles { user: &dir.join(UNIT), shipped: &t, dropin: &dropin };
+        let files_now = TimerFiles {
+            user: &dir.join(UNIT),
+            shipped: &t,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&files_now).unwrap(), "monthly");
     }
 
@@ -2111,21 +2434,40 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     #[test]
     fn units_the_user_wrote_are_left_alone() {
         for (name, service) in [
-            ("env", OLD_SERVICE.replace("TimeoutStartSec=3h", "TimeoutStartSec=3h\nEnvironment=FOO=1")),
-            ("exec", OLD_SERVICE.replace("%h/.local/bin/omarchy-auto-update", "/opt/my-update")),
+            (
+                "env",
+                OLD_SERVICE.replace(
+                    "TimeoutStartSec=3h",
+                    "TimeoutStartSec=3h\nEnvironment=FOO=1",
+                ),
+            ),
+            (
+                "exec",
+                OLD_SERVICE.replace("%h/.local/bin/omarchy-auto-update", "/opt/my-update"),
+            ),
         ] {
             let (dir, t, sv) = legacy_setup(&format!("legacy-foreign-{name}"));
             std::fs::write(dir.join(SERVICE), &service).unwrap();
             std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
             let (calls, mut sys) = fake_systemctl(true);
-            let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
-            assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Foreign(vec![dir.join(SERVICE)]));
+            let files = LegacyFiles {
+                dir: &dir,
+                shipped_timer: &t,
+                shipped_service: &sv,
+            };
+            assert_eq!(
+                migrate_in(&files, &mut sys).unwrap(),
+                Legacy::Foreign(vec![dir.join(SERVICE)])
+            );
             assert!(calls.borrow().is_empty());
             assert_eq!(std::fs::read_to_string(dir.join(SERVICE)).unwrap(), service);
             assert!(dir.join(UNIT).exists());
             // Run now runs what that timer runs.
             if name == "exec" {
-                assert_eq!(script_path_in(&dir.join(SERVICE), &t, &dir), PathBuf::from("/opt/my-update"));
+                assert_eq!(
+                    script_path_in(&dir.join(SERVICE), &t, &dir),
+                    PathBuf::from("/opt/my-update")
+                );
             }
         }
         // A link, even to Almanac's own text, is the user's arrangement.
@@ -2133,14 +2475,25 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         std::fs::write(dir.join("elsewhere.timer"), OLD_TIMER).unwrap();
         std::os::unix::fs::symlink(dir.join("elsewhere.timer"), dir.join(UNIT)).unwrap();
         let (_calls, mut sys) = fake_systemctl(true);
-        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
-        assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::Foreign(vec![dir.join(UNIT)]));
+        let files = LegacyFiles {
+            dir: &dir,
+            shipped_timer: &t,
+            shipped_service: &sv,
+        };
+        assert_eq!(
+            migrate_in(&files, &mut sys).unwrap(),
+            Legacy::Foreign(vec![dir.join(UNIT)])
+        );
         // Without the packaged units there is nothing to move to.
         let (dir, t, sv) = legacy_setup("legacy-unpackaged");
         std::fs::write(dir.join(UNIT), OLD_TIMER).unwrap();
         std::fs::remove_file(&t).unwrap();
         let (calls, mut sys) = fake_systemctl(true);
-        let files = LegacyFiles { dir: &dir, shipped_timer: &t, shipped_service: &sv };
+        let files = LegacyFiles {
+            dir: &dir,
+            shipped_timer: &t,
+            shipped_service: &sv,
+        };
         assert_eq!(migrate_in(&files, &mut sys).unwrap(), Legacy::None);
         assert!(calls.borrow().is_empty() && dir.join(UNIT).exists());
     }
@@ -2159,16 +2512,32 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         let mut calls = Vec::new();
         let mut sys = |a: &[&str], _t: u64| {
             calls.push(a.join(" "));
-            Ok(if a[0] == "is-enabled" { (0, "enabled".to_owned()) } else { (0, String::new()) })
+            Ok(if a[0] == "is-enabled" {
+                (0, "enabled".to_owned())
+            } else {
+                (0, String::new())
+            })
         };
         let r = set_schedule_with("daily", &t, &mut sys).unwrap();
         assert_eq!(r, (true, "*-*-* 11:00:00".to_owned()));
         let text = std::fs::read_to_string(&t).unwrap();
-        assert!(text.contains("OnCalendar=*-*-* 11:00:00\nPersistent=true\nRandomizedDelaySec=30m\n"));
-        assert_eq!(calls, vec!["daemon-reload".to_owned(), format!("is-enabled {UNIT}"), format!("restart {UNIT}")]);
+        assert!(
+            text.contains("OnCalendar=*-*-* 11:00:00\nPersistent=true\nRandomizedDelaySec=30m\n")
+        );
+        assert_eq!(
+            calls,
+            vec![
+                "daemon-reload".to_owned(),
+                format!("is-enabled {UNIT}"),
+                format!("restart {UNIT}")
+            ]
+        );
         assert_eq!(current_schedule_in(&t).unwrap(), "daily");
         let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
-        assert_eq!(set_schedule_with("hourly", &t, &mut none).unwrap(), (false, "unknown schedule 'hourly'".to_owned()));
+        assert_eq!(
+            set_schedule_with("hourly", &t, &mut none).unwrap(),
+            (false, "unknown schedule 'hourly'".to_owned())
+        );
     }
 
     /// The unit is replaced by a rename, not rewritten in place: no
@@ -2184,10 +2553,19 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         let ino = |p: &Path| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(p).unwrap());
         let before = ino(&t);
         let mut sys = |_a: &[&str], _t: u64| Ok((1, String::new()));
-        assert_eq!(set_schedule_with("daily", &t, &mut sys).unwrap(), (true, "*-*-* 11:00:00".to_owned()));
+        assert_eq!(
+            set_schedule_with("daily", &t, &mut sys).unwrap(),
+            (true, "*-*-* 11:00:00".to_owned())
+        );
         assert_ne!(ino(&t), before, "written in place");
-        assert_eq!(std::fs::metadata(&t).unwrap().permissions().mode() & 0o777, 0o644);
-        let names: Vec<_> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(
+            std::fs::metadata(&t).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        let names: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(UNIT)]);
         assert_eq!(current_schedule_in(&t).unwrap(), "daily");
     }
@@ -2195,7 +2573,11 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     fn files(d: &Path) -> (PathBuf, PathBuf, PathBuf) {
         std::fs::create_dir_all(d.join("user")).unwrap();
         std::fs::create_dir_all(d.join("usr")).unwrap();
-        (d.join("user").join(UNIT), d.join("usr").join(UNIT), d.join("user").join(format!("{UNIT}.d/schedule.conf")))
+        (
+            d.join("user").join(UNIT),
+            d.join("usr").join(UNIT),
+            d.join("user").join(format!("{UNIT}.d/schedule.conf")),
+        )
     }
 
     /// With only the packaged unit, the schedule goes in a drop-in in the
@@ -2205,26 +2587,52 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         let d = tmp("sched-dropin");
         let (user, shipped, dropin) = files(&d);
         std::fs::write(&shipped, TIMER).unwrap();
-        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        let f = TimerFiles {
+            user: &user,
+            shipped: &shipped,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&f).unwrap(), "weekly");
         let mut calls = Vec::new();
         let mut sys = |a: &[&str], _t: u64| {
             calls.push(a.join(" "));
-            Ok(if a[0] == "is-enabled" { (1, "disabled".to_owned()) } else { (0, String::new()) })
+            Ok(if a[0] == "is-enabled" {
+                (1, "disabled".to_owned())
+            } else {
+                (0, String::new())
+            })
         };
-        assert_eq!(set_schedule_in("monthly", &f, &mut sys).unwrap(), (true, "Sun *-*-1..7 11:00:00".to_owned()));
-        assert_eq!(calls, vec!["daemon-reload".to_owned(), format!("is-enabled {UNIT}")]);
+        assert_eq!(
+            set_schedule_in("monthly", &f, &mut sys).unwrap(),
+            (true, "Sun *-*-1..7 11:00:00".to_owned())
+        );
+        assert_eq!(
+            calls,
+            vec!["daemon-reload".to_owned(), format!("is-enabled {UNIT}")]
+        );
         assert_eq!(std::fs::read_to_string(&shipped).unwrap(), TIMER);
         assert!(!user.exists(), "no user copy of the unit is made");
         let text = std::fs::read_to_string(&dropin).unwrap();
-        assert!(text.ends_with("[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n"), "{text}");
+        assert!(
+            text.ends_with("[Timer]\nOnCalendar=\nOnCalendar=Sun *-*-1..7 11:00:00\n"),
+            "{text}"
+        );
         assert_eq!(current_schedule_of(&f).unwrap(), "monthly");
         // A second change rewrites the drop-in, not adds to it.
         let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
         set_schedule_in("daily", &f, &mut none).unwrap();
-        assert_eq!(std::fs::read_to_string(&dropin).unwrap().matches("OnCalendar=").count(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&dropin)
+                .unwrap()
+                .matches("OnCalendar=")
+                .count(),
+            2
+        );
         assert_eq!(current_schedule_of(&f).unwrap(), "daily");
-        assert_eq!(set_schedule_in("hourly", &f, &mut none).unwrap(), (false, "unknown schedule 'hourly'".to_owned()));
+        assert_eq!(
+            set_schedule_in("hourly", &f, &mut none).unwrap(),
+            (false, "unknown schedule 'hourly'".to_owned())
+        );
     }
 
     /// A full copy in the user's directory (installs from before the timer
@@ -2236,11 +2644,17 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         let (user, shipped, dropin) = files(&d);
         std::fs::write(&shipped, TIMER).unwrap();
         std::fs::write(&user, TIMER.replace("Sun 11:00", "*-*-* 11:00:00")).unwrap();
-        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        let f = TimerFiles {
+            user: &user,
+            shipped: &shipped,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&f).unwrap(), "daily");
         let mut none = |_a: &[&str], _t: u64| Ok((1, String::new()));
         assert!(set_schedule_in("fortnightly", &f, &mut none).unwrap().0);
-        assert!(std::fs::read_to_string(&user).unwrap().contains("OnCalendar=Sun *-*-1..7,15..21 11:00:00\n"));
+        assert!(std::fs::read_to_string(&user)
+            .unwrap()
+            .contains("OnCalendar=Sun *-*-1..7,15..21 11:00:00\n"));
         assert!(!dropin.exists());
         assert_eq!(current_schedule_of(&f).unwrap(), "fortnightly");
     }
@@ -2254,7 +2668,11 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         std::fs::write(&user, TIMER).unwrap();
         std::fs::create_dir_all(dropin.parent().unwrap()).unwrap();
         std::fs::write(&dropin, "[Timer]\nOnCalendar=\nOnCalendar=*-*-* 11:00:00\n").unwrap();
-        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        let f = TimerFiles {
+            user: &user,
+            shipped: &shipped,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&f).unwrap(), "daily");
         let mut none = |_a: &[&str], _t: u64| Ok((1, String::new()));
         set_schedule_in("monthly", &f, &mut none).unwrap();
@@ -2268,12 +2686,19 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     fn no_timer_at_all_reads_weekly_and_cannot_be_rescheduled() {
         let d = tmp("sched-none");
         let (user, shipped, dropin) = files(&d);
-        let f = TimerFiles { user: &user, shipped: &shipped, dropin: &dropin };
+        let f = TimerFiles {
+            user: &user,
+            shipped: &shipped,
+            dropin: &dropin,
+        };
         assert_eq!(current_schedule_of(&f).unwrap(), "weekly");
         let mut none = |_a: &[&str], _t: u64| Ok((0, String::new()));
         let (ok, msg) = set_schedule_in("daily", &f, &mut none).unwrap();
         assert!(!ok);
-        assert!(msg.starts_with("[Errno 2] No such file or directory"), "{msg}");
+        assert!(
+            msg.starts_with("[Errno 2] No such file or directory"),
+            "{msg}"
+        );
         assert!(!dropin.exists());
     }
 
@@ -2281,17 +2706,31 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     fn status_parses_show() {
         let mut sys = |a: &[&str], _t: u64| {
             Ok(match a[0] {
-                "show" => (0, "NextElapseUSecRealtime=Sun 2026-10-18 11:00:00 PDT\nLastTriggerUSec=\nUnit=x".to_owned()),
+                "show" => (
+                    0,
+                    "NextElapseUSecRealtime=Sun 2026-10-18 11:00:00 PDT\nLastTriggerUSec=\nUnit=x"
+                        .to_owned(),
+                ),
                 _ => (1, "disabled".to_owned()),
             })
         };
         let s = status_with(&mut sys).unwrap();
-        assert_eq!(s, Status { enabled: false, next: "Sun 2026-10-18 11:00:00 PDT".into(), last: "never".into() });
+        assert_eq!(
+            s,
+            Status {
+                enabled: false,
+                next: "Sun 2026-10-18 11:00:00 PDT".into(),
+                last: "never".into()
+            }
+        );
     }
 
     #[test]
     fn splitlines_like_python() {
-        assert_eq!(py_splitlines("a\r\nb\rc\n\nd\u{2028}e\n"), vec!["a", "b", "c", "", "d", "e"]);
+        assert_eq!(
+            py_splitlines("a\r\nb\rc\n\nd\u{2028}e\n"),
+            vec!["a", "b", "c", "", "d", "e"]
+        );
         assert!(py_splitlines("").is_empty());
     }
 
@@ -2303,13 +2742,22 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         assert_eq!(codec_for(Some("0"), None, false, None), Codec::Utf8); // coerced to C.UTF-8
         assert_eq!(codec_for(Some("0"), None, false, Some("0")), Codec::Ascii);
         assert_eq!(codec_for(None, Some("UTF-8"), false, None), Codec::Utf8);
-        assert_eq!(codec_for(None, Some("ISO-8859-1"), false, None), Codec::Latin1);
-        assert!(matches!(codec_for(None, Some("ISO-8859-15"), false, None), Codec::Other(..)));
+        assert_eq!(
+            codec_for(None, Some("ISO-8859-1"), false, None),
+            Codec::Latin1
+        );
+        assert!(matches!(
+            codec_for(None, Some("ISO-8859-15"), false, None),
+            Codec::Other(..)
+        ));
         assert_eq!(
             decode_as(&Codec::Ascii, b"ab\xc3\xa9".to_vec()).unwrap_err(),
             "'ascii' codec can't decode byte 0xc3 in position 2: ordinal not in range(128)"
         );
-        assert_eq!(decode_as(&Codec::Latin1, b"\xe9".to_vec()).unwrap(), "\u{e9}");
+        assert_eq!(
+            decode_as(&Codec::Latin1, b"\xe9".to_vec()).unwrap(),
+            "\u{e9}"
+        );
         assert_eq!(decode_as(&Codec::Ascii, b"ok".to_vec()).unwrap(), "ok");
     }
 
@@ -2317,7 +2765,10 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
     fn os_bytes_like_python() {
         let p = to_path(b"/tmp/al\xffm".to_vec());
         assert_eq!(py_repr_path(&p), "'/tmp/al\\udcffm'");
-        assert_eq!(backslashreplace(b"/tmp/al\xffm/\xe2\x82"), "/tmp/al\\xffm/\\xe2\\x82");
+        assert_eq!(
+            backslashreplace(b"/tmp/al\xffm/\xe2\x82"),
+            "/tmp/al\\xffm/\\xe2\\x82"
+        );
         assert_eq!(backslashreplace("/é".as_bytes()), "/é");
     }
 
@@ -2329,19 +2780,31 @@ Persistent=true\nRandomizedDelaySec=30m\n\n[Install]\nWantedBy=timers.target\n";
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::create_dir_all(&good).unwrap();
         use std::os::unix::fs::PermissionsExt;
-        for (dir, body) in [(&bad, &b"echo bad\n"[..]), (&good, &b"#!/bin/sh\necho good\n"[..])] {
+        for (dir, body) in [
+            (&bad, &b"echo bad\n"[..]),
+            (&good, &b"#!/bin/sh\necho good\n"[..]),
+        ] {
             let f = dir.join("prog");
             std::fs::write(&f, body).unwrap();
             std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let both = format!("{}:{}", bad.display(), good.display()).into_bytes();
         let run = |path: Vec<u8>| run_capture_in(&["prog"], Duration::from_secs(5), Some(path));
-        let Ok(Ran::Exited { stdout, .. }) = run(both) else { panic!("prog did not run") };
+        let Ok(Ran::Exited { stdout, .. }) = run(both) else {
+            panic!("prog did not run")
+        };
         assert_eq!(stdout, b"good\n"); // past the ENOEXEC entry
-        let Err(e) = run(bad.as_os_str().as_bytes().to_vec()) else { panic!("ran") };
+        let Err(e) = run(bad.as_os_str().as_bytes().to_vec()) else {
+            panic!("ran")
+        };
         assert_eq!(e.raw_os_error(), Some(libc::ENOEXEC));
-        let Err(e) = run(b"/nonexistent".to_vec()) else { panic!("ran") };
+        let Err(e) = run(b"/nonexistent".to_vec()) else {
+            panic!("ran")
+        };
         assert_eq!(e.raw_os_error(), Some(libc::ENOENT));
-        assert_eq!(systemctl(&["is-enabled", "a\0b"], 5).unwrap_err(), "embedded null byte");
+        assert_eq!(
+            systemctl(&["is-enabled", "a\0b"], 5).unwrap_err(),
+            "embedded null byte"
+        );
     }
 }

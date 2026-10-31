@@ -52,7 +52,11 @@ impl NewsItem {
     /// "21 Oct 2026".
     pub fn date(&self) -> String {
         chrono::DateTime::from_timestamp(self.published, 0)
-            .map(|d| d.with_timezone(&chrono::Local).format("%-d %b %Y").to_string())
+            .map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%-d %b %Y")
+                    .to_string()
+            })
             .unwrap_or_default()
     }
 }
@@ -64,11 +68,15 @@ pub fn enabled() -> bool {
 
 /// The file the scheduled update reads.
 pub fn seen_path() -> PathBuf {
-    crate::xdg::state_home().join("omarchy-auto-update").join("news-seen")
+    crate::xdg::state_home()
+        .join("omarchy-auto-update")
+        .join("news-seen")
 }
 
 fn cache_path() -> PathBuf {
-    crate::xdg::cache_home().join("almanac").join("arch-news.json")
+    crate::xdg::cache_home()
+        .join("almanac")
+        .join("arch-news.json")
 }
 
 // ---- text ---------------------------------------------------------------------
@@ -153,7 +161,11 @@ fn py_space(c: char) -> bool {
 /// stable), so a headline marked read here matches the feed's spelling of
 /// it there.
 pub fn normalise(s: &str) -> String {
-    decode_entities(s).split(py_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+    decode_entities(s)
+        .split(py_space)
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A post's HTML as one paragraph of plain text, cut at about `max`
@@ -161,7 +173,22 @@ pub fn normalise(s: &str) -> String {
 fn plain_summary(html: &str, max: usize) -> String {
     // A block element breaks the text where it starts or ends; an inline one
     // (<code>, <a>, <em>) runs on, so "<code>42-1</code>," stays "42-1,".
-    const BLOCKS: [&str; 14] = ["p", "br", "li", "ul", "ol", "div", "pre", "h1", "h2", "h3", "h4", "tr", "td", "blockquote"];
+    const BLOCKS: [&str; 14] = [
+        "p",
+        "br",
+        "li",
+        "ul",
+        "ol",
+        "div",
+        "pre",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "tr",
+        "td",
+        "blockquote",
+    ];
     let mut text = String::new();
     let mut tag: Option<String> = None;
     for c in html.chars() {
@@ -209,7 +236,11 @@ pub fn parse(xml: &[u8]) -> Result<Vec<NewsItem>, String> {
         et::Error::Raise(m) => m,
     })?;
     let channel = root.find("channel").ok_or("the news feed has no channel")?;
-    let text = |el: &et::Element, tag: &str| el.find(tag).map(|e| e.text.trim().to_string()).unwrap_or_default();
+    let text = |el: &et::Element, tag: &str| {
+        el.find(tag)
+            .map(|e| e.text.trim().to_string())
+            .unwrap_or_default()
+    };
     Ok(channel
         .children
         .iter()
@@ -217,7 +248,8 @@ pub fn parse(xml: &[u8]) -> Result<Vec<NewsItem>, String> {
         .map(|item| NewsItem {
             title: decode_entities(&text(item, "title")),
             link: text(item, "link"),
-            published: chrono::DateTime::parse_from_rfc2822(&text(item, "pubDate")).map_or(0, |d| d.timestamp()),
+            published: chrono::DateTime::parse_from_rfc2822(&text(item, "pubDate"))
+                .map_or(0, |d| d.timestamp()),
             summary: plain_summary(&text(item, "description"), 240),
         })
         .filter(|i| !i.title.is_empty())
@@ -234,11 +266,23 @@ fn fetch() -> Result<Vec<u8>, String> {
     let t = std::time::Duration::from_secs(10);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(t))
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(crate::sources::system_roots())
+                .build(),
+        )
         .build()
         .into();
-    let r = agent.get(FEED).header("User-Agent", "almanac").call().map_err(|e| e.to_string())?;
-    r.into_body().with_config().limit(4 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())
+    let r = agent
+        .get(FEED)
+        .header("User-Agent", "almanac")
+        .call()
+        .map_err(|e| e.to_string())?;
+    r.into_body()
+        .with_config()
+        .limit(4 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|e| e.to_string())
 }
 
 /// The feed: the copy fetched within the hour, else a fresh one, else the
@@ -248,9 +292,15 @@ pub fn feed(now: f64) -> Option<Vec<NewsItem>> {
     feed_with(&cache_path(), now, enabled(), &fetch)
 }
 
-fn feed_with(cache: &Path, now: f64, online: bool, fetch: &dyn Fn() -> Result<Vec<u8>, String>) -> Option<Vec<NewsItem>> {
-    let kept: Option<Cached> =
-        std::fs::read(cache).ok().and_then(|b| serde_json::from_slice(&b).ok());
+fn feed_with(
+    cache: &Path,
+    now: f64,
+    online: bool,
+    fetch: &dyn Fn() -> Result<Vec<u8>, String>,
+) -> Option<Vec<NewsItem>> {
+    let kept: Option<Cached> = std::fs::read(cache)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
     if let Some(k) = &kept {
         if (0.0..TTL).contains(&(now - k.at)) {
             return Some(k.items.clone());
@@ -304,7 +354,9 @@ pub fn unread_now() -> Vec<NewsItem> {
         return Vec::new();
     }
     let now = util::now();
-    let Some(items) = feed(now) else { return Vec::new() };
+    let Some(items) = feed(now) else {
+        return Vec::new();
+    };
     unread(&items, &read_seen(&seen_path()), now)
 }
 
@@ -322,7 +374,10 @@ fn mark_read_at(path: &Path, titles: &[String]) -> std::io::Result<()> {
     lock_name.push(".lock");
     let _lock = util::lock_file(Path::new(&lock_name))?;
     let existing = std::fs::read(path).unwrap_or_default();
-    let have: Vec<String> = String::from_utf8_lossy(&existing).lines().map(normalise).collect();
+    let have: Vec<String> = String::from_utf8_lossy(&existing)
+        .lines()
+        .map(normalise)
+        .collect();
     let mut add = String::new();
     if !existing.is_empty() && !existing.ends_with(b"\n") {
         add.push('\n');
@@ -344,7 +399,10 @@ fn mark_read_at(path: &Path, titles: &[String]) -> std::io::Result<()> {
     }
     // One write of whole lines with O_APPEND: a reader never sees half a
     // headline.
-    let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
+    let mut fh = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)?;
     fh.write_all(add.as_bytes())?;
     drop(fh);
     let text = std::fs::read(path)?;
@@ -378,16 +436,28 @@ mod tests {
             items[0].title,
             "Update to ca-certificates-mozilla ≥ 3.131.1-1 to prevent man-in-the-middle attacks"
         );
-        assert_eq!(items[1].title, "Mkinitcpio >=42 requires manual intervention for TPM2-based unlocking of LUKS devices");
-        assert_eq!(items[1].link, "https://archlinux.org/news/mkinitcpio-42-requires-manual-intervention/");
+        assert_eq!(
+            items[1].title,
+            "Mkinitcpio >=42 requires manual intervention for TPM2-based unlocking of LUKS devices"
+        );
+        assert_eq!(
+            items[1].link,
+            "https://archlinux.org/news/mkinitcpio-42-requires-manual-intervention/"
+        );
         assert_eq!(items[1].published, 1_791_795_600);
-        assert_eq!(items[1].summary, "Users of sd-encrypt must update /etc/crypttab & rebuild.");
+        assert_eq!(
+            items[1].summary,
+            "Users of sd-encrypt must update /etc/crypttab & rebuild."
+        );
     }
 
     #[test]
     fn cdata_and_double_escaped_entities_come_out_as_plain_text() {
         let items = parse(SAMPLE.as_bytes()).unwrap();
-        assert_eq!(items[2].title, "virtualbox-ext-vnc >= 7.2.12-2 requires manual intervention");
+        assert_eq!(
+            items[2].title,
+            "virtualbox-ext-vnc >= 7.2.12-2 requires manual intervention"
+        );
         assert_eq!(items[2].summary, "Remove the package first.");
     }
 
@@ -402,7 +472,10 @@ mod tests {
         assert_eq!(decode_entities("Mkinitcpio &gt;=42"), "Mkinitcpio >=42");
         assert_eq!(decode_entities("a &amp;gt;= b"), "a >= b");
         assert_eq!(decode_entities("&#8805; &#x2265;"), "≥ ≥");
-        assert_eq!(decode_entities("AT&T & co &unknown;"), "AT&T & co &unknown;");
+        assert_eq!(
+            decode_entities("AT&T & co &unknown;"),
+            "AT&T & co &unknown;"
+        );
     }
 
     #[test]
@@ -424,7 +497,10 @@ mod tests {
     fn marking_one_post_read_leaves_older_ones_unread() {
         let items = parse(SAMPLE.as_bytes()).unwrap();
         let seen = vec![normalise(&items[0].title)];
-        let titles: Vec<String> = unread(&items, &seen, NOW).into_iter().map(|i| i.title).collect();
+        let titles: Vec<String> = unread(&items, &seen, NOW)
+            .into_iter()
+            .map(|i| i.title)
+            .collect();
         assert_eq!(titles.len(), 2, "{titles:?}");
         assert!(titles[0].starts_with("Mkinitcpio"));
     }
@@ -434,14 +510,24 @@ mod tests {
     /// from &nbsp; too -- one space.
     #[test]
     fn headlines_are_normalised_as_the_script_does() {
-        assert_eq!(normalise(" Foo&amp;nbsp;42 \t needs\n\u{a0}care "), "Foo 42 needs care");
+        assert_eq!(
+            normalise(" Foo&amp;nbsp;42 \t needs\n\u{a0}care "),
+            "Foo 42 needs care"
+        );
         // Python's str.split() also splits on the ASCII separators.
         assert_eq!(normalise("a\u{1c}b\u{3000}c"), "a b c");
         let d = tempfile::tempdir().unwrap();
         let seen = d.path().join("news-seen");
         mark_read_at(&seen, &["Foo\u{a0}42  needs care".to_string()]).unwrap();
-        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "Foo 42 needs care\n");
-        let item = NewsItem { title: "Foo&nbsp;42 needs care".into(), published: NOW as i64, ..Default::default() };
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "Foo 42 needs care\n"
+        );
+        let item = NewsItem {
+            title: "Foo&nbsp;42 needs care".into(),
+            published: NOW as i64,
+            ..Default::default()
+        };
         assert!(unread(&[item], &read_seen(&seen), NOW).is_empty());
     }
 
@@ -450,7 +536,10 @@ mod tests {
         let items = parse(SAMPLE.as_bytes()).unwrap();
         // Forty days on: the October posts are still recent, September's is not.
         let later = NOW + 40.0 * 86400.0;
-        let titles: Vec<String> = unread(&items, &[], later).into_iter().map(|i| i.title).collect();
+        let titles: Vec<String> = unread(&items, &[], later)
+            .into_iter()
+            .map(|i| i.title)
+            .collect();
         assert_eq!(titles.len(), 2, "{titles:?}");
         assert!(unread(&items, &[], NOW + 365.0 * 86400.0).is_empty());
     }
@@ -461,7 +550,10 @@ mod tests {
         let seen = d.path().join("state").join("news-seen");
         mark_read_at(&seen, &["A &gt;= B".to_string()]).unwrap();
         mark_read_at(&seen, &["A >= B".to_string(), "Second\nline".to_string()]).unwrap();
-        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "A >= B\nSecond line\n");
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "A >= B\nSecond line\n"
+        );
         assert!(d.path().join("state").join("news-seen.lock").exists());
     }
 
@@ -471,7 +563,10 @@ mod tests {
         let seen = d.path().join("news-seen");
         std::fs::write(&seen, "Old headline").unwrap();
         mark_read_at(&seen, &["New headline".to_string()]).unwrap();
-        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "Old headline\nNew headline\n");
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap(),
+            "Old headline\nNew headline\n"
+        );
     }
 
     #[test]
@@ -504,10 +599,21 @@ mod tests {
         assert_eq!(calls.get(), 1);
         // Hours later and offline: still the kept copy.
         let down = || -> Result<Vec<u8>, String> { Err("offline".into()) };
-        assert_eq!(feed_with(&cache, NOW + 7200.0, true, &down).unwrap().len(), 3);
+        assert_eq!(
+            feed_with(&cache, NOW + 7200.0, true, &down).unwrap().len(),
+            3
+        );
         // Switched off: no request, but what was kept still shows.
         let never = || -> Result<Vec<u8>, String> { panic!("fetched while switched off") };
-        assert_eq!(feed_with(&cache, NOW + 7200.0, false, &never).unwrap().len(), 3);
-        assert_eq!(feed_with(&d.path().join("none.json"), NOW, false, &never), None);
+        assert_eq!(
+            feed_with(&cache, NOW + 7200.0, false, &never)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            feed_with(&d.path().join("none.json"), NOW, false, &never),
+            None
+        );
     }
 }

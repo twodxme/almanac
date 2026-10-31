@@ -97,7 +97,9 @@ fn version_parts(v: &str) -> (Vec<u64>, Vec<String>) {
     for raw in v.split(['.', '-', '_', '+']).filter(|t| !t.is_empty()) {
         let split = raw
             .char_indices()
-            .find(|&(i, c)| i > 0 && c.is_ascii_alphabetic() && raw.as_bytes()[i - 1].is_ascii_digit())
+            .find(|&(i, c)| {
+                i > 0 && c.is_ascii_alphabetic() && raw.as_bytes()[i - 1].is_ascii_digit()
+            })
             .map(|(i, _)| i);
         match split {
             Some(i) => {
@@ -135,7 +137,11 @@ pub fn kernel_matches(release: &str, pkgver: &str) -> bool {
 /// Why the computer needs restarting, or None. `modules_present`: the running
 /// kernel's modules directory still exists; `installed`: the package the
 /// running kernel came from and the version of it installed now, when known.
-pub fn reboot_reason(release: &str, modules_present: bool, installed: Option<(&str, &str)>) -> Option<String> {
+pub fn reboot_reason(
+    release: &str,
+    modules_present: bool,
+    installed: Option<(&str, &str)>,
+) -> Option<String> {
     if release.is_empty() {
         return None;
     }
@@ -146,9 +152,9 @@ pub fn reboot_reason(release: &str, modules_present: bool, installed: Option<(&s
         ));
     }
     match installed {
-        Some((pkg, ver)) if !ver.is_empty() && !kernel_matches(release, ver) => {
-            Some(format!("{pkg} {ver} is installed, but {release} is still running"))
-        }
+        Some((pkg, ver)) if !ver.is_empty() && !kernel_matches(release, ver) => Some(format!(
+            "{pkg} {ver} is installed, but {release} is still running"
+        )),
         _ => None,
     }
 }
@@ -162,7 +168,10 @@ pub fn reboot_needed() -> Option<String> {
     if crate::demo::active() {
         return None;
     }
-    let release = rustix::system::uname().release().to_string_lossy().into_owned();
+    let release = rustix::system::uname()
+        .release()
+        .to_string_lossy()
+        .into_owned();
     let key = local_db_stamp().map(|stamp| (release.clone(), stamp));
     kept(&REBOOT, key, || {
         reboot_needed_in(Path::new(MODULES), &release, &|pkg| {
@@ -172,7 +181,9 @@ pub fn reboot_needed() -> Option<String> {
             }
             let line = out.stdout.lines().next()?.to_string();
             let mut parts = line.split_whitespace();
-            (parts.next() == Some(pkg)).then(|| parts.next().map(str::to_string)).flatten()
+            (parts.next() == Some(pkg))
+                .then(|| parts.next().map(str::to_string))
+                .flatten()
         })
     })
 }
@@ -189,7 +200,9 @@ static REBOOT: std::sync::Mutex<Option<(RebootKey, Option<String>)>> = std::sync
 /// When pacman's local database last changed, or None where it cannot be
 /// read (and then nothing is kept).
 fn local_db_stamp() -> Option<std::time::SystemTime> {
-    std::fs::metadata("/var/lib/pacman/local").and_then(|m| m.modified()).ok()
+    std::fs::metadata("/var/lib/pacman/local")
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 /// `compute()`, or what it said last time for the same `key`. No key: asked
@@ -210,7 +223,11 @@ fn kept(
     answer
 }
 
-fn reboot_needed_in(modules: &Path, release: &str, installed: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+fn reboot_needed_in(
+    modules: &Path,
+    release: &str,
+    installed: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
     if release.is_empty() || release.contains('/') {
         return None;
     }
@@ -238,7 +255,9 @@ fn reboot_needed_in(modules: &Path, release: &str, installed: &dyn Fn(&str) -> O
 pub fn deleted_files(maps: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in maps.lines() {
-        let Some(head) = line.strip_suffix(" (deleted)") else { continue };
+        let Some(head) = line.strip_suffix(" (deleted)") else {
+            continue;
+        };
         // address perms offset dev inode, then the path, which may hold spaces.
         let mut rest = head;
         for _ in 0..5 {
@@ -260,7 +279,14 @@ pub fn deleted_files(maps: &str) -> Vec<String> {
 }
 
 fn is_code(path: &str) -> bool {
-    const DIRS: [&str; 6] = ["/usr/bin/", "/usr/sbin/", "/usr/lib/", "/usr/lib32/", "/usr/lib64/", "/usr/libexec/"];
+    const DIRS: [&str; 6] = [
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/usr/lib/",
+        "/usr/lib32/",
+        "/usr/lib64/",
+        "/usr/libexec/",
+    ];
     DIRS.iter().any(|d| path.starts_with(d))
         && !path.starts_with("/usr/lib/locale/")
         && !path.ends_with(".cache")
@@ -274,40 +300,96 @@ pub fn unit_of(cgroup: &str) -> Option<Unit> {
     let path = cgroup
         .lines()
         .find_map(|l| l.strip_prefix("0::"))
-        .or_else(|| cgroup.lines().find_map(|l| l.split_once(":name=systemd:").map(|(_, p)| p)))?;
+        .or_else(|| {
+            cgroup
+                .lines()
+                .find_map(|l| l.split_once(":name=systemd:").map(|(_, p)| p))
+        })?;
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    let leaf = parts.iter().rev().find(|p| p.ends_with(".service") || p.ends_with(".scope"))?;
-    let user = parts.iter().any(|p| p.starts_with("user@") && p.ends_with(".service"));
+    let leaf = parts
+        .iter()
+        .rev()
+        .find(|p| p.ends_with(".service") || p.ends_with(".scope"))?;
+    let user = parts
+        .iter()
+        .any(|p| p.starts_with("user@") && p.ends_with(".service"));
     // systemd --user itself sits in user@UID.service/init.scope; the
     // user@UID.service unit is the system's.
     if user && leaf.starts_with("user@") {
-        return Some(Unit { scope: Scope::System, name: leaf.to_string() });
+        return Some(Unit {
+            scope: Scope::System,
+            name: leaf.to_string(),
+        });
     }
-    Some(Unit { scope: if user { Scope::User } else { Scope::System }, name: leaf.to_string() })
+    Some(Unit {
+        scope: if user { Scope::User } else { Scope::System },
+        name: leaf.to_string(),
+    })
 }
 
 /// The programs that are the desktop session: restarting one ends or breaks
 /// the session, so they are never offered. Names as `/proc/PID/comm` has them
 /// (15 characters at most).
 const SESSION_PROGRAMS: &[&str] = &[
-    "Hyprland", "Xwayland", "quickshell", "qs", "waybar", "mako", "swaync", "hypridle", "hyprlock",
-    "hyprpaper", "swaybg", "swayosd-server", "walker", "uwsm", "sway", "niri", "gnome-shell",
-    "kwin_wayland", "plasmashell",
+    "Hyprland",
+    "Xwayland",
+    "quickshell",
+    "qs",
+    "waybar",
+    "mako",
+    "swaync",
+    "hypridle",
+    "hyprlock",
+    "hyprpaper",
+    "swaybg",
+    "swayosd-server",
+    "walker",
+    "uwsm",
+    "sway",
+    "niri",
+    "gnome-shell",
+    "kwin_wayland",
+    "plasmashell",
 ];
 
 /// System units that restarting would end the session or the machine's
 /// ability to log in. Matched by name before ".service" (and before "@").
 const NEVER_SYSTEM: &[&str] = &[
-    "dbus", "dbus-broker", "systemd-logind", "display-manager", "sddm", "gdm", "lightdm", "greetd",
-    "ly", "lxdm", "getty", "serial-getty", "user", "user-runtime-dir", "systemd-journald", "polkit",
+    "dbus",
+    "dbus-broker",
+    "systemd-logind",
+    "display-manager",
+    "sddm",
+    "gdm",
+    "lightdm",
+    "greetd",
+    "ly",
+    "lxdm",
+    "getty",
+    "serial-getty",
+    "user",
+    "user-runtime-dir",
+    "systemd-journald",
+    "polkit",
 ];
 
 /// User units that carry the session itself.
-const NEVER_USER: &[&str] = &["dbus", "dbus-broker", "wayland-wm", "wayland-wm-env", "wayland-session-bindpid",
-    "wayland-session-waitenv", "graphical-session", "xdg-desktop-portal-hyprland"];
+const NEVER_USER: &[&str] = &[
+    "dbus",
+    "dbus-broker",
+    "wayland-wm",
+    "wayland-wm-env",
+    "wayland-session-bindpid",
+    "wayland-session-waitenv",
+    "graphical-session",
+    "xdg-desktop-portal-hyprland",
+];
 
 fn stem(unit: &str) -> &str {
-    let base = unit.strip_suffix(".service").or_else(|| unit.strip_suffix(".scope")).unwrap_or(unit);
+    let base = unit
+        .strip_suffix(".service")
+        .or_else(|| unit.strip_suffix(".scope"))
+        .unwrap_or(unit);
     base.split_once('@').map_or(base, |(a, _)| a)
 }
 
@@ -354,18 +436,28 @@ pub fn kind_of(unit: Option<&Unit>, program: &str) -> Kind {
 pub fn scan(proc: &Path) -> (Vec<Stale>, usize) {
     let mut out = Vec::new();
     let mut scanned = 0;
-    let Ok(dir) = std::fs::read_dir(proc) else { return (out, 0) };
+    let Ok(dir) = std::fs::read_dir(proc) else {
+        return (out, 0);
+    };
     for entry in dir.flatten() {
         let file_name = entry.file_name();
-        let Some(pid) = file_name.to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+        let Some(pid) = file_name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
         let base = proc.join(file_name);
-        let Ok(stat) = std::fs::read_to_string(base.join("stat")) else { continue };
-        let Some((name, flags)) = parse_stat(&stat) else { continue };
+        let Ok(stat) = std::fs::read_to_string(base.join("stat")) else {
+            continue;
+        };
+        let Some((name, flags)) = parse_stat(&stat) else {
+            continue;
+        };
         if flags & PF_KTHREAD != 0 {
             continue;
         }
         scanned += 1;
-        let Ok(maps) = std::fs::read(base.join("maps")) else { continue };
+        let Ok(maps) = std::fs::read(base.join("maps")) else {
+            continue;
+        };
         // Most processes have nothing replaced: look for the marker before
         // decoding and splitting the whole file.
         if !DELETED.is_match(&maps) {
@@ -375,8 +467,15 @@ pub fn scan(proc: &Path) -> (Vec<Stale>, usize) {
         if files.is_empty() {
             continue;
         }
-        let unit = std::fs::read_to_string(base.join("cgroup")).ok().and_then(|c| unit_of(&c));
-        out.push(Stale { pid, name, unit, files });
+        let unit = std::fs::read_to_string(base.join("cgroup"))
+            .ok()
+            .and_then(|c| unit_of(&c));
+        out.push(Stale {
+            pid,
+            name,
+            unit,
+            files,
+        });
     }
     out.sort_by_key(|s| s.pid);
     (out, scanned)
@@ -392,7 +491,12 @@ fn parse_stat(stat: &str) -> Option<(String, u64)> {
     let close = stat.rfind(')')?;
     let name = stat.get(open + 1..close)?.to_string();
     // state ppid pgrp session tty_nr tpgid flags
-    let flags = stat.get(close + 1..)?.split_whitespace().nth(6)?.parse().ok()?;
+    let flags = stat
+        .get(close + 1..)?
+        .split_whitespace()
+        .nth(6)?
+        .parse()
+        .ok()?;
     Some((name, flags))
 }
 
@@ -406,7 +510,12 @@ pub fn status() -> Status {
     let started = Instant::now();
     let reboot = reboot_needed();
     let (stale, scanned) = scan(Path::new("/proc"));
-    Status { reboot, stale, scanned, millis: started.elapsed().as_millis() }
+    Status {
+        reboot,
+        stale,
+        scanned,
+        millis: started.elapsed().as_millis(),
+    }
 }
 
 // ---- the finding --------------------------------------------------------------
@@ -419,7 +528,11 @@ pub fn groups(stale: &[Stale]) -> Vec<(Kind, Option<Unit>, Vec<String>)> {
         let kind = kind_of(s.unit.as_ref(), &s.name);
         // Apps are named by program, not by their launch scope's
         // generated name.
-        let key_unit = if kind == Kind::App || kind == Kind::Session { None } else { s.unit.clone() };
+        let key_unit = if kind == Kind::App || kind == Kind::Session {
+            None
+        } else {
+            s.unit.clone()
+        };
         let names = by.entry((kind, key_unit)).or_default();
         if !names.contains(&s.name) {
             names.push(s.name.clone());
@@ -430,7 +543,11 @@ pub fn groups(stale: &[Stale]) -> Vec<(Kind, Option<Unit>, Vec<String>)> {
 
 /// The units the fix restarts.
 pub fn restartable(stale: &[Stale]) -> Vec<Unit> {
-    groups(stale).into_iter().filter(|(k, _, _)| *k == Kind::Service).filter_map(|(_, u, _)| u).collect()
+    groups(stale)
+        .into_iter()
+        .filter(|(k, _, _)| *k == Kind::Service)
+        .filter_map(|(_, u, _)| u)
+        .collect()
 }
 
 /// The commands that restart `units`: the user's in one `systemctl --user`,
@@ -439,18 +556,25 @@ pub fn restartable(stale: &[Stale]) -> Vec<Unit> {
 pub fn restart_commands(units: &[Unit]) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     let names = |scope: Scope| -> Vec<String> {
-        units.iter().filter(|u| u.scope == scope).map(|u| u.name.clone()).collect()
+        units
+            .iter()
+            .filter(|u| u.scope == scope)
+            .map(|u| u.name.clone())
+            .collect()
     };
     let user = names(Scope::User);
     if !user.is_empty() {
-        let mut argv: Vec<String> = ["/usr/bin/systemctl", "--user", "restart"].map(String::from).to_vec();
+        let mut argv: Vec<String> = ["/usr/bin/systemctl", "--user", "restart"]
+            .map(String::from)
+            .to_vec();
         argv.extend(user);
         out.push(argv);
     }
     let system = names(Scope::System);
     if !system.is_empty() {
-        let mut argv: Vec<String> =
-            [crate::tasks::PKEXEC, "/usr/bin/systemctl", "restart"].map(String::from).to_vec();
+        let mut argv: Vec<String> = [crate::tasks::PKEXEC, "/usr/bin/systemctl", "restart"]
+            .map(String::from)
+            .to_vec();
         argv.extend(system);
         out.push(argv);
     }
@@ -469,14 +593,22 @@ pub fn finding_from(status: &Status) -> Finding {
         let names = names.join(", ");
         items.push(match (kind, unit) {
             (Kind::Session, _) => format!("Session: {names} — log out and back in"),
-            (Kind::Reboot, Some(u)) => format!("System: {} ({names}) — restart the computer", u.name),
-            (Kind::Service, Some(u)) if u.scope == Scope::User => format!("Your service: {} ({names})", u.name),
+            (Kind::Reboot, Some(u)) => {
+                format!("System: {} ({names}) — restart the computer", u.name)
+            }
+            (Kind::Service, Some(u)) if u.scope == Scope::User => {
+                format!("Your service: {} ({names})", u.name)
+            }
             (Kind::Service, Some(u)) => format!("System service: {} ({names})", u.name),
             (Kind::App, _) => format!("App: {names} — close it and open it again"),
             (_, None) => names,
         });
     }
-    let units = if status.reboot.is_some() { Vec::new() } else { restartable(&status.stale) };
+    let units = if status.reboot.is_some() {
+        Vec::new()
+    } else {
+        restartable(&status.stale)
+    };
 
     if items.is_empty() {
         return Finding {
@@ -487,7 +619,11 @@ pub fn finding_from(status: &Status) -> Finding {
             ..Default::default()
         };
     }
-    let severity = if status.reboot.is_some() || has(Kind::Session) || has(Kind::Reboot) { WARN } else { INFO };
+    let severity = if status.reboot.is_some() || has(Kind::Session) || has(Kind::Reboot) {
+        WARN
+    } else {
+        INFO
+    };
     let detail = if status.reboot.is_some() {
         "Updated software is installed but not all of it is running yet. \
          Restart the computer to finish updating."
@@ -513,26 +649,47 @@ pub fn finding_from(status: &Status) -> Finding {
         note.push(format!(
             "Restarts {}. Each picks up the updated files as it starts again.\n\n{}",
             plural(units.len(), "service"),
-            commands.iter().map(|c| format!("$ {}", c.join(" "))).collect::<Vec<_>>().join("\n")
+            commands
+                .iter()
+                .map(|c| format!("$ {}", c.join(" ")))
+                .collect::<Vec<_>>()
+                .join("\n")
         ));
     }
     if status.reboot.is_some() || has(Kind::Reboot) {
-        note.push("Restart to finish updating: save your work, then use Restart now on Today.".into());
+        note.push(
+            "Restart to finish updating: save your work, then use Restart now on Today.".into(),
+        );
     } else if has(Kind::Session) {
         note.push("Log out and back in to restart the desktop session.".into());
     }
     if has(Kind::App) {
-        note.push("Apps you started are not closed for you: close and reopen them when it suits you.".into());
+        note.push(
+            "Apps you started are not closed for you: close and reopen them when it suits you."
+                .into(),
+        );
     }
     Finding {
         id: "restart-needed".into(),
-        title: if status.reboot.is_some() { "Restart needed".into() } else { "Running old versions".into() },
+        title: if status.reboot.is_some() {
+            "Restart needed".into()
+        } else {
+            "Running old versions".into()
+        },
         detail,
         severity: severity.into(),
         count: items.len() as i64,
         items,
-        fix_label: if commands.is_empty() { String::new() } else { "Restart services".into() },
-        fix: if commands.is_empty() { None } else { Some(restart_fix(units)) },
+        fix_label: if commands.is_empty() {
+            String::new()
+        } else {
+            "Restart services".into()
+        },
+        fix: if commands.is_empty() {
+            None
+        } else {
+            Some(restart_fix(units))
+        },
         fix_note: note.join("\n\n"),
         ..Default::default()
     }
@@ -578,23 +735,43 @@ fn restart_fix(units: Vec<Unit>) -> Fix {
         }
         let (after, _) = scan(Path::new("/proc"));
         for u in &units {
-            let still: Vec<&Stale> = after.iter().filter(|s| s.unit.as_ref() == Some(u)).collect();
+            let still: Vec<&Stale> = after
+                .iter()
+                .filter(|s| s.unit.as_ref() == Some(u))
+                .collect();
             action.checks.push(crate::history::CheckResult {
                 name: u.name.clone(),
                 ok: Some(still.is_empty()),
                 detail: if still.is_empty() {
                     "running the updated files".into()
                 } else {
-                    format!("still uses {}", still[0].files.first().cloned().unwrap_or_default())
+                    format!(
+                        "still uses {}",
+                        still[0].files.first().cloned().unwrap_or_default()
+                    )
                 },
             });
         }
         action.duration_secs = Some(started.elapsed().as_secs_f64());
         let bad = action.checks.iter().filter(|c| c.ok == Some(false)).count();
         let title = format!("Restarted {}", plural(units.len(), "service"));
-        let detail = if bad > 0 { format!("{} still run old files", plural(bad, "service")) } else { String::new() };
-        let severity = if bad > 0 || !failed.is_empty() { WARN } else { "" };
-        if let Err(e) = crate::history::record_action(crate::history::ALMANAC, &title, &detail, severity, &action) {
+        let detail = if bad > 0 {
+            format!("{} still run old files", plural(bad, "service"))
+        } else {
+            String::new()
+        };
+        let severity = if bad > 0 || !failed.is_empty() {
+            WARN
+        } else {
+            ""
+        };
+        if let Err(e) = crate::history::record_action(
+            crate::history::ALMANAC,
+            &title,
+            &detail,
+            severity,
+            &action,
+        ) {
             log(&format!("Could not write the history log: {e}"));
         }
         if !failed.is_empty() {
@@ -622,17 +799,37 @@ fn reboot_now_with(demo: bool, run: &dyn Fn(&[&str]) -> crate::util::Output) -> 
     }
     let argv = ["/usr/bin/systemctl", "reboot"];
     let mut action = crate::history::ActionLog::default();
-    action.commands.push(crate::history::CommandRun { argv: argv.join(" "), exit: None, secs: None });
+    action.commands.push(crate::history::CommandRun {
+        argv: argv.join(" "),
+        exit: None,
+        secs: None,
+    });
     let why = reboot_needed().unwrap_or_default();
-    let _ = crate::history::record_action(crate::history::ALMANAC, "Restarted to finish updating", &why, "", &action);
+    let _ = crate::history::record_action(
+        crate::history::ALMANAC,
+        "Restarted to finish updating",
+        &why,
+        "",
+        &action,
+    );
     let out = run(&argv);
     if out.ok() {
         return Ok(());
     }
     let msg = out.stderr.trim().to_string();
     action.commands[0].exit = out.code;
-    let _ = crate::history::record_action(crate::history::ALMANAC, "Restart did not start", &msg, WARN, &action);
-    Err(if msg.is_empty() { "systemctl reboot failed".into() } else { msg })
+    let _ = crate::history::record_action(
+        crate::history::ALMANAC,
+        "Restart did not start",
+        &msg,
+        WARN,
+        &action,
+    );
+    Err(if msg.is_empty() {
+        "systemctl reboot failed".into()
+    } else {
+        msg
+    })
 }
 
 #[cfg(test)]
@@ -640,15 +837,26 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> Unit {
-        Unit { scope: Scope::User, name: name.into() }
+        Unit {
+            scope: Scope::User,
+            name: name.into(),
+        }
     }
 
     fn system(name: &str) -> Unit {
-        Unit { scope: Scope::System, name: name.into() }
+        Unit {
+            scope: Scope::System,
+            name: name.into(),
+        }
     }
 
     fn stale(pid: u32, name: &str, unit: Option<Unit>) -> Stale {
-        Stale { pid, name: name.into(), unit, files: vec!["/usr/lib/libc.so.6".into()] }
+        Stale {
+            pid,
+            name: name.into(),
+            unit,
+            files: vec!["/usr/lib/libc.so.6".into()],
+        }
     }
 
     const MAPS: &str = "\
@@ -685,16 +893,28 @@ mod tests {
             u("0::/user.slice/user-1000.slice/user@1000.service/session.slice/pipewire.service\n"),
             Some(user("pipewire.service"))
         );
-        assert_eq!(u("0::/system.slice/NetworkManager.service\n"), Some(system("NetworkManager.service")));
+        assert_eq!(
+            u("0::/system.slice/NetworkManager.service\n"),
+            Some(system("NetworkManager.service"))
+        );
         assert_eq!(
             u("0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-graphical.slice/app-Hyprland-xdg\\x2dterminal\\x2dexec-e782e8bb.scope"),
             Some(user("app-Hyprland-xdg\\x2dterminal\\x2dexec-e782e8bb.scope"))
         );
-        assert_eq!(u("0::/user.slice/user-1000.slice/session-1.scope"), Some(system("session-1.scope")));
+        assert_eq!(
+            u("0::/user.slice/user-1000.slice/session-1.scope"),
+            Some(system("session-1.scope"))
+        );
         assert_eq!(u("0::/init.scope"), Some(system("init.scope")));
-        assert_eq!(u("0::/user.slice/user-1000.slice/user@1000.service/init.scope"), Some(user("init.scope")));
+        assert_eq!(
+            u("0::/user.slice/user-1000.slice/user@1000.service/init.scope"),
+            Some(user("init.scope"))
+        );
         // cgroup v1 with systemd's named hierarchy
-        assert_eq!(u("12:memory:/\n1:name=systemd:/system.slice/cups.service\n"), Some(system("cups.service")));
+        assert_eq!(
+            u("12:memory:/\n1:name=systemd:/system.slice/cups.service\n"),
+            Some(system("cups.service"))
+        );
         assert_eq!(u("0::/\n"), None);
         assert_eq!(u(""), None);
     }
@@ -702,8 +922,14 @@ mod tests {
     #[test]
     fn the_session_and_what_keeps_it_running_are_never_restarted() {
         let k = |u: Unit, p: &str| kind_of(Some(&u), p);
-        assert_eq!(k(user("wayland-wm@hyprland.desktop.service"), "Hyprland"), Kind::Session);
-        assert_eq!(k(user("wayland-wm@hyprland.desktop.service"), "inotifywait"), Kind::Session);
+        assert_eq!(
+            k(user("wayland-wm@hyprland.desktop.service"), "Hyprland"),
+            Kind::Session
+        );
+        assert_eq!(
+            k(user("wayland-wm@hyprland.desktop.service"), "inotifywait"),
+            Kind::Session
+        );
         assert_eq!(k(user("dbus-broker.service"), "dbus-broker"), Kind::Session);
         assert_eq!(k(user("init.scope"), "systemd"), Kind::Session);
         assert_eq!(k(user("waybar.service"), "waybar"), Kind::Session);
@@ -726,10 +952,28 @@ mod tests {
     fn services_are_restartable_and_apps_are_left_to_their_user() {
         let k = |u: Unit, p: &str| kind_of(Some(&u), p);
         assert_eq!(k(user("pipewire.service"), "pipewire"), Kind::Service);
-        assert_eq!(k(user("gnome-keyring-daemon.service"), "gnome-keyring-d"), Kind::Service);
-        assert_eq!(k(system("NetworkManager.service"), "NetworkManager"), Kind::Service);
-        assert_eq!(k(user("app-Hyprland-gtk\\x2dlaunch-82a6189c.scope"), "spotify"), Kind::App);
-        assert_eq!(k(user("app-Hyprland-org.mozilla.firefox@a1b2.service"), "firefox"), Kind::App);
+        assert_eq!(
+            k(user("gnome-keyring-daemon.service"), "gnome-keyring-d"),
+            Kind::Service
+        );
+        assert_eq!(
+            k(system("NetworkManager.service"), "NetworkManager"),
+            Kind::Service
+        );
+        assert_eq!(
+            k(
+                user("app-Hyprland-gtk\\x2dlaunch-82a6189c.scope"),
+                "spotify"
+            ),
+            Kind::App
+        );
+        assert_eq!(
+            k(
+                user("app-Hyprland-org.mozilla.firefox@a1b2.service"),
+                "firefox"
+            ),
+            Kind::App
+        );
         assert_eq!(k(system("docker-1234.scope"), "nginx"), Kind::App);
         assert_eq!(kind_of(None, "something"), Kind::App);
     }
@@ -741,7 +985,10 @@ mod tests {
         assert!(kernel_matches("7.2.8-9-omarchy", "7.2.8-9"));
         assert!(kernel_matches("6.12.50-1-lts", "6.12.50-1"));
         assert!(kernel_matches("6.17.2-zen1-1-zen", "6.17.2.zen1-1"));
-        assert!(kernel_matches("6.17.2-hardened1-1-hardened", "6.17.2.hardened1-1"));
+        assert!(kernel_matches(
+            "6.17.2-hardened1-1-hardened",
+            "6.17.2.hardened1-1"
+        ));
         assert!(kernel_matches("6.18.0-rc1-1-mainline", "6.18rc1-1"));
         assert!(kernel_matches("6.17.2-arch1-1", "1:6.17.2.arch1-1"));
         assert!(!kernel_matches("6.17.2-arch1-1", "6.17.3.arch1-1"));
@@ -760,7 +1007,10 @@ mod tests {
         let newer = |p: &str| (p == "linux-omarchy").then(|| "7.2.9-1".to_string());
         assert_eq!(reboot_needed_in(d.path(), "7.2.8-9-omarchy", &same), None);
         let why = reboot_needed_in(d.path(), "7.2.8-9-omarchy", &newer).unwrap();
-        assert!(why.contains("linux-omarchy 7.2.9-1") && why.contains("7.2.8-9-omarchy"), "{why}");
+        assert!(
+            why.contains("linux-omarchy 7.2.9-1") && why.contains("7.2.8-9-omarchy"),
+            "{why}"
+        );
         // The modules directory gone: pacman removed the old package.
         let why = reboot_needed_in(d.path(), "7.2.7-1-omarchy", &same).unwrap();
         assert!(why.contains("modules are gone"), "{why}");
@@ -768,7 +1018,10 @@ mod tests {
         std::fs::create_dir(d.path().join("6.99.0-custom")).unwrap();
         assert_eq!(reboot_needed_in(d.path(), "6.99.0-custom", &newer), None);
         // The package query failing is not a reason to restart either.
-        assert_eq!(reboot_needed_in(d.path(), "7.2.8-9-omarchy", &|_| None), None);
+        assert_eq!(
+            reboot_needed_in(d.path(), "7.2.8-9-omarchy", &|_| None),
+            None
+        );
     }
 
     #[test]
@@ -783,10 +1036,17 @@ mod tests {
         let t1 = t0 + std::time::Duration::from_secs(1);
         let key = |stamp| Some(("7.2.8-9-omarchy".to_string(), stamp));
         assert_eq!(kept(&slot, key(t0), || ask(None)), None);
-        assert_eq!(kept(&slot, key(t0), || ask(Some("x"))), None, "the same database: the kept answer");
+        assert_eq!(
+            kept(&slot, key(t0), || ask(Some("x"))),
+            None,
+            "the same database: the kept answer"
+        );
         assert_eq!(calls.get(), 1);
         // A kernel installed since: asked again.
-        assert_eq!(kept(&slot, key(t1), || ask(Some("newer"))).as_deref(), Some("newer"));
+        assert_eq!(
+            kept(&slot, key(t1), || ask(Some("newer"))).as_deref(),
+            Some("newer")
+        );
         assert_eq!(calls.get(), 2);
         // No stamp to key on: asked every time, and not kept.
         kept(&slot, None, || ask(None));
@@ -797,10 +1057,14 @@ mod tests {
 
     #[test]
     fn demo_mode_reads_nothing_and_restarts_nothing() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
         let (reboot, status) = (reboot_needed(), status());
-        let now = reboot_now_with(crate::demo::active(), &|_argv| panic!("systemctl reboot ran in demo mode"));
+        let now = reboot_now_with(crate::demo::active(), &|_argv| {
+            panic!("systemctl reboot ran in demo mode")
+        });
         // A unit that does not exist, should the guard ever fail.
         let fix = restart_fix(vec![user("almanac-test-no-such-unit.service")]);
         let ran = std::sync::Mutex::new(Vec::new());
@@ -812,7 +1076,10 @@ mod tests {
         assert_eq!(reboot, None);
         assert_eq!(status, Status::default(), "no process was read");
         assert!(now.unwrap_err().contains("Demo mode"));
-        assert!(fixed.is_ok() && ran.lock().unwrap().iter().all(|l| !l.starts_with('$')), "no command ran");
+        assert!(
+            fixed.is_ok() && ran.lock().unwrap().iter().all(|l| !l.starts_with('$')),
+            "no command ran"
+        );
     }
 
     #[test]
@@ -821,31 +1088,60 @@ mod tests {
         let add = |pid: &str, comm: &str, flags: u64, maps: &str, cgroup: &str| {
             let p = d.path().join(pid);
             std::fs::create_dir(&p).unwrap();
-            std::fs::write(p.join("stat"), format!("{pid} ({comm}) S 1 1 1 0 -1 {flags} 0 0 0")).unwrap();
+            std::fs::write(
+                p.join("stat"),
+                format!("{pid} ({comm}) S 1 1 1 0 -1 {flags} 0 0 0"),
+            )
+            .unwrap();
             std::fs::write(p.join("maps"), maps).unwrap();
             std::fs::write(p.join("cgroup"), cgroup).unwrap();
         };
-        let pw = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/pipewire.service\n";
+        let pw =
+            "0::/user.slice/user-1000.slice/user@1000.service/session.slice/pipewire.service\n";
         add("10", "pipewire", 0x40_0100, MAPS, pw);
         add("11", "kworker/0:1", PF_KTHREAD, MAPS, "0::/\n");
-        add("12", "fine (x) y", 0, "7f3a4000-7f3a5000 r--p 00000000 103:02 3311 /usr/lib/libfine.so.1\n", "0::/system.slice/a.service\n");
+        add(
+            "12",
+            "fine (x) y",
+            0,
+            "7f3a4000-7f3a5000 r--p 00000000 103:02 3311 /usr/lib/libfine.so.1\n",
+            "0::/system.slice/a.service\n",
+        );
         std::fs::create_dir(d.path().join("self")).unwrap();
         let (stale, scanned) = scan(d.path());
         assert_eq!(scanned, 2);
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].pid, 10);
         assert_eq!(stale[0].unit, Some(user("pipewire.service")));
-        assert_eq!(parse_stat("12 (fine (x) y) S 1 1 1 0 -1 64 0"), Some(("fine (x) y".into(), 64)));
+        assert_eq!(
+            parse_stat("12 (fine (x) y) S 1 1 1 0 -1 64 0"),
+            Some(("fine (x) y".into(), 64))
+        );
     }
 
     #[test]
     fn user_and_system_services_restart_in_one_command_each() {
-        let units = vec![user("pipewire.service"), system("cups.service"), user("wireplumber.service")];
+        let units = vec![
+            user("pipewire.service"),
+            system("cups.service"),
+            user("wireplumber.service"),
+        ];
         assert_eq!(
             restart_commands(&units),
             vec![
-                vec!["/usr/bin/systemctl", "--user", "restart", "pipewire.service", "wireplumber.service"],
-                vec![crate::tasks::PKEXEC, "/usr/bin/systemctl", "restart", "cups.service"],
+                vec![
+                    "/usr/bin/systemctl",
+                    "--user",
+                    "restart",
+                    "pipewire.service",
+                    "wireplumber.service"
+                ],
+                vec![
+                    crate::tasks::PKEXEC,
+                    "/usr/bin/systemctl",
+                    "restart",
+                    "cups.service"
+                ],
             ]
         );
         assert!(restart_commands(&[]).is_empty());
@@ -874,15 +1170,30 @@ mod tests {
         let f = finding_from(&st);
         assert_eq!(f.severity, INFO);
         assert!(f.fix.is_some());
-        assert_eq!(restartable(&st.stale), vec![user("pipewire-pulse.service"), user("pipewire.service")]);
-        assert!(f.items.iter().any(|i| i == "App: spotify — close it and open it again"), "{:?}", f.items);
-        assert!(f.fix_note.contains("systemctl --user restart pipewire-pulse.service pipewire.service"));
+        assert_eq!(
+            restartable(&st.stale),
+            vec![user("pipewire-pulse.service"), user("pipewire.service")]
+        );
+        assert!(
+            f.items
+                .iter()
+                .any(|i| i == "App: spotify — close it and open it again"),
+            "{:?}",
+            f.items
+        );
+        assert!(f
+            .fix_note
+            .contains("systemctl --user restart pipewire-pulse.service pipewire.service"));
     }
 
     #[test]
     fn the_compositor_running_old_code_is_a_warning_with_no_restart_offered_for_it() {
         let st = Status {
-            stale: vec![stale(1, "Hyprland", Some(user("wayland-wm@hyprland.desktop.service")))],
+            stale: vec![stale(
+                1,
+                "Hyprland",
+                Some(user("wayland-wm@hyprland.desktop.service")),
+            )],
             ..Default::default()
         };
         let f = finding_from(&st);
@@ -894,7 +1205,9 @@ mod tests {
     #[test]
     fn a_reboot_is_a_warning_and_restarting_services_first_is_not_offered() {
         let st = Status {
-            reboot: Some("linux 6.17.3.arch1-1 is installed, but 6.17.2-arch1-1 is still running".into()),
+            reboot: Some(
+                "linux 6.17.3.arch1-1 is installed, but 6.17.2-arch1-1 is still running".into(),
+            ),
             stale: vec![stale(1, "cupsd", Some(system("cups.service")))],
             ..Default::default()
         };

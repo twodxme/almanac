@@ -21,18 +21,26 @@ fn feed(items: &[(&str, i64)]) -> String {
     );
     for (title, days) in items {
         let date = (now - chrono::Duration::days(*days)).to_rfc2822();
-        xml.push_str(&format!("<item><title>{title}</title><pubDate>{date}</pubDate></item>"));
+        xml.push_str(&format!(
+            "<item><title>{title}</title><pubDate>{date}</pubDate></item>"
+        ));
     }
     xml + "</channel></rss>"
 }
 
 /// The usual feed: the newest title escaped twice, then an older post.
 fn usual_feed() -> String {
-    feed(&[("Mkinitcpio &amp;gt;=42 needs manual intervention", 2), (OLDER, 20)])
+    feed(&[
+        ("Mkinitcpio &amp;gt;=42 needs manual intervention", 2),
+        (OLDER, 20),
+    ])
 }
 
 fn have(tool: &str) -> bool {
-    Command::new("sh").args(["-c", &format!("command -v {tool}")]).output().is_ok_and(|o| o.status.success())
+    Command::new("sh")
+        .args(["-c", &format!("command -v {tool}")])
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 /// bash and python3 are what the script runs on; a system without them
@@ -53,7 +61,8 @@ impl Sandbox {
     /// A machine on mains power, unmetered, with passwordless sudo, one
     /// routine update pending and no news the user has not read.
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("almanac-auto-update-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("almanac-auto-update-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["bin", "home", "state", "config", "power/AC"] {
             std::fs::create_dir_all(dir.join(sub)).unwrap();
@@ -66,12 +75,32 @@ impl Sandbox {
         sb.write("feed", &usual_feed());
         sb.write("state/news-seen", &format!("{NEWS}\n{OLDER}\n"));
         let calls = sb.path("calls");
-        let log = |what: &str| format!("#!/bin/sh\nprintf '%s\\n' \"{what} $*\" >>'{}'\n", calls.display());
-        sb.stub("checkupdates", &format!(
-            "{}[ -s '{r}' ] || exit 2\ncat '{r}'\n", log("checkupdates"), r = sb.path("repo").display()));
-        sb.stub("yay", &format!(
-            "{}[ -s '{a}' ] || exit 1\ncat '{a}'\n", log("yay"), a = sb.path("aur").display()));
-        sb.stub("curl", &format!("#!/bin/sh\ncat '{}'\n", sb.path("feed").display()));
+        let log = |what: &str| {
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"{what} $*\" >>'{}'\n",
+                calls.display()
+            )
+        };
+        sb.stub(
+            "checkupdates",
+            &format!(
+                "{}[ -s '{r}' ] || exit 2\ncat '{r}'\n",
+                log("checkupdates"),
+                r = sb.path("repo").display()
+            ),
+        );
+        sb.stub(
+            "yay",
+            &format!(
+                "{}[ -s '{a}' ] || exit 1\ncat '{a}'\n",
+                log("yay"),
+                a = sb.path("aur").display()
+            ),
+        );
+        sb.stub(
+            "curl",
+            &format!("#!/bin/sh\ncat '{}'\n", sb.path("feed").display()),
+        );
         sb.stub("omarchy", &log("omarchy"));
         sb.stub("omarchy-notification-send", &log("notify"));
         sb.stub("logger", &log("logger"));
@@ -79,11 +108,16 @@ impl Sandbox {
         sb.stub("busctl", "#!/bin/sh\necho 'u 4'\n");
         sb.stub("nmcli", "#!/bin/sh\nexit 1\n");
         // Core packages are the kernel here; --record-hold is written down.
-        sb.stub("almanac-autorun", &format!(
-            "#!/bin/sh\ncase \"$1\" in\n\
+        sb.stub(
+            "almanac-autorun",
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in\n\
              --core-holds) grep -E '^linux ' | cut -d' ' -f1 ;;\n\
              --record-hold) printf 'record %s | %s\\n' \"$2\" \"$3\" >>'{c}' ;;\n\
-             *) echo autorun-run >>'{c}' ;;\nesac\n", c = calls.display()));
+             *) echo autorun-run >>'{c}' ;;\nesac\n",
+                c = calls.display()
+            ),
+        );
         sb
     }
 
@@ -131,7 +165,9 @@ impl Sandbox {
 
     /// Whether a stub was run: its lines start with its name.
     fn ran(&self, name: &str) -> bool {
-        self.calls().lines().any(|l| l == name || l.starts_with(&format!("{name} ")))
+        self.calls()
+            .lines()
+            .any(|l| l == name || l.starts_with(&format!("{name} ")))
     }
 
     fn log(&self) -> String {
@@ -146,7 +182,12 @@ impl Drop for Sandbox {
 }
 
 fn assert_applied(sb: &Sandbox) {
-    assert!(sb.calls().lines().any(|l| l == "omarchy update -y"), "not applied:\n{}\n{}", sb.calls(), sb.log());
+    assert!(
+        sb.calls().lines().any(|l| l == "omarchy update -y"),
+        "not applied:\n{}\n{}",
+        sb.calls(),
+        sb.log()
+    );
 }
 
 fn assert_not_applied(sb: &Sandbox) {
@@ -164,8 +205,14 @@ fn a_routine_batch_with_the_news_read_is_applied() {
     assert_applied(&sb);
     let calls = sb.calls();
     assert!(calls.contains("autorun-run"), "{calls}");
-    assert!(calls.contains("notify -u normal Updated 1 packages"), "{calls}");
-    assert!(!calls.contains("record "), "a clean run is not a hold:\n{calls}");
+    assert!(
+        calls.contains("notify -u normal Updated 1 packages"),
+        "{calls}"
+    );
+    assert!(
+        !calls.contains("record "),
+        "a clean run is not a hold:\n{calls}"
+    );
 }
 
 #[test]
@@ -174,7 +221,10 @@ fn unread_arch_news_holds_the_update() {
         return;
     }
     let sb = Sandbox::new("news-unread");
-    sb.write("state/news-seen", &format!("Some older headline\n{OLDER}\n"));
+    sb.write(
+        "state/news-seen",
+        &format!("Some older headline\n{OLDER}\n"),
+    );
     let out = sb.run(&[]);
     assert!(out.status.success(), "{out:?}");
     assert_not_applied(&sb);
@@ -182,12 +232,28 @@ fn unread_arch_news_holds_the_update() {
     let held = format!("Not applied automatically. Arch news: {NEWS}. Read it in Almanac (Updates) or run: omarchy update");
     // The notification body is markup to the daemon: the headline's ">" is escaped there.
     let shown = held.replace('>', "&gt;");
-    assert!(calls.contains(&format!("notify -u critical 1 updates held {shown}")), "{calls}");
-    assert!(calls.contains(&format!("record 1 updates held | {held}")), "{calls}");
-    assert!(sb.log().contains(&format!("HELD — Arch news: {NEWS}")), "{}", sb.log());
+    assert!(
+        calls.contains(&format!("notify -u critical 1 updates held {shown}")),
+        "{calls}"
+    );
+    assert!(
+        calls.contains(&format!("record 1 updates held | {held}")),
+        "{calls}"
+    );
+    assert!(
+        sb.log().contains(&format!("HELD — Arch news: {NEWS}")),
+        "{}",
+        sb.log()
+    );
     // The headline is remembered as the one held for, not as read.
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-held")).unwrap(), format!("{NEWS}\n"));
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("Some older headline\n{OLDER}\n"));
+    assert_eq!(
+        std::fs::read_to_string(sb.path("state/news-held")).unwrap(),
+        format!("{NEWS}\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(sb.path("state/news-seen")).unwrap(),
+        format!("Some older headline\n{OLDER}\n")
+    );
 }
 
 /// "Read" is per post: the newest one read does not make an older one,
@@ -201,12 +267,24 @@ fn an_older_unread_post_holds_even_when_the_newest_is_read() {
     sb.write("state/news-seen", &format!("{NEWS}\n"));
     sb.run(&[]);
     assert_not_applied(&sb);
-    assert!(sb.log().contains(&format!("HELD — Arch news: {OLDER}")), "{}", sb.log());
+    assert!(
+        sb.log().contains(&format!("HELD — Arch news: {OLDER}")),
+        "{}",
+        sb.log()
+    );
     // Every unread post is named, newest first.
     sb.write("state/news-seen", "");
     sb.run(&[]);
-    assert!(sb.log().contains(&format!("HELD — Arch news: {NEWS}; {OLDER}")), "{}", sb.log());
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-held")).unwrap(), format!("{NEWS}\n{OLDER}\n"));
+    assert!(
+        sb.log()
+            .contains(&format!("HELD — Arch news: {NEWS}; {OLDER}")),
+        "{}",
+        sb.log()
+    );
+    assert_eq!(
+        std::fs::read_to_string(sb.path("state/news-held")).unwrap(),
+        format!("{NEWS}\n{OLDER}\n")
+    );
 }
 
 /// Only the window Almanac lists (news.rs RECENT_DAYS) holds: a hold is
@@ -222,7 +300,10 @@ fn news_older_than_almanac_lists_does_not_hold() {
     sb.run(&[]);
     assert_applied(&sb);
     // ...and a post with no date Almanac can read is not listed there either.
-    sb.write("feed", "<rss><channel><item><title>Undated</title><pubDate>soon</pubDate></item></channel></rss>");
+    sb.write(
+        "feed",
+        "<rss><channel><item><title>Undated</title><pubDate>soon</pubDate></item></channel></rss>",
+    );
     sb.run(&[]);
     assert!(!sb.log().contains("Arch news"), "{}", sb.log());
 }
@@ -236,7 +317,10 @@ fn a_headline_with_odd_spacing_marked_read_counts_as_read() {
         return;
     }
     let sb = Sandbox::new("news-nbsp");
-    sb.write("feed", &feed(&[("Foo&amp;nbsp;42  needs\n manual intervention", 2)]));
+    sb.write(
+        "feed",
+        &feed(&[("Foo&amp;nbsp;42  needs\n manual intervention", 2)]),
+    );
     sb.write("state/news-seen", "Foo 42 needs manual intervention\n");
     sb.run(&[]);
     assert_applied(&sb);
@@ -249,7 +333,10 @@ fn news_marked_read_with_entities_still_counts_as_read() {
     if !runnable() {
         return;
     }
-    for seen in ["Mkinitcpio &gt;=42 needs manual intervention", "Mkinitcpio &amp;gt;=42 needs manual intervention"] {
+    for seen in [
+        "Mkinitcpio &gt;=42 needs manual intervention",
+        "Mkinitcpio &amp;gt;=42 needs manual intervention",
+    ] {
         let sb = Sandbox::new("news-entities");
         sb.write("state/news-seen", &format!("Other\n{seen}\n{OLDER}\n"));
         sb.run(&[]);
@@ -268,14 +355,24 @@ fn a_full_upgrade_by_hand_after_a_news_hold_clears_it() {
     let sb = Sandbox::new("news-by-hand");
     sb.write("state/news-seen", &format!("{OLDER}\n"));
     sb.write("state/news-held", &format!("{NEWS}\n"));
-    let st = Command::new("touch").args(["-d", "2026-01-01 00:00"]).arg(sb.path("state/news-held")).status().unwrap();
+    let st = Command::new("touch")
+        .args(["-d", "2026-01-01 00:00"])
+        .arg(sb.path("state/news-held"))
+        .status()
+        .unwrap();
     assert!(st.success());
     // Before the hold: still held.
-    sb.write("pacman.log", "[2025-12-30T10:00:00+0000] [PACMAN] starting full system upgrade\n");
+    sb.write(
+        "pacman.log",
+        "[2025-12-30T10:00:00+0000] [PACMAN] starting full system upgrade\n",
+    );
     sb.run(&[]);
     assert_not_applied(&sb);
     // After it, but answered "n" at the prompt: nothing was upgraded, still held.
-    sb.write("pacman.log", "[2026-02-01T10:00:00+0000] [PACMAN] starting full system upgrade\n");
+    sb.write(
+        "pacman.log",
+        "[2026-02-01T10:00:00+0000] [PACMAN] starting full system upgrade\n",
+    );
     sb.run(&[]);
     assert_not_applied(&sb);
     // After it, and the transaction completed: read.
@@ -288,7 +385,10 @@ fn a_full_upgrade_by_hand_after_a_news_hold_clears_it() {
     );
     sb.run(&[]);
     assert_applied(&sb);
-    assert_eq!(std::fs::read_to_string(sb.path("state/news-seen")).unwrap(), format!("{OLDER}\n{NEWS}\n"));
+    assert_eq!(
+        std::fs::read_to_string(sb.path("state/news-seen")).unwrap(),
+        format!("{OLDER}\n{NEWS}\n")
+    );
 }
 
 #[test]
@@ -300,7 +400,11 @@ fn news_that_cannot_be_read_holds_the_update() {
     sb.write("feed", "<html>502 Bad Gateway</html>");
     sb.run(&[]);
     assert_not_applied(&sb);
-    assert!(sb.log().contains("HELD — Arch news could not be read"), "{}", sb.log());
+    assert!(
+        sb.log().contains("HELD — Arch news could not be read"),
+        "{}",
+        sb.log()
+    );
 }
 
 #[test]
@@ -312,7 +416,11 @@ fn a_settings_file_that_cannot_be_read_allows_nothing() {
     sb.write("config/auto-update.json", "{not json");
     sb.run(&[]);
     assert_not_applied(&sb);
-    assert!(sb.log().contains("package updates disabled"), "{}", sb.log());
+    assert!(
+        sb.log().contains("package updates disabled"),
+        "{}",
+        sb.log()
+    );
 }
 
 #[test]
@@ -340,20 +448,33 @@ fn core_packages_that_cannot_be_told_hold_everything() {
     let sb = Sandbox::new("core-unknown");
     // kmod is core in Almanac's list; a fallback list here once missed it.
     sb.write("repo", "kmod 33-1 -> 34-1\n");
-    sb.stub("almanac-autorun", &format!(
-        "#!/bin/sh\ncase \"$1\" in\n--core-holds) exit 3 ;;\n\
+    sb.stub(
+        "almanac-autorun",
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n--core-holds) exit 3 ;;\n\
          --record-hold) printf 'record %s | %s\\n' \"$2\" \"$3\" >>'{c}' ;;\nesac\n",
-        c = sb.path("calls").display()));
+            c = sb.path("calls").display()
+        ),
+    );
     sb.run(&[]);
     assert_not_applied(&sb);
-    assert!(sb.log().contains("HELD — Almanac could not tell which of them touch boot"), "{}", sb.log());
+    assert!(
+        sb.log()
+            .contains("HELD — Almanac could not tell which of them touch boot"),
+        "{}",
+        sb.log()
+    );
 
     let sb = Sandbox::new("core-missing");
     sb.write("repo", "foo 1.0-1 -> 1.1-1\n");
     std::fs::remove_file(sb.path("bin/almanac-autorun")).unwrap();
     sb.run(&[]);
     assert_not_applied(&sb);
-    assert!(sb.log().contains("HELD — Almanac could not tell"), "{}", sb.log());
+    assert!(
+        sb.log().contains("HELD — Almanac could not tell"),
+        "{}",
+        sb.log()
+    );
 }
 
 /// AUR packages run build scripts anyone can publish: not installed
@@ -389,8 +510,15 @@ fn without_omarchy_updates_are_only_announced() {
     sb.run(&[]);
     let calls = sb.calls();
     assert!(!calls.lines().any(|l| l.starts_with("omarchy ")), "{calls}");
-    assert!(calls.contains("Omarchy is not installed. Run: sudo pacman -Syu"), "{calls}");
-    assert!(sb.log().contains("HELD — omarchy not found"), "{}", sb.log());
+    assert!(
+        calls.contains("Omarchy is not installed. Run: sudo pacman -Syu"),
+        "{calls}"
+    );
+    assert!(
+        sb.log().contains("HELD — omarchy not found"),
+        "{}",
+        sb.log()
+    );
 }
 
 /// python3 runs isolated: a module left in the directory the unit starts
@@ -403,22 +531,38 @@ fn python_does_not_import_from_the_working_directory() {
     let sb = Sandbox::new("python-isolated");
     let marker = sb.path("imported");
     for module in ["json", "html", "email"] {
-        sb.write(&format!("home/{module}.py"), &format!("open('{}', 'a').write('{module}\\n')\n", marker.display()));
+        sb.write(
+            &format!("home/{module}.py"),
+            &format!("open('{}', 'a').write('{module}\\n')\n", marker.display()),
+        );
     }
     sb.run(&[]);
     assert_applied(&sb);
-    assert!(!marker.exists(), "imported from the working directory: {:?}", std::fs::read_to_string(&marker));
+    assert!(
+        !marker.exists(),
+        "imported from the working directory: {:?}",
+        std::fs::read_to_string(&marker)
+    );
 }
 
 /// The units: run from /, and a timer left enabled after Almanac is
 /// removed skips instead of failing on a script that is gone.
 #[test]
 fn the_units_start_in_root_and_skip_when_the_script_is_gone() {
-    let unit = |name: &str| std::fs::read_to_string(format!("{}/packaging/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let unit = |name: &str| {
+        std::fs::read_to_string(format!("{}/packaging/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    };
     let service = unit("omarchy-auto-update.service");
-    assert!(service.lines().any(|l| l == "WorkingDirectory=/"), "{service}");
+    assert!(
+        service.lines().any(|l| l == "WorkingDirectory=/"),
+        "{service}"
+    );
     for text in [service, unit("omarchy-auto-update.timer")] {
-        assert!(text.lines().any(|l| l == "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update"), "{text}");
+        assert!(
+            text.lines()
+                .any(|l| l == "ConditionPathExists=/usr/lib/almanac/omarchy-auto-update"),
+            "{text}"
+        );
     }
 }
 
@@ -432,8 +576,14 @@ fn on_battery_nothing_runs_at_all() {
     let out = sb.run(&[]);
     assert!(out.status.success());
     let calls = sb.calls();
-    assert!(calls.contains("notify -u normal Scheduled update skipped On battery power."), "{calls}");
-    assert!(calls.contains("record Scheduled update skipped | On battery power."), "{calls}");
+    assert!(
+        calls.contains("notify -u normal Scheduled update skipped On battery power."),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("record Scheduled update skipped | On battery power."),
+        "{calls}"
+    );
     for not in ["autorun-run", "checkupdates", "yay", "omarchy"] {
         assert!(!sb.ran(not), "{not} ran on battery:\n{calls}");
     }
@@ -466,7 +616,10 @@ fn a_metered_connection_skips_the_run() {
     sb.stub("busctl", "#!/bin/sh\necho 'u 3'\n");
     sb.run(&[]);
     let calls = sb.calls();
-    assert!(calls.contains("Scheduled update skipped The connection is metered."), "{calls}");
+    assert!(
+        calls.contains("Scheduled update skipped The connection is metered."),
+        "{calls}"
+    );
     assert!(!sb.ran("autorun-run") && !sb.ran("omarchy"), "{calls}");
 }
 
@@ -495,7 +648,12 @@ fn a_failed_check_holds_and_is_recorded() {
     sb.run(&[]);
     assert_not_applied(&sb);
     let calls = sb.calls();
-    assert!(calls.contains("record Updates not checked | checkupdates failed (exit 1). Run: omarchy update"), "{calls}");
+    assert!(
+        calls.contains(
+            "record Updates not checked | checkupdates failed (exit 1). Run: omarchy update"
+        ),
+        "{calls}"
+    );
 }
 
 #[test]
@@ -504,11 +662,20 @@ fn a_failed_update_is_recorded_and_exits_non_zero() {
         return;
     }
     let sb = Sandbox::new("update-failed");
-    sb.stub("omarchy", &format!("#!/bin/sh\necho \"omarchy $*\" >>'{}'\nexit 1\n", sb.path("calls").display()));
+    sb.stub(
+        "omarchy",
+        &format!(
+            "#!/bin/sh\necho \"omarchy $*\" >>'{}'\nexit 1\n",
+            sb.path("calls").display()
+        ),
+    );
     let out = sb.run(&[]);
     assert!(!out.status.success());
     let calls = sb.calls();
-    assert!(calls.contains("notify -u critical Update failed"), "{calls}");
+    assert!(
+        calls.contains("notify -u critical Update failed"),
+        "{calls}"
+    );
     assert!(calls.contains("record Update failed | "), "{calls}");
 }
 
@@ -525,7 +692,10 @@ fn a_dry_run_prints_the_plan_and_changes_nothing() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("(dry run)"), "{stdout}");
     assert!(stdout.contains("would run: "), "{stdout}");
-    assert!(stdout.contains("would apply 1 updates: omarchy update -y\n  foo 1.0-1 -> 1.1-1"), "{stdout}");
+    assert!(
+        stdout.contains("would apply 1 updates: omarchy update -y\n  foo 1.0-1 -> 1.1-1"),
+        "{stdout}"
+    );
     let calls = sb.calls();
     for not in ["omarchy", "notify", "record", "autorun-run"] {
         assert!(!sb.ran(not), "{not} in a dry run:\n{calls}");
@@ -537,8 +707,14 @@ fn a_dry_run_prints_the_plan_and_changes_nothing() {
     sb.write("state/news-seen", "");
     let out = sb.run(&["--dry-run"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("would notify (critical): 1 updates held"), "{stdout}");
-    assert!(stdout.contains("would record in History: 1 updates held"), "{stdout}");
+    assert!(
+        stdout.contains("would notify (critical): 1 updates held"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("would record in History: 1 updates held"),
+        "{stdout}"
+    );
     assert!(!sb.path("state/news-held").exists());
 }
 
@@ -581,6 +757,9 @@ fn record_hold_writes_a_warning_to_the_history_log() {
 
     let out = run(&["--record-hold", "only a title"]);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(std::fs::read_to_string(dir.join("state/almanac/history.jsonl")).unwrap(), log);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("state/almanac/history.jsonl")).unwrap(),
+        log
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

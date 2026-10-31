@@ -31,7 +31,6 @@
 //! heavyweight every day, and no marketplace gets both places while another has
 //! a contender.
 
-
 use num_bigint::{BigInt, BigUint, Sign};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -209,7 +208,11 @@ fn _float_json(f: f64) -> Value {
 
 /// An i64 that stands for `n` where `n` does not fit (only the exact copy is read).
 fn big_i64(n: &BigInt) -> i64 {
-    i64::try_from(n).unwrap_or(if n.sign() == Sign::Minus { i64::MIN } else { i64::MAX })
+    i64::try_from(n).unwrap_or(if n.sign() == Sign::Minus {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
 }
 
 fn big_json(n: &BigInt) -> Value {
@@ -244,13 +247,20 @@ fn ratio_f64(a: &BigInt, b: &BigInt) -> Option<f64> {
     let neg = a.sign() == Sign::Minus;
     let (am, bm) = (a.magnitude().clone(), b.magnitude().clone());
     if am.bits() <= 53 && bm.bits() <= 53 {
-        let (x, y) = (u64::try_from(&am).ok()? as f64, u64::try_from(&bm).ok()? as f64);
+        let (x, y) = (
+            u64::try_from(&am).ok()? as f64,
+            u64::try_from(&bm).ok()? as f64,
+        );
         let q = x / y;
         return Some(if neg { -q } else { q });
     }
     // Shift so the quotient has 55 or 56 bits, then round it to 53 by hand.
     let s = 55 - (am.bits() as i64 - bm.bits() as i64);
-    let (num, den) = if s >= 0 { (am << s as u64, bm) } else { (am, bm << (-s) as u64) };
+    let (num, den) = if s >= 0 {
+        (am << s as u64, bm)
+    } else {
+        (am, bm << (-s) as u64)
+    };
     let q: BigUint = &num / &den;
     let sticky = (&num % &den) != BigUint::from(0u32);
     let extra = q.bits() - 53;
@@ -269,7 +279,8 @@ fn ratio_f64(a: &BigInt, b: &BigInt) -> Option<f64> {
 
 /// `float(n)` for a Python int.
 fn big_f64(n: &BigInt) -> Result<f64, String> {
-    ratio_f64(n, &BigInt::from(1)).ok_or_else(|| "OverflowError: int too large to convert to float".to_string())
+    ratio_f64(n, &BigInt::from(1))
+        .ok_or_else(|| "OverflowError: int too large to convert to float".to_string())
 }
 
 /// `int(f)`: toward zero, exactly.
@@ -303,7 +314,11 @@ fn cmp_int_float(n: &BigInt, f: f64) -> Option<Ordering> {
         return None;
     }
     if f.is_infinite() {
-        return Some(if f > 0.0 { Ordering::Less } else { Ordering::Greater });
+        return Some(if f > 0.0 {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        });
     }
     let t = f.trunc();
     let ti = f64_big(t).ok()?;
@@ -328,7 +343,9 @@ fn is_surrogate(c: u32) -> bool {
 
 /// A `String` for display: a lone surrogate becomes U+FFFD.
 fn ps_lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// The `String` when `s` is one (no lone surrogate).
@@ -352,7 +369,6 @@ pub enum PyJson {
 // As deep as Python's json goes (MAX_DEPTH): cloned and compared without
 // recursion.
 crate::util::tree_clone_eq!(PyJson, key: PStr, units: [None], leaves: [Bool, Int, Float, Str], list: List, dict: Dict(PyDict));
-
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PyDict(pub Vec<(PStr, PyJson)>);
@@ -395,7 +411,11 @@ impl PyJson {
             },
             Value::String(s) => PyJson::Str(ps(s)),
             Value::Array(a) => PyJson::List(a.iter().map(PyJson::from_serde).collect()),
-            Value::Object(o) => PyJson::Dict(PyDict(o.iter().map(|(k, v)| (ps(k), PyJson::from_serde(v))).collect())),
+            Value::Object(o) => PyJson::Dict(PyDict(
+                o.iter()
+                    .map(|(k, v)| (ps(k), PyJson::from_serde(v)))
+                    .collect(),
+            )),
         }
     }
 
@@ -410,7 +430,11 @@ impl PyJson {
             PyJson::Float(f) => Num::Float(*f).to_json(),
             PyJson::Str(s) => _str_json(s),
             PyJson::List(a) => Value::Array(a.iter().map(PyJson::to_serde).collect()),
-            PyJson::Dict(d) => Value::Object(d.0.iter().map(|(k, v)| (ps_lossy(k), v.to_serde())).collect()),
+            PyJson::Dict(d) => Value::Object(
+                d.0.iter()
+                    .map(|(k, v)| (ps_lossy(k), v.to_serde()))
+                    .collect(),
+            ),
         }
     }
 
@@ -425,7 +449,11 @@ impl PyJson {
             PyJson::Float(f) => G::Float(*f),
             PyJson::Str(s) => G::Str(s.clone()),
             PyJson::List(a) => G::List(a.iter().map(PyJson::to_ghcache).collect()),
-            PyJson::Dict(d) => G::Dict(d.0.iter().map(|(k, v)| (k.clone(), v.to_ghcache())).collect()),
+            PyJson::Dict(d) => G::Dict(
+                d.0.iter()
+                    .map(|(k, v)| (k.clone(), v.to_ghcache()))
+                    .collect(),
+            ),
         }
     }
 
@@ -473,16 +501,23 @@ fn py_eq(a: &PyJson, b: &PyJson) -> bool {
     if let (Some(x), Some(y)) = (a.num(), b.num()) {
         return match (x, y) {
             (Num::Int(x), Num::Int(y)) => x == y,
-            (Num::Int(x), Num::Float(y)) | (Num::Float(y), Num::Int(x)) => cmp_int_float(&x, y) == Some(Ordering::Equal),
+            (Num::Int(x), Num::Float(y)) | (Num::Float(y), Num::Int(x)) => {
+                cmp_int_float(&x, y) == Some(Ordering::Equal)
+            }
             (Num::Float(x), Num::Float(y)) => x == y,
         };
     }
     match (a, b) {
         (PyJson::None, PyJson::None) => true,
         (PyJson::Str(x), PyJson::Str(y)) => x == y,
-        (PyJson::List(x), PyJson::List(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q)),
+        (PyJson::List(x), PyJson::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q))
+        }
         (PyJson::Dict(x), PyJson::Dict(y)) => {
-            x.0.len() == y.0.len() && x.0.iter().all(|(k, v)| y.get(k).is_some_and(|w| py_eq(v, w)))
+            x.0.len() == y.0.len()
+                && x.0
+                    .iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| py_eq(v, w)))
         }
         _ => false,
     }
@@ -494,17 +529,29 @@ fn py_iter(v: &PyJson) -> Result<Vec<PyJson>, String> {
         PyJson::List(a) => Ok(a.clone()),
         PyJson::Str(s) => Ok(s.iter().map(|&c| PyJson::Str(vec![c])).collect()),
         PyJson::Dict(d) => Ok(d.0.iter().map(|(k, _)| PyJson::Str(k.clone())).collect()),
-        other => Err(format!("TypeError: '{}' object is not iterable", other.type_name())),
+        other => Err(format!(
+            "TypeError: '{}' object is not iterable",
+            other.type_name()
+        )),
     }
 }
 
 /// `v[i]`
 fn py_index(v: &PyJson, i: usize) -> Result<PyJson, String> {
     match v {
-        PyJson::List(a) => a.get(i).cloned().ok_or_else(|| "IndexError: list index out of range".to_string()),
-        PyJson::Str(s) => s.get(i).map(|&c| PyJson::Str(vec![c])).ok_or_else(|| "IndexError: string index out of range".to_string()),
+        PyJson::List(a) => a
+            .get(i)
+            .cloned()
+            .ok_or_else(|| "IndexError: list index out of range".to_string()),
+        PyJson::Str(s) => s
+            .get(i)
+            .map(|&c| PyJson::Str(vec![c]))
+            .ok_or_else(|| "IndexError: string index out of range".to_string()),
         PyJson::Dict(_) => Err(format!("KeyError: {i}")),
-        other => Err(format!("TypeError: '{}' object is not subscriptable", other.type_name())),
+        other => Err(format!(
+            "TypeError: '{}' object is not subscriptable",
+            other.type_name()
+        )),
     }
 }
 
@@ -514,7 +561,10 @@ fn py_contains(v: &PyJson, s: &[u32]) -> Result<bool, String> {
         PyJson::Dict(d) => Ok(d.contains_key(s)),
         PyJson::List(a) => Ok(a.iter().any(|x| matches!(x, PyJson::Str(y) if y == s))),
         PyJson::Str(t) => Ok(s.is_empty() || t.windows(s.len()).any(|w| w == s)),
-        other => Err(format!("TypeError: argument of type '{}' is not iterable", other.type_name())),
+        other => Err(format!(
+            "TypeError: argument of type '{}' is not iterable",
+            other.type_name()
+        )),
     }
 }
 
@@ -525,8 +575,13 @@ fn py_setitem(v: &mut PyJson, k: &[u32], x: PyJson) -> Result<(), String> {
             d.insert(k.to_vec(), x);
             Ok(())
         }
-        PyJson::List(_) => Err("TypeError: list indices must be integers or slices, not str".into()),
-        other => Err(format!("TypeError: '{}' object does not support item assignment", other.type_name())),
+        PyJson::List(_) => {
+            Err("TypeError: list indices must be integers or slices, not str".into())
+        }
+        other => Err(format!(
+            "TypeError: '{}' object does not support item assignment",
+            other.type_name()
+        )),
     }
 }
 
@@ -560,7 +615,10 @@ fn py_repr(v: &PyJson) -> String {
         PyJson::List(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         PyJson::Dict(d) => format!(
             "{{{}}}",
-            d.0.iter().map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")
+            d.0.iter()
+                .map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }
@@ -575,7 +633,8 @@ fn py_isprintable(c: u32) -> bool {
         return (' '..='~').contains(&c);
     }
     static NONPRINT: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-    let re = NONPRINT.get_or_init(|| regex::Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").ok());
+    let re = NONPRINT
+        .get_or_init(|| regex::Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").ok());
     match re {
         Some(re) => !re.is_match(c.encode_utf8(&mut [0u8; 4])),
         None => true,
@@ -622,7 +681,12 @@ fn py_isspace(c: char) -> bool {
 
 /// `int(s)` for a str.
 fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
-    let bad = || format!("ValueError: invalid literal for int() with base 10: {}", py_str_repr(s));
+    let bad = || {
+        format!(
+            "ValueError: invalid literal for int() with base 10: {}",
+            py_str_repr(s)
+        )
+    };
     // _PyUnicode_TransformDecimalAndSpaceToASCII
     let mut t = String::new();
     for &n in s {
@@ -661,7 +725,9 @@ fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
         return Err(bad());
     }
     if digits.len() > 4300 {
-        return Err("ValueError: Exceeds the limit (4300 digits) for integer string conversion".into());
+        return Err(
+            "ValueError: Exceeds the limit (4300 digits) for integer string conversion".into(),
+        );
     }
     let n: BigInt = digits.parse().map_err(|_| bad())?;
     Ok(if neg { -n } else { n })
@@ -722,7 +788,9 @@ impl crate::util::pyjson::Build for PyJson {
         match n {
             Num::Int(i) => PyJson::Int(BigInt::from(i)),
             Num::UInt(u) => PyJson::Int(BigInt::from(u)),
-            Num::Big(digits) => PyJson::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Big(digits) => {
+                PyJson::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default())
+            }
             Num::Float(f) => PyJson::Float(f),
         }
     }
@@ -987,7 +1055,9 @@ fn _iso_hms(b: &[u8], mut p: usize, end: usize) -> Option<(bool, [u32; 4])> {
     let (np, mut us) = _digits(b, p, to_parse)?;
     p = np;
     if to_parse < 6 {
-        us *= [100000, 10000, 1000, 100, 10].get(to_parse.wrapping_sub(1)).copied()?;
+        us *= [100000, 10000, 1000, 100, 10]
+            .get(to_parse.wrapping_sub(1))
+            .copied()?;
     }
     while _byte(b, p).is_ascii_digit() {
         p += 1;
@@ -1013,14 +1083,19 @@ fn _iso_time(b: &[u8], start: usize, end: usize) -> Option<([u32; 4], Option<i64
         return if more { None } else { Some((t, None)) };
     }
     if _byte(b, tz) == b'Z' {
-        return if _byte(b, tz + 1) != 0 { None } else { Some((t, Some(0))) };
+        return if _byte(b, tz + 1) != 0 {
+            None
+        } else {
+            Some((t, Some(0)))
+        };
     }
     let sign: i64 = if _byte(b, tz) == b'-' { -1 } else { 1 };
     let (more, o) = _iso_hms(b, tz + 1, end)?;
     if more {
         return None;
     }
-    let off = (i64::from(o[0]) * 3600 + i64::from(o[1]) * 60 + i64::from(o[2])) * 1_000_000 + i64::from(o[3]);
+    let off = (i64::from(o[0]) * 3600 + i64::from(o[1]) * 60 + i64::from(o[2])) * 1_000_000
+        + i64::from(o[3]);
     Some((t, Some(sign * off)))
 }
 
@@ -1075,7 +1150,16 @@ fn _fromisoformat(s: &str) -> Option<IsoDt> {
             return None;
         }
     }
-    Some(IsoDt { year, month, day, hour, minute, second, us, tz_us: tz })
+    Some(IsoDt {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        us,
+        tz_us: tz,
+    })
 }
 
 /// `local(u)` of CPython's `local_to_seconds`: the local wall clock at the
@@ -1095,8 +1179,13 @@ impl IsoDt {
     /// (`fold=0`); `None` for its ValueError.
     fn timestamp(&self) -> Option<f64> {
         let days = chrono::NaiveDate::from_ymd_opt(self.year, self.month, self.day)
-            .map_or(0, |d| i64::from(chrono::Datelike::num_days_from_ce(&d)) - 719_163);
-        let t = days * DAY + i64::from(self.hour) * 3600 + i64::from(self.minute) * 60 + i64::from(self.second);
+            .map_or(0, |d| {
+                i64::from(chrono::Datelike::num_days_from_ce(&d)) - 719_163
+            });
+        let t = days * DAY
+            + i64::from(self.hour) * 3600
+            + i64::from(self.minute) * 60
+            + i64::from(self.second);
         match self.tz_us {
             Some(off) => {
                 let total = BigInt::from(t) * 1_000_000 + i64::from(self.us) - off;
@@ -1107,7 +1196,7 @@ impl IsoDt {
                 let a = _local(t)? - t;
                 let u1 = t - a;
                 let t1 = _local(u1)?;
-                
+
                 let b = if t1 == t {
                     let u2 = u1 - DAY;
                     let bb = _local(u2)? - u2;
@@ -1210,7 +1299,10 @@ fn _real_get(url: &str, ttl: u64) -> Result<Option<PyJson>, String> {
 /// `entry["body"]` of ghcache's file for `url`, read as Python reads it.
 fn _cached_body(url: &str) -> Option<PyJson> {
     use sha1::{Digest, Sha1};
-    let path = crate::ghcache::dir().join(format!("{}.json", hex::encode(Sha1::digest(url.as_bytes()))));
+    let path = crate::ghcache::dir().join(format!(
+        "{}.json",
+        hex::encode(Sha1::digest(url.as_bytes()))
+    ));
     let text = std::fs::read_to_string(path).ok()?;
     match json_loads(&text).ok()? {
         PyJson::Dict(d) => d.get_str("body").cloned(),
@@ -1254,7 +1346,10 @@ fn _load() -> Result<PyDict, String> {
     match json_loads(&text) {
         Ok(PyJson::Dict(d)) => Ok(d),
         Ok(_) | Err(LoadErr::Value) => Ok(PyDict::default()),
-        Err(LoadErr::Recursion) => Err("RecursionError: maximum recursion depth exceeded while decoding a JSON document".into()),
+        Err(LoadErr::Recursion) => Err(
+            "RecursionError: maximum recursion depth exceeded while decoding a JSON document"
+                .into(),
+        ),
     }
 }
 
@@ -1290,7 +1385,10 @@ fn _ts_ps(value: &[u32]) -> f64 {
     // only be at 7, 8 or 10), and no other: a str that is not UTF-8 is not
     // an ISO string.
     if v.len() >= 7 {
-        if let Some(&i) = [7, 8, 10].iter().find(|&&i| v.get(i).copied().is_some_and(is_surrogate)) {
+        if let Some(&i) = [7, 8, 10]
+            .iter()
+            .find(|&&i| v.get(i).copied().is_some_and(is_surrogate))
+        {
             v[i] = 'T' as u32;
         }
     }
@@ -1348,7 +1446,12 @@ pub fn shortlist(plugins: &[Plugin], size: usize, now: Option<f64>) -> Vec<Plugi
     _shortlist(plugins, size, _now(now), &eligible)
 }
 
-fn _shortlist(plugins: &[Plugin], size: usize, now: f64, eligible: &dyn Fn(&Plugin) -> bool) -> Vec<Plugin> {
+fn _shortlist(
+    plugins: &[Plugin],
+    size: usize,
+    now: f64,
+    eligible: &dyn Fn(&Plugin) -> bool,
+) -> Vec<Plugin> {
     let mut pool: Vec<&Plugin> = plugins
         .iter()
         .filter(|p| eligible(p) && now - _ts(&p.updated) < (14 * DAY) as f64)
@@ -1356,7 +1459,10 @@ fn _shortlist(plugins: &[Plugin], size: usize, now: f64, eligible: &dyn Fn(&Plug
     pool.sort_by_key(|p| std::cmp::Reverse(p.stars));
     let mut by_market: BTreeMap<String, VecDeque<Plugin>> = BTreeMap::new();
     for p in pool {
-        by_market.entry(p.market.clone()).or_default().push_back(p.clone());
+        by_market
+            .entry(p.market.clone())
+            .or_default()
+            .push_back(p.clone());
     }
     let mut out: Vec<Plugin> = Vec::new();
     while out.len() < size && by_market.values().any(|v| !v.is_empty()) {
@@ -1382,14 +1488,22 @@ fn _float_int(x: f64) -> Result<i64, String> {
     Ok(x as i64)
 }
 
-fn _activity_today(full: &str, now: f64, pages: u32, get: GetJson) -> Result<(i64, i64, i64), String> {
+fn _activity_today(
+    full: &str,
+    now: f64,
+    pages: u32,
+    get: GetJson,
+) -> Result<(i64, i64, i64), String> {
     let (mut stars, mut forks) = (0i64, 0i64);
     let mut oldest = now;
     let mut exhausted = false; // the feed ended: nothing older exists
     let day = DAY as f64;
     for page in 1..=pages {
         let rows = get(
-            &format!("{}/repos/{full}/events?per_page=100&page={page}", crate::ghcache::API),
+            &format!(
+                "{}/repos/{full}/events?per_page=100&page={page}",
+                crate::ghcache::API
+            ),
             3 * 3600,
         )?;
         let Some(PyJson::List(rows)) = rows else {
@@ -1400,14 +1514,20 @@ fn _activity_today(full: &str, now: f64, pages: u32, get: GetJson) -> Result<(i6
         };
         for r in &rows {
             let PyJson::Dict(r) = r else {
-                return Err(format!("AttributeError: '{}' object has no attribute 'get'", r.type_name()));
+                return Err(format!(
+                    "AttributeError: '{}' object has no attribute 'get'",
+                    r.type_name()
+                ));
             };
             let at = match r.get_str("created_at") {
                 None => 0.0,
                 Some(v) if !v.truthy() => 0.0,
                 Some(PyJson::Str(s)) => _ts_ps(s),
                 Some(v) => {
-                    return Err(format!("AttributeError: '{}' object has no attribute 'replace'", v.type_name()));
+                    return Err(format!(
+                        "AttributeError: '{}' object has no attribute 'replace'",
+                        v.type_name()
+                    ));
                 }
             };
             if at < oldest {
@@ -1440,7 +1560,10 @@ pub fn comments_this_week(full: &str, now: f64) -> Result<(i64, bool), String> {
 fn _comments_this_week(full: &str, now: f64, get: GetJson) -> Result<(i64, bool), String> {
     let since = _utc_stamp(now - (7 * DAY) as f64)?;
     let rows = get(
-        &format!("{}/repos/{full}/issues/comments?since={since}&per_page=100", crate::ghcache::API),
+        &format!(
+            "{}/repos/{full}/issues/comments?since={since}&per_page=100",
+            crate::ghcache::API
+        ),
         6 * 3600,
     )?;
     let Some(PyJson::List(rows)) = rows else {
@@ -1451,7 +1574,10 @@ fn _comments_this_week(full: &str, now: f64, get: GetJson) -> Result<(i64, bool)
 
 fn _release_downloads(full: &str, get: GetJson) -> Result<(BigInt, PyJson), String> {
     // ghcache.latest_release(full, ttl=6 * 3600)
-    let rel = get(&format!("{}/repos/{full}/releases/latest", crate::ghcache::API), 6 * 3600)?;
+    let rel = get(
+        &format!("{}/repos/{full}/releases/latest", crate::ghcache::API),
+        6 * 3600,
+    )?;
     let nothing = (BigInt::from(-1), PyJson::Str(PStr::new()));
     let Some(PyJson::Dict(rel)) = rel else {
         return Ok(nothing);
@@ -1462,7 +1588,10 @@ fn _release_downloads(full: &str, get: GetJson) -> Result<(BigInt, PyJson), Stri
     let mut total = BigInt::from(0);
     for a in py_iter(assets)? {
         let PyJson::Dict(a) = a else {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", a.type_name()));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                a.type_name()
+            ));
         };
         total += py_int(a.get_str("download_count"))?;
     }
@@ -1474,7 +1603,13 @@ pub fn measure(p: &Plugin, now: f64, history: &PyJson) -> Result<Signals, String
     _measure(p, now, history, _real_token()?, &_real_get)
 }
 
-fn _measure(p: &Plugin, now: f64, history: &PyJson, token: bool, get: GetJson) -> Result<Signals, String> {
+fn _measure(
+    p: &Plugin,
+    now: f64,
+    history: &PyJson,
+    token: bool,
+    get: GetJson,
+) -> Result<Signals, String> {
     let full = _github(&p.repo);
     let mut s = Signals::default();
     let pages = if token { EVENT_PAGES } else { 1 };
@@ -1511,12 +1646,18 @@ fn _measure(p: &Plugin, now: f64, history: &PyJson, token: bool, get: GetJson) -
             None => None,
             Some(last) => {
                 let PyJson::Dict(h) = history else {
-                    return Err(format!("AttributeError: '{}' object has no attribute 'get'", history.type_name()));
+                    return Err(format!(
+                        "AttributeError: '{}' object has no attribute 'get'",
+                        history.type_name()
+                    ));
                 };
                 match h.get(last) {
                     Some(PyJson::Dict(snap)) => snap.get(&ps(&p.id)).cloned(),
                     Some(other) => {
-                        return Err(format!("AttributeError: '{}' object has no attribute 'get'", other.type_name()));
+                        return Err(format!(
+                            "AttributeError: '{}' object has no attribute 'get'",
+                            other.type_name()
+                        ));
                     }
                     None => None,
                 }
@@ -1529,7 +1670,10 @@ fn _measure(p: &Plugin, now: f64, history: &PyJson, token: bool, get: GetJson) -
                 let (ge, diff) = match b0.num() {
                     Some(Num::Int(b)) => (total >= b, Num::Int(&total - &b)),
                     Some(Num::Float(f)) => {
-                        let ge = matches!(cmp_int_float(&total, f), Some(Ordering::Greater | Ordering::Equal));
+                        let ge = matches!(
+                            cmp_int_float(&total, f),
+                            Some(Ordering::Greater | Ordering::Equal)
+                        );
                         (ge, Num::Float(if ge { big_f64(&total)? - f } else { 0.0 }))
                     }
                     None => {
@@ -1565,28 +1709,54 @@ fn _scaled(values: &[f64]) -> Vec<f64> {
         None => 0.0,
         Some((first, rest)) => rest.iter().fold(*first, |m, v| if *v > m { *v } else { m }),
     };
-    values.iter().map(|v| if top > 0.0 { v / top } else { 0.0 }).collect()
+    values
+        .iter()
+        .map(|v| if top > 0.0 { v / top } else { 0.0 })
+        .collect()
 }
 
 /// Blend the signals. Each is scaled to the best in the same marketplace,
 /// so a plugin is judged against plugins and a vendor's app against the
 /// vendor's apps: 60 stars is a crowd for an Omarchy plugin and a quiet day
 /// for a 15,000-star app. A signal nobody has counts for nothing.
-pub fn rank(candidates: &[Plugin], signals: &[Signals], now: f64, recent_picks: &HashSet<String>) -> Result<Vec<Pick>, String> {
+pub fn rank(
+    candidates: &[Plugin],
+    signals: &[Signals],
+    now: f64,
+    recent_picks: &HashSet<String>,
+) -> Result<Vec<Pick>, String> {
     let log = |n: i64| (n.max(0) as f64).ln_1p();
     // Log scales: one viral repository should not make every other number zero.
     let cols: Vec<(&str, Vec<f64>)> = vec![
-        ("stars_today", signals.iter().map(|s| log(s.stars_today)).collect()),
-        ("forks_today", signals.iter().map(|s| log(s.forks_today)).collect()),
-        ("downloads", signals.iter().map(|s| s.dl().log1p_max0()).collect::<Result<_, _>>()?),
-        ("comments", signals.iter().map(|s| log(s.comments)).collect()),
+        (
+            "stars_today",
+            signals.iter().map(|s| log(s.stars_today)).collect(),
+        ),
+        (
+            "forks_today",
+            signals.iter().map(|s| log(s.forks_today)).collect(),
+        ),
+        (
+            "downloads",
+            signals
+                .iter()
+                .map(|s| s.dl().log1p_max0())
+                .collect::<Result<_, _>>()?,
+        ),
+        (
+            "comments",
+            signals.iter().map(|s| log(s.comments)).collect(),
+        ),
         (
             "stars",
             candidates
                 .iter()
                 .map(|p| {
                     if p.stars <= -1 {
-                        Err(format!("ValueError: expected argument value > -1, got {}", p.stars))
+                        Err(format!(
+                            "ValueError: expected argument value > -1, got {}",
+                            p.stars
+                        ))
                     } else {
                         Ok((p.stars as f64).ln_1p())
                     }
@@ -1601,14 +1771,26 @@ pub fn rank(candidates: &[Plugin], signals: &[Signals], now: f64, recent_picks: 
                 .collect(),
         ),
     ];
-    let mut scaled: BTreeMap<&str, Vec<f64>> = cols.iter().map(|(k, _)| (*k, vec![0.0; candidates.len()])).collect();
+    let mut scaled: BTreeMap<&str, Vec<f64>> = cols
+        .iter()
+        .map(|(k, _)| (*k, vec![0.0; candidates.len()]))
+        .collect();
     let markets: BTreeSet<&str> = candidates.iter().map(|p| p.market.as_str()).collect();
     for market in markets {
-        let idx: Vec<usize> = candidates.iter().enumerate().filter(|(_, p)| p.market == market).map(|(i, _)| i).collect();
+        let idx: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.market == market)
+            .map(|(i, _)| i)
+            .collect();
         for (k, v) in &cols {
             let vals: Vec<f64> = idx
                 .iter()
-                .map(|&i| v.get(i).copied().ok_or_else(|| "IndexError: list index out of range".to_string()))
+                .map(|&i| {
+                    v.get(i)
+                        .copied()
+                        .ok_or_else(|| "IndexError: list index out of range".to_string())
+                })
                 .collect::<Result<_, _>>()?;
             if let Some(col) = scaled.get_mut(k) {
                 for (&i, x) in idx.iter().zip(_scaled(&vals)) {
@@ -1619,11 +1801,20 @@ pub fn rank(candidates: &[Plugin], signals: &[Signals], now: f64, recent_picks: 
     }
     let mut out: Vec<Pick> = Vec::new();
     for (i, (p, s)) in candidates.iter().zip(signals).enumerate() {
-        let mut score = _py_sum(WEIGHTS.iter().map(|(k, w)| w * scaled.get(k).map_or(0.0, |c| c[i])));
+        let mut score = _py_sum(
+            WEIGHTS
+                .iter()
+                .map(|(k, w)| w * scaled.get(k).map_or(0.0, |c| c[i])),
+        );
         if recent_picks.contains(&p.id) {
             score *= REPEAT_PENALTY;
         }
-        out.push(Pick { plugin: p.clone(), signals: s.clone(), score, reasons: reasons(p, s) });
+        out.push(Pick {
+            plugin: p.clone(),
+            signals: s.clone(),
+            score,
+            reasons: reasons(p, s),
+        });
     }
     // sort(key=lambda pk: -pk.score), with list.sort's own comparisons, so
     // a NaN score lands where it lands in Python.
@@ -1678,7 +1869,12 @@ struct Timsort<'a> {
 
 /// The order `sorted(range(n), key=...)` puts 0..n in, comparing with `lt`.
 fn _py_sort(n: usize, lt: impl Fn(usize, usize) -> bool) -> Vec<usize> {
-    let mut ts = Timsort { lt: &lt, a: (0..n).collect(), min_gallop: MIN_GALLOP, runs: Vec::new() };
+    let mut ts = Timsort {
+        lt: &lt,
+        a: (0..n).collect(),
+        min_gallop: MIN_GALLOP,
+        runs: Vec::new(),
+    };
     if n < 2 {
         return ts.a;
     }
@@ -2121,7 +2317,8 @@ impl Timsort<'_> {
                     if k > 0 {
                         dest -= k as isize;
                         pb -= k as isize;
-                        self.a[u(dest + 1)..u(dest + 1) + k].copy_from_slice(&tmp[u(pb + 1)..u(pb + 1) + k]);
+                        self.a[u(dest + 1)..u(dest + 1) + k]
+                            .copy_from_slice(&tmp[u(pb + 1)..u(pb + 1) + k]);
                         nb -= k;
                         if nb == 1 {
                             self.copy_a(dest, pa, na, tmp[u(pb)]);
@@ -2157,7 +2354,10 @@ impl Timsort<'_> {
     /// left goes below them.
     fn copy_a(&mut self, dest: isize, pa: isize, na: usize, b: usize) {
         let na_i = na as isize;
-        self.a.copy_within((pa + 1 - na_i) as usize..(pa + 1) as usize, (dest + 1 - na_i) as usize);
+        self.a.copy_within(
+            (pa + 1 - na_i) as usize..(pa + 1) as usize,
+            (dest + 1 - na_i) as usize,
+        );
         self.a[(dest - na_i) as usize] = b;
     }
 }
@@ -2169,7 +2369,9 @@ fn _compact(n: i64) -> String {
 fn _compact_num(n: &Num) -> String {
     let over = |by: i64| -> Option<f64> {
         match n {
-            Num::Int(i) if *i >= BigInt::from(by) => Some(ratio_f64(i, &BigInt::from(by)).unwrap_or(f64::INFINITY)),
+            Num::Int(i) if *i >= BigInt::from(by) => {
+                Some(ratio_f64(i, &BigInt::from(by)).unwrap_or(f64::INFINITY))
+            }
             Num::Float(f) if *f >= by as f64 => Some(f / by as f64),
             _ => None,
         }
@@ -2193,7 +2395,11 @@ pub fn reasons(p: &Plugin, s: &Signals) -> Vec<(String, String)> {
         let noun = if s.stars_today == 1 { "star" } else { "stars" };
         out.push((
             format!("+{}", _compact(s.stars_today)),
-            if s.window_hours >= 24 { format!("{noun} today") } else { format!("{noun} in {}h", s.window_hours) },
+            if s.window_hours >= 24 {
+                format!("{noun} today")
+            } else {
+                format!("{noun} in {}h", s.window_hours)
+            },
         ));
     }
     let downloads = s.dl();
@@ -2214,13 +2420,21 @@ pub fn reasons(p: &Plugin, s: &Signals) -> Vec<(String, String)> {
         let noun = if s.forks_today == 1 { "fork" } else { "forks" };
         out.push((
             format!("+{}", _compact(s.forks_today)),
-            if s.window_hours >= 24 { format!("{noun} today") } else { format!("{noun} in {}h", s.window_hours) },
+            if s.window_hours >= 24 {
+                format!("{noun} today")
+            } else {
+                format!("{noun} in {}h", s.window_hours)
+            },
         ));
     }
     if s.comments > 0 {
         out.push((
             _compact(s.comments) + if s.comments_capped { "+" } else { "" },
-            if s.comments == 1 { "comment this week".to_string() } else { "comments this week".to_string() },
+            if s.comments == 1 {
+                "comment this week".to_string()
+            } else {
+                "comments this week".to_string()
+            },
         ));
     }
     if p.stars != 0 {
@@ -2237,9 +2451,20 @@ pub fn choose(ranked: &[Pick], limit: usize) -> Vec<Pick> {
         return Vec::new();
     };
     let mut picked = vec![first.clone()];
-    let rest: Vec<&Pick> = ranked[1..].iter().filter(|pk| pk.score >= 0.5 * first.score).collect();
-    let other: Vec<&Pick> = rest.iter().copied().filter(|pk| pk.plugin.market != first.plugin.market).collect();
-    let same: Vec<&Pick> = rest.iter().copied().filter(|pk| !other.contains(pk)).collect();
+    let rest: Vec<&Pick> = ranked[1..]
+        .iter()
+        .filter(|pk| pk.score >= 0.5 * first.score)
+        .collect();
+    let other: Vec<&Pick> = rest
+        .iter()
+        .copied()
+        .filter(|pk| pk.plugin.market != first.plugin.market)
+        .collect();
+    let same: Vec<&Pick> = rest
+        .iter()
+        .copied()
+        .filter(|pk| !other.contains(pk))
+        .collect();
     for pk in other.iter().chain(same.iter()) {
         if picked.len() >= limit {
             break;
@@ -2284,7 +2509,10 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
     }
 
     let mut data = _load()?;
-    let mut history = data.get_str("downloads").cloned().unwrap_or(PyJson::Dict(PyDict::default()));
+    let mut history = data
+        .get_str("downloads")
+        .cloned()
+        .unwrap_or(PyJson::Dict(PyDict::default()));
     let signals: Vec<Signals> = candidates
         .iter()
         .map(|p| _measure(p, now, &history, (deps.token)()?, deps.get))
@@ -2292,7 +2520,10 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
 
     let key = ps(&_local_day(now)?);
     let PyJson::Dict(hist) = &mut history else {
-        return Err(format!("AttributeError: '{}' object has no attribute 'setdefault'", history.type_name()));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'setdefault'",
+            history.type_name()
+        ));
     };
     if !hist.contains_key(&key) {
         hist.insert(key.clone(), PyJson::Dict(PyDict::default()));
@@ -2303,13 +2534,23 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
             // from it, whether or not today's was.
             let pid = ps(&p.id);
             if s.total().sign() != Sign::Minus && !py_contains(snap, &pid)? {
-                py_setitem(snap, &pid, PyJson::List(vec![PyJson::Int(s.total()), s.tag()]))?;
+                py_setitem(
+                    snap,
+                    &pid,
+                    PyJson::List(vec![PyJson::Int(s.total()), s.tag()]),
+                )?;
             }
         }
     }
-    let mut past = data.get_str("picked").cloned().unwrap_or(PyJson::Dict(PyDict::default()));
+    let mut past = data
+        .get_str("picked")
+        .cloned()
+        .unwrap_or(PyJson::Dict(PyDict::default()));
     let PyJson::Dict(past) = &mut past else {
-        return Err(format!("AttributeError: '{}' object has no attribute 'items'", past.type_name()));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'items'",
+            past.type_name()
+        ));
     };
     let day_ts = |d: &[u32]| _ts_ps(&[d, &ps("T00:00:00+00:00")[..]].concat());
     let mut recent: HashSet<String> = HashSet::new();
@@ -2354,10 +2595,25 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
             picked = again;
         }
     }
-    past.insert(key, PyJson::List(picked.iter().map(|pk| PyJson::Str(ps(&pk.plugin.id))).collect()));
+    past.insert(
+        key,
+        PyJson::List(
+            picked
+                .iter()
+                .map(|pk| PyJson::Str(ps(&pk.plugin.id)))
+                .collect(),
+        ),
+    );
 
     let keep = (KEEP_DAYS * DAY) as f64;
-    let kept_days = |m: &PyDict| PyDict(m.0.iter().filter(|(d, _)| now - day_ts(d) < keep).cloned().collect());
+    let kept_days = |m: &PyDict| {
+        PyDict(
+            m.0.iter()
+                .filter(|(d, _)| now - day_ts(d) < keep)
+                .cloned()
+                .collect(),
+        )
+    };
     data.insert(ps("downloads"), PyJson::Dict(kept_days(hist)));
     data.insert(ps("picked"), PyJson::Dict(kept_days(past)));
     _save(data);
@@ -2365,7 +2621,9 @@ fn _today_in(plugins: &[Plugin], now: f64, deps: &Deps) -> Result<Vec<Pick>, Str
 }
 
 fn _arg<T: serde::de::DeserializeOwned + Default>(args: &Value, key: &str) -> T {
-    args.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
+    args.get(key)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// The test's `eligible`: "every candidate counts as reviewed and
@@ -2472,11 +2730,20 @@ mod tests {
             serde_json::json!({"type": "ForkEvent", "created_at": iso(30.0)}),
         ];
         let get = |url: &str, _ttl: u64| {
-            Ok(Some(PyJson::from_serde(&Value::Array(if url.contains("busy") { busy.clone() } else { quiet.clone() }))))
+            Ok(Some(PyJson::from_serde(&Value::Array(
+                if url.contains("busy") {
+                    busy.clone()
+                } else {
+                    quiet.clone()
+                },
+            ))))
         };
         assert_eq!(_activity_today("o/busy", NOW, 1, &get), Ok((100, 0, 1)));
         // A feed that ran out is complete: the day is fully counted.
-        assert_eq!(_activity_today("o/quiet", NOW, EVENT_PAGES, &get), Ok((1, 0, 24)));
+        assert_eq!(
+            _activity_today("o/quiet", NOW, EVENT_PAGES, &get),
+            Ok((1, 0, 24))
+        );
         let s = sig(|s| {
             s.stars_today = 100;
             s.window_hours = 2;
@@ -2503,7 +2770,9 @@ mod tests {
 
     #[test]
     fn test_marketplaces_are_judged_against_themselves() {
-        let mut cands: Vec<Plugin> = (0..3).map(|i| plugin_at(&format!("app{i}"), "artcraft", 15000 + i, 1.0)).collect();
+        let mut cands: Vec<Plugin> = (0..3)
+            .map(|i| plugin_at(&format!("app{i}"), "artcraft", 15000 + i, 1.0))
+            .collect();
         cands.extend((0..3).map(|i| plugin_at(&format!("plug{i}"), "omarchy", 40 + i, 1.0)));
         let mut sigs = vec![
             sig(|s| {
@@ -2522,12 +2791,19 @@ mod tests {
         let ranked = rank(&cands, &sigs, NOW, &HashSet::new()).unwrap();
         let chosen = choose(&ranked, 2);
         let markets: BTreeSet<String> = chosen.iter().map(|pk| pk.plugin.market.clone()).collect();
-        assert_eq!(markets, ["artcraft".to_string(), "omarchy".to_string()].into_iter().collect());
+        assert_eq!(
+            markets,
+            ["artcraft".to_string(), "omarchy".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     #[test]
     fn test_the_shortlist_takes_turns_between_marketplaces() {
-        let mut pool: Vec<Plugin> = (0..6).map(|i| plugin_at(&format!("app{i}"), "artcraft", 9000, 1.0)).collect();
+        let mut pool: Vec<Plugin> = (0..6)
+            .map(|i| plugin_at(&format!("app{i}"), "artcraft", 9000, 1.0))
+            .collect();
         pool.extend((0..6).map(|i| plugin_at(&format!("plug{i}"), "omarchy", 9, 1.0)));
         let short = _shortlist(&pool, 4, NOW, &eligible);
         let markets: Vec<&str> = short.iter().map(|p| p.market.as_str()).collect();
@@ -2540,14 +2816,21 @@ mod tests {
     fn test_yesterdays_pick_makes_room() {
         let cands = vec![plugin("a"), plugin("b")];
         let sigs = vec![sig(|s| s.stars_today = 10), sig(|s| s.stars_today = 8)];
-        assert_eq!(rank(&cands, &sigs, NOW, &HashSet::new()).unwrap()[0].plugin.id, "a");
+        assert_eq!(
+            rank(&cands, &sigs, NOW, &HashSet::new()).unwrap()[0]
+                .plugin
+                .id,
+            "a"
+        );
         let recent: HashSet<String> = ["a".to_string()].into_iter().collect();
         assert_eq!(rank(&cands, &sigs, NOW, &recent).unwrap()[0].plugin.id, "b");
     }
 
     #[test]
     fn test_picks_hold_for_the_day_and_switch_off() {
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());
@@ -2571,9 +2854,17 @@ mod tests {
             enabled: &|| crate::settings::get_bool("net_daily_picks"),
         };
         let cands = vec![plugin("a"), plugin("b")];
-        let first: Vec<String> = _today(&cands, NOW, &deps).unwrap().into_iter().map(|pk| pk.plugin.id).collect();
+        let first: Vec<String> = _today(&cands, NOW, &deps)
+            .unwrap()
+            .into_iter()
+            .map(|pk| pk.plugin.id)
+            .collect();
         *numbers.lock().unwrap() = (50, 1); // the afternoon's figures
-        let again: Vec<String> = _today(&cands, NOW + 3600.0, &deps).unwrap().into_iter().map(|pk| pk.plugin.id).collect();
+        let again: Vec<String> = _today(&cands, NOW + 3600.0, &deps)
+            .unwrap()
+            .into_iter()
+            .map(|pk| pk.plugin.id)
+            .collect();
         assert_eq!(first, again);
         crate::settings::set("net_daily_picks", Value::Bool(false)).unwrap();
         assert_eq!(_today(&cands, NOW, &deps), Ok(Vec::<Pick>::new()));
@@ -2598,7 +2889,9 @@ mod tests {
     #[test]
     fn state_file_round_trips_like_pythons_json() {
         let text = r#"{"x": NaN, "y": -Infinity, "z": 1e400, "big": 123456789012345678901234567890, "f": 1E5, "n": -0, "a": 1, "a": [1.0, true, null, "BS-u00e9BS-ud83dBS-ude00"]}"#.replace("BS-", "\\");
-        let Ok(v) = json_loads(&text) else { panic!("did not parse") };
+        let Ok(v) = json_loads(&text) else {
+            panic!("did not parse")
+        };
         let mut out = String::new();
         json_dumps(&v, &mut out);
         assert_eq!(
@@ -2670,7 +2963,14 @@ mod tests {
         for (n, mode, sum, head) in want {
             let k = keys(n, mode);
             let o = _py_sort(n, |a, b| k[a] < k[b]);
-            assert_eq!((o.iter().enumerate().map(|(i, v)| i * v).sum::<usize>(), [o[0], o[1], o[2]]), (sum, head), "n={n} mode={mode}");
+            assert_eq!(
+                (
+                    o.iter().enumerate().map(|(i, v)| i * v).sum::<usize>(),
+                    [o[0], o[1], o[2]]
+                ),
+                (sum, head),
+                "n={n} mode={mode}"
+            );
         }
         // without NaN it is a stable sort
         let k: Vec<f64> = (0..500).map(|i| ((i * 37) % 23) as f64).collect();
@@ -2690,8 +2990,14 @@ mod tests {
     #[test]
     fn state_file_keeps_what_python_keeps() {
         // lone surrogates are kept and written back as they were
-        for text in [r#"{"x": "\ud800A"}"#, r#"{"x": "\udc00"}"#, r#"{"x": "\ud83d\ude00\ud83d"}"#] {
-            let Ok(v) = json_loads(text) else { panic!("did not parse") };
+        for text in [
+            r#"{"x": "\ud800A"}"#,
+            r#"{"x": "\udc00"}"#,
+            r#"{"x": "\ud83d\ude00\ud83d"}"#,
+        ] {
+            let Ok(v) = json_loads(text) else {
+                panic!("did not parse")
+            };
             let mut out = String::new();
             json_dumps(&v, &mut out);
             assert_eq!(out, text);
@@ -2700,11 +3006,19 @@ mod tests {
         assert!(json_loads(&format!("-{}", "1".repeat(4300))).is_ok());
         assert!(json_loads(&format!("-{}", "1".repeat(4301))).is_err());
         // nesting as deep as Python's json reads, on the thread made for it
-        let deep = |n: usize| _deep(move || json_loads(&format!("{}{}", "[".repeat(n), "]".repeat(n))).is_ok());
+        let deep = |n: usize| {
+            _deep(move || json_loads(&format!("{}{}", "[".repeat(n), "]".repeat(n))).is_ok())
+        };
         assert!(deep(MAX_DEPTH));
         assert!(!deep(MAX_DEPTH + 1));
-        assert_eq!(_ts_ps(&[&ps("2027-01-15")[..], &[0xd800], &ps("07:00:00Z")[..]].concat()), 1_799_996_400.0);
-        assert_eq!(_ts_ps(&[&ps("2027-01-15T07:00:00Z")[..], &[0xd800]].concat()), 0.0);
+        assert_eq!(
+            _ts_ps(&[&ps("2027-01-15")[..], &[0xd800], &ps("07:00:00Z")[..]].concat()),
+            1_799_996_400.0
+        );
+        assert_eq!(
+            _ts_ps(&[&ps("2027-01-15T07:00:00Z")[..], &[0xd800]].concat()),
+            0.0
+        );
     }
 
     #[test]

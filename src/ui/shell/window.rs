@@ -12,8 +12,8 @@ use gtk::{gdk, gio, glib};
 use crate::i18n::tr;
 use crate::inventory;
 
-use super::PrimaryAction;
 use super::tables::COLLAPSED_BY_DEFAULT;
+use super::PrimaryAction;
 
 /// A sidebar destination: the row plus what Python stashed on it
 /// (`row._key`, `row._count`, `row._group`).
@@ -54,7 +54,13 @@ pub struct TexCache<T = gdk::Texture> {
 
 impl<T: Clone> TexCache<T> {
     pub fn new(budget: usize) -> Self {
-        TexCache { entries: HashMap::new(), order: BTreeMap::new(), tick: 0, bytes: 0, budget }
+        TexCache {
+            entries: HashMap::new(),
+            order: BTreeMap::new(),
+            tick: 0,
+            bytes: 0,
+            budget,
+        }
     }
 
     fn touch(&mut self) -> u64 {
@@ -81,7 +87,9 @@ impl<T: Clone> TexCache<T> {
             return;
         }
         while self.bytes + bytes > self.budget {
-            let Some((_, oldest)) = self.order.pop_first() else { break };
+            let Some((_, oldest)) = self.order.pop_first() else {
+                break;
+            };
             if let Some((_, size, _)) = self.entries.remove(&oldest) {
                 self.bytes -= size;
             }
@@ -227,7 +235,10 @@ impl Default for Shared {
             sidebar_rows: Vec::new(),
             group_rows: Vec::new(),
             group_members: BTreeMap::new(),
-            collapsed: COLLAPSED_BY_DEFAULT.iter().map(|s| (*s).to_string()).collect(),
+            collapsed: COLLAPSED_BY_DEFAULT
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             primary: None,
             manual_sorter: None,
             narrow: false,
@@ -387,7 +398,10 @@ pub struct Inner {
 
 /// A `GtkLabel` that is centred vertically and hidden: a sidebar count.
 fn count_label() -> gtk::Label {
-    let count = gtk::Label::builder().valign(gtk::Align::Center).visible(false).build();
+    let count = gtk::Label::builder()
+        .valign(gtk::Align::Center)
+        .visible(false)
+        .build();
     count.add_css_class("count-badge");
     count
 }
@@ -399,7 +413,12 @@ pub(super) fn sidebar_entry(key: &str, label: &str, icon: &str, gkey: &str) -> S
     row.add_prefix(&gtk::Image::from_icon_name(icon));
     let count = count_label();
     row.add_suffix(&count);
-    SidebarRow { key: key.to_string(), row, count, group: gkey.to_string() }
+    SidebarRow {
+        key: key.to_string(),
+        row,
+        count,
+        group: gkey.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -413,7 +432,10 @@ mod tests {
         c.insert("b".into(), 2, 40);
         assert_eq!(c.get("a"), Some(1)); // a is now newer than b
         c.insert("c".into(), 3, 40); // over budget: b goes, not a
-        assert_eq!((c.get("b"), c.get("a"), c.get("c")), (None, Some(1), Some(3)));
+        assert_eq!(
+            (c.get("b"), c.get("a"), c.get("c")),
+            (None, Some(1), Some(3))
+        );
         assert_eq!((c.len(), c.bytes()), (2, 80));
         // replacing a key does not count it twice
         c.insert("c".into(), 4, 50);

@@ -14,7 +14,10 @@ impl Win {
         if !crate::demo::active() {
             return false;
         }
-        self.toast(&tr("This is a demo: nothing on this machine was changed"), 5);
+        self.toast(
+            &tr("This is a demo: nothing on this machine was changed"),
+            5,
+        );
         true
     }
 
@@ -33,13 +36,19 @@ mod tests {
     /// (file, its source) for every section that acts on the machine.
     const FILES: &[(&str, &str)] = &[
         ("plugins/removal.rs", include_str!("../plugins/removal.rs")),
-        ("plugins/controls.rs", include_str!("../plugins/controls.rs")),
+        (
+            "plugins/controls.rs",
+            include_str!("../plugins/controls.rs"),
+        ),
         ("plugins/page.rs", include_str!("../plugins/page.rs")),
         ("plugins/updates.rs", include_str!("../plugins/updates.rs")),
         ("actions/link.rs", include_str!("../actions/link.rs")),
         ("actions/update.rs", include_str!("../actions/update.rs")),
         ("actions/rows.rs", include_str!("../actions/rows.rs")),
-        ("actions/appimage_add.rs", include_str!("../actions/appimage_add.rs")),
+        (
+            "actions/appimage_add.rs",
+            include_str!("../actions/appimage_add.rs"),
+        ),
         ("store_actions.rs", include_str!("../store_actions.rs")),
         ("history.rs", include_str!("../history.rs")),
         ("ai.rs", include_str!("../ai.rs")),
@@ -56,8 +65,14 @@ mod tests {
     #[test]
     fn every_task_runs_through_the_demo_gate() {
         for (file, src) in FILES {
-            assert!(!code(src).contains("tasks::run("), "{file} runs a task around the demo gate");
-            assert!(!code(src).contains("tasks::run_each("), "{file} runs a task around the demo gate");
+            assert!(
+                !code(src).contains("tasks::run("),
+                "{file} runs a task around the demo gate"
+            );
+            assert!(
+                !code(src).contains("tasks::run_each("),
+                "{file} runs a task around the demo gate"
+            );
         }
         let gate = include_str!("guard.rs");
         let run_task = gate.split("pub fn run_task(").nth(1).unwrap_or("");
@@ -69,32 +84,98 @@ mod tests {
     #[test]
     fn direct_actions_ask_the_demo_gate_first() {
         let wanted: &[(&str, &[&str])] = &[
-            ("plugins/removal.rs", &["pub fn on_launch(", "pub fn on_clean_orphans(", "pub fn on_install(",
-                                     "pub fn on_install_item(", "pub fn install_package(", "pub fn on_remove("]),
-            ("plugins/controls.rs", &["pub fn edit_shortcut(", "pub fn on_restart_shell(", "pub fn toggle_plugin("]),
+            (
+                "plugins/removal.rs",
+                &[
+                    "pub fn on_launch(",
+                    "pub fn on_clean_orphans(",
+                    "pub fn on_install(",
+                    "pub fn on_install_item(",
+                    "pub fn install_package(",
+                    "pub fn on_remove(",
+                ],
+            ),
+            (
+                "plugins/controls.rs",
+                &[
+                    "pub fn edit_shortcut(",
+                    "pub fn on_restart_shell(",
+                    "pub fn toggle_plugin(",
+                ],
+            ),
             ("actions/link.rs", &["pub fn on_install_link("]),
-            ("actions/update.rs", &["pub fn remove_appimage_then(", "pub fn on_update_one(", "pub fn update_agent(",
-                                    "pub fn on_git_pull(", "pub fn on_update_appimage("]),
-            ("actions/rows.rs", &["pub fn on_self_update(", "pub fn row_pull(", "pub fn row_stash("]),
+            (
+                "actions/update.rs",
+                &[
+                    "pub fn remove_appimage_then(",
+                    "pub fn on_update_one(",
+                    "pub fn update_agent(",
+                    "pub fn on_git_pull(",
+                    "pub fn on_update_appimage(",
+                ],
+            ),
+            (
+                "actions/rows.rs",
+                &[
+                    "pub fn on_self_update(",
+                    "pub fn row_pull(",
+                    "pub fn row_stash(",
+                ],
+            ),
             ("actions/appimage_add.rs", &["pub fn on_add_appimage("]),
-            ("store_actions.rs", &["pub fn run_setup(", "pub fn apply_theme_now(", "pub fn install_store_appimage(",
-                                   "pub fn remove_store_appimage("]),
-            ("history.rs", &["pub fn on_clear_log(", "fn run_fixes(", "pub fn maint_fix(", "pub fn reclaim_space("]),
+            (
+                "store_actions.rs",
+                &[
+                    "pub fn run_setup(",
+                    "pub fn apply_theme_now(",
+                    "pub fn install_store_appimage(",
+                    "pub fn remove_store_appimage(",
+                ],
+            ),
+            (
+                "history.rs",
+                &[
+                    "pub fn on_clear_log(",
+                    "fn run_fixes(",
+                    "pub fn maint_fix(",
+                    "pub fn reclaim_space(",
+                ],
+            ),
             ("ai.rs", &["pub fn ai_act("]),
         ];
         for (file, fns) in wanted {
-            let src = FILES.iter().find(|(f, _)| f == file).map(|(_, s)| *s).unwrap_or("");
+            let src = FILES
+                .iter()
+                .find(|(f, _)| f == file)
+                .map(|(_, s)| *s)
+                .unwrap_or("");
             for f in *fns {
-                let body = code(src).split(f).nth(1).unwrap_or_else(|| panic!("{file}: {f} not found"));
+                let body = code(src)
+                    .split(f)
+                    .nth(1)
+                    .unwrap_or_else(|| panic!("{file}: {f} not found"));
                 let head: String = body.chars().take(220).collect();
-                let first = head.split_once("{\n").map(|(_, rest)| rest.trim_start()).unwrap_or("");
-                assert!(first.starts_with("if self.demo_refuses()"), "{file}: {f} acts before asking the demo gate");
+                let first = head
+                    .split_once("{\n")
+                    .map(|(_, rest)| rest.trim_start())
+                    .unwrap_or("");
+                assert!(
+                    first.starts_with("if self.demo_refuses()"),
+                    "{file}: {f} acts before asking the demo gate"
+                );
             }
         }
         // The switches snap back instead of switching.
         for file in ["plugins/page.rs", "switchboard.rs"] {
-            let src = FILES.iter().find(|(f, _)| *f == file).map(|(_, s)| *s).unwrap_or("");
-            assert!(code(src).contains("w.demo_refuses()"), "{file}: a switch acts in a demo");
+            let src = FILES
+                .iter()
+                .find(|(f, _)| *f == file)
+                .map(|(_, s)| *s)
+                .unwrap_or("");
+            assert!(
+                code(src).contains("w.demo_refuses()"),
+                "{file}: a switch acts in a demo"
+            );
         }
     }
 }

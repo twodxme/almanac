@@ -8,11 +8,14 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use serde_json::{Map, Value};
 
-use crate::{appimage, inventory};
 use crate::i18n::tr;
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
+use crate::{appimage, inventory};
 
-use super::pyisms::{path_repr, py_first_line, py_oserror, py_oserror2, py_oserror_line, py_str_repr, py_strip, utf8_error};
+use super::pyisms::{
+    path_repr, py_first_line, py_oserror, py_oserror2, py_oserror_line, py_str_repr, py_strip,
+    utf8_error,
+};
 use super::raised;
 
 /// The name an added AppImage is tracked under: the file stem up to the
@@ -50,15 +53,28 @@ pub fn appimage_clash(reg: &Map<String, Value>, name: &str, src: &Path, store: &
     if !taken(name) {
         return AddClash::Free;
     }
-    let field = |k: &str| reg.get(name).and_then(|e| e.get(k)).and_then(Value::as_str).map(str::to_string);
+    let field = |k: &str| {
+        reg.get(name)
+            .and_then(|e| e.get(k))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
     let src_s = src.to_string_lossy();
     if field("source_file").as_deref() == Some(&*src_s) {
         return AddClash::Free;
     }
     let existing = field("source_file")
         .or_else(|| field("path"))
-        .unwrap_or_else(|| store.join(format!("{name}.AppImage")).to_string_lossy().into_owned());
-    let spare = (2..).map(|n| format!("{name}-{n}")).find(|k| !taken(k)).unwrap_or_default();
+        .unwrap_or_else(|| {
+            store
+                .join(format!("{name}.AppImage"))
+                .to_string_lossy()
+                .into_owned()
+        });
+    let spare = (2..)
+        .map(|n| format!("{name}-{n}"))
+        .find(|k| !taken(k))
+        .unwrap_or_default();
     AddClash::Taken { existing, spare }
 }
 
@@ -76,7 +92,10 @@ fn copy2(src: &Path, dst: &Path) -> Result<(), String> {
     // copyfile
     if let (Ok(a), Ok(b)) = (std::fs::metadata(src), std::fs::metadata(&dst)) {
         if a.dev() == b.dev() && a.ino() == b.ino() {
-            return Err(format!("{} and {dst_repr} are the same file", path_repr(src)));
+            return Err(format!(
+                "{} and {dst_repr} are the same file",
+                path_repr(src)
+            ));
         }
     }
     for p in [src, dst.as_path()] {
@@ -91,8 +110,14 @@ fn copy2(src: &Path, dst: &Path) -> Result<(), String> {
     // copystat
     let st = std::fs::metadata(src).map_err(|e| py_oserror(&e, src))?;
     let times = rustix::fs::Timestamps {
-        last_access: rustix::fs::Timespec { tv_sec: st.atime(), tv_nsec: st.atime_nsec() as _ },
-        last_modification: rustix::fs::Timespec { tv_sec: st.mtime(), tv_nsec: st.mtime_nsec() as _ },
+        last_access: rustix::fs::Timespec {
+            tv_sec: st.atime(),
+            tv_nsec: st.atime_nsec() as _,
+        },
+        last_modification: rustix::fs::Timespec {
+            tv_sec: st.mtime(),
+            tv_nsec: st.mtime_nsec() as _,
+        },
     };
     rustix::fs::utimensat(rustix::fs::CWD, &dst, &times, rustix::fs::AtFlags::empty())
         .map_err(|e| py_oserror(&e.into(), &dst))?;
@@ -124,10 +149,19 @@ fn copy_xattr(src: &Path, dst: &Path) -> Result<(), String> {
             let mut value = vec![0u8; n];
             let n = rustix::fs::getxattr(src, name, &mut value[..]).map_err(|e| (e, src))?;
             value.truncate(n);
-            rustix::fs::setxattr(dst, name, &value, rustix::fs::XattrFlags::empty()).map_err(|e| (e, dst))
+            rustix::fs::setxattr(dst, name, &value, rustix::fs::XattrFlags::empty())
+                .map_err(|e| (e, dst))
         })();
         if let Err((e, p)) = copied {
-            if ![Errno::PERM, Errno::NOTSUP, Errno::NODATA, Errno::INVAL, Errno::ACCESS].contains(&e) {
+            if ![
+                Errno::PERM,
+                Errno::NOTSUP,
+                Errno::NODATA,
+                Errno::INVAL,
+                Errno::ACCESS,
+            ]
+            .contains(&e)
+            {
                 return Err(py_oserror(&e.into(), p));
             }
         }
@@ -142,11 +176,14 @@ fn copy_xattr(src: &Path, dst: &Path) -> Result<(), String> {
 /// reading both pipes to their end, not only the process exiting.
 fn version_output(dest: &Path) -> Result<Option<String>, String> {
     let argv = [dest.as_os_str(), std::ffi::OsStr::new("--version")];
-    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
-        timeout: Some(Duration::from_secs(12)),
-        stdin: crate::util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = crate::util::run_bytes(
+        &argv,
+        &crate::util::RunOpts {
+            timeout: Some(Duration::from_secs(12)),
+            stdin: crate::util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     if out.failed_to_start || out.timed_out {
         return Ok(None);
     }
@@ -165,13 +202,19 @@ impl Win {
         if self.demo_refuses() {
             return;
         }
-        let dialog = gtk::FileDialog::builder().title(tr("Choose an AppImage to track")).build();
+        let dialog = gtk::FileDialog::builder()
+            .title(tr("Choose an AppImage to track"))
+            .build();
         let w = self.downgrade();
-        dialog.open(Some(&self.window), None::<&gio::Cancellable>, move |result| {
-            if let Some(win) = w.upgrade() {
-                win.on_appimage_chosen(result);
-            }
-        });
+        dialog.open(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                if let Some(win) = w.upgrade() {
+                    win.on_appimage_chosen(result);
+                }
+            },
+        );
     }
 
     pub fn on_appimage_chosen(&self, result: Result<gio::File, glib::Error>) {
@@ -180,8 +223,10 @@ impl Win {
         };
         match gfile.path() {
             Some(path) => self.install_appimage(&path),
-            None => raised("TypeError: argument should be a str or an os.PathLike object where \
-                            __fspath__ returns a str, not 'NoneType'"),
+            None => raised(
+                "TypeError: argument should be a str or an os.PathLike object where \
+                            __fspath__ returns a str, not 'NoneType'",
+            ),
         }
     }
 
@@ -194,11 +239,17 @@ impl Win {
     /// replaced without asking (see [`AddClash`]).
     pub fn install_appimage(&self, src: &Path) {
         let registry = inventory::registry();
-        let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
+        let store = registry
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+            .join("apps");
         let name = appimage_name(src);
         match appimage_clash(&inventory::load_registry(), &name, src, &store) {
             AddClash::Free => self.install_appimage_as(src, &name),
-            AddClash::Taken { existing, spare } => self.ask_appimage_clash(src, &name, &existing, &spare),
+            AddClash::Taken { existing, spare } => {
+                self.ask_appimage_clash(src, &name, &existing, &spare)
+            }
         }
     }
 
@@ -207,14 +258,17 @@ impl Win {
     fn ask_appimage_clash(&self, src: &Path, name: &str, existing: &str, spare: &str) {
         let body = format!(
             "{}\n\n{}\n{existing}\n\n{}\n{}",
-            tr("Another AppImage is already tracked under this name. Adding this one \
+            tr(
+                "Another AppImage is already tracked under this name. Adding this one \
                 as it is would replace it: its file, its launcher and what Almanac \
-                knows about it."),
+                knows about it."
+            ),
             tr("Tracked now:"),
             tr("Adding:"),
             src.display(),
         );
-        let dialog = adw::AlertDialog::new(Some(&format!("“{name}” is already tracked")), Some(&body));
+        let dialog =
+            adw::AlertDialog::new(Some(&format!("“{name}” is already tracked")), Some(&body));
         dialog.add_response("cancel", &tr("Cancel"));
         dialog.add_response("both", &format!("Keep both, as “{spare}”"));
         dialog.add_response("replace", &tr("Replace"));
@@ -273,12 +327,19 @@ enum AddFailed {
 fn add_appimage(src: &Path, name: &str) -> Result<String, AddFailed> {
     use std::os::unix::fs::PermissionsExt;
     let registry = inventory::registry();
-    let store = registry.parent().map(Path::to_path_buf).unwrap_or_default().join("apps");
+    let store = registry
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join("apps");
     std::fs::create_dir_all(&store).map_err(|e| AddFailed::Raised(py_oserror_line(&e, &store)))?;
     let name = name.to_string();
     let dest = store.join(format!("{name}.AppImage"));
     let copied = copy2(src, &dest).and_then(|()| {
-        let mode = std::fs::metadata(&dest).map_err(|e| py_oserror(&e, &dest))?.permissions().mode();
+        let mode = std::fs::metadata(&dest)
+            .map_err(|e| py_oserror(&e, &dest))?
+            .permissions()
+            .mode();
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode | 0o111))
             .map_err(|e| py_oserror(&e, &dest))
     });
@@ -299,7 +360,10 @@ fn add_appimage(src: &Path, name: &str) -> Result<String, AddFailed> {
     }
 
     let dest_s = dest.to_string_lossy().into_owned();
-    let src_name = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let src_name = src
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let entry = serde_json::json!({
         "name": name,
         "path": dest_s,
@@ -325,7 +389,10 @@ mod tests {
 
     #[test]
     fn appimage_name_takes_stem_prefix() {
-        assert_eq!(appimage_name(Path::new("/d/Foo-1.2-x86_64.AppImage")), "Foo");
+        assert_eq!(
+            appimage_name(Path::new("/d/Foo-1.2-x86_64.AppImage")),
+            "Foo"
+        );
         assert_eq!(appimage_name(Path::new("/d/-x.AppImage")), "-x");
     }
 
@@ -346,14 +413,20 @@ mod tests {
         std::fs::write(store.join("my-3.AppImage"), b"").unwrap();
         assert_eq!(
             appimage_clash(&reg, "my", tool, &store),
-            AddClash::Taken { existing: "/home/u/Downloads/my-app-1.0.AppImage".into(), spare: "my-4".into() }
+            AddClash::Taken {
+                existing: "/home/u/Downloads/my-app-1.0.AppImage".into(),
+                spare: "my-4".into()
+            }
         );
         // The same file added again refreshes its own entry.
         let app = Path::new("/home/u/Downloads/my-app-1.0.AppImage");
         assert_eq!(appimage_clash(&reg, "my", app, &store), AddClash::Free);
         // A file in the store that nothing tracks is in the way too.
         std::fs::write(store.join("solo.AppImage"), b"").unwrap();
-        assert!(matches!(appimage_clash(&Map::new(), "solo", app, &store), AddClash::Taken { .. }));
+        assert!(matches!(
+            appimage_clash(&Map::new(), "solo", app, &store),
+            AddClash::Taken { .. }
+        ));
     }
 
     #[test]
@@ -368,7 +441,12 @@ mod tests {
         copy2(&f, &g).unwrap();
         assert_eq!(std::fs::read(&g).unwrap(), b"keep me");
         let missing = tmp.path().join("nope");
-        assert_eq!(copy2(&missing, &g).unwrap_err(),
-                   format!("[Errno 2] No such file or directory: '{}'", missing.display()));
+        assert_eq!(
+            copy2(&missing, &g).unwrap_err(),
+            format!(
+                "[Errno 2] No such file or directory: '{}'",
+                missing.display()
+            )
+        );
     }
 }

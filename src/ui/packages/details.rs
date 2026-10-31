@@ -5,16 +5,21 @@ use serde_json::Value;
 
 use crate::i18n::tr;
 use crate::inventory;
-use crate::ui::shell::{AppItem, Win, name, source_label, spawn_bg};
+use crate::ui::shell::{name, source_label, spawn_bg, AppItem, Win};
 
 use super::decisions::{available_label, detail_badges_for, squeeze};
-use super::extra::{DetailValue, local_time, py_format_thousands, py_repr, py_repr_str, py_str, timestamp_of, truthy};
+use super::extra::{
+    local_time, py_format_thousands, py_repr, py_repr_str, py_str, timestamp_of, truthy,
+    DetailValue,
+};
 use super::PlainRow;
 
 impl Win {
     pub fn on_row_activated(&self, _view: &gtk::ColumnView, position: u32) {
         let sorted = self.shared.borrow().sorted.clone();
-        let item = sorted.item(position).and_then(|o| AppItem::of(&o).map(|it| it.clone()));
+        let item = sorted
+            .item(position)
+            .and_then(|o| AppItem::of(&o).map(|it| it.clone()));
         if let Some(item) = item {
             self.show_details(&item);
         }
@@ -70,7 +75,11 @@ impl Win {
         t.add_css_class("title-2");
         titles.append(&t);
         if !app.description.is_empty() {
-            let d = gtk::Label::builder().xalign(0.0).label(&app.description).wrap(true).build();
+            let d = gtk::Label::builder()
+                .xalign(0.0)
+                .label(&app.description)
+                .wrap(true)
+                .build();
             d.add_css_class("dim-label");
             titles.append(&d);
         }
@@ -88,7 +97,9 @@ impl Win {
         page.add(&hero);
 
         // --- version ---
-        let vg = adw::PreferencesGroup::builder().title(tr("Version")).build();
+        let vg = adw::PreferencesGroup::builder()
+            .title(tr("Version"))
+            .build();
         Win::detail_row(&vg, &tr("Installed"), &app.version);
         if !app.update.is_empty() {
             Win::detail_row(&vg, &tr("Available"), &available_label(item));
@@ -105,7 +116,11 @@ impl Win {
                 Win::detail_row(
                     &vg,
                     &tr("Switched"),
-                    &if truthy(extra.get("enabled")) { tr("On") } else { tr("Off") },
+                    &if truthy(extra.get("enabled")) {
+                        tr("On")
+                    } else {
+                        tr("Off")
+                    },
                 );
             }
         }
@@ -115,20 +130,30 @@ impl Win {
         if has("vulns") {
             let sg = adw::PreferencesGroup::builder()
                 .title(tr("Known vulnerabilities"))
-                .description(tr("From the Arch Security Tracker, for the installed version."))
+                .description(tr(
+                    "From the Arch Security Tracker, for the installed version.",
+                ))
                 .build();
             // `for v in extra["vulns"]` with `v["cves"]`, `v["fixed"]` and
             // `v['group']`: anything but a list of dicts, or a dict missing a
             // key, raised before the dialog opened.
             let vulns = match &extra["vulns"] {
                 Value::Array(a) => a.clone(),
-                other => return Err(format!("TypeError: vulns is not a list: {}", py_repr(other))),
+                other => {
+                    return Err(format!(
+                        "TypeError: vulns is not a list: {}",
+                        py_repr(other)
+                    ))
+                }
             };
             for v in &vulns {
                 let Value::Object(v) = v else {
                     return Err(format!("TypeError: advisory is not a dict: {}", py_repr(v)));
                 };
-                let get = |k: &str| v.get(k).ok_or_else(|| format!("KeyError: {}", py_repr_str(k)));
+                let get = |k: &str| {
+                    v.get(k)
+                        .ok_or_else(|| format!("KeyError: {}", py_repr_str(k)))
+                };
                 // ", ".join(v["cves"][:4]): a list of strings, or a string,
                 // whose characters are then joined.
                 // Only the four that are joined have to be strings; len()
@@ -136,21 +161,27 @@ impl Win {
                 let (cve_list, cve_n): (Vec<String>, usize) = match get("cves")? {
                     Value::Array(a) => (
                         a.iter()
-                        .take(4)
-                        .map(|c| match c {
-                            Value::String(s) => Ok(s.clone()),
-                            other => Err(format!(
-                                "TypeError: sequence item: expected str instance, got {}",
-                                py_repr(other)
-                            )),
-                        })
-                        .collect::<Result<_, _>>()?,
+                            .take(4)
+                            .map(|c| match c {
+                                Value::String(s) => Ok(s.clone()),
+                                other => Err(format!(
+                                    "TypeError: sequence item: expected str instance, got {}",
+                                    py_repr(other)
+                                )),
+                            })
+                            .collect::<Result<_, _>>()?,
                         a.len(),
                     ),
-                    Value::String(s) => {
-                        (s.chars().take(4).map(String::from).collect(), s.chars().count())
+                    Value::String(s) => (
+                        s.chars().take(4).map(String::from).collect(),
+                        s.chars().count(),
+                    ),
+                    other => {
+                        return Err(format!(
+                            "TypeError: cves cannot be sliced: {}",
+                            py_repr(other)
+                        ))
                     }
-                    other => return Err(format!("TypeError: cves cannot be sliced: {}", py_repr(other))),
                 };
                 let cves = cve_list.join(", ") + if cve_n > 4 { "…" } else { "" };
                 let fixed = get("fixed")?;
@@ -210,10 +241,18 @@ impl Win {
             }
         }
         if item.installed_ts != 0.0 {
-            Win::detail_row(&og, &tr("Installed"), &local_time(item.installed_ts, "%d %b %Y, %H:%M")?);
+            Win::detail_row(
+                &og,
+                &tr("Installed"),
+                &local_time(item.installed_ts, "%d %b %Y, %H:%M")?,
+            );
         }
         if has("built_ts") {
-            Win::detail_row(&og, &tr("Built"), &local_time(timestamp_of(extra.get("built_ts"))?, "%d %b %Y")?);
+            Win::detail_row(
+                &og,
+                &tr("Built"),
+                &local_time(timestamp_of(extra.get("built_ts"))?, "%d %b %Y")?,
+            );
         }
         if has("files") {
             Win::detail_row(&og, &tr("Files"), &py_format_thousands(&extra["files"])?);
@@ -241,7 +280,9 @@ impl Win {
         page.add(&og);
 
         // --- relationships ---
-        let deps = adw::PreferencesGroup::builder().title(tr("Dependencies")).build();
+        let deps = adw::PreferencesGroup::builder()
+            .title(tr("Dependencies"))
+            .build();
         let mut added = false;
         for (key, label) in [
             ("Depends On", "Requires"),
@@ -324,7 +365,11 @@ impl Win {
     pub fn note_row(icon: &str, title: &str, body: &str) -> adw::ActionRow {
         let row: adw::ActionRow = Win::plain(title, body);
         row.set_subtitle_lines(0);
-        let image = gtk::Image::builder().icon_name(icon).pixel_size(24).valign(gtk::Align::Center).build();
+        let image = gtk::Image::builder()
+            .icon_name(icon)
+            .pixel_size(24)
+            .valign(gtk::Align::Center)
+            .build();
         image.add_css_class("dim-label");
         image.set_accessible_role(gtk::AccessibleRole::Presentation);
         row.add_prefix(&image);
@@ -357,7 +402,11 @@ impl Win {
         row
     }
 
-    pub fn detail_row<V: DetailValue + ?Sized>(group: &adw::PreferencesGroup, title: &str, value: &V) {
+    pub fn detail_row<V: DetailValue + ?Sized>(
+        group: &adw::PreferencesGroup,
+        title: &str,
+        value: &V,
+    ) {
         // A row reading "Reviewed by: (blank)" says less than no row at all,
         // and the provenance group has several fields that only some entries
         // carry.
@@ -408,7 +457,10 @@ mod tests {
             for _ in 0..LEVELS {
                 url = Py::List(vec![url]);
             }
-            Py::Dict(vec![(s("uv"), Py::Dict(vec![(s("latest"), s("0.13.1")), (s("release_url"), url)]))])
+            Py::Dict(vec![(
+                s("uv"),
+                Py::Dict(vec![(s("latest"), s("0.13.1")), (s("release_url"), url)]),
+            )])
         });
         let have = vec![("uv".to_string(), s("0.12.0"))];
         let (url, repr_len, str_len) = std::thread::scope(|sc| {

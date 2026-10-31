@@ -6,9 +6,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::UA;
 use super::pyisms::{py_int, py_norm, py_str_repr, py_strip, py_with_suffix};
 use super::urllib;
+use super::UA;
 
 /// urllib's `timeout=120`: it bounds every socket operation, so a body that
 /// keeps arriving may take as long as it takes, but one that stalls for this
@@ -66,7 +66,11 @@ fn unquote_to_bytes(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
             let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("00");
             out.push(u8::from_str_radix(hex, 16).unwrap_or(0));
             i += 3;
@@ -155,16 +159,22 @@ fn open_data(url: &str) -> Result<Opened, String> {
         bytes = a2b_base64(&bytes)?;
     }
     let len = bytes.len();
-    Ok(Opened { body: Box::new(std::io::Cursor::new(bytes)), content_length: Some(len.to_string()) })
+    Ok(Opened {
+        body: Box::new(std::io::Cursor::new(bytes)),
+        content_length: Some(len.to_string()),
+    })
 }
 
 /// `socket.gethostbyname(name)`: its first IPv4 address.
 fn host_ipv4(name: &str) -> Option<std::net::Ipv4Addr> {
     use std::net::ToSocketAddrs;
-    (name, 0).to_socket_addrs().ok()?.find_map(|a| match a.ip() {
-        std::net::IpAddr::V4(ip) => Some(ip),
-        std::net::IpAddr::V6(_) => None,
-    })
+    (name, 0)
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|a| match a.ip() {
+            std::net::IpAddr::V4(ip) => Some(ip),
+            std::net::IpAddr::V6(_) => None,
+        })
 }
 
 /// `_is_local_authority(authority, resolve=True)`.
@@ -172,11 +182,16 @@ fn is_local_authority(authority: &str) -> bool {
     if authority.is_empty() || authority == "localhost" {
         return true;
     }
-    let hostname = rustix::system::uname().nodename().to_string_lossy().into_owned();
+    let hostname = rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .into_owned();
     if authority == hostname {
         return true;
     }
-    let Some(addr) = host_ipv4(authority) else { return false };
+    let Some(addr) = host_ipv4(authority) else {
+        return false;
+    };
     // FileHandler.get_names(): every IPv4 address of localhost and of us.
     use std::net::ToSocketAddrs;
     let names: Vec<std::net::Ipv4Addr> = ["localhost", hostname.as_str()]
@@ -213,7 +228,9 @@ fn open_file(url: &str) -> Result<Opened, String> {
     };
     let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
     if !is_local_authority(authority) {
-        return Err("URLError: <urlopen error file:// scheme is supported only on localhost>".into());
+        return Err(
+            "URLError: <urlopen error file:// scheme is supported only on localhost>".into(),
+        );
     }
     let local = PathBuf::from(std::ffi::OsStr::from_bytes(&unquote_to_bytes(path)));
     let err = |e: std::io::Error| format!("URLError: <urlopen error {e}>");
@@ -224,7 +241,10 @@ fn open_file(url: &str) -> Result<Opened, String> {
         return Err(err(std::io::Error::from_raw_os_error(libc::EISDIR)));
     }
     let f = std::fs::File::open(&local).map_err(err)?;
-    Ok(Opened { body: Box::new(f), content_length: Some(size.to_string()) })
+    Ok(Opened {
+        body: Box::new(f),
+        content_length: Some(size.to_string()),
+    })
 }
 
 /// `urllib.request.urlopen`: http and https over the network, file and
@@ -239,18 +259,26 @@ fn urlopen(url: &str) -> Result<Opened, String> {
         _ => base.to_string(),
     };
     let Some(scheme) = url_scheme(base) else {
-        return Err(format!("ValueError: unknown url type: {}", py_str_repr(&clean)));
+        return Err(format!(
+            "ValueError: unknown url type: {}",
+            py_str_repr(&clean)
+        ));
     };
     urllib::check_request(&full_url)?;
     urllib::build_opener();
     match scheme.as_str() {
         "http" | "https" => {
             let (body, content_length) = urllib::open_http(url, UA, DOWNLOAD_TIMEOUT)?;
-            Ok(Opened { body, content_length })
+            Ok(Opened {
+                body,
+                content_length,
+            })
         }
         "file" => open_file(&clean),
         "data" => open_data(&full_url),
-        other => Err(format!("URLError: <urlopen error unknown url type: {other}>")),
+        other => Err(format!(
+            "URLError: <urlopen error unknown url type: {other}>"
+        )),
     }
 }
 
@@ -258,7 +286,10 @@ fn urlopen(url: &str) -> Result<Opened, String> {
 /// bounded by `DOWNLOAD_TIMEOUT` the way urllib's socket timeout bounds it.
 /// The reads run on a helper thread so a stalled connection cannot hang the
 /// caller; on a timeout that thread is left to die with the connection.
-fn read_blocks(mut body: Box<dyn Read + Send>, mut each: impl FnMut(&[u8]) -> Result<(), String>) -> Result<(), String> {
+fn read_blocks(
+    mut body: Box<dyn Read + Send>,
+    mut each: impl FnMut(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Vec<u8>, String>>(16);
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
@@ -279,7 +310,9 @@ fn read_blocks(mut body: Box<dyn Read + Send>, mut each: impl FnMut(&[u8]) -> Re
         let chunk = match rx.recv_timeout(DOWNLOAD_TIMEOUT) {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => return Err(e),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Err("TimeoutError: The read operation timed out".into()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err("TimeoutError: The read operation timed out".into())
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Vec::new(),
         };
         if chunk.is_empty() {
@@ -340,14 +373,20 @@ fn host_machine() -> Option<u16> {
 /// magic is checked then.
 fn elf_check(head: &[u8], machine: Option<u16>) -> Result<(), String> {
     if head.len() < ELF_HEAD || &head[..ELF_MAGIC.len()] != ELF_MAGIC {
-        return Err("the download is not an AppImage (it does not start with an ELF header), \
+        return Err(
+            "the download is not an AppImage (it does not start with an ELF header), \
                     so it was deleted"
-            .into());
+                .into(),
+        );
     }
     let Some(want) = machine else { return Ok(()) };
     // EI_DATA (byte 5): 2 is big-endian, anything else is read as little.
     let raw = [head[18], head[19]];
-    let got = if head[5] == 2 { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) };
+    let got = if head[5] == 2 {
+        u16::from_be_bytes(raw)
+    } else {
+        u16::from_le_bytes(raw)
+    };
     if got != want {
         return Err(format!(
             "the download is built for another processor (ELF machine {got:#x}; this one is \
@@ -417,16 +456,23 @@ pub fn download_verified(
         // http.client hands a short body over as if it were whole; a
         // truncated AppImage must not replace a working one.
         if total > 0.0 && (done as f64) < total {
-            return Err(format!("IncompleteRead: the download ended after {done} of {total} bytes"));
+            return Err(format!(
+                "IncompleteRead: the download ended after {done} of {total} bytes"
+            ));
         }
         elf_check(&head, host_machine())?;
         if !sha256.is_empty() && !hex::encode(hash.finalize()).eq_ignore_ascii_case(sha256.trim()) {
-            return Err("checksum mismatch: the download is not the file the project published, \
+            return Err(
+                "checksum mismatch: the download is not the file the project published, \
                         so it was deleted"
-                .into());
+                    .into(),
+            );
         }
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&tmp).map_err(|e| format!("OSError: {e}"))?.permissions().mode();
+        let mode = std::fs::metadata(&tmp)
+            .map_err(|e| format!("OSError: {e}"))?
+            .permissions()
+            .mode();
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode | 0o111))
             .map_err(|e| format!("OSError: {e}"))
     })();
@@ -446,7 +492,9 @@ pub fn download_verified(
     };
     let kept = dest.exists() && {
         let _ = std::fs::remove_file(&staged);
-        std::fs::hard_link(&dest, &staged).or_else(|_| std::fs::copy(&dest, &staged).map(|_| ())).is_ok()
+        std::fs::hard_link(&dest, &staged)
+            .or_else(|_| std::fs::copy(&dest, &staged).map(|_| ()))
+            .is_ok()
     };
     if let Err(e) = std::fs::rename(&tmp, &dest) {
         let _ = std::fs::remove_file(&tmp);
@@ -460,11 +508,17 @@ pub fn download_verified(
     // leave the registry naming a version that is no longer the one installed.
     if kept {
         if let Err(e) = std::fs::rename(&staged, &prev) {
-            eprintln!("almanac: {}: the previous build was not kept for rollback: {e}", dest.display());
+            eprintln!(
+                "almanac: {}: the previous build was not kept for rollback: {e}",
+                dest.display()
+            );
             let _ = std::fs::remove_file(&staged);
         }
     }
-    Ok(Downloaded { path: dest, checksum_verified: !sha256.is_empty() })
+    Ok(Downloaded {
+        path: dest,
+        checksum_verified: !sha256.is_empty(),
+    })
 }
 
 /// The lock on one download's temporary file (see [`lock_download`]).
@@ -496,7 +550,9 @@ fn lock_download(tmp: &Path) -> Result<DownloadLock, String> {
         format!(
             "busy: {} is already being downloaded (by Almanac or its scheduled update); \
              try again when that is done",
-            tmp.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            tmp.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
         )
     };
     let file = std::fs::OpenOptions::new()
@@ -550,7 +606,10 @@ mod tests {
             if let Ok((mut s, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
-                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
                 let _ = s.write_all(head.as_bytes());
                 let _ = s.write_all(&body);
             }
@@ -586,7 +645,11 @@ mod tests {
         let dest = tmp.path().join("app.AppImage");
         std::fs::write(&dest, b"OLD").unwrap();
         // A port nothing listens on: the connection dies.
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         assert!(download(&format!("http://127.0.0.1:{port}/x"), &dest, None).is_err());
         assert_eq!(
             std::fs::read(&dest).unwrap(),
@@ -623,8 +686,14 @@ mod tests {
         let err = download(&url, &dest, None).unwrap_err();
         assert!(err.contains("IncompleteRead"), "{err}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"\x7fELFOLD");
-        assert_eq!(std::fs::read(tmp.path().join("app.previous")).unwrap(), b"\x7fELFOLDER");
-        assert!(!tmp.path().join("app.download").exists(), "the partial file is left behind");
+        assert_eq!(
+            std::fs::read(tmp.path().join("app.previous")).unwrap(),
+            b"\x7fELFOLDER"
+        );
+        assert!(
+            !tmp.path().join("app.download").exists(),
+            "the partial file is left behind"
+        );
     }
 
     /// Only an ELF file (every AppImage is one) replaces the installed
@@ -658,7 +727,10 @@ mod tests {
         };
         download_verified(&serve(&NEW), &dest, None, &right).unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), *NEW);
-        assert_eq!(std::fs::read(tmp.path().join("app.previous")).unwrap(), b"\x7fELFOLD");
+        assert_eq!(
+            std::fs::read(tmp.path().join("app.previous")).unwrap(),
+            b"\x7fELFOLD"
+        );
     }
 
     /// Whether a download was checked against a checksum is reported, so
@@ -668,12 +740,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("app.AppImage");
         let got = download_verified(&serve(&NEW), &dest, None, "").unwrap();
-        assert_eq!(got, Downloaded { path: dest.clone(), checksum_verified: false });
+        assert_eq!(
+            got,
+            Downloaded {
+                path: dest.clone(),
+                checksum_verified: false
+            }
+        );
         let sum = {
             use sha2::{Digest, Sha256};
             hex::encode(Sha256::digest(&*NEW))
         };
-        assert!(download_verified(&serve(&NEW), &dest, None, &sum).unwrap().checksum_verified);
+        assert!(
+            download_verified(&serve(&NEW), &dest, None, &sum)
+                .unwrap()
+                .checksum_verified
+        );
     }
 
     /// An ELF file for another processor is refused like any non-AppImage,
@@ -691,33 +773,59 @@ mod tests {
         const AARCH64: u16 = 0xB7;
         assert_eq!(elf_check(&header(1, [0x3E, 0]), Some(X86_64)), Ok(()));
         assert_eq!(elf_check(&header(1, [0xB7, 0]), Some(AARCH64)), Ok(()));
-        assert_eq!(elf_check(&header(2, [0, 0xB7]), Some(AARCH64)), Ok(()), "big-endian header");
+        assert_eq!(
+            elf_check(&header(2, [0, 0xB7]), Some(AARCH64)),
+            Ok(()),
+            "big-endian header"
+        );
         let err = elf_check(&header(1, [0xB7, 0]), Some(X86_64)).unwrap_err();
-        assert!(err.contains("another processor") && err.contains("0xb7"), "{err}");
-        assert!(elf_check(&header(1, [0x03, 0]), Some(X86_64)).is_err(), "i386");
-        assert!(elf_check(&header(1, [0x28, 0]), Some(AARCH64)).is_err(), "32-bit ARM");
-        assert!(elf_check(&header(2, [0x3E, 0]), Some(X86_64)).is_err(), "byte order honoured");
+        assert!(
+            err.contains("another processor") && err.contains("0xb7"),
+            "{err}"
+        );
+        assert!(
+            elf_check(&header(1, [0x03, 0]), Some(X86_64)).is_err(),
+            "i386"
+        );
+        assert!(
+            elf_check(&header(1, [0x28, 0]), Some(AARCH64)).is_err(),
+            "32-bit ARM"
+        );
+        assert!(
+            elf_check(&header(2, [0x3E, 0]), Some(X86_64)).is_err(),
+            "byte order honoured"
+        );
         // An unknown host checks the magic only.
         assert_eq!(elf_check(&header(1, [0x28, 0]), None), Ok(()));
-        assert!(elf_check(b"\x7fELF", Some(X86_64)).unwrap_err().contains("not an AppImage"));
+        assert!(elf_check(b"\x7fELF", Some(X86_64))
+            .unwrap_err()
+            .contains("not an AppImage"));
         assert!(elf_check(b"\x7fELF", None).is_err());
-        assert!(elf_check(&[b'<'; 20], None).unwrap_err().contains("not an AppImage"));
-        assert_eq!(host_machine(), match std::env::consts::ARCH {
-            "x86_64" => Some(X86_64),
-            "aarch64" => Some(AARCH64),
-            _ => None,
-        });
+        assert!(elf_check(&[b'<'; 20], None)
+            .unwrap_err()
+            .contains("not an AppImage"));
+        assert_eq!(
+            host_machine(),
+            match std::env::consts::ARCH {
+                "x86_64" => Some(X86_64),
+                "aarch64" => Some(AARCH64),
+                _ => None,
+            }
+        );
     }
 
     /// A build for another processor never replaces the installed one.
     #[test]
     fn test_a_wrong_architecture_download_is_refused() {
-        let Some(machine) = host_machine() else { return };
+        let Some(machine) = host_machine() else {
+            return;
+        };
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("app.AppImage");
         std::fs::write(&dest, b"OLD").unwrap();
         let mut other = test_elf(b"NEW");
-        other[18..20].copy_from_slice(&(if machine == 0x3E { 0xB7u16 } else { 0x3E }).to_le_bytes());
+        other[18..20]
+            .copy_from_slice(&(if machine == 0x3E { 0xB7u16 } else { 0x3E }).to_le_bytes());
         let err = download(&serve(&other), &dest, None).unwrap_err();
         assert!(err.contains("another processor"), "{err}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"OLD");
@@ -741,7 +849,10 @@ mod tests {
         assert_eq!(got, dest);
         assert_eq!(std::fs::read(&dest).unwrap(), *NEW);
         assert!(prev.is_dir());
-        assert!(!tmp.path().join("app.previous.new").exists(), "the staged copy is left behind");
+        assert!(
+            !tmp.path().join("app.previous.new").exists(),
+            "the staged copy is left behind"
+        );
         assert!(!tmp.path().join("app.download").exists());
     }
 
@@ -765,10 +876,22 @@ mod tests {
     /// An https download is not followed down to http.
     #[test]
     fn test_no_redirect_from_https_to_http() {
-        assert_eq!(urllib::redirect_allowed("https", "http://example.invalid/b"), Ok(false));
-        assert_eq!(urllib::redirect_allowed("https", "HTTP://example.invalid/b"), Ok(false));
-        assert_eq!(urllib::redirect_allowed("https", "https://cdn.example.invalid/b"), Ok(true));
-        assert_eq!(urllib::redirect_allowed("http", "http://example.invalid/b"), Ok(true));
+        assert_eq!(
+            urllib::redirect_allowed("https", "http://example.invalid/b"),
+            Ok(false)
+        );
+        assert_eq!(
+            urllib::redirect_allowed("https", "HTTP://example.invalid/b"),
+            Ok(false)
+        );
+        assert_eq!(
+            urllib::redirect_allowed("https", "https://cdn.example.invalid/b"),
+            Ok(true)
+        );
+        assert_eq!(
+            urllib::redirect_allowed("http", "http://example.invalid/b"),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -777,9 +900,15 @@ mod tests {
         let dest = tmp.path().join("app.AppImage");
         // An ELF header, gzipped, sent although identity was asked for: it
         // is written as it came (and so is not an AppImage).
-        let mut body = vec![0x7f, b'E', b'L', b'F', 0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xab, 0, 0, 0x83];
+        let mut body = vec![
+            0x7f, b'E', b'L', b'F', 0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xab, 0, 0, 0x83,
+        ];
         body.extend_from_slice(&host_machine().unwrap_or(0).to_le_bytes());
-        let mut resp = format!("HTTP/1.0 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        let mut resp = format!(
+            "HTTP/1.0 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
         resp.extend_from_slice(&body);
         download(&serve_raw(resp), &dest, None).unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), body);
@@ -791,13 +920,31 @@ mod tests {
         let src = tmp.path().join("s rc");
         std::fs::write(&src, test_elf(b"FILE")).unwrap();
         let dest = tmp.path().join("app.AppImage");
-        download(&format!("file://{}", tmp.path().join("s%20rc").display()), &dest, None).unwrap();
+        download(
+            &format!("file://{}", tmp.path().join("s%20rc").display()),
+            &dest,
+            None,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), test_elf(b"FILE"));
-        download(&format!("data:,{}NEW%41#frag", pct(&test_elf(b""))), &dest, None).unwrap();
+        download(
+            &format!("data:,{}NEW%41#frag", pct(&test_elf(b""))),
+            &dest,
+            None,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), test_elf(b"NEWA#frag"));
-        download(&format!("data:text/plain;base64,{}", urllib::b64encode(&NEW)), &dest, None).unwrap();
+        download(
+            &format!("data:text/plain;base64,{}", urllib::b64encode(&NEW)),
+            &dest,
+            None,
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), *NEW);
-        assert!(download("data:,NEW", &dest, None).is_err(), "not an ELF file");
+        assert!(
+            download("data:,NEW", &dest, None).is_err(),
+            "not an ELF file"
+        );
         assert!(download("data:no-comma", &dest, None).is_err());
         assert!(download("gopher://x/y", &dest, None).is_err());
     }

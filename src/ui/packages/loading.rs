@@ -6,7 +6,7 @@ use gtk::{gio, glib};
 
 use crate::i18n::tr;
 use crate::inventory;
-use crate::ui::shell::{AppItem, Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, AppItem, Win};
 
 use super::extra::text_of;
 use super::SAY_TIMEOUT;
@@ -14,7 +14,9 @@ use super::SAY_TIMEOUT;
 impl Win {
     /// `self.lookup_action(name)`, as the SimpleAction it always is here.
     fn win_action(&self, act_name: &str) -> Option<gio::SimpleAction> {
-        self.window.lookup_action(act_name).and_downcast::<gio::SimpleAction>()
+        self.window
+            .lookup_action(act_name)
+            .and_downcast::<gio::SimpleAction>()
     }
 
     /// Every row of `self.store`, as the model's own objects (a reference
@@ -26,7 +28,10 @@ impl Win {
 
     /// How many rows of `self.store` satisfy `pred`, read in place.
     pub(super) fn count_items(objects: &[glib::Object], pred: impl Fn(&AppItem) -> bool) -> usize {
-        objects.iter().filter(|o| AppItem::of(o).is_some_and(|it| pred(&it))).count()
+        objects
+            .iter()
+            .filter(|o| AppItem::of(o).is_some_and(|it| pred(&it)))
+            .count()
     }
 
     /// `self.filter.changed(Gtk.FilterChange.DIFFERENT)`.
@@ -55,11 +60,14 @@ impl Win {
 
         // A new window: the last scan's list, shown while this one runs
         // (`inventory::load_snapshot` says what of it can be trusted).
-        let fresh_window = self.packages.borrow().last_scan.is_none() && self.shared.borrow().store.n_items() == 0;
+        let fresh_window =
+            self.packages.borrow().last_scan.is_none() && self.shared.borrow().store.n_items() == 0;
         if fresh_window && !crate::demo::active() {
             let w = self.downgrade();
             spawn_bg(inventory::load_snapshot, move |apps| {
-                let (Some(w), Some(apps)) = (w.upgrade(), apps) else { return };
+                let (Some(w), Some(apps)) = (w.upgrade(), apps) else {
+                    return;
+                };
                 // The scan won the race, or something else filled the list.
                 if !w.packages.borrow().scanning || w.shared.borrow().store.n_items() != 0 {
                     return;
@@ -77,7 +85,9 @@ impl Win {
         spawn_bg(
             || {
                 let before = inventory::scan_stamp();
-                std::panic::catch_unwind(inventory::collect).ok().map(|apps| (apps, before))
+                std::panic::catch_unwind(inventory::collect)
+                    .ok()
+                    .map(|apps| (apps, before))
             },
             move |apps| {
                 if let Some(w) = w.upgrade() {
@@ -121,7 +131,10 @@ impl Win {
     /// Whether a scan started after `changed`: the watcher's rescan for a
     /// change that old would find nothing new.
     pub fn scanned_since(&self, changed: std::time::SystemTime) -> bool {
-        self.packages.borrow().scan_started.is_some_and(|started| started > changed)
+        self.packages
+            .borrow()
+            .scan_started
+            .is_some_and(|started| started > changed)
     }
 
     /// Desktop notification, falling back to the status line.
@@ -141,7 +154,10 @@ impl Win {
     pub fn try_notify(&self, title: &str, body: &str, urgency: &str) -> Result<(), String> {
         // In plain words once, here: the status line below is `toast`, not
         // `say`, which would put them in plain words again.
-        let (title, body) = (&crate::util::human_error(title), &crate::util::human_error(body));
+        let (title, body) = (
+            &crate::util::human_error(title),
+            &crate::util::human_error(body),
+        );
         let tool = crate::util::which("omarchy-notification-send")
             .or_else(|| crate::util::which("notify-send"));
         let Some(tool) = tool else {
@@ -196,13 +212,22 @@ impl Win {
     pub fn report_health(&self, apps: &[inventory::App]) {
         let abandoned: Vec<&inventory::App> = apps
             .iter()
-            .filter(|a| matches!(text_of(a.extra.get("stale")).as_str(), "orphaned" | "flagged"))
+            .filter(|a| {
+                matches!(
+                    text_of(a.extra.get("stale")).as_str(),
+                    "orphaned" | "flagged"
+                )
+            })
             .collect();
         let dupes = inventory::duplicates(apps);
 
         let mut findings = std::collections::BTreeSet::new();
         for a in &abandoned {
-            findings.insert(format!("stale:{}:{}", a.name, text_of(a.extra.get("stale"))));
+            findings.insert(format!(
+                "stale:{}:{}",
+                a.name,
+                text_of(a.extra.get("stale"))
+            ));
         }
         for (k, _v) in &dupes {
             findings.insert(format!("dupe:{k}"));
@@ -235,7 +260,8 @@ impl Win {
                 .collect();
             let body = lines.iter().take(5).cloned().collect::<Vec<_>>().join("\n");
             // A _notify that raised ended _report_health here.
-            if let Err(e) = self.try_notify(&tr("Software no longer maintained"), &body, "critical") {
+            if let Err(e) = self.try_notify(&tr("Software no longer maintained"), &body, "critical")
+            {
                 eprintln!("almanac: _report_health: {e}");
                 return;
             }
@@ -247,7 +273,11 @@ impl Win {
                 .take(5)
                 .map(|(k, v)| format!("{k}: {}", v.join(", ")))
                 .collect();
-            self.notify(&tr("Duplicate software installed"), &lines.join("\n"), "normal");
+            self.notify(
+                &tr("Duplicate software installed"),
+                &lines.join("\n"),
+                "normal",
+            );
         }
     }
 
@@ -265,7 +295,10 @@ impl Win {
             store.append(&AppItem::new(a.clone()).boxed());
         }
         let names: std::collections::HashSet<&str> = apps.iter().map(|a| a.name.as_str()).collect();
-        self.shared.borrow_mut().row_actions.retain(|name, _| names.contains(name.as_str()));
+        self.shared
+            .borrow_mut()
+            .row_actions
+            .retain(|name, _| names.contains(name.as_str()));
     }
 
     /// Rows whose update was verified installed show it at once, ahead of
@@ -339,15 +372,15 @@ impl Win {
         }
         // Say which kind of empty this is, rather than showing a blank table.
         if shown == 0 {
-            let (mut icon, mut title, mut body) = match crate::ui::history::empty_states(&filter_key)
-            {
-                Some((icon, title, body)) => (icon, title, body),
-                None => (
-                    "system-search-symbolic",
-                    "Nothing matches".to_string(),
-                    "Try a different search.".to_string(),
-                ),
-            };
+            let (mut icon, mut title, mut body) =
+                match crate::ui::history::empty_states(&filter_key) {
+                    Some((icon, title, body)) => (icon, title, body),
+                    None => (
+                        "system-search-symbolic",
+                        "Nothing matches".to_string(),
+                        "Try a different search.".to_string(),
+                    ),
+                };
             if !query.is_empty() {
                 icon = "system-search-symbolic";
                 title = "Nothing matches".to_string();
@@ -372,8 +405,9 @@ impl Win {
         self.sync_primary();
         self.update_sidebar_counts();
         self.refresh_stats()?;
-        let removable =
-            Win::count_items(&items, |i| i.source == inventory::ORPHAN && i.advice != "keep");
+        let removable = Win::count_items(&items, |i| {
+            i.source == inventory::ORPHAN && i.advice != "keep"
+        });
         if let Some(act) = self.win_action("clean") {
             act.set_enabled(removable > 0);
         }
@@ -413,14 +447,21 @@ impl Win {
             .filter(|_| self.list_stack.visible_child_name().as_deref() != Some("empty"));
         if let Some(why) = &failed {
             let (icon, title, body) = check_failed(why);
-            self.update_notes.append(&Win::note_row(icon, &title, &body));
+            self.update_notes
+                .append(&Win::note_row(icon, &title, &body));
         }
         // Arch news first: it can say not to update yet.
-        let news = if filter_key == "updates" && query.is_empty() { self.news_into(&self.update_notes) } else { 0 };
+        let news = if filter_key == "updates" && query.is_empty() {
+            self.news_into(&self.update_notes)
+        } else {
+            0
+        };
         for note in &notes {
-            self.update_notes.append(&Win::note_row(note.icon, &note.title, &note.body));
+            self.update_notes
+                .append(&Win::note_row(note.icon, &note.title, &note.body));
         }
-        self.update_notes.set_visible(!notes.is_empty() || news > 0 || failed.is_some());
+        self.update_notes
+            .set_visible(!notes.is_empty() || news > 0 || failed.is_some());
     }
 }
 
@@ -430,7 +471,10 @@ pub(super) fn check_failed(why: &str) -> (&'static str, String, String) {
     (
         "dialog-warning-symbolic",
         tr("Could not check for updates"),
-        format!("{}. Updates waiting may not be listed; rescan to try again.", why.trim_end_matches('.')),
+        format!(
+            "{}. Updates waiting may not be listed; rescan to try again.",
+            why.trim_end_matches('.')
+        ),
     )
 }
 
@@ -442,7 +486,9 @@ mod tests {
     /// read as "no updates" and showed "Everything is up to date".
     #[test]
     fn a_check_that_could_not_run_does_not_say_up_to_date() {
-        let (icon, title, body) = check_failed("checkupdates could not check (exit status 1): offline, or a mirror is down");
+        let (icon, title, body) = check_failed(
+            "checkupdates could not check (exit status 1): offline, or a mirror is down",
+        );
         assert_eq!(icon, "dialog-warning-symbolic");
         assert!(!title.to_lowercase().contains("up to date"));
         assert!(body.starts_with("checkupdates could not check"));

@@ -65,7 +65,10 @@ pub(super) fn git_env(ssh: &str) -> [(&'static str, &str); 2] {
     [("GIT_TERMINAL_PROMPT", "0"), ("GIT_SSH_COMMAND", ssh)]
 }
 
-pub(super) fn git_behind_raw(repo: &Path, cache: &mut Map<String, Value>) -> Result<Map<String, Value>, String> {
+pub(super) fn git_behind_raw(
+    repo: &Path,
+    cache: &mut Map<String, Value>,
+) -> Result<Map<String, Value>, String> {
     // str(repo): a name that is not UTF-8 keeps its bytes (surrogateescape),
     // so the key is the one the Python writes.
     let key = match path_json(repo) {
@@ -110,7 +113,11 @@ pub(super) fn git_behind_raw(repo: &Path, cache: &mut Map<String, Value>) -> Res
         let subject = py_strip(&subject_out.stdout).to_string();
         let dirty = !py_strip(&git(&["status", "--porcelain"], 25)?.stdout).is_empty();
         // int(behind or 0): a non-number is the ValueError the Python catches.
-        let behind_n = if behind.is_empty() { "0".to_string() } else { py_int_text(&behind).ok_or(())? };
+        let behind_n = if behind.is_empty() {
+            "0".to_string()
+        } else {
+            py_int_text(&behind).ok_or(())?
+        };
         let mut r = Map::new();
         r.insert("tracked".into(), json!(true));
         r.insert("behind".into(), int_json(&behind_n));
@@ -153,7 +160,10 @@ pub fn git_behind(repo: &Path, cache: &mut Map<String, Value>) -> Result<GitBehi
     let raw = git_behind_raw(repo, cache)?;
     // Field by field: a fetched_at of inf is a float, not the str a Value
     // carries it as.
-    let fetched_at = raw.get("fetched_at").and_then(py_float_value).unwrap_or(0.0);
+    let fetched_at = raw
+        .get("fetched_at")
+        .and_then(py_float_value)
+        .unwrap_or(0.0);
     let mut r: GitBehind = serde_json::from_value(Value::Object(
         raw.into_iter().filter(|(k, _)| k != "fetched_at").collect(),
     ))
@@ -169,7 +179,11 @@ pub fn github_page(url: &str) -> String {
     if let Some(rest) = url.strip_prefix("git@github.com:") {
         url = format!("https://github.com/{rest}");
     }
-    if url.starts_with("https://") { url } else { String::new() }
+    if url.starts_with("https://") {
+        url
+    } else {
+        String::new()
+    }
 }
 
 /// The Almanac checkout the running code came from, symlinks resolved. A
@@ -220,7 +234,9 @@ pub(super) fn sorted_children(d: &Path) -> Vec<PathBuf> {
 /// the surrogates Python keeps for a name that is not UTF-8: such a name
 /// shows with U+FFFD. The paths handed to git and kept in `extra` are exact.)
 pub(super) fn name_of(p: &Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Software built from source here. Listed so the inventory is honest about
@@ -238,7 +254,10 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
             Value::Object(m) => m,
             // Every path below reaches `cache.get` or `cache.setdefault`.
             other => {
-                return Err(format!("'{}' object has no attribute 'setdefault'", py_type(&other)))
+                return Err(format!(
+                    "'{}' object has no attribute 'setdefault'",
+                    py_type(&other)
+                ))
             }
         }
     } else {
@@ -251,7 +270,10 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
     let pdir_ok = pdir.is_dir();
     let switched_on = pdir_ok.then(|| std::thread::spawn(crate::plugins::enabled));
 
-    let git_extra =|repo: &Path, cache: &mut Map<String, Value>, dirty_cache: &mut bool| -> Result<Map<String, Value>, String> {
+    let git_extra = |repo: &Path,
+                     cache: &mut Map<String, Value>,
+                     dirty_cache: &mut bool|
+     -> Result<Map<String, Value>, String> {
         if !check_updates || !repo.join(".git").exists() {
             return Ok(Map::new());
         }
@@ -283,12 +305,18 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         // The path as the bytes it is: git must find the directory even when
         // its name is not UTF-8.
         let git_argv = |args: &[&'static str]| -> Vec<std::ffi::OsString> {
-            let mut v: Vec<std::ffi::OsString> = vec!["git".into(), "-C".into(), repo.clone().into_os_string()];
+            let mut v: Vec<std::ffi::OsString> =
+                vec!["git".into(), "-C".into(), repo.clone().into_os_string()];
             v.extend(args.iter().map(std::ffi::OsString::from));
             v
         };
-        let rev = py_strip(&run_os(&git_argv(&["describe", "--always", "--dirty"]), 25)?).to_string();
-        let origin = py_strip(&run_os(&git_argv(&["remote", "get-url", "origin"]), 25)?).to_string();
+        let rev = py_strip(&run_os(
+            &git_argv(&["describe", "--always", "--dirty"]),
+            25,
+        )?)
+        .to_string();
+        let origin =
+            py_strip(&run_os(&git_argv(&["remote", "get-url", "origin"]), 25)?).to_string();
         let g = git_extra(&repo, &mut cache, &mut dirty_cache)?;
         let launcher = crate::xdg::bin_home().join(repo.file_name().unwrap_or_default());
         let mut extra = g.clone();
@@ -300,41 +328,69 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         };
         // `repo.name` and `str(launcher)` keep a name that is not UTF-8 as
         // surrogates.
-        let exec = if launcher.exists() { path_json(&launcher) } else { json!("") };
-        apps.push(App {
-            version: if rev.is_empty() { "git".into() } else { rev },
-            source: LOCAL.into(),
-            description: format!(
-                "Built from source{}",
-                if origin.is_empty() { String::new() } else { format!(" · {origin}") }
-            ),
-            update,
-            extra: extra.into(),
-            ..Default::default()
-        }
-        .with_values(&[("name", &path_json(Path::new(repo.file_name().unwrap_or_default()))), ("exec_path", &exec)]));
+        let exec = if launcher.exists() {
+            path_json(&launcher)
+        } else {
+            json!("")
+        };
+        apps.push(
+            App {
+                version: if rev.is_empty() { "git".into() } else { rev },
+                source: LOCAL.into(),
+                description: format!(
+                    "Built from source{}",
+                    if origin.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {origin}")
+                    }
+                ),
+                update,
+                extra: extra.into(),
+                ..Default::default()
+            }
+            .with_values(&[
+                (
+                    "name",
+                    &path_json(Path::new(repo.file_name().unwrap_or_default())),
+                ),
+                ("exec_path", &exec),
+            ]),
+        );
     }
     // Omarchy shell plugins: classified before anything offers to touch them
     // (plugins.py), with whether Omarchy currently has each one switched on.
-    let switched_on = switched_on.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    let switched_on = switched_on
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
     // pcache = cache.setdefault("_plugins", {}): an existing value is used
     // as it is, whatever it is.
     if !cache.contains_key("_plugins") {
         cache.insert("_plugins".into(), json!({}));
     }
-    let children: Vec<PathBuf> =
-        if pdir_ok { sorted_children(&pdir).into_iter().filter(|p| p.is_dir()).collect() } else { Vec::new() };
+    let children: Vec<PathBuf> = if pdir_ok {
+        sorted_children(&pdir)
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .collect()
+    } else {
+        Vec::new()
+    };
     // Each plugin is a few git calls and, when due, a fetch: classified all
     // at once (`plugins::classify_all`, as the Plugins page does) when the
     // cache is the usual map. Anything else goes one at a time below, with
     // the Python's errors.
-    let mut classified: std::collections::VecDeque<crate::plugins::State> = match cache.get_mut("_plugins") {
-        Some(Value::Object(pc)) => crate::plugins::classify_each(&children, Some(pc), check_updates).into(),
-        _ => Default::default(),
-    };
+    let mut classified: std::collections::VecDeque<crate::plugins::State> =
+        match cache.get_mut("_plugins") {
+            Some(Value::Object(pc)) => {
+                crate::plugins::classify_each(&children, Some(pc), check_updates).into()
+            }
+            _ => Default::default(),
+        };
     for p in children {
         let pname = path_json(Path::new(p.file_name().unwrap_or_default()));
-        let (mut desc, mut ver, mut pid) = (json!("Omarchy shell plugin"), json!("—"), pname.clone());
+        let (mut desc, mut ver, mut pid) =
+            (json!("Omarchy shell plugin"), json!("—"), pname.clone());
         // OSError and ValueError (bad JSON, or text that is not UTF-8) are
         // caught; a document that is not an object fails at `m.get`.
         if let Ok(text) = std::fs::read_to_string(p.join("manifest.json")) {
@@ -347,7 +403,10 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
                     }
                 }
                 Ok(other) => {
-                    return Err(format!("'{}' object has no attribute 'get'", py_type(&other)))
+                    return Err(format!(
+                        "'{}' object has no attribute 'get'",
+                        py_type(&other)
+                    ))
                 }
                 Err(_) => {}
             }
@@ -370,7 +429,10 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
                     || (st.kind == crate::plugins::ERROR && st.detail != "fetch failed");
                 if !before_remote {
                     if truthy(&other) {
-                        return Err(format!("'{}' object has no attribute 'get'", py_type(&other)));
+                        return Err(format!(
+                            "'{}' object has no attribute 'get'",
+                            py_type(&other)
+                        ));
                     }
                     if check_updates && st.detail != "fetch failed" {
                         return Err(format!(
@@ -398,7 +460,11 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         // An edit with an update waiting is still offered, through the
         // patches.py weighing; ahead, diverged, detached and symlinked
         // plugins are not, because no update is right for them.
-        let behind = if st.updatable() || st.detail == "modified" { st.behind } else { 0 };
+        let behind = if st.updatable() || st.detail == "modified" {
+            st.behind
+        } else {
+            0
+        };
         let mut extra = Map::new();
         extra.insert("repo".into(), path_json(&p));
         extra.insert("is_app".into(), json!(false));
@@ -409,17 +475,32 @@ pub fn local_builds(check_updates: bool) -> Result<Vec<App>, String> {
         extra.insert("url".into(), json!(github_page(&st.url)));
         extra.insert("git_behind".into(), json!(behind));
         extra.insert("git_dirty".into(), json!(st.detail == "modified"));
-        extra.insert("git_tracked".into(), json!(st.kind != crate::plugins::LOCAL));
+        extra.insert(
+            "git_tracked".into(),
+            json!(st.kind != crate::plugins::LOCAL),
+        );
         extra.insert("git_subject".into(), json!(""));
-        let desc = if on != Some(false) { desc } else { json!(format!("Turned off · {}", py_str(&desc))) };
+        let desc = if on != Some(false) {
+            desc
+        } else {
+            json!(format!("Turned off · {}", py_str(&desc)))
+        };
         apps.push(
             App {
                 source: LOCAL.into(),
-                update: if behind != 0 { format!("{behind} commits") } else { String::new() },
+                update: if behind != 0 {
+                    format!("{behind} commits")
+                } else {
+                    String::new()
+                },
                 extra: extra.into(),
                 ..Default::default()
             }
-            .with_values(&[("name", &pname), ("version", &ver), ("description", &desc)]),
+            .with_values(&[
+                ("name", &pname),
+                ("version", &ver),
+                ("description", &desc),
+            ]),
         );
     }
 
@@ -447,10 +528,20 @@ mod tests {
         let ssh = "ssh -oBatchMode=yes";
         let out = subprocess_run_env(&["/usr/bin/env"], 5, &git_env(ssh)).unwrap();
         assert!(out.stdout.lines().any(|l| l == "GIT_TERMINAL_PROMPT=0"));
-        assert!(out.stdout.lines().any(|l| l == "GIT_SSH_COMMAND=ssh -oBatchMode=yes"));
+        assert!(out
+            .stdout
+            .lines()
+            .any(|l| l == "GIT_SSH_COMMAND=ssh -oBatchMode=yes"));
         let code = include_str!("local.rs");
-        let body = code.split("fn git_behind_raw(").nth(1).and_then(|s| s.split("\n}\n").next()).unwrap_or("");
-        assert!(body.contains("subprocess_run_env(&v, timeout, &env)"), "git runs with that environment");
+        let body = code
+            .split("fn git_behind_raw(")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .unwrap_or("");
+        assert!(
+            body.contains("subprocess_run_env(&v, timeout, &env)"),
+            "git runs with that environment"
+        );
     }
 
     // ---- UpdatesClearAfterUpdating
@@ -460,13 +551,25 @@ mod tests {
         let git = |a: &[&str], cwd: &Path| {
             let mut v = vec!["git", "-c", "user.name=t", "-c", "user.email=t@t"];
             v.extend_from_slice(a);
-            let out = util::run_with(&v, &util::RunOpts { cwd: Some(cwd), ..Default::default() });
+            let out = util::run_with(
+                &v,
+                &util::RunOpts {
+                    cwd: Some(cwd),
+                    ..Default::default()
+                },
+            );
             assert!(out.ok(), "{:?}: {}", a, out.stderr);
         };
         let (up, clone) = (d.path().join("up"), d.path().join("clone"));
-        git(&["init", "-q", "-b", "main", up.to_str().unwrap()], d.path());
+        git(
+            &["init", "-q", "-b", "main", up.to_str().unwrap()],
+            d.path(),
+        );
         git(&["commit", "-q", "--allow-empty", "-m", "one"], &up);
-        git(&["clone", "-q", up.to_str().unwrap(), clone.to_str().unwrap()], d.path());
+        git(
+            &["clone", "-q", up.to_str().unwrap(), clone.to_str().unwrap()],
+            d.path(),
+        );
         git(&["commit", "-q", "--allow-empty", "-m", "two"], &up);
 
         let mut cache = Map::new();
@@ -479,7 +582,9 @@ mod tests {
     // ---- AnyonesMachine
     #[test]
     fn test_local_builds_are_found_by_being_checkouts_not_by_name() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let repo = d.path().join("some-driver");
         assert!(util::run(&["git", "init", "-q", repo.to_str().unwrap()], 30).ok());
@@ -491,7 +596,11 @@ mod tests {
             std::env::set_var(k, d.path());
         }
         let names: Vec<String> = std::panic::catch_unwind(|| {
-            local_builds(false).unwrap().into_iter().map(|a| a.name).collect()
+            local_builds(false)
+                .unwrap()
+                .into_iter()
+                .map(|a| a.name)
+                .collect()
         })
         .unwrap_or_default();
         for (k, v) in saved {

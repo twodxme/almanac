@@ -4,17 +4,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::{history, settings, snapshots, verify};
 use crate::history::{ActionLog, Change, CheckResult, CommandRun};
 use crate::i18n::tr;
 use crate::inventory::App;
 use crate::tasks::{OnDone, Step};
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
 use crate::verify::{Outcome, ProbeValue, TryProbe};
+use crate::{history, settings, snapshots, verify};
 
-use super::{Judge, JudgeAgain, raised};
 use super::pyisms::truthy;
 use super::update::with_snapshot;
+use super::{raised, Judge, JudgeAgain};
 
 impl Win {
     /// An on_done that reports what changed, not what a command exited.
@@ -116,7 +116,8 @@ impl Win {
     pub(super) fn record_update(&self, log: &UpdateLog, ok: bool, out: Option<&Outcome>) {
         if let Err(e) = history::record_action(
             history::ALMANAC,
-            &out.map(|o| o.message.clone()).unwrap_or_else(|| format!("Updated {}", log.app.name)),
+            &out.map(|o| o.message.clone())
+                .unwrap_or_else(|| format!("Updated {}", log.app.name)),
             "",
             update_severity(ok, out),
             &update_action(log, ok, out),
@@ -183,7 +184,11 @@ impl Win {
             history::ALMANAC,
             &out.message,
             "",
-            if out.changed == Some(false) { "warn" } else { "" },
+            if out.changed == Some(false) {
+                "warn"
+            } else {
+                ""
+            },
             &[],
         ) {
             return raised(&e);
@@ -224,7 +229,11 @@ pub(super) struct UpdateLog {
 
 impl UpdateLog {
     pub fn new(app: &App, argv: &[String]) -> UpdateLog {
-        UpdateLog { app: app.clone(), argv: argv.join(" "), started: Instant::now() }
+        UpdateLog {
+            app: app.clone(),
+            argv: argv.join(" "),
+            started: Instant::now(),
+        }
     }
 }
 
@@ -243,16 +252,26 @@ pub(super) fn update_action(log: &UpdateLog, ok: bool, out: Option<&Outcome>) ->
     let secs = log.started.elapsed().as_secs_f64();
     let changed = out.and_then(|o| o.changed);
     ActionLog {
-        commands: vec![CommandRun { argv: log.argv.clone(), exit: ok.then_some(0), secs: Some(secs) }],
+        commands: vec![CommandRun {
+            argv: log.argv.clone(),
+            exit: ok.then_some(0),
+            secs: Some(secs),
+        }],
         changes: if changed == Some(true) {
-            vec![Change { name: log.app.name.clone(), from: log.app.version.clone(), to: log.app.update.clone() }]
+            vec![Change {
+                name: log.app.name.clone(),
+                from: log.app.version.clone(),
+                to: log.app.update.clone(),
+            }]
         } else {
             Vec::new()
         },
         checks: vec![CheckResult {
             name: "Installed version changed".into(),
             ok: changed,
-            detail: out.map(|o| o.message.clone()).unwrap_or_else(|| "could not be checked".into()),
+            detail: out
+                .map(|o| o.message.clone())
+                .unwrap_or_else(|| "could not be checked".into()),
         }],
         duration_secs: Some(secs),
         ..Default::default()
@@ -306,7 +325,14 @@ mod tests {
         let a = update_action(&log, true, Some(&landed));
         assert_eq!(a.commands[0].argv, "yay -S ghostty");
         assert_eq!(a.commands[0].exit, Some(0));
-        assert_eq!(a.changes, vec![Change { name: "ghostty".into(), from: "1.0".into(), to: "1.1".into() }]);
+        assert_eq!(
+            a.changes,
+            vec![Change {
+                name: "ghostty".into(),
+                from: "1.0".into(),
+                to: "1.1".into()
+            }]
+        );
         assert_eq!(a.checks[0].ok, Some(true));
         assert_eq!(update_severity(true, Some(&landed)), "");
 

@@ -74,7 +74,12 @@ pub fn offers_download(info: &Info) -> bool {
     !info.can_update
         && info.kind == PACKAGE
         && !info.latest.is_empty()
-        && matches!(info.origin, Some(PackageOrigin::Foreign { aur: None | Some(false) }))
+        && matches!(
+            info.origin,
+            Some(PackageOrigin::Foreign {
+                aur: None | Some(false)
+            })
+        )
 }
 
 /// `pacman -Qmq <pkg>` read as a [`PackageOrigin`]. Local and quick: no
@@ -92,7 +97,11 @@ pub(super) fn package_origin(pkg: &str) -> PackageOrigin {
     }
     let argv: Vec<OsString> = vec!["pacman".into(), "-Qmq".into(), pkg.into()];
     match run_capture(&argv, Some(20)) {
-        Ok(out) => origin_from(out.code, &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr)),
+        Ok(out) => origin_from(
+            out.code,
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+        ),
         Err(_) => PackageOrigin::Unknown,
     }
 }
@@ -120,7 +129,9 @@ pub(super) fn aur_lists(answer: &serde_json::Value, pkg: &str) -> Option<bool> {
     let results = answer.get("results")?.as_array()?;
     Some(results.iter().any(|r| {
         r.get("Name").and_then(|n| n.as_str()) == Some(pkg)
-            && r.get("URL").and_then(|u| u.as_str()).is_some_and(is_this_project)
+            && r.get("URL")
+                .and_then(|u| u.as_str())
+                .is_some_and(is_this_project)
     }))
 }
 
@@ -130,7 +141,8 @@ pub(super) fn is_this_project(url: &str) -> bool {
 }
 
 /// What the AUR said about a package name, as last asked by this process.
-pub(super) static AUR_LISTED: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+pub(super) static AUR_LISTED: std::sync::Mutex<Option<(String, bool)>> =
+    std::sync::Mutex::new(None);
 
 /// Whether the AUR carries `pkg` as this project. With `fetch`, ask it --
 /// through the inventory's kept AUR answer, which the scan's question about
@@ -140,15 +152,23 @@ pub(super) static AUR_LISTED: std::sync::Mutex<Option<(String, bool)>> = std::sy
 pub(super) fn aur_listed(pkg: &str, fetch: bool) -> Option<bool> {
     if !fetch {
         let seen = AUR_LISTED.lock().ok()?;
-        return seen.as_ref().filter(|(name, _)| name == pkg).map(|(_, listed)| *listed);
+        return seen
+            .as_ref()
+            .filter(|(name, _)| name == pkg)
+            .map(|(_, listed)| *listed);
     }
     // pacman names are [a-z0-9@._+-]; anything else is not a name to send.
-    if !pkg.chars().all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c)) {
+    if !pkg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c))
+    {
         return None;
     }
     // Asked as part of every foreign package, the question the scan and the
     // Health check ask, so the three share one request.
-    let mut names = crate::inventory::foreign_packages().map(|f| f.to_vec()).unwrap_or_default();
+    let mut names = crate::inventory::foreign_packages()
+        .map(|f| f.to_vec())
+        .unwrap_or_default();
     if !names.iter().any(|n| n == pkg) {
         names = vec![pkg.to_string()];
     }
@@ -192,11 +212,16 @@ pub(super) fn note_release(info: &mut Info, fetch: bool) {
 /// the version running.
 pub(super) fn mention_release(info: &mut Info, tag: &str) {
     let newer = tag.trim().trim_start_matches('v');
-    if newer.is_empty() || crate::security::vercmp(newer, &info.version) != std::cmp::Ordering::Greater {
+    if newer.is_empty()
+        || crate::security::vercmp(newer, &info.version) != std::cmp::Ordering::Greater
+    {
         return;
     }
     info.latest = newer.to_string();
-    info.note = format!("Almanac {newer} is out (this is {}). {}", info.version, info.note);
+    info.note = format!(
+        "Almanac {newer} is out (this is {}). {}",
+        info.version, info.note
+    );
 }
 
 /// `check` as the Python does it, against `root`. The app itself goes
@@ -216,12 +241,18 @@ pub(super) fn check_as(
     owner: impl FnOnce() -> Result<String, String>,
     fetch: bool,
 ) -> Result<Info, String> {
-    let mut info = Info { kind: kind.to_string(), version, ..Default::default() };
+    let mut info = Info {
+        kind: kind.to_string(),
+        version,
+        ..Default::default()
+    };
 
     if kind == PACKAGE {
         let pkg = owner()?;
         let origin = match package_origin(&pkg) {
-            PackageOrigin::Foreign { .. } => PackageOrigin::Foreign { aur: aur_listed(&pkg, fetch) },
+            PackageOrigin::Foreign { .. } => PackageOrigin::Foreign {
+                aur: aur_listed(&pkg, fetch),
+            },
             other => other,
         };
         info.note = package_note(&pkg, origin);
@@ -237,14 +268,19 @@ pub(super) fn check_as(
     info.remote = remote_url_in(root)?;
     info.dirty = dirty_in(root)?;
     if info.remote.is_empty() {
-        info.note = "This checkout has no 'origin' remote yet, so there is nowhere to update from.".to_string();
+        info.note = "This checkout has no 'origin' remote yet, so there is nowhere to update from."
+            .to_string();
         return Ok(info);
     }
 
     if fetch {
         let (code, out) = git_in(root, &["fetch", "--quiet", "origin"], 90)?;
         if code != 0 {
-            let last = if out.is_empty() { "" } else { py_splitlines(&out).last().copied().unwrap_or("") };
+            let last = if out.is_empty() {
+                ""
+            } else {
+                py_splitlines(&out).last().copied().unwrap_or("")
+            };
             info.note = format!("Could not reach the remote: {last}");
             return Ok(info);
         }
@@ -319,7 +355,8 @@ pub const BUILD_VERSION: &str = VERSION;
 
 /// What the note says, after the Python's "N commit(s) behind", in a
 /// checkout that would otherwise offer to pull.
-pub const REBUILD_NOTE: &str = "This copy is compiled, so pulling alone changes nothing that runs: \
+pub const REBUILD_NOTE: &str =
+    "This copy is compiled, so pulling alone changes nothing that runs: \
                                 pull, then rebuild it with cargo build --release.";
 
 /// The running binary, symlinks resolved.
@@ -330,7 +367,8 @@ pub fn running_exe() -> PathBuf {
 
 /// `check` for a compiled build: see above.
 pub fn compiled_check_in(root: &Path, exe: &Path, fetch: bool) -> Result<Info, String> {
-    let in_checkout = exe.starts_with(root) && git_in(root, &["rev-parse", "--is-inside-work-tree"], 60)?.0 == 0;
+    let in_checkout =
+        exe.starts_with(root) && git_in(root, &["rev-parse", "--is-inside-work-tree"], 60)?.0 == 0;
     let mut owner: Option<String> = None;
     let kind = if in_checkout {
         GIT
@@ -351,7 +389,11 @@ pub fn compiled_check_in(root: &Path, exe: &Path, fetch: bool) -> Result<Info, S
             Err(_) => PLAIN,
         }
     };
-    let version = if kind == GIT { version_in(root)? } else { BUILD_VERSION.to_string() };
+    let version = if kind == GIT {
+        version_in(root)?
+    } else {
+        BUILD_VERSION.to_string()
+    };
     let mut info = check_as(root, kind, version, || Ok(owner.unwrap_or_default()), fetch)?;
     if info.can_update {
         info.can_update = false;
@@ -368,7 +410,15 @@ pub fn update_steps() -> Vec<(String, Vec<String>)> {
 }
 
 pub fn update_steps_in(root: &Path) -> Vec<(String, Vec<String>)> {
-    let argv = ["git", "-C", &root.to_string_lossy(), "pull", "--ff-only", "--stat"].map(String::from);
+    let argv = [
+        "git",
+        "-C",
+        &root.to_string_lossy(),
+        "pull",
+        "--ff-only",
+        "--stat",
+    ]
+    .map(String::from);
     vec![("Updating Almanac".to_string(), argv.to_vec())]
 }
 
@@ -409,7 +459,15 @@ mod tests {
             sh_git(&work, &["commit", "-q", "-m", &format!("c{i}")]);
         }
         let clone = tmp.path().join("clone");
-        sh_git(tmp.path(), &["clone", "-q", work.to_str().unwrap(), clone.to_str().unwrap()]);
+        sh_git(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                work.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
         sh_git(&clone, &["reset", "-q", "--hard", "HEAD~1"]);
 
         let exe = clone.join("target/release/almanac");
@@ -436,9 +494,15 @@ mod tests {
     fn a_package_install_is_told_what_updates_it() {
         // pacman -Qmq: foreign prints the name; a repository package exits 1
         // silently; anything else is not taken as either.
-        assert_eq!(origin_from(0, "almanac\n", ""), PackageOrigin::Foreign { aur: None });
+        assert_eq!(
+            origin_from(0, "almanac\n", ""),
+            PackageOrigin::Foreign { aur: None }
+        );
         assert_eq!(origin_from(1, "", ""), PackageOrigin::Repo);
-        assert_eq!(origin_from(1, "", "error: package 'almanac' was not found\n"), PackageOrigin::Unknown);
+        assert_eq!(
+            origin_from(1, "", "error: package 'almanac' was not found\n"),
+            PackageOrigin::Unknown
+        );
         assert_eq!(origin_from(-1, "", ""), PackageOrigin::Unknown);
         assert_eq!(origin_from(0, "  \n", ""), PackageOrigin::Unknown);
         assert_eq!(package_origin(""), PackageOrigin::Unknown);
@@ -450,8 +514,15 @@ mod tests {
         assert!(aur.contains("AUR") && aur.contains("rest of the system"));
         for unlisted in [None, Some(false)] {
             let note = package_note("almanac", PackageOrigin::Foreign { aur: unlisted });
-            assert!(!note.contains("rest of the system") && !note.contains("AUR"), "{note}");
-            assert!(note.contains("nothing updates it") && note.contains(RELEASES_URL) && note.contains("sudo pacman -U"));
+            assert!(
+                !note.contains("rest of the system") && !note.contains("AUR"),
+                "{note}"
+            );
+            assert!(
+                note.contains("nothing updates it")
+                    && note.contains(RELEASES_URL)
+                    && note.contains("sudo pacman -U")
+            );
         }
         let unknown = package_note("almanac", PackageOrigin::Unknown);
         assert!(!unknown.contains("rest of the system") && unknown.contains(RELEASES_URL));
@@ -462,8 +533,17 @@ mod tests {
         assert_eq!(aur_lists(&ours, "almanac-git"), Some(false));
         let other = serde_json::json!({"results": [{"Name": "almanac", "URL": "https://example.org/almanac"}]});
         assert_eq!(aur_lists(&other, "almanac"), Some(false));
-        assert_eq!(aur_lists(&serde_json::json!({"results": []}), "almanac"), Some(false));
-        assert_eq!(aur_lists(&serde_json::json!({"type": "error", "error": "x"}), "almanac"), None);
+        assert_eq!(
+            aur_lists(&serde_json::json!({"results": []}), "almanac"),
+            Some(false)
+        );
+        assert_eq!(
+            aur_lists(
+                &serde_json::json!({"type": "error", "error": "x"}),
+                "almanac"
+            ),
+            None
+        );
         // Without fetching, nothing heard is nothing known.
         assert_eq!(aur_listed("almanac-never-asked", false), None);
     }
@@ -471,20 +551,39 @@ mod tests {
     #[test]
     fn a_package_install_hears_of_a_newer_release() {
         let note = package_note("almanac", PackageOrigin::Unknown);
-        assert!(note.contains("package manager") && note.contains(RELEASES_URL) && note.contains("sudo pacman -U"));
-        let info = |version: &str| Info { kind: PACKAGE.into(), version: version.into(), note: note.clone(), ..Default::default() };
+        assert!(
+            note.contains("package manager")
+                && note.contains(RELEASES_URL)
+                && note.contains("sudo pacman -U")
+        );
+        let info = |version: &str| Info {
+            kind: PACKAGE.into(),
+            version: version.into(),
+            note: note.clone(),
+            ..Default::default()
+        };
         let mut i = info("2.1.2");
         mention_release(&mut i, "v2.2.0");
         assert_eq!(i.latest, "2.2.0");
-        assert!(i.note.starts_with("Almanac 2.2.0 is out (this is 2.1.2). Installed as"));
+        assert!(i
+            .note
+            .starts_with("Almanac 2.2.0 is out (this is 2.1.2). Installed as"));
         assert!(!i.can_update, "pacman installs it, not Almanac");
         for (running, tag) in [("2.2.0", "v2.2.0"), ("2.3.0", "2.2.0"), ("2.1.2", "")] {
             let mut i = info(running);
             mention_release(&mut i, tag);
-            assert_eq!((i.latest.as_str(), i.note.as_str()), ("", note.as_str()), "{running} {tag}");
+            assert_eq!(
+                (i.latest.as_str(), i.note.as_str()),
+                ("", note.as_str()),
+                "{running} {tag}"
+            );
         }
         // only a package install is told
-        let mut git = Info { kind: GIT.into(), version: "2.1.2".into(), ..Default::default() };
+        let mut git = Info {
+            kind: GIT.into(),
+            version: "2.1.2".into(),
+            ..Default::default()
+        };
         note_release(&mut git, false);
         assert_eq!(git.note, "");
     }
@@ -500,16 +599,31 @@ mod tests {
             origin: Some(origin),
             ..Default::default()
         };
-        assert!(offers_download(&behind(PackageOrigin::Foreign { aur: None })));
-        assert!(offers_download(&behind(PackageOrigin::Foreign { aur: Some(false) })));
-        assert!(!offers_download(&behind(PackageOrigin::Foreign { aur: Some(true) })));
+        assert!(offers_download(&behind(PackageOrigin::Foreign {
+            aur: None
+        })));
+        assert!(offers_download(&behind(PackageOrigin::Foreign {
+            aur: Some(false)
+        })));
+        assert!(!offers_download(&behind(PackageOrigin::Foreign {
+            aur: Some(true)
+        })));
         assert!(!offers_download(&behind(PackageOrigin::Repo)));
         assert!(!offers_download(&behind(PackageOrigin::Unknown)));
-        let current = Info { latest: String::new(), ..behind(PackageOrigin::Foreign { aur: None }) };
+        let current = Info {
+            latest: String::new(),
+            ..behind(PackageOrigin::Foreign { aur: None })
+        };
         assert!(!offers_download(&current));
-        let unset = Info { origin: None, ..behind(PackageOrigin::Foreign { aur: None }) };
+        let unset = Info {
+            origin: None,
+            ..behind(PackageOrigin::Foreign { aur: None })
+        };
         assert!(!offers_download(&unset));
-        let git = Info { kind: GIT.into(), ..behind(PackageOrigin::Foreign { aur: None }) };
+        let git = Info {
+            kind: GIT.into(),
+            ..behind(PackageOrigin::Foreign { aur: None })
+        };
         assert!(!offers_download(&git));
         // The origin rides along with the note, and never into the dict.
         let json = serde_json::to_value(behind(PackageOrigin::Repo)).unwrap();

@@ -11,7 +11,6 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 
-
 fn base(var: &str, default: &str) -> Result<PathBuf, String> {
     // var_os: Python reads the environment through surrogateescape, so a
     // value that is not UTF-8 is still used as the path it names.
@@ -28,7 +27,10 @@ fn base(var: &str, default: &str) -> Result<PathBuf, String> {
 /// components and a trailing slash, but POSIX keeps exactly two leading
 /// slashes as they are.
 fn py_path(value: &OsStr) -> PathBuf {
-    let p: PathBuf = Path::new(value).components().filter(|c| *c != Component::CurDir).collect();
+    let p: PathBuf = Path::new(value)
+        .components()
+        .filter(|c| *c != Component::CurDir)
+        .collect();
     let b = value.as_bytes();
     if b.starts_with(b"//") && !b.starts_with(b"///") {
         let mut out = b"/".to_vec();
@@ -197,7 +199,11 @@ const TERMINALS: &[(&str, &[&str])] = &[
 /// OsString because $TERMINAL is read as bytes (Python's surrogateescape):
 /// a terminal at a path that is not UTF-8 is still found and run.
 pub fn terminal_argv_os<S: AsRef<str>>(command: &[S]) -> Option<Vec<OsString>> {
-    terminal_argv_with(command, &|n| which(n), &std::env::var_os("TERMINAL").unwrap_or_default())
+    terminal_argv_with(
+        command,
+        &|n| which(n),
+        &std::env::var_os("TERMINAL").unwrap_or_default(),
+    )
 }
 
 /// [`terminal_argv_os`] as Strings, for callers that spawn with `&[String]`.
@@ -205,7 +211,11 @@ pub fn terminal_argv_os<S: AsRef<str>>(command: &[S]) -> Option<Vec<OsString>> {
 /// so starting it fails and the caller reports that; use `terminal_argv_os`
 /// to run it.
 pub fn terminal_argv<S: AsRef<str>>(command: &[S]) -> Option<Vec<String>> {
-    terminal_argv_os(command).map(|a| a.into_iter().map(|s| s.to_string_lossy().into_owned()).collect())
+    terminal_argv_os(command).map(|a| {
+        a.into_iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    })
 }
 
 /// `terminal_argv` with `shutil.which` and `$TERMINAL` passed in, so tests can
@@ -217,13 +227,20 @@ fn terminal_argv_with<S: AsRef<str>>(
 ) -> Option<Vec<OsString>> {
     let command = command.iter().map(|c| OsString::from(c.as_ref()));
     if which(OsStr::new("xdg-terminal-exec")).is_some() {
-        return Some(std::iter::once(OsString::from("xdg-terminal-exec")).chain(command).collect());
+        return Some(
+            std::iter::once(OsString::from("xdg-terminal-exec"))
+                .chain(command)
+                .collect(),
+        );
     }
     if !chosen.is_empty() && which(chosen).is_some() {
         // Path(chosen).name
         let name = Path::new(chosen).file_name().unwrap_or_default();
-        let flags: &[&str] =
-            TERMINALS.iter().find(|(t, _)| OsStr::new(t) == name).map(|(_, f)| *f).unwrap_or(&["-e"]);
+        let flags: &[&str] = TERMINALS
+            .iter()
+            .find(|(t, _)| OsStr::new(t) == name)
+            .map(|(_, f)| *f)
+            .unwrap_or(&["-e"]);
         let mut argv = vec![chosen.to_os_string()];
         argv.extend(flags.iter().map(OsString::from));
         argv.extend(command);
@@ -258,7 +275,6 @@ fn system_update_command_with(which: &dyn Fn(&str) -> Option<PathBuf>) -> String
     "sudo pacman -Syu".into()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,8 +282,13 @@ mod tests {
     fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
         // base() reads the environment; these tests are the only ones that
         // touch XDG_DATA_HOME / XDG_CONFIG_HOME, and run under one lock.
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var_os(k)))
+            .collect();
         for (k, v) in vars {
             std::env::set_var(k, v);
         }
@@ -287,10 +308,16 @@ mod tests {
 
     #[test]
     fn test_base_directories_follow_xdg() {
-        with_env(&[("XDG_DATA_HOME", "/srv/data"), ("XDG_CONFIG_HOME", "relative/ignored")], || {
-            assert_eq!(data_home(), PathBuf::from("/srv/data"));
-            assert_eq!(config_home(), home().unwrap().join(".config"));
-        });
+        with_env(
+            &[
+                ("XDG_DATA_HOME", "/srv/data"),
+                ("XDG_CONFIG_HOME", "relative/ignored"),
+            ],
+            || {
+                assert_eq!(data_home(), PathBuf::from("/srv/data"));
+                assert_eq!(config_home(), home().unwrap().join(".config"));
+            },
+        );
     }
 
     #[test]
@@ -305,7 +332,11 @@ mod tests {
     fn test_the_desktops_terminal_launcher_wins() {
         let which = |n: &OsStr| Some(Path::new("/usr/bin").join(n));
         assert_eq!(
-            terminal_argv_with(&["true"], &which, &std::env::var_os("TERMINAL").unwrap_or_default()),
+            terminal_argv_with(
+                &["true"],
+                &which,
+                &std::env::var_os("TERMINAL").unwrap_or_default()
+            ),
             Some(os(&["xdg-terminal-exec", "true"]))
         );
     }
@@ -313,7 +344,10 @@ mod tests {
     #[test]
     fn test_each_terminal_gets_its_own_flags() {
         let which = |n: &OsStr| (n == "gnome-terminal").then(|| PathBuf::from(n));
-        assert_eq!(terminal_argv_with(&["true"], &which, OsStr::new("")), Some(os(&["gnome-terminal", "--wait", "--", "true"])));
+        assert_eq!(
+            terminal_argv_with(&["true"], &which, OsStr::new("")),
+            Some(os(&["gnome-terminal", "--wait", "--", "true"]))
+        );
     }
 
     #[test]

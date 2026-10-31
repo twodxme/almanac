@@ -113,9 +113,8 @@ fn end_b() -> String {
 
 static FENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?ms)^```[^\n]*\n(.*?)^```").unwrap());
-static PKG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&py(r"^(?:sudo\s+)?(?:pacman|yay|paru)\s+-S\w*\s+(.+)$")).unwrap()
-});
+static PKG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&py(r"^(?:sudo\s+)?(?:pacman|yay|paru)\s+-S\w*\s+(.+)$")).unwrap());
 static PKG_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9@][a-z0-9@._+-]*$").unwrap());
 // Commands worth running for the user, by the tool they start with: the
@@ -140,7 +139,10 @@ const TOOLS: &[(&str, &str)] = &[
     ("python3?", "python3 x.py"),
     ("gcc", "gcc -o x x.c"),
     ("cc", "cc -o x x.c"),
-    (r"systemctl\s+--user", "systemctl --user enable --now x.service"),
+    (
+        r"systemctl\s+--user",
+        "systemctl --user enable --now x.service",
+    ),
     (r"bash\s+\S+\.sh", "bash x.sh"),
     (r"sh\s+\S+\.sh", "sh x.sh"),
 ];
@@ -170,14 +172,20 @@ static NEVER: LazyLock<Regex> = LazyLock::new(|| {
 static BY_HAND: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     let bounded = |body: &str| Regex::new(&format!("({}){}", py_ci(body), end_b())).unwrap();
     vec![
-        (bounded(concat!(
-            r"(api[ _-]?key|access token|secret|password|log ?in|sign ?in|",
-            r"credential|oauth)"
-        )), "Credentials or a sign-in"),
-        (bounded(concat!(
-            r"(keybind|bindings?\.(conf|lua)|hyprland\.(conf|lua)|",
-            r"config\.(toml|json|ya?ml))"
-        )), "Configuration you edit"),
+        (
+            bounded(concat!(
+                r"(api[ _-]?key|access token|secret|password|log ?in|sign ?in|",
+                r"credential|oauth)"
+            )),
+            "Credentials or a sign-in",
+        ),
+        (
+            bounded(concat!(
+                r"(keybind|bindings?\.(conf|lua)|hyprland\.(conf|lua)|",
+                r"config\.(toml|json|ya?ml))"
+            )),
+            "Configuration you edit",
+        ),
     ]
 });
 static HEADING: LazyLock<Regex> =
@@ -226,9 +234,15 @@ fn by_hand_starts(pattern: &Regex, text: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut pos = 0;
     while pos <= text.len() {
-        let Some(c) = pattern.captures_at(text, pos) else { break };
+        let Some(c) = pattern.captures_at(text, pos) else {
+            break;
+        };
         let Some(m) = c.get(1) else { break };
-        if text[..m.start()].chars().next_back().is_some_and(is_py_word) {
+        if text[..m.start()]
+            .chars()
+            .next_back()
+            .is_some_and(is_py_word)
+        {
             pos = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
             continue;
         }
@@ -298,12 +312,19 @@ mod ordered_map {
         s.collect_map(v.iter().map(|(k, x)| (super::esc(k), x)))
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(OsString, String)>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<(OsString, String)>, D::Error> {
         // serde_json is built with `preserve_order`, so the Map keeps the
         // order the object was written in.
         let m = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
         Ok(m.into_iter()
-            .map(|(k, v)| (OsString::from(k), v.as_str().unwrap_or_default().to_string()))
+            .map(|(k, v)| {
+                (
+                    OsString::from(k),
+                    v.as_str().unwrap_or_default().to_string(),
+                )
+            })
             .collect())
     }
 }
@@ -352,8 +373,15 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     while let Some((i, c)) = it.next() {
         let sep = matches!(
             c,
-            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}'
-                | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\u{0b}'
+                | '\u{0c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if !sep {
             continue;
@@ -393,9 +421,16 @@ fn py_path_str(p: &Path) -> String {
     } else {
         ""
     };
-    let parts: Vec<&str> = s.split('/').filter(|x| !x.is_empty() && *x != ".").collect();
+    let parts: Vec<&str> = s
+        .split('/')
+        .filter(|x| !x.is_empty() && *x != ".")
+        .collect();
     let joined = format!("{root}{}", parts.join("/"));
-    if joined.is_empty() { ".".to_string() } else { joined }
+    if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
 }
 
 /// `Path.resolve()` (non-strict): `os.path.realpath` as Python 3.14 has it.
@@ -414,7 +449,11 @@ fn resolve(p: &Path) -> PathBuf {
     }
     let filename = p.as_os_str().as_bytes();
     // The stack of unresolved path parts, reversed.
-    let mut rest: Vec<Part> = filename.split(|&b| b == b'/').rev().map(|x| Part::Name(x.to_vec())).collect();
+    let mut rest: Vec<Part> = filename
+        .split(|&b| b == b'/')
+        .rev()
+        .map(|x| Part::Name(x.to_vec()))
+        .collect();
     // The resolved path, absolute throughout.
     let mut path: Vec<u8> = if filename.starts_with(b"/") {
         b"/".to_vec()
@@ -480,7 +519,12 @@ fn resolve(p: &Path) -> PathBuf {
         }
         seen.insert(newpath.clone(), None);
         rest.push(Part::Done(newpath));
-        rest.extend(target.split(|&b| b == b'/').rev().map(|x| Part::Name(x.to_vec())));
+        rest.extend(
+            target
+                .split(|&b| b == b'/')
+                .rev()
+                .map(|x| Part::Name(x.to_vec())),
+        );
     }
     PathBuf::from(std::ffi::OsString::from_vec(path))
 }
@@ -592,7 +636,8 @@ struct Word {
     home: Option<usize>,
 }
 
-static ASSIGN_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[A-Za-z_][A-Za-z0-9_]*=\z").unwrap());
+static ASSIGN_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\A[A-Za-z_][A-Za-z0-9_]*=\z").unwrap());
 
 /// The words of one step (a line, or one side of its `&&`) when bash would
 /// read it as nothing but plain words -- the words `shlex_split` gives, which
@@ -644,7 +689,16 @@ fn literal_words(part: &str) -> Option<Vec<Word>> {
                     }
                 }
                 '\'' | '"' => {
-                    cur.get_or_insert_with(|| (Word { text: String::new(), home: None }, false)).1 = true;
+                    cur.get_or_insert_with(|| {
+                        (
+                            Word {
+                                text: String::new(),
+                                home: None,
+                            },
+                            false,
+                        )
+                    })
+                    .1 = true;
                     state = if c == '\'' { Q::Single } else { Q::Double };
                 }
                 '~' => {
@@ -658,9 +712,21 @@ fn literal_words(part: &str) -> Option<Vec<Word>> {
                     w.home = Some(w.text.len());
                     w.text.push('~');
                 }
-                '$' | '`' | '*' | '?' | '[' | ']' | '{' | '}' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '!'
-                | '#' | '\\' => return None,
-                _ => cur.get_or_insert_with(|| (Word { text: String::new(), home: None }, false)).0.text.push(c),
+                '$' | '`' | '*' | '?' | '[' | ']' | '{' | '}' | ';' | '|' | '&' | '<' | '>'
+                | '(' | ')' | '!' | '#' | '\\' => return None,
+                _ => cur
+                    .get_or_insert_with(|| {
+                        (
+                            Word {
+                                text: String::new(),
+                                home: None,
+                            },
+                            false,
+                        )
+                    })
+                    .0
+                    .text
+                    .push(c),
             },
         }
     }
@@ -670,7 +736,8 @@ fn literal_words(part: &str) -> Option<Vec<Word>> {
     words.extend(cur.map(|(w, _)| w));
     // Every check reads the line through shlex_split: the two must agree.
     let split = shlex_split(part).ok()?;
-    (split.len() == words.len() && split.iter().zip(&words).all(|(s, w)| *s == w.text)).then_some(words)
+    (split.len() == words.len() && split.iter().zip(&words).all(|(s, w)| *s == w.text))
+        .then_some(words)
 }
 
 /// A step's words, quoted for bash so that it runs exactly them: each in
@@ -723,7 +790,10 @@ fn _sections(text: &str) -> Vec<(usize, Vec<String>)> {
         path.push((level, m[2].to_string()));
         // Byte offsets, not Python's character offsets: they are only ever
         // compared with other offsets into the same text.
-        out.push((m.get(0).map_or(0, |x| x.start()), path.iter().map(|(_, h)| h.clone()).collect()));
+        out.push((
+            m.get(0).map_or(0, |x| x.start()),
+            path.iter().map(|(_, h)| h.clone()).collect(),
+        ));
     }
     out
 }
@@ -775,8 +845,8 @@ fn step_kind(part: &str) -> Option<Kind> {
         "systemctl" if !service_line(args) => None,
         p if p.contains('/') => Some(Kind::Script),
         "bash" | "sh" | "zsh" | "dash" => Some(Kind::Script),
-        "make" | "cmake" | "meson" | "ninja" | "cargo" | "go" | "npm" | "pnpm" | "yarn" | "bun" | "uv" | "pip"
-        | "pipx" | "just" | "gcc" | "cc" => Some(Kind::Build),
+        "make" | "cmake" | "meson" | "ninja" | "cargo" | "go" | "npm" | "pnpm" | "yarn" | "bun"
+        | "uv" | "pip" | "pipx" | "just" | "gcc" | "cc" => Some(Kind::Build),
         p if is_python(p) => Some(Kind::Build),
         "systemctl" => Some(Kind::Service),
         _ => None,
@@ -788,8 +858,10 @@ fn step_kind(part: &str) -> Option<Kind> {
 /// `pypy@3.10`, blank lines and `#` comments. A path or any other word (a
 /// folder of the plugin's with a bin/python in it) is not.
 fn python_versions_only(body: &str, plugin_dir: &Path) -> bool {
-    let request =
-        regex::Regex::new(r"^(?:(?:cpython|pypy|graalpy|pyodide|python)@?)?[0-9]+(?:\.[0-9]+){0,2}[a-z0-9+]*$").expect("constant regex");
+    let request = regex::Regex::new(
+        r"^(?:(?:cpython|pypy|graalpy|pyodide|python)@?)?[0-9]+(?:\.[0-9]+){0,2}[a-z0-9+]*$",
+    )
+    .expect("constant regex");
     // uv reads a request that names something in the folder as that path
     // (`cpython-3.12`, `py3`, `d3` all ran a folder's bin/python), so one
     // that does is refused however much it looks like a version.
@@ -806,16 +878,28 @@ fn python_versions_only(body: &str, plugin_dir: &Path) -> bool {
 /// `--root=` or `-H` points it at another tree or machine -- so it is not
 /// offered: being free of a `/` was not enough.
 fn service_line(args: &[String]) -> bool {
-    const VERBS: &[&str] = &["enable", "disable", "start", "stop", "restart", "daemon-reload"];
+    const VERBS: &[&str] = &[
+        "enable",
+        "disable",
+        "start",
+        "stop",
+        "restart",
+        "daemon-reload",
+    ];
     let (opts, words): (Vec<&String>, Vec<&String>) = args.iter().partition(|a| a.starts_with('-'));
-    if !opts.iter().all(|o| *o == "--user" || *o == "--now") || !opts.iter().any(|o| *o == "--user") {
+    if !opts.iter().all(|o| *o == "--user" || *o == "--now") || !opts.iter().any(|o| *o == "--user")
+    {
         return false;
     }
     match words.split_first() {
-        Some((verb, units)) if *verb == "daemon-reload" => units.is_empty() && !opts.iter().any(|o| *o == "--now"),
+        Some((verb, units)) if *verb == "daemon-reload" => {
+            units.is_empty() && !opts.iter().any(|o| *o == "--now")
+        }
         // A quoted glob is plain words, and `stop '*'` matches every unit.
         Some((verb, units)) => {
-            VERBS.contains(&verb.as_str()) && !units.is_empty() && units.iter().all(|u| !u.contains(['*', '?', '[', ']']))
+            VERBS.contains(&verb.as_str())
+                && !units.is_empty()
+                && units.iter().all(|u| !u.contains(['*', '?', '[', ']']))
         }
         None => false,
     }
@@ -824,7 +908,10 @@ fn service_line(args: &[String]) -> bool {
 /// Python's options that take no value, which may come before `-m` or the
 /// script.
 fn py_flag(a: &str) -> bool {
-    matches!(a, "-u" | "-B" | "-E" | "-I" | "-s" | "-S" | "-O" | "-OO" | "-q" | "-b" | "-bb")
+    matches!(
+        a,
+        "-u" | "-B" | "-E" | "-I" | "-s" | "-S" | "-O" | "-OO" | "-q" | "-b" | "-bb"
+    )
 }
 
 /// `python3 [flags] -m module args...`: the module and its arguments.
@@ -853,7 +940,11 @@ fn python_module_files(module: &str) -> Vec<String> {
         out.push(format!("{}/__init__.py", parts[..i].join("/")));
     }
     let m = parts.join("/");
-    out.extend([format!("{m}.py"), format!("{m}/__init__.py"), format!("{m}/__main__.py")]);
+    out.extend([
+        format!("{m}.py"),
+        format!("{m}/__init__.py"),
+        format!("{m}/__main__.py"),
+    ]);
     out
 }
 
@@ -861,8 +952,9 @@ fn python_module_files(module: &str) -> Vec<String> {
 /// rather than one of bun's own commands or a package.json script.
 fn bun_file(args: &[String], plugin_dir: &Path) -> Option<String> {
     const OWN: &[&str] = &[
-        "install", "i", "add", "a", "remove", "rm", "update", "upgrade", "x", "build", "test", "init",
-        "create", "link", "unlink", "pm", "outdated", "publish", "patch", "exec", "repl", "info", "audit", "why",
+        "install", "i", "add", "a", "remove", "rm", "update", "upgrade", "x", "build", "test",
+        "init", "create", "link", "unlink", "pm", "outdated", "publish", "patch", "exec", "repl",
+        "info", "audit", "why",
     ];
     let mut words = args.iter().filter(|a| !a.starts_with('-'));
     let mut w = words.next()?;
@@ -872,7 +964,8 @@ fn bun_file(args: &[String], plugin_dir: &Path) -> Option<String> {
         return None;
     }
     const EXT: &[&str] = &[".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".mts", ".cts"];
-    (w.contains('/') || EXT.iter().any(|e| w.ends_with(e)) || plugin_dir.join(w).is_file()).then(|| w.clone())
+    (w.contains('/') || EXT.iter().any(|e| w.ends_with(e)) || plugin_dir.join(w).is_file())
+        .then(|| w.clone())
 }
 
 /// The files uv reads the Python to use from. Shown and checked like any
@@ -894,7 +987,10 @@ const JUSTFILES: [&str; 2] = ["justfile", ".justfile"];
 /// (`./tools/configure`) used to excuse ./Makefile and ./build.ninja, so a
 /// file nothing shown writes could appear unchecked before `make`.
 fn generated_by(part: &str, files: &[String]) -> Vec<String> {
-    if files.iter().any(|f| py_path_str(Path::new(f)) == "configure") {
+    if files
+        .iter()
+        .any(|f| py_path_str(Path::new(f)) == "configure")
+    {
         return vec!["Makefile".to_string()];
     }
     let dir = (|| {
@@ -909,7 +1005,10 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
                 }
             }
             "cmake" => {
-                if args.iter().any(|a| a == "--build" || a == "--install" || a == "-E") {
+                if args
+                    .iter()
+                    .any(|a| a == "--build" || a == "--install" || a == "-E")
+                {
                     return None;
                 }
                 let mut b = None;
@@ -925,8 +1024,12 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
             _ => None,
         }
     })();
-    dir.map(|d| ["Makefile", "build.ninja"].map(|n| py_path_str(Path::new(&under(&d, n)))).to_vec())
-        .unwrap_or_default()
+    dir.map(|d| {
+        ["Makefile", "build.ninja"]
+            .map(|n| py_path_str(Path::new(&under(&d, n))))
+            .to_vec()
+    })
+    .unwrap_or_default()
 }
 
 /// Whether a file run by path names the system's interpreter, if it names
@@ -937,12 +1040,22 @@ fn generated_by(part: &str, files: &[String]) -> Vec<String> {
 /// env the rest of the line as one word, so `env python3 ./x` names a
 /// relative path too, and `env -S` splits it again: one word only.
 fn shebang_is_systems(file: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(file) else { return true };
-    let Some(line) = bytes.strip_prefix(b"#!") else { return true };
+    let Ok(bytes) = std::fs::read(file) else {
+        return true;
+    };
+    let Some(line) = bytes.strip_prefix(b"#!") else {
+        return true;
+    };
     let line = String::from_utf8_lossy(line.split(|&b| b == b'\n').next().unwrap_or_default());
     let mut words = line.split_whitespace();
-    let Some(interp) = words.next() else { return false };
-    if !interp.starts_with('/') || interp.split('/').any(|c| c == "..") || interp.starts_with("/proc/") || interp.starts_with("/dev/") {
+    let Some(interp) = words.next() else {
+        return false;
+    };
+    if !interp.starts_with('/')
+        || interp.split('/').any(|c| c == "..")
+        || interp.starts_with("/proc/")
+        || interp.starts_with("/dev/")
+    {
         return false;
     }
     if interp.rsplit('/').next() == Some("env") {
@@ -962,7 +1075,9 @@ fn shebang_is_systems(file: &Path) -> bool {
 /// not offered at all.
 fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let words = shlex_split(part).map_err(|_| ())?;
-    let Some((prog, args)) = program(&words) else { return Ok(Vec::new()) };
+    let Some((prog, args)) = program(&words) else {
+        return Ok(Vec::new());
+    };
     if prog.contains('/') {
         if !shebang_is_systems(&plugin_dir.join(prog)) {
             return Err(());
@@ -994,7 +1109,10 @@ fn executed_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             return Ok(Vec::new());
         }
         let known = if shell {
-            matches!(a.as_str(), "-e" | "-x" | "-u" | "-v" | "-l" | "--login" | "--norc" | "--noprofile")
+            matches!(
+                a.as_str(),
+                "-e" | "-x" | "-u" | "-v" | "-l" | "--login" | "--norc" | "--noprofile"
+            )
         } else {
             py_flag(a)
         };
@@ -1026,7 +1144,10 @@ fn under(dir: &str, name: &str) -> String {
 /// itself, and pyproject.toml / setup.cfg, which name the build backend
 /// (possibly one of the project's own) and what it runs.
 fn python_project(dir: &str) -> Vec<String> {
-    ["setup.py", "pyproject.toml", "setup.cfg"].iter().map(|n| under(dir, n)).collect()
+    ["setup.py", "pyproject.toml", "setup.cfg"]
+        .iter()
+        .map(|n| under(dir, n))
+        .collect()
 }
 
 /// The words of a command line that are not options, with `on(option,
@@ -1064,7 +1185,11 @@ fn scan_args<'a>(
         for (i, c) in cluster.char_indices() {
             let rest = &cluster[i + c.len_utf8()..];
             if takes.contains(c) {
-                let value = if rest.is_empty() { it.next().ok_or(())?.as_str() } else { rest };
+                let value = if rest.is_empty() {
+                    it.next().ok_or(())?.as_str()
+                } else {
+                    rest
+                };
                 on(c.encode_utf8(&mut [0; 4]), value);
                 break;
             }
@@ -1095,17 +1220,39 @@ fn pip_files(args: &[String], plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let mut local: Vec<String> = Vec::new();
     let mut lists: Vec<String> = Vec::new();
     let long = [
-        "editable", "requirement", "constraint", "index-url", "extra-index-url", "find-links",
-        "target", "prefix", "root", "src", "python", "platform", "python-version",
-        "implementation", "abi", "config-settings", "global-option", "pip-args", "suffix", "spec",
+        "editable",
+        "requirement",
+        "constraint",
+        "index-url",
+        "extra-index-url",
+        "find-links",
+        "target",
+        "prefix",
+        "root",
+        "src",
+        "python",
+        "platform",
+        "python-version",
+        "implementation",
+        "abi",
+        "config-settings",
+        "global-option",
+        "pip-args",
+        "suffix",
+        "spec",
     ];
     let words = scan_args(args, "ercitf", "", &long, |opt, v| match opt {
         "e" | "editable" => local.extend(local_spec(v, plugin_dir)),
         "r" | "requirement" | "c" | "constraint" => lists.push(v.to_string()),
         _ => {}
     })?;
-    let Some((sub, specs)) = words.split_first() else { return Ok(Vec::new()) };
-    if !matches!(*sub, "install" | "wheel" | "download" | "run" | "inject" | "sync") {
+    let Some((sub, specs)) = words.split_first() else {
+        return Ok(Vec::new());
+    };
+    if !matches!(
+        *sub,
+        "install" | "wheel" | "download" | "run" | "inject" | "sync"
+    ) {
         return Ok(Vec::new());
     }
     local.extend(specs.iter().filter_map(|s| local_spec(s, plugin_dir)));
@@ -1128,21 +1275,55 @@ fn pip_files(args: &[String], plugin_dir: &Path) -> Result<Vec<String>, ()> {
 /// keep up with. An allowlist, for the same reason the commands are one: npm
 /// also takes any abbreviation of its commands (`exe` is exec, `innit` init).
 const PACKAGE_FLAGS: &[&str] = &[
-    "-q", "--quiet", "-v", "--verbose", "--frozen", "--locked", "--no-dev", "--all-extras", "--no-cache", "-U",
-    "--upgrade", "--offline", "--production", "--omit=dev", "--no-audit", "--no-fund", "--silent",
-    "--legacy-peer-deps", "--ignore-scripts", "--immutable", "--frozen-lockfile", "--force", "--user", "--no-deps",
-    "--no-build-isolation", "--break-system-packages", "-g", "--global",
+    "-q",
+    "--quiet",
+    "-v",
+    "--verbose",
+    "--frozen",
+    "--locked",
+    "--no-dev",
+    "--all-extras",
+    "--no-cache",
+    "-U",
+    "--upgrade",
+    "--offline",
+    "--production",
+    "--omit=dev",
+    "--no-audit",
+    "--no-fund",
+    "--silent",
+    "--legacy-peer-deps",
+    "--ignore-scripts",
+    "--immutable",
+    "--frozen-lockfile",
+    "--force",
+    "--user",
+    "--no-deps",
+    "--no-build-isolation",
+    "--break-system-packages",
+    "-g",
+    "--global",
 ];
 
 /// A path inside the plugin's folder, as `-r`, `-c` and `-e` must name: not
 /// a URL (`-r https://…` fetches a list nothing here shows), not absolute,
 /// and not climbing out with `..`.
 fn plugin_relative(v: &str) -> bool {
-    !v.is_empty() && !v.starts_with(['-', '/', '~']) && !v.contains(':') && !v.split('/').any(|c| c == "..")
+    !v.is_empty()
+        && !v.starts_with(['-', '/', '~'])
+        && !v.contains(':')
+        && !v.split('/').any(|c| c == "..")
 }
 
 /// pip's options whose value is a file `pip_files` shows.
-const PIP_SHOWN_VALUES: &[&str] = &["-r", "--requirement", "-e", "--editable", "-c", "--constraint"];
+const PIP_SHOWN_VALUES: &[&str] = &[
+    "-r",
+    "--requirement",
+    "-e",
+    "--editable",
+    "-c",
+    "--constraint",
+];
 
 /// A package name, not a path or a URL: `left-pad`, `@scope/pkg`,
 /// `pkg@1.2`, `requests`, `black==24.1`, `rich[jupyter]`. Not anything the
@@ -1155,7 +1336,9 @@ fn package_name(word: &str, plugin_dir: &Path) -> bool {
         Regex::new(r"^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?(?:(?:@|==|~=|!=)[A-Za-z0-9*+^~_-][A-Za-z0-9.*+^~_-]*)?$")
             .expect("constant regex")
     });
-    const ARCHIVES: &[&str] = &[".tgz", ".tar", ".gz", ".bz2", ".xz", ".zst", ".zip", ".whl", ".egg"];
+    const ARCHIVES: &[&str] = &[
+        ".tgz", ".tar", ".gz", ".bz2", ".xz", ".zst", ".zip", ".whl", ".egg",
+    ];
     let lower = word.to_ascii_lowercase();
     NAME.is_match(word)
         && !word.contains("..")
@@ -1184,7 +1367,10 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
             if !args.get(i).is_some_and(|v| plugin_relative(v)) {
                 return false;
             }
-        } else if python && a.split_once('=').is_some_and(|(k, v)| PIP_SHOWN_VALUES.contains(&k) && plugin_relative(v)) {
+        } else if python
+            && a.split_once('=')
+                .is_some_and(|(k, v)| PIP_SHOWN_VALUES.contains(&k) && plugin_relative(v))
+        {
         } else if a.starts_with('-') {
             return false;
         } else {
@@ -1200,7 +1386,11 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     };
     // In a Python spec `@` is a direct reference -- `foo@evil-dir` is
     // `foo @ evil-dir`, a folder uv builds -- so a name there has none.
-    let specs = |s: &[&str]| s.iter().all(|w| (package_name(w, plugin_dir) && !(python && w.contains('@'))) || (python && local(w)));
+    let specs = |s: &[&str]| {
+        s.iter().all(|w| {
+            (package_name(w, plugin_dir) && !(python && w.contains('@'))) || (python && local(w))
+        })
+    };
     let scripts = || package_script_names(plugin_dir);
     match (prog, words.as_slice()) {
         ("npm", ["install" | "i" | "ci" | "add" | "update", rest @ ..]) => specs(rest),
@@ -1208,7 +1398,10 @@ fn package_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         ("yarn", []) => true,
         ("yarn", ["install" | "add", rest @ ..]) => specs(rest),
         ("bun", ["install" | "i" | "add", rest @ ..]) => specs(rest),
-        ("npm" | "pnpm" | "yarn" | "bun", ["run" | "run-script", s]) => scripts().iter().any(|n| n == s) || (prog == "bun" && bun_file(args, plugin_dir).is_some()),
+        ("npm" | "pnpm" | "yarn" | "bun", ["run" | "run-script", s]) => {
+            scripts().iter().any(|n| n == s)
+                || (prog == "bun" && bun_file(args, plugin_dir).is_some())
+        }
         ("bun", [_]) => bun_file(args, plugin_dir).is_some(),
         ("pip", ["install", rest @ ..]) => specs(rest),
         ("pipx", ["install" | "upgrade" | "reinstall", rest @ ..]) => specs(rest),
@@ -1233,22 +1426,132 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     // Flags that take no value, flags whose value follows (as the next word
     // or after `=`), and patterns a whole word may match.
     let (flags, valued, patterns): (&[&str], &[&str], &str) = match prog {
-        "make" => (&["-k", "-s", "--silent", "-B", "--always-make", "-n", "--dry-run"], &["-C", "--directory", "-f", "--file", "--makefile", "-j", "--jobs"], r"^-j[0-9]*$"),
-        "ninja" => (&["-v", "--verbose", "-n"], &["-C", "-f", "-j", "-k", "-l"], r"^-j[0-9]+$"),
-        "meson" => (&["--wipe", "--reconfigure", "-v", "--verbose", "--no-rebuild"], &["-C", "--prefix", "--buildtype", "--libdir", "--bindir", "--destdir", "-j"], r"^-D[A-Za-z0-9_:.-]+=[^/]*$|^-j[0-9]+$"),
+        "make" => (
+            &[
+                "-k",
+                "-s",
+                "--silent",
+                "-B",
+                "--always-make",
+                "-n",
+                "--dry-run",
+            ],
+            &[
+                "-C",
+                "--directory",
+                "-f",
+                "--file",
+                "--makefile",
+                "-j",
+                "--jobs",
+            ],
+            r"^-j[0-9]*$",
+        ),
+        "ninja" => (
+            &["-v", "--verbose", "-n"],
+            &["-C", "-f", "-j", "-k", "-l"],
+            r"^-j[0-9]+$",
+        ),
+        "meson" => (
+            &["--wipe", "--reconfigure", "-v", "--verbose", "--no-rebuild"],
+            &[
+                "-C",
+                "--prefix",
+                "--buildtype",
+                "--libdir",
+                "--bindir",
+                "--destdir",
+                "-j",
+            ],
+            r"^-D[A-Za-z0-9_:.-]+=[^/]*$|^-j[0-9]+$",
+        ),
         "cmake" => (
-            &["--build", "--install", "--fresh", "--verbose", "-v", "--parallel"],
-            &["-S", "-B", "-H", "-G", "-A", "-T", "-C", "-P", "--config", "-j", "--target", "-t", "--preset", "--prefix", "--component"],
+            &[
+                "--build",
+                "--install",
+                "--fresh",
+                "--verbose",
+                "-v",
+                "--parallel",
+            ],
+            &[
+                "-S",
+                "-B",
+                "-H",
+                "-G",
+                "-A",
+                "-T",
+                "-C",
+                "-P",
+                "--config",
+                "-j",
+                "--target",
+                "-t",
+                "--preset",
+                "--prefix",
+                "--component",
+            ],
             r"^-D[A-Za-z0-9_]+(:[A-Z]+)?=[^/]*$|^-DCMAKE_(BUILD_TYPE|INSTALL_PREFIX)=.*$|^-j[0-9]+$",
         ),
         "cargo" => (
-            &["--release", "-r", "--locked", "--frozen", "--offline", "--all-features", "--no-default-features", "--force", "-f", "-q", "--quiet", "-v", "--verbose", "--workspace", "--all-targets", "--bins", "--"],
-            &["-j", "--jobs", "-p", "--package", "-F", "--features", "--bin", "--example", "--path", "--manifest-path", "--root", "--target", "--profile"],
+            &[
+                "--release",
+                "-r",
+                "--locked",
+                "--frozen",
+                "--offline",
+                "--all-features",
+                "--no-default-features",
+                "--force",
+                "-f",
+                "-q",
+                "--quiet",
+                "-v",
+                "--verbose",
+                "--workspace",
+                "--all-targets",
+                "--bins",
+                "--",
+            ],
+            &[
+                "-j",
+                "--jobs",
+                "-p",
+                "--package",
+                "-F",
+                "--features",
+                "--bin",
+                "--example",
+                "--path",
+                "--manifest-path",
+                "--root",
+                "--target",
+                "--profile",
+            ],
             r"^\+[A-Za-z0-9._-]+$|^-j[0-9]+$",
         ),
-        "go" => (&["-v", "-x", "-trimpath", "-race", "-buildvcs=false", "-mod=readonly", "-mod=vendor", "-mod=mod"], &["-o", "-tags", "-ldflags"], ""),
+        "go" => (
+            &[
+                "-v",
+                "-x",
+                "-trimpath",
+                "-race",
+                "-buildvcs=false",
+                "-mod=readonly",
+                "-mod=vendor",
+                "-mod=mod",
+            ],
+            &["-o", "-tags", "-ldflags"],
+            "",
+        ),
         "just" => (&["-q", "--quiet", "--yes"], &[], ""),
-        _ => (&["-c", "-g", "-s", "-pthread", "-shared", "-static", "-fPIC", "-fpic"], &["-o", "-I", "-L"], r"^-(O[0-3sz]?|W[a-z][a-z0-9-]*(=[a-z0-9]+)?|std=[a-z0-9+]+|l[A-Za-z0-9_+.-]+|[IL][A-Za-z0-9_./-]+|D[A-Za-z0-9_]+(=[A-Za-z0-9_.]*)?|march=[a-z0-9-]+|mtune=[a-z0-9-]+)$"),
+        _ => (
+            &[
+                "-c", "-g", "-s", "-pthread", "-shared", "-static", "-fPIC", "-fpic",
+            ],
+            &["-o", "-I", "-L"],
+            r"^-(O[0-3sz]?|W[a-z][a-z0-9-]*(=[a-z0-9]+)?|std=[a-z0-9+]+|l[A-Za-z0-9_+.-]+|[IL][A-Za-z0-9_./-]+|D[A-Za-z0-9_]+(=[A-Za-z0-9_.]*)?|march=[a-z0-9-]+|mtune=[a-z0-9-]+)$",
+        ),
     };
     // The options whose file or folder the arm for the tool shows; any other
     // value must not name something of the plugin's (`cargo --target
@@ -1275,8 +1578,15 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     // every folder the line names is a place it could be.
     let mut dirs = vec![String::from(".")];
     for (j, a) in args.iter().enumerate() {
-        if let Some(v) = shown.iter().find_map(|o| a.strip_prefix(o).map(|r| r.trim_start_matches('='))) {
-            let v = if v.is_empty() { args.get(j + 1).map_or("", String::as_str) } else { v };
+        if let Some(v) = shown
+            .iter()
+            .find_map(|o| a.strip_prefix(o).map(|r| r.trim_start_matches('=')))
+        {
+            let v = if v.is_empty() {
+                args.get(j + 1).map_or("", String::as_str)
+            } else {
+                v
+            };
             if !v.is_empty() && !v.starts_with('/') {
                 dirs.push(v.to_string());
             }
@@ -1285,13 +1595,19 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
     let names_file = |v: &str| {
         v.starts_with("./")
             || v.starts_with("../")
-            || (!v.is_empty() && !v.starts_with('/') && dirs.iter().any(|d| std::fs::symlink_metadata(plugin_dir.join(d).join(v)).is_ok()))
+            || (!v.is_empty()
+                && !v.starts_with('/')
+                && dirs
+                    .iter()
+                    .any(|d| std::fs::symlink_metadata(plugin_dir.join(d).join(v)).is_ok()))
     };
     // A build folder the plugin ships holds what cmake, meson and ninja
     // then run (a CMakeCache.txt naming a compiler, a generated Makefile,
     // meson's pickled state): the folder a build is pointed at must not be
     // there yet. An earlier step that makes it is shown like any other.
-    let build_dir = |d: &str| d != "." && !d.starts_with('/') && std::fs::symlink_metadata(plugin_dir.join(d)).is_ok();
+    let build_dir = |d: &str| {
+        d != "." && !d.starts_with('/') && std::fs::symlink_metadata(plugin_dir.join(d)).is_ok()
+    };
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     let dir_after = |opts: &[&str]| -> Vec<&str> {
         words
@@ -1300,20 +1616,37 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
             .filter_map(|(j, a)| {
                 opts.iter().find_map(|o| match a.strip_prefix(o) {
                     Some("") => words.get(j + 1).copied(),
-                    Some(r) if r.starts_with('=') || !o.starts_with("--") => Some(r.trim_start_matches('=')),
+                    Some(r) if r.starts_with('=') || !o.starts_with("--") => {
+                        Some(r.trim_start_matches('='))
+                    }
                     _ => None,
                 })
             })
             .collect()
     };
     match prog {
-        "cmake" if dir_after(&["-B", "--build", "--install"]).iter().any(|d| build_dir(d)) => return false,
+        "cmake"
+            if dir_after(&["-B", "--build", "--install"])
+                .iter()
+                .any(|d| build_dir(d)) =>
+        {
+            return false
+        }
         "meson" => {
             let setup_dir = match words.as_slice() {
-                ["setup", rest @ ..] => rest.iter().find(|w| !w.starts_with('-')).copied().into_iter().collect(),
+                ["setup", rest @ ..] => rest
+                    .iter()
+                    .find(|w| !w.starts_with('-'))
+                    .copied()
+                    .into_iter()
+                    .collect(),
                 _ => Vec::new(),
             };
-            if dir_after(&["-C"]).iter().chain(&setup_dir).any(|d| build_dir(d)) {
+            if dir_after(&["-C"])
+                .iter()
+                .chain(&setup_dir)
+                .any(|d| build_dir(d))
+            {
                 return false;
             }
         }
@@ -1345,7 +1678,9 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
         if flags.contains(&a) || pattern.as_ref().is_some_and(|r| r.is_match(a)) {
             continue;
         }
-        let valued_ok = |k: &str, v: &str| !v.is_empty() && !ldflags_bad(k, v) && (shown.contains(&k) || !names_file(v));
+        let valued_ok = |k: &str, v: &str| {
+            !v.is_empty() && !ldflags_bad(k, v) && (shown.contains(&k) || !names_file(v))
+        };
         if let Some((k, v)) = a.split_once('=').filter(|(k, _)| k.starts_with('-')) {
             if valued.contains(&k) && valued_ok(k, v) {
                 continue;
@@ -1376,13 +1711,21 @@ fn build_line(prog: &str, args: &[String], plugin_dir: &Path) -> bool {
 /// go's -ldflags other than stripping and -X values: `-extld=./x` names the
 /// linker to run.
 fn ldflags_bad(opt: &str, v: &str) -> bool {
-    opt == "-ldflags" && !v.split_whitespace().all(|f| matches!(f, "-s" | "-w") || f.starts_with("-X"))
+    opt == "-ldflags"
+        && !v
+            .split_whitespace()
+            .all(|f| matches!(f, "-s" | "-w") || f.starts_with("-X"))
 }
 
 /// The names of the scripts the plugin's package.json defines (`package_scripts` shows them).
 fn package_script_names(plugin_dir: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(plugin_dir.join("package.json")) else { return Vec::new() };
-    let Ok(serde_json::Value::Object(top)) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(plugin_dir.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(serde_json::Value::Object(top)) = serde_json::from_str::<serde_json::Value>(&text)
+    else {
+        return Vec::new();
+    };
     match top.get("scripts") {
         Some(serde_json::Value::Object(s)) => s.keys().cloned().collect(),
         _ => Vec::new(),
@@ -1402,10 +1745,14 @@ fn package_script_names(plugin_dir: &Path) -> Vec<String> {
 /// with no arm here: then the step is not offered.
 fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
     let words = shlex_split(part).map_err(|_| ())?;
-    let Some((mut prog, mut args)) = program(&words) else { return Ok(Vec::new()) };
+    let Some((mut prog, mut args)) = program(&words) else {
+        return Ok(Vec::new());
+    };
     let mut out: Vec<String> = Vec::new();
     if is_python(prog) {
-        let Some((module, rest)) = py_module(args) else { return Ok(Vec::new()) };
+        let Some((module, rest)) = py_module(args) else {
+            return Ok(Vec::new());
+        };
         out.extend(python_module_files(module));
         match module {
             "pip" => {
@@ -1419,30 +1766,55 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             _ => return Ok(out),
         }
     }
-    if matches!(prog, "npm" | "pnpm" | "yarn" | "bun" | "pip" | "pipx" | "uv") && !package_line(prog, args, plugin_dir) {
+    if matches!(
+        prog,
+        "npm" | "pnpm" | "yarn" | "bun" | "pip" | "pipx" | "uv"
+    ) && !package_line(prog, args, plugin_dir)
+    {
         return Err(());
     }
-    if matches!(prog, "make" | "ninja" | "meson" | "cmake" | "cargo" | "go" | "just" | "gcc" | "cc") && !build_line(prog, args, plugin_dir) {
+    if matches!(
+        prog,
+        "make" | "ninja" | "meson" | "cmake" | "cargo" | "go" | "just" | "gcc" | "cc"
+    ) && !build_line(prog, args, plugin_dir)
+    {
         return Err(());
     }
     // Options that point a tool at another folder or file than the one
     // whose build files are shown.
     let elsewhere = |names: &[&str]| {
-        args.iter().any(|a| names.iter().any(|n| a == n || (n.starts_with("--") && a.starts_with(&format!("{n}=")))))
+        args.iter().any(|a| {
+            names
+                .iter()
+                .any(|n| a == n || (n.starts_with("--") && a.starts_with(&format!("{n}="))))
+        })
     };
     match prog {
         "make" => {
             // GNU make reads GNUmakefile, makefile or Makefile (or the -f
             // ones), after changing into -C's folder.
             let (mut dir, mut files) = (String::from("."), Vec::new());
-            let long = ["directory", "file", "makefile", "include-dir", "old-file", "assume-old", "what-if", "new-file", "assume-new", "eval"];
+            let long = [
+                "directory",
+                "file",
+                "makefile",
+                "include-dir",
+                "old-file",
+                "assume-old",
+                "what-if",
+                "new-file",
+                "assume-new",
+                "eval",
+            ];
             scan_args(args, "CfIoW", "jlO", &long, |opt, v| match opt {
                 "C" | "directory" => dir = under(&dir, v),
                 "f" | "file" | "makefile" => files.push(v.to_string()),
                 _ => {}
             })?;
             if files.is_empty() {
-                files = ["GNUmakefile", "makefile", "Makefile"].map(String::from).to_vec();
+                files = ["GNUmakefile", "makefile", "Makefile"]
+                    .map(String::from)
+                    .to_vec();
             }
             // make remakes a makefile that is missing from a source its
             // built-in rules know (`Makefile.sh` is copied into place, RCS
@@ -1463,9 +1835,14 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             })?;
             out.push(under(&dir, &file));
         }
-        "meson" => out.extend(["meson.build", "meson.options", "meson_options.txt"].map(String::from)),
+        "meson" => {
+            out.extend(["meson.build", "meson.options", "meson_options.txt"].map(String::from))
+        }
         "cmake" => {
-            if args.iter().any(|a| a == "--build" || a == "--install" || a == "-E") {
+            if args
+                .iter()
+                .any(|a| a == "--build" || a == "--install" || a == "-E")
+            {
                 return Ok(Vec::new());
             }
             let mut src: Option<String> = None;
@@ -1475,10 +1852,19 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
                 "C" | "P" => out.push(v.to_string()),
                 _ => {}
             })?;
-            let src = src.or_else(|| words.first().map(|s| s.to_string())).unwrap_or_else(|| ".".into());
+            let src = src
+                .or_else(|| words.first().map(|s| s.to_string()))
+                .unwrap_or_else(|| ".".into());
             // Presets can set the compiler, or any cache variable, to a
             // program of the plugin's.
-            out.extend(["CMakeLists.txt", "CMakePresets.json", "CMakeUserPresets.json"].map(|n| under(&src, n)));
+            out.extend(
+                [
+                    "CMakeLists.txt",
+                    "CMakePresets.json",
+                    "CMakeUserPresets.json",
+                ]
+                .map(|n| under(&src, n)),
+            );
             // Built in place (no -B), the cache it reads is the folder's own.
             if !args.iter().any(|a| a.starts_with("-B")) {
                 out.push("CMakeCache.txt".into());
@@ -1491,25 +1877,54 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // .cargo/config.toml can name a rustc wrapper or a runner to run,
             // and rust-toolchain.toml a toolchain by path, whose cargo runs.
             let project = |dir: &str| {
-                ["Cargo.toml", "build.rs", ".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain"]
-                    .map(|n| under(dir, n))
+                [
+                    "Cargo.toml",
+                    "build.rs",
+                    ".cargo/config.toml",
+                    ".cargo/config",
+                    "rust-toolchain.toml",
+                    "rust-toolchain",
+                ]
+                .map(|n| under(dir, n))
             };
             out.extend(project("."));
             let mut dirs = Vec::new();
-            scan_args(args, "pjFZ", "", &["manifest-path", "path"], |opt, v| match opt {
-                "path" => dirs.push(v.to_string()),
-                _ => {
-                    let parent = Path::new(v).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-                    out.push(v.to_string());
-                    dirs.push(if parent.is_empty() { ".".into() } else { parent });
-                }
-            })?;
+            scan_args(
+                args,
+                "pjFZ",
+                "",
+                &["manifest-path", "path"],
+                |opt, v| match opt {
+                    "path" => dirs.push(v.to_string()),
+                    _ => {
+                        let parent = Path::new(v)
+                            .parent()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        out.push(v.to_string());
+                        dirs.push(if parent.is_empty() {
+                            ".".into()
+                        } else {
+                            parent
+                        });
+                    }
+                },
+            )?;
             for d in dirs {
                 out.extend(project(&d));
             }
         }
         "npm" | "pnpm" | "yarn" | "bun" => {
-            if elsewhere(&["--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"]) {
+            if elsewhere(&[
+                "--prefix",
+                "-C",
+                "--dir",
+                "--cwd",
+                "--filter",
+                "-F",
+                "--workspace",
+                "-w",
+            ]) {
                 return Err(());
             }
             // The command comes first, as a README writes it: an option before
@@ -1518,7 +1933,10 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // `create`/`init` (which runs a create-* package): those run a
             // package from the registry, code that is not even in the plugin.
             const RUNNERS: &[&str] = &["exec", "x", "dlx", "create", "init"];
-            if args.first().is_some_and(|a| a.starts_with('-') || RUNNERS.contains(&a.as_str())) {
+            if args
+                .first()
+                .is_some_and(|a| a.starts_with('-') || RUNNERS.contains(&a.as_str()))
+            {
                 return Err(());
             }
             // A node_modules the plugin ships is what scripts and installs
@@ -1540,8 +1958,19 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             out.extend(
                 match prog {
                     "npm" => &[".npmrc", "package-lock.json", "npm-shrinkwrap.json"][..],
-                    "pnpm" => &[".npmrc", ".pnpmfile.cjs", "pnpm-workspace.yaml", "pnpm-lock.yaml"][..],
-                    "yarn" => &[".yarnrc", ".yarnrc.yml", "yarn.lock", ".pnp.cjs", ".pnp.loader.mjs"][..],
+                    "pnpm" => &[
+                        ".npmrc",
+                        ".pnpmfile.cjs",
+                        "pnpm-workspace.yaml",
+                        "pnpm-lock.yaml",
+                    ][..],
+                    "yarn" => &[
+                        ".yarnrc",
+                        ".yarnrc.yml",
+                        "yarn.lock",
+                        ".pnp.cjs",
+                        ".pnp.loader.mjs",
+                    ][..],
                     _ => &["bunfig.toml", "bun.lock", "bun.lockb"][..],
                 }
                 .iter()
@@ -1550,7 +1979,13 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
         }
         // pipx installs, or it runs a program (`pipx run`) whose code nothing
         // here could show: only the installing commands, named first.
-        "pipx" if !args.first().is_some_and(|a| ["install", "upgrade", "reinstall"].contains(&a.as_str())) => return Err(()),
+        "pipx"
+            if !args
+                .first()
+                .is_some_and(|a| ["install", "upgrade", "reinstall"].contains(&a.as_str())) =>
+        {
+            return Err(())
+        }
         "pip" | "pipx" => out.extend(pip_files(args, plugin_dir)?),
         "uv" => {
             if elsewhere(&["--directory", "--project"]) {
@@ -1560,7 +1995,16 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // config (uv.toml, pyproject's [tool.uv]) and the Python to use
             // (.python-version(s)), which may name a path -- `./fakepy` made
             // uv run a program of the plugin's (see `PYTHON_VERSION_FILES`).
-            out.extend(["uv.toml", "pyproject.toml", "uv.lock", PYTHON_VERSION_FILES[0], PYTHON_VERSION_FILES[1]].map(String::from));
+            out.extend(
+                [
+                    "uv.toml",
+                    "pyproject.toml",
+                    "uv.lock",
+                    PYTHON_VERSION_FILES[0],
+                    PYTHON_VERSION_FILES[1],
+                ]
+                .map(String::from),
+            );
             // uv runs the interpreter of a .venv in the folder to ask it
             // what it is, so a plugin that ships one runs that program.
             if std::fs::symlink_metadata(plugin_dir.join(".venv")).is_ok() {
@@ -1605,7 +2049,11 @@ fn build_files(part: &str, plugin_dir: &Path) -> Result<Vec<String>, ()> {
             // of the plugin's) and the toolchain; the .go files named on the
             // line are what `go run x.go` compiles first.
             out.extend(["go.mod", "go.work"].map(String::from));
-            out.extend(args.iter().filter(|a| a.ends_with(".go") && !a.starts_with('-')).cloned());
+            out.extend(
+                args.iter()
+                    .filter(|a| a.ends_with(".go") && !a.starts_with('-'))
+                    .cloned(),
+            );
         }
         // A compiler opens the sources it is given, which it does not run.
         "gcc" | "cc" => {}
@@ -1634,17 +2082,38 @@ fn make_remakes(plugin_dir: &Path, dir: &str, makefiles: &[String]) -> bool {
         }
         let path = plugin_dir.join(&rel);
         let folder = path.parent().unwrap_or(plugin_dir).to_path_buf();
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if ["RCS", "SCCS"].iter().any(|d| folder.join(d).exists())
-            || [format!("{name}.sh"), format!("{name},v"), format!("s.{name}")].iter().any(|s| folder.join(s).exists())
+            || [
+                format!("{name}.sh"),
+                format!("{name},v"),
+                format!("s.{name}"),
+            ]
+            .iter()
+            .any(|s| folder.join(s).exists())
         {
             return true;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         for line in text.lines() {
             let line = line.trim_start();
-            let Some(rest) = ["include ", "-include ", "sinclude "].iter().find_map(|k| line.strip_prefix(k)) else { continue };
-            for w in rest.split('#').next().unwrap_or_default().split_whitespace() {
+            let Some(rest) = ["include ", "-include ", "sinclude "]
+                .iter()
+                .find_map(|k| line.strip_prefix(k))
+            else {
+                continue;
+            };
+            for w in rest
+                .split('#')
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+            {
                 if !w.contains(['$', '*', '?', '[']) {
                     todo.push(under(dir, w));
                 }
@@ -1671,11 +2140,22 @@ fn shown_file(plugin_dir: &Path, rel: &str) -> Option<(OsString, String, String,
     if bytes.contains(&0) {
         return None;
     }
-    let key = target.strip_prefix(&base).unwrap_or(&target).as_os_str().to_os_string();
+    let key = target
+        .strip_prefix(&base)
+        .unwrap_or(&target)
+        .as_os_str()
+        .to_os_string();
     // As `read_text` reads it: all of it, since it runs in full (see
     // `describe` for the one limit on showing it).
-    let body = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n");
-    Some((key, body, hex::encode(Sha256::digest(&bytes)), esc(target.as_os_str())))
+    let body = String::from_utf8_lossy(&bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    Some((
+        key,
+        body,
+        hex::encode(Sha256::digest(&bytes)),
+        esc(target.as_os_str()),
+    ))
 }
 
 /// The SHA-256 of a file of the plugin's, as `shown_file` takes it; None
@@ -1696,9 +2176,15 @@ fn digest_now(plugin_dir: &Path, name: &std::ffi::OsStr) -> Option<String> {
 fn any_case_present(plugin_dir: &Path, name: &str) -> bool {
     let rel = Path::new(name);
     let dir = plugin_dir.join(rel.parent().unwrap_or(Path::new("")));
-    let Some(want) = rel.file_name().and_then(|n| n.to_str()) else { return true };
+    let Some(want) = rel.file_name().and_then(|n| n.to_str()) else {
+        return true;
+    };
     match std::fs::read_dir(&dir) {
-        Ok(entries) => entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.eq_ignore_ascii_case(want))),
+        Ok(entries) => entries.flatten().any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(want))
+        }),
         Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     }
 }
@@ -1715,33 +2201,52 @@ pub fn unchanged(p: &SetupPlan) -> Result<(), String> {
         }
     }
     for (name, _) in &p.scripts {
-        let want = p.digests.iter().find(|(k, _)| k == name).map(|(_, d)| d.as_str());
+        let want = p
+            .digests
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, d)| d.as_str());
         if want.is_none() || digest_now(&p.plugin_dir, name).as_deref() != want {
             return Err(esc(name));
         }
     }
     // A dangling symlink is there too: what it points at could be written.
-    if let Some(name) = p.absent.iter().find(|n| p.plugin_dir.join(n).symlink_metadata().is_ok()) {
+    if let Some(name) = p
+        .absent
+        .iter()
+        .find(|n| p.plugin_dir.join(n).symlink_metadata().is_ok())
+    {
         return Err(name.clone());
     }
-    if let Some(name) = p.absent_any_case.iter().find(|n| any_case_present(&p.plugin_dir, n)) {
+    if let Some(name) = p
+        .absent_any_case
+        .iter()
+        .find(|n| any_case_present(&p.plugin_dir, n))
+    {
         return Err(name.clone());
     }
     Ok(())
 }
 
 pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
-    let mut out = SetupPlan { plugin_dir: PathBuf::from(py_path_str(plugin_dir)), ..Default::default() };
+    let mut out = SetupPlan {
+        plugin_dir: PathBuf::from(py_path_str(plugin_dir)),
+        ..Default::default()
+    };
     let Some(path) = _readme(plugin_dir) else {
         return Ok(out);
     };
-    out.readme = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    out.readme = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let text = read_text(&path)?;
     let sections = _sections(&text);
 
     let heading_at = |pos: usize| -> Vec<String> {
         sections
-            .iter().rfind(|(start, _)| *start <= pos)
+            .iter()
+            .rfind(|(start, _)| *start <= pos)
             .map(|(_, p)| p.clone())
             .unwrap_or_default()
     };
@@ -1757,7 +2262,11 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
         for line in _logical_lines(block) {
             for part in AND_AND.split(&line).map(py_strip) {
                 if let Some(m) = PKG.captures(part) {
-                    let toks = if !part.contains('"') { shlex_split(&m[1])? } else { Vec::new() };
+                    let toks = if !part.contains('"') {
+                        shlex_split(&m[1])?
+                    } else {
+                        Vec::new()
+                    };
                     for tok in toks {
                         if tok.starts_with('-') {
                             continue;
@@ -1778,23 +2287,32 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 }
                 // Only a step bash reads as plain words, which the terminal
                 // then runs as exactly those words (`literal_words`).
-                let Some(words) = literal_words(part) else { continue };
+                let Some(words) = literal_words(part) else {
+                    continue;
+                };
                 // A `cd` (bare, `pushd`, `popd`, anywhere) would move every
                 // later check and command out of the plugin's folder.
-                if words.iter().any(|w| matches!(w.text.as_str(), "cd" | "pushd" | "popd")) {
+                if words
+                    .iter()
+                    .any(|w| matches!(w.text.as_str(), "cd" | "pushd" | "popd"))
+                {
                     continue;
                 }
                 // The file of the plugin's the command names to run is shown
                 // in full, or the command is not offered: only a file the
                 // plugin itself ships, never outside it.
-                let Ok(files) = executed_files(part, plugin_dir) else { continue };
+                let Ok(files) = executed_files(part, plugin_dir) else {
+                    continue;
+                };
                 // And the build files the step's tool opens (a Makefile,
                 // package.json's scripts, setup.py, build.rs, go.mod): one
                 // that is there is shown and checked like a script; one that
                 // is not is recorded, and checked still absent, since a step
                 // before could write it -- unless an earlier configure step
                 // shown here writes it (`generated_by`).
-                let Ok(read) = build_files(part, plugin_dir) else { continue };
+                let Ok(read) = build_files(part, plugin_dir) else {
+                    continue;
+                };
                 let base = resolve(plugin_dir);
                 let mut present = Vec::new();
                 let mut missing = Vec::new();
@@ -1814,8 +2332,13 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 if !inside {
                     continue;
                 }
-                let any_case: Vec<&str> = match shlex_split(part).ok().as_deref().and_then(program) {
-                    Some(("just", _)) => JUSTFILES.iter().copied().filter(|j| !any_case_present(plugin_dir, j)).collect(),
+                let any_case: Vec<&str> = match shlex_split(part).ok().as_deref().and_then(program)
+                {
+                    Some(("just", _)) => JUSTFILES
+                        .iter()
+                        .copied()
+                        .filter(|j| !any_case_present(plugin_dir, j))
+                        .collect(),
                     _ => Vec::new(),
                 };
                 let Some(shown) = files
@@ -1832,7 +2355,9 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 // step is not offered. The path a step names, the file it
                 // leads to, and every build file held absent.
                 let ctl = |s: &str| s.chars().any(char::is_control);
-                if shown.iter().any(|(f, (key, _, _, target))| ctl(f) || ctl(&esc(key)) || ctl(target))
+                if shown
+                    .iter()
+                    .any(|(f, (key, _, _, target))| ctl(f) || ctl(&esc(key)) || ctl(target))
                     || missing.iter().any(|f| ctl(f))
                 {
                     continue;
@@ -1841,8 +2366,12 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
                 // runs a path (`./fakepy`) or a folder's bin/python (`d`) as
                 // its Python.
                 if shown.iter().any(|(f, (key, body, _, _))| {
-                    let name = Path::new(key).file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                    (PYTHON_VERSION_FILES.contains(&name) || PYTHON_VERSION_FILES.iter().any(|v| f.ends_with(v)))
+                    let name = Path::new(key)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default();
+                    (PYTHON_VERSION_FILES.contains(&name)
+                        || PYTHON_VERSION_FILES.iter().any(|v| f.ends_with(v)))
                         && !python_versions_only(body, plugin_dir)
                 }) {
                     continue;
@@ -1888,7 +2417,8 @@ pub fn plan(plugin_dir: &Path) -> Result<SetupPlan, String> {
         for start in by_hand_starts(pattern, &prose) {
             let place = heading_at(start);
             if _is_setup(&place) {
-                out.by_hand.push((label.to_string(), place.last().cloned().unwrap_or_default()));
+                out.by_hand
+                    .push((label.to_string(), place.last().cloned().unwrap_or_default()));
                 break;
             }
         }
@@ -1932,12 +2462,21 @@ fn exact_output(cmd: &str, want: &str, fail: &str) -> String {
 fn python_m_safe(words: Vec<Word>) -> Vec<Word> {
     let at = usize::from(words.first().is_some_and(|w| w.text == "sudo"));
     let is_m = words.get(at).is_some_and(|w| is_python(&w.text))
-        && words[at + 1..].iter().take_while(|w| w.text.starts_with('-')).any(|w| w.text == "-m");
+        && words[at + 1..]
+            .iter()
+            .take_while(|w| w.text.starts_with('-'))
+            .any(|w| w.text == "-m");
     if !is_m {
         return words;
     }
     let mut out = words;
-    out.insert(at + 1, Word { text: "-P".to_string(), home: None });
+    out.insert(
+        at + 1,
+        Word {
+            text: "-P".to_string(),
+            home: None,
+        },
+    );
     out
 }
 
@@ -1955,18 +2494,33 @@ pub fn terminal_script(p: &SetupPlan) -> String {
         format!("cd {}", shlex_quote(&py_path_str(&p.plugin_dir))),
         "set -e".to_string(),
     ];
-    let stop = |shown: &str| shlex_quote(&format!("{shown} changed after it was shown -- setup stopped."));
+    let stop = |shown: &str| {
+        shlex_quote(&format!(
+            "{shown} changed after it was shown -- setup stopped."
+        ))
+    };
     for cmd in &p.commands {
         for (written, target) in &p.links {
-            lines.push(exact_output(&format!("realpath -e -- {}", shlex_quote(written)), target, &stop(written)));
+            lines.push(exact_output(
+                &format!("realpath -e -- {}", shlex_quote(written)),
+                target,
+                &stop(written),
+            ));
         }
         for (name, digest) in &p.digests {
             let shown = esc(name);
-            lines.push(exact_output(&format!("sha256sum < {}", shlex_quote(&shown)), &format!("{digest}  -"), &stop(&shown)));
+            lines.push(exact_output(
+                &format!("sha256sum < {}", shlex_quote(&shown)),
+                &format!("{digest}  -"),
+                &stop(&shown),
+            ));
         }
         for name in &p.absent {
             let q = shlex_quote(name);
-            lines.push(format!("test ! -e {q} && test ! -L {q} || {{ echo; echo {}; exit 1; }}", stop(name)));
+            lines.push(format!(
+                "test ! -e {q} && test ! -L {q} || {{ echo; echo {}; exit 1; }}",
+                stop(name)
+            ));
         }
         // A glob that matches nothing stays as written, which is not there.
         for name in &p.absent_any_case {
@@ -2057,18 +2611,28 @@ fn package_scripts(name: &std::ffi::OsStr, body: &str) -> Option<String> {
 pub fn describe(p: &SetupPlan) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !p.packages.is_empty() {
-        parts.push(format!("Packages, installed by Almanac\n  {}", p.packages.join(" ")));
+        parts.push(format!(
+            "Packages, installed by Almanac\n  {}",
+            p.packages.join(" ")
+        ));
     }
     if !p.commands.is_empty() {
         let mut run = format!(
             "Run in a terminal, in the plugin's folder\n{}",
-            p.commands.iter().map(|c| format!("  $ {c}")).collect::<Vec<_>>().join("\n")
+            p.commands
+                .iter()
+                .map(|c| format!("  $ {c}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
         // What is shown below is what a build or a script reads first, not
         // all it runs (what a script sources or imports, a module beside it
         // shadowing the standard library's): say so rather than let the
         // list of files suggest otherwise.
-        if p.commands.iter().any(|c| matches!(step_kind(c), Some(Kind::Build | Kind::Script))) {
+        if p.commands
+            .iter()
+            .any(|c| matches!(step_kind(c), Some(Kind::Build | Kind::Script)))
+        {
             run.push('\n');
             run.push_str(&tr(
                 "A build or a script, and any Python or JavaScript program, runs code from the repository beyond the files shown here.",
@@ -2080,7 +2644,11 @@ pub fn describe(p: &SetupPlan) -> String {
         if let Some(scripts) = package_scripts(name, body) {
             parts.push(scripts);
         }
-        parts.push(format!("Contents of {}\n{}", esc(name), shown_script(&p.plugin_dir, name, body)));
+        parts.push(format!(
+            "Contents of {}\n{}",
+            esc(name),
+            shown_script(&p.plugin_dir, name, body)
+        ));
     }
     if !p.by_hand.is_empty() {
         parts.push(format!(
@@ -2088,7 +2656,11 @@ pub fn describe(p: &SetupPlan) -> String {
             p.by_hand
                 .iter()
                 .map(|(what, h)| {
-                    let see = if h.is_empty() { String::new() } else { format!(" — see “{h}” in the README") };
+                    let see = if h.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — see “{h}” in the README")
+                    };
                     format!("  • {what}{see}")
                 })
                 .collect::<Vec<_>>()
@@ -2096,9 +2668,12 @@ pub fn describe(p: &SetupPlan) -> String {
         ));
     }
     let joined = parts.join("\n\n");
-    if joined.is_empty() { "The README asks for nothing beyond the install.".to_string() } else { joined }
+    if joined.is_empty() {
+        "The README asks for nothing beyond the install.".to_string()
+    } else {
+        joined
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2157,11 +2732,17 @@ make build
         let plan = plan(&plugin(&d)).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(plan.packages, vec!["jq", "socat", "some-helper-bin"]);
-        assert_eq!(plan.commands, vec!["make install PREFIX=~/.local", "./scripts/setup.sh"]);
+        assert_eq!(
+            plan.commands,
+            vec!["make install PREFIX=~/.local", "./scripts/setup.sh"]
+        );
         assert!(plan.scripts.iter().any(|(k, _)| k == "scripts/setup.sh"));
         assert_eq!(
             plan.by_hand,
-            vec![("Credentials or a sign-in".to_string(), "Requirements".to_string())]
+            vec![(
+                "Credentials or a sign-in".to_string(),
+                "Requirements".to_string()
+            )]
         );
     }
 
@@ -2172,7 +2753,11 @@ make build
         // 45 links, more than the kernel's 40: realpath has no limit.
         std::fs::write(d.join("real.sh"), "").unwrap();
         for i in 0..45 {
-            let to = if i < 44 { format!("l{}.sh", i + 1) } else { "real.sh".to_string() };
+            let to = if i < 44 {
+                format!("l{}.sh", i + 1)
+            } else {
+                "real.sh".to_string()
+            };
             symlink(to, d.join(format!("l{i}.sh"))).unwrap();
         }
         assert_eq!(resolve(&d.join("l0.sh")), resolve(&d).join("real.sh"));
@@ -2201,7 +2786,10 @@ make build
         std::os::unix::fs::symlink(bad, root.join("a.sh")).unwrap();
         let p = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
-        assert_eq!(p.scripts, vec![(bad.to_os_string(), "echo nu\n".to_string())]);
+        assert_eq!(
+            p.scripts,
+            vec![(bad.to_os_string(), "echo nu\n".to_string())]
+        );
         assert!(describe(&p).contains("Contents of \\xff.sh"));
     }
 
@@ -2212,19 +2800,32 @@ make build
         let d = tempdir();
         let root = d.join("p");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("README.md"), "# Install\n```\n./a.sh\n./big.sh\n```\n").unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            "# Install\n```\n./a.sh\n./big.sh\n```\n",
+        )
+        .unwrap();
         let script: String = (1..=500).map(|i| format!("echo step {i}\n")).collect();
         std::fs::write(root.join("a.sh"), &script).unwrap();
-        let big: String = (1..=20_000).map(|i| format!("echo a rather long line, number {i}\n")).collect();
+        let big: String = (1..=20_000)
+            .map(|i| format!("echo a rather long line, number {i}\n"))
+            .collect();
         std::fs::write(root.join("big.sh"), &big).unwrap();
         let p = plan(&root).unwrap();
         let shown = describe(&p);
         let _ = std::fs::remove_dir_all(&d);
-        assert!(shown.contains("  echo step 1\n") && shown.contains("  echo step 500"), "a.sh shown in full");
+        assert!(
+            shown.contains("  echo step 1\n") && shown.contains("  echo step 500"),
+            "a.sh shown in full"
+        );
         // Past the limit the cut is said, with the length and where to read it.
         assert!(shown.contains("echo a rather long line, number 1\n"));
         assert!(!shown.contains("number 20000"));
-        assert!(shown.contains("of its 20000 lines"), "{}", &shown[shown.len() - 300..]);
+        assert!(
+            shown.contains("of its 20000 lines"),
+            "{}",
+            &shown[shown.len() - 300..]
+        );
         assert!(shown.contains("all of it runs"));
         assert!(shown.contains("big.sh before you run setup"));
         assert_eq!(cut_scripts(&p), vec![p.plugin_dir.join("big.sh")]);
@@ -2235,7 +2836,13 @@ make build
         let d = tempdir();
         let cmds = plan(&plugin(&d)).unwrap().commands.join(" ");
         let _ = std::fs::remove_dir_all(&d);
-        for bad in ["curl", "uninstall", "cargo test", "make build", "omarchy plugin add"] {
+        for bad in [
+            "curl",
+            "uninstall",
+            "cargo test",
+            "make build",
+            "omarchy plugin add",
+        ] {
             assert!(!cmds.contains(bad), "{bad} offered in {cmds}");
         }
     }
@@ -2291,13 +2898,34 @@ make build
             ]
         );
         let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
-        assert_eq!(names, ["install", "setup.py", "tools/prep.sh", "tools/go.sh", "tools/helper.py"]);
-        assert_eq!(p.digests.iter().map(|(k, _)| esc(k)).collect::<Vec<_>>(), names);
-        for body in ["echo installing", "print('setup')", "echo prep", "echo go", "print('helper')"] {
+        assert_eq!(
+            names,
+            [
+                "install",
+                "setup.py",
+                "tools/prep.sh",
+                "tools/go.sh",
+                "tools/helper.py"
+            ]
+        );
+        assert_eq!(
+            p.digests.iter().map(|(k, _)| esc(k)).collect::<Vec<_>>(),
+            names
+        );
+        for body in [
+            "echo installing",
+            "print('setup')",
+            "echo prep",
+            "echo go",
+            "print('helper')",
+        ] {
             assert!(shown.contains(&format!("  {body}")), "{body} not shown");
         }
         for never in ["missing", "bin/tool", "outside", "hidden", "sneaky"] {
-            assert!(!p.commands.iter().any(|c| c.contains(never)), "{never} offered");
+            assert!(
+                !p.commands.iter().any(|c| c.contains(never)),
+                "{never} offered"
+            );
         }
     }
 
@@ -2310,7 +2938,11 @@ make build
         let d = tempdir();
         let root = d.join("p");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("README.md"), "# Install\n```\nmake\n./install\n```\n").unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            "# Install\n```\nmake\n./install\n```\n",
+        )
+        .unwrap();
         std::fs::write(root.join("install"), "echo fine\n").unwrap();
         let p = plan(&root).unwrap();
         assert_eq!(unchanged(&p), Ok(()));
@@ -2325,7 +2957,10 @@ make build
         std::fs::remove_file(root.join("install")).unwrap();
         assert_eq!(unchanged(&p), Err("install".to_string()));
         // A plan whose files carry no digest is not trusted either.
-        let bare = SetupPlan { digests: Vec::new(), ..p.clone() };
+        let bare = SetupPlan {
+            digests: Vec::new(),
+            ..p.clone()
+        };
         let _ = std::fs::remove_dir_all(&d);
         assert!(unchanged(&bare).is_err());
     }
@@ -2374,23 +3009,49 @@ make build
         let after = unchanged(&p);
         let _ = std::fs::remove_dir_all(&d);
 
-        assert!(p.commands.contains(&"make install".to_string()) && p.commands.contains(&"make -C sub".to_string()));
-        assert!(!p.commands.iter().any(|c| c.contains("--prefix")), "a step pointed elsewhere is not offered");
+        assert!(
+            p.commands.contains(&"make install".to_string())
+                && p.commands.contains(&"make -C sub".to_string())
+        );
+        assert!(
+            !p.commands.iter().any(|c| c.contains("--prefix")),
+            "a step pointed elsewhere is not offered"
+        );
         let mut names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
         names.sort();
         // setup.py, setup.cfg, .npmrc ... are absent: not shown, but held absent (build.ninja meson writes)
         assert_eq!(
             names,
-            ["Cargo.toml", "Makefile", "build.rs", "justfile", "meson.build", "package.json", "pyproject.toml", "sub/GNUmakefile"]
+            [
+                "Cargo.toml",
+                "Makefile",
+                "build.rs",
+                "justfile",
+                "meson.build",
+                "package.json",
+                "pyproject.toml",
+                "sub/GNUmakefile"
+            ]
         );
         assert_eq!(p.digests.len(), p.scripts.len());
-        assert!(p.absent.contains(&"setup.py".to_string()) && p.absent.contains(&".npmrc".to_string()));
+        assert!(
+            p.absent.contains(&"setup.py".to_string()) && p.absent.contains(&".npmrc".to_string())
+        );
         assert!(!p.absent.contains(&"build/build.ninja".to_string()));
-        for body in ["echo make", "backend-path", "fn main() {}", "echo just", "project('p')", "echo sub"] {
+        for body in [
+            "echo make",
+            "backend-path",
+            "fn main() {}",
+            "echo just",
+            "project('p')",
+            "echo sub",
+        ] {
             assert!(shown.contains(body), "{body} not shown");
         }
         // package.json's scripts are set out on their own, before the file.
-        let scripts = shown.find("Scripts in package.json").expect("scripts listed");
+        let scripts = shown
+            .find("Scripts in package.json")
+            .expect("scripts listed");
         assert!(scripts < shown.find("Contents of package.json").unwrap());
         assert!(shown.contains("  postinstall: node evil.js") && shown.contains("  build: tsc"));
         // Checked before each command, as a script is.
@@ -2405,7 +3066,11 @@ make build
         let d = tempdir();
         let root = d.join("p");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("README.md"), "# Install\n```\nmake\ncargo build\npip install .\n```\n").unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            "# Install\n```\nmake\ncargo build\npip install .\n```\n",
+        )
+        .unwrap();
         std::fs::write(d.join("outside.mk"), "all:\n").unwrap();
         std::os::unix::fs::symlink(d.join("outside.mk"), root.join("Makefile")).unwrap();
         std::fs::write(root.join("Cargo.toml"), b"\x00binary").unwrap();
@@ -2422,36 +3087,95 @@ make build
         std::fs::create_dir_all(d.join("pkg")).unwrap();
         let files = |line: &str| build_files(line, &d);
         assert_eq!(files("make -j4 -f build.mk").unwrap(), ["build.mk"]);
-        assert_eq!(files("make -C a -C b").unwrap(), ["a/b/GNUmakefile", "a/b/makefile", "a/b/Makefile"]);
+        assert_eq!(
+            files("make -C a -C b").unwrap(),
+            ["a/b/GNUmakefile", "a/b/makefile", "a/b/Makefile"]
+        );
         assert_eq!(files("ninja -C build").unwrap(), ["build/build.ninja"]);
-        assert_eq!(files("cmake -S src -B build").unwrap(), ["src/CMakeLists.txt", "src/CMakePresets.json", "src/CMakeUserPresets.json"]);
+        assert_eq!(
+            files("cmake -S src -B build").unwrap(),
+            [
+                "src/CMakeLists.txt",
+                "src/CMakePresets.json",
+                "src/CMakeUserPresets.json"
+            ]
+        );
         assert!(files("cmake --build build").unwrap().is_empty());
-        assert!(files("cargo install --path tool").unwrap().contains(&"tool/build.rs".to_string()));
-        assert!(files("cargo build").unwrap().contains(&".cargo/config.toml".to_string()));
+        assert!(files("cargo install --path tool")
+            .unwrap()
+            .contains(&"tool/build.rs".to_string()));
+        assert!(files("cargo build")
+            .unwrap()
+            .contains(&".cargo/config.toml".to_string()));
         // `-m pip` is the plugin's own if it ships a pip.py (the folder comes first).
         assert_eq!(
             files("python3 -m pip install ./pkg[cli]").unwrap(),
-            ["pip.py", "pip/__init__.py", "pip/__main__.py", "./pkg/setup.py", "./pkg/pyproject.toml", "./pkg/setup.cfg"]
+            [
+                "pip.py",
+                "pip/__init__.py",
+                "pip/__main__.py",
+                "./pkg/setup.py",
+                "./pkg/pyproject.toml",
+                "./pkg/setup.cfg"
+            ]
         );
-        assert_eq!(files("python3 -u -m a.b").unwrap(), ["a/__init__.py", "a/b.py", "a/b/__init__.py", "a/b/__main__.py"]);
-        assert!(files("cargo run").unwrap().contains(&"rust-toolchain.toml".to_string()));
+        assert_eq!(
+            files("python3 -u -m a.b").unwrap(),
+            [
+                "a/__init__.py",
+                "a/b.py",
+                "a/b/__init__.py",
+                "a/b/__main__.py"
+            ]
+        );
+        assert!(files("cargo run")
+            .unwrap()
+            .contains(&"rust-toolchain.toml".to_string()));
         assert_eq!(files("go generate ./...").unwrap(), ["go.mod", "go.work"]);
-        assert_eq!(files("go run main.go").unwrap(), ["go.mod", "go.work", "main.go"]);
+        assert_eq!(
+            files("go run main.go").unwrap(),
+            ["go.mod", "go.work", "main.go"]
+        );
         assert!(files("gcc -o x x.c").unwrap().is_empty());
-        assert_eq!(files("pip install pkg").unwrap(), ["pkg/setup.py", "pkg/pyproject.toml", "pkg/setup.cfg"]);
-        assert_eq!(files("pip install -r requirements.txt requests").unwrap(), ["requirements.txt"]);
+        assert_eq!(
+            files("pip install pkg").unwrap(),
+            ["pkg/setup.py", "pkg/pyproject.toml", "pkg/setup.cfg"]
+        );
+        assert_eq!(
+            files("pip install -r requirements.txt requests").unwrap(),
+            ["requirements.txt"]
+        );
         // A URL is not a package name: what it fetches is not shown, so not offered.
         assert!(files("pip install requests git+https://x/y").is_err());
         assert_eq!(
             files("uv tool install .").unwrap(),
-            ["uv.toml", "pyproject.toml", "uv.lock", ".python-version", ".python-versions", "setup.py", "pyproject.toml", "setup.cfg"]
+            [
+                "uv.toml",
+                "pyproject.toml",
+                "uv.lock",
+                ".python-version",
+                ".python-versions",
+                "setup.py",
+                "pyproject.toml",
+                "setup.cfg"
+            ]
         );
-        assert_eq!(files("pipx install --editable .").unwrap(), ["setup.py", "pyproject.toml", "setup.cfg"]);
+        assert_eq!(
+            files("pipx install --editable .").unwrap(),
+            ["setup.py", "pyproject.toml", "setup.cfg"]
+        );
         assert!(files("yarn").unwrap().contains(&".yarnrc.yml".to_string()));
-        assert!(files("pnpm install").unwrap().contains(&".pnpmfile.cjs".to_string()));
+        assert!(files("pnpm install")
+            .unwrap()
+            .contains(&".pnpmfile.cjs".to_string()));
         for elsewhere in [
-            "npm --prefix x install", "yarn --cwd=x", "just -f other.just", "uv --directory x sync", "cargo -C x build",
-            "go -C x build", "bun --preload ./x.ts run build",
+            "npm --prefix x install",
+            "yarn --cwd=x",
+            "just -f other.just",
+            "uv --directory x sync",
+            "cargo -C x build",
+            "go -C x build",
+            "bun --preload ./x.ts run build",
         ] {
             assert!(files(elsewhere).is_err(), "{elsewhere}");
         }
@@ -2466,12 +3190,23 @@ make build
     #[test]
     fn test_every_runnable_tool_has_a_kind() {
         let d = tempdir();
-        let lines = TOOLS.iter().map(|(_, line)| *line).chain(["./install", "python x.py", "python3.12 x.py", "sudo make"]);
+        let lines = TOOLS.iter().map(|(_, line)| *line).chain([
+            "./install",
+            "python x.py",
+            "python3.12 x.py",
+            "sudo make",
+        ]);
         for line in lines {
             assert!(RUNNABLE.is_match(line), "{line} not runnable");
             assert!(step_kind(line).is_some(), "{line} has no kind");
-            assert!(build_files(line, &d).is_ok(), "{line} has no build files case");
-            assert!(executed_files(line, &d).is_ok(), "{line} has no executed files case");
+            assert!(
+                build_files(line, &d).is_ok(),
+                "{line} has no build files case"
+            );
+            assert!(
+                executed_files(line, &d).is_ok(),
+                "{line} has no executed files case"
+            );
         }
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(step_kind("./install"), Some(Kind::Script));
@@ -2499,18 +3234,34 @@ make build
         std::fs::write(root.join("go.mod"), "module p\n").unwrap();
         std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
         std::fs::write(root.join("x.ts"), "console.log('x')\n").unwrap();
-        std::fs::write(root.join("package.json"), "{\"scripts\": {\"build\": \"tsc\"}}\n").unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            "{\"scripts\": {\"build\": \"tsc\"}}\n",
+        )
+        .unwrap();
         let p = plan(&root).unwrap();
         let shown = describe(&p);
         std::fs::write(root.join("x.ts"), "evil()\n").unwrap();
         let after = unchanged(&p);
         let _ = std::fs::remove_dir_all(&d);
-        assert_eq!(p.commands, ["go generate ./...", "go run .", "cargo run --release", "bun x.ts", "bun run build"]);
+        assert_eq!(
+            p.commands,
+            [
+                "go generate ./...",
+                "go run .",
+                "cargo run --release",
+                "bun x.ts",
+                "bun run build"
+            ]
+        );
         let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
         assert_eq!(names, ["go.mod", "Cargo.toml", "x.ts", "package.json"]);
         assert!(shown.contains("  console.log('x')") && shown.contains("  module p"));
         assert!(shown.contains("runs code from the repository beyond the files shown here"));
-        assert!(p.absent.contains(&"go.work".to_string()) && p.absent.contains(&"bunfig.toml".to_string()));
+        assert!(
+            p.absent.contains(&"go.work".to_string())
+                && p.absent.contains(&"bunfig.toml".to_string())
+        );
         assert_eq!(after, Err("x.ts".to_string()));
     }
 
@@ -2523,8 +3274,16 @@ make build
         let d = tempdir();
         let root = d.join("p");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("README.md"), "# Install\n```\nnpm install && make\njust setup\n```\n").unwrap();
-        std::fs::write(root.join("package.json"), "{\"scripts\": {\"postinstall\": \"node gen.js\"}}\n").unwrap();
+        std::fs::write(
+            root.join("README.md"),
+            "# Install\n```\nnpm install && make\njust setup\n```\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            "{\"scripts\": {\"postinstall\": \"node gen.js\"}}\n",
+        )
+        .unwrap();
         std::fs::write(root.join("Makefile"), "all:\n\techo shown\n").unwrap();
         std::fs::write(root.join("JustFile"), "setup:\n  echo just\n").unwrap();
         let p = plan(&root).unwrap();
@@ -2532,22 +3291,42 @@ make build
         // just matches its name in any case: the JustFile is shown.
         assert!(p.scripts.iter().any(|(k, _)| k == "JustFile"));
         for f in ["GNUmakefile", "makefile", ".npmrc"] {
-            assert!(p.absent.contains(&f.to_string()), "{f} not recorded absent: {:?}", p.absent);
+            assert!(
+                p.absent.contains(&f.to_string()),
+                "{f} not recorded absent: {:?}",
+                p.absent
+            );
         }
         assert_eq!(p.absent_any_case, [".justfile"]);
         assert_eq!(unchanged(&p), Ok(()));
 
         // The terminal's own check, run for real on a stand-in command.
-        let probe = SetupPlan { commands: vec!["echo ran".into()], ..p.clone() };
+        let probe = SetupPlan {
+            commands: vec!["echo ran".into()],
+            ..p.clone()
+        };
         let run = || {
-            let out = std::process::Command::new("bash").arg("-c").arg(terminal_script(&probe)).output().unwrap();
-            (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+            let out = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(terminal_script(&probe))
+                .output()
+                .unwrap();
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
         };
         let (ok, out) = run();
-        assert!(ok && out.contains("ran"), "the check passes while nothing appeared: {out}");
+        assert!(
+            ok && out.contains("ran"),
+            "the check passes while nothing appeared: {out}"
+        );
         std::fs::write(root.join("GNUmakefile"), "all:\n\techo unseen\n").unwrap();
         let (ok, out) = run();
-        assert!(!ok && !out.contains("ran") && out.contains("GNUmakefile changed after it was shown"), "{out}");
+        assert!(
+            !ok && !out.contains("ran") && out.contains("GNUmakefile changed after it was shown"),
+            "{out}"
+        );
         assert_eq!(unchanged(&p), Err("GNUmakefile".to_string()));
         // A dangling symlink counts as there.
         std::fs::remove_file(root.join("GNUmakefile")).unwrap();
@@ -2561,7 +3340,10 @@ make build
         let (ok, out) = run();
         let after = unchanged(&p);
         let _ = std::fs::remove_dir_all(&d);
-        assert!(!ok && out.contains(".justfile changed after it was shown"), "{out}");
+        assert!(
+            !ok && out.contains(".justfile changed after it was shown"),
+            "{out}"
+        );
         assert_eq!(after, Err(".justfile".to_string()));
     }
 
@@ -2593,14 +3375,37 @@ make build
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(
             p.commands,
-            ["meson setup build", "ninja -C build", "cmake -B out", "make -C out", "./configure", "make", "python3 -m venv .venv"]
+            [
+                "meson setup build",
+                "ninja -C build",
+                "cmake -B out",
+                "make -C out",
+                "./configure",
+                "make",
+                "python3 -m venv .venv"
+            ]
         );
         for written in ["build/build.ninja", "out/Makefile", "Makefile"] {
-            assert!(!p.absent.contains(&written.to_string()), "{written}: {:?}", p.absent);
+            assert!(
+                !p.absent.contains(&written.to_string()),
+                "{written}: {:?}",
+                p.absent
+            );
         }
         // What they do not write is still held absent.
-        for held in ["out/GNUmakefile", "GNUmakefile", "makefile", "meson.options", "venv.py", "venv/__init__.py"] {
-            assert!(p.absent.contains(&held.to_string()), "{held}: {:?}", p.absent);
+        for held in [
+            "out/GNUmakefile",
+            "GNUmakefile",
+            "makefile",
+            "meson.options",
+            "venv.py",
+            "venv/__init__.py",
+        ] {
+            assert!(
+                p.absent.contains(&held.to_string()),
+                "{held}: {:?}",
+                p.absent
+            );
         }
     }
 
@@ -2610,11 +3415,24 @@ make build
     #[test]
     fn test_the_confirmation_says_a_build_runs_more_than_is_shown() {
         let line = "A build or a script, and any Python or JavaScript program, runs code from the repository beyond the files shown here.";
-        let build = SetupPlan { commands: vec!["make install".into(), "./install".into()], ..Default::default() };
-        assert!(describe(&build).contains(&format!("  $ ./install\n{line}")), "{}", describe(&build));
-        let script = SetupPlan { commands: vec!["./install.py".into()], ..Default::default() };
+        let build = SetupPlan {
+            commands: vec!["make install".into(), "./install".into()],
+            ..Default::default()
+        };
+        assert!(
+            describe(&build).contains(&format!("  $ ./install\n{line}")),
+            "{}",
+            describe(&build)
+        );
+        let script = SetupPlan {
+            commands: vec!["./install.py".into()],
+            ..Default::default()
+        };
         assert!(describe(&script).contains(line));
-        let services = SetupPlan { commands: vec!["systemctl --user enable x".into()], ..Default::default() };
+        let services = SetupPlan {
+            commands: vec!["systemctl --user enable x".into()],
+            ..Default::default()
+        };
         assert!(!describe(&services).contains(line));
     }
 
@@ -2639,12 +3457,24 @@ make build
             ("#!/usr/bin/env python3\n", true),
             ("echo no shebang\n", true),
         ] {
-            let root = plugin_with(&d, "# Install\n```\n./install\n```\n", &[("install", body), ("bin/sh", "echo PWNED\n")]);
-            assert_eq!(plan(&root).unwrap().commands.len(), usize::from(offered), "{body:?}");
+            let root = plugin_with(
+                &d,
+                "# Install\n```\n./install\n```\n",
+                &[("install", body), ("bin/sh", "echo PWNED\n")],
+            );
+            assert_eq!(
+                plan(&root).unwrap().commands.len(),
+                usize::from(offered),
+                "{body:?}"
+            );
             let _ = std::fs::remove_dir_all(&root);
         }
         for source in ["Makefile.sh", "makefile,v", "s.Makefile", "RCS/Makefile,v"] {
-            let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[(source, "all:\n\techo PWNED\n")]);
+            let root = plugin_with(
+                &d,
+                "# Install\n```\nmake\n```\n",
+                &[(source, "all:\n\techo PWNED\n")],
+            );
             assert!(plan(&root).unwrap().commands.is_empty(), "{source}");
             let _ = std::fs::remove_dir_all(&root);
         }
@@ -2652,16 +3482,39 @@ make build
         // and a file a makefile includes.
         for (line, files) in [
             ("make -f sub/x.mk", &[("sub/x.mk.sh", "all:\n")][..]),
-            ("make", &[("Makefile", "all:\n"), ("Makefile.sh", "all:\n")][..]),
-            ("make", &[("Makefile", "include config.mk\nall:\n"), ("config.mk.sh", "x:\n")][..]),
-            ("make -C src", &[("src/Makefile", "-include sub/c.mk\n"), ("src/sub/c.mk.sh", "x:\n")][..]),
+            (
+                "make",
+                &[("Makefile", "all:\n"), ("Makefile.sh", "all:\n")][..],
+            ),
+            (
+                "make",
+                &[
+                    ("Makefile", "include config.mk\nall:\n"),
+                    ("config.mk.sh", "x:\n"),
+                ][..],
+            ),
+            (
+                "make -C src",
+                &[
+                    ("src/Makefile", "-include sub/c.mk\n"),
+                    ("src/sub/c.mk.sh", "x:\n"),
+                ][..],
+            ),
         ] {
             let root = plugin_with(&d, &format!("# Install\n```\n{line}\n```\n"), files);
             assert!(plan(&root).unwrap().commands.is_empty(), "{line} {files:?}");
             let _ = std::fs::remove_dir_all(&root);
         }
         // An autotools project's templates are not sources make remakes from.
-        let root = plugin_with(&d, "# Install\n```\nmake\n```\n", &[("Makefile", "all:\n"), ("Makefile.in", "\n"), ("Makefile.am", "\n")]);
+        let root = plugin_with(
+            &d,
+            "# Install\n```\nmake\n```\n",
+            &[
+                ("Makefile", "all:\n"),
+                ("Makefile.in", "\n"),
+                ("Makefile.am", "\n"),
+            ],
+        );
         assert_eq!(plan(&root).unwrap().commands, ["make"]);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -2689,7 +3542,10 @@ make build
             .env("HOME", home)
             .output()
             .unwrap();
-        (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
     }
 
     /// The reviewer's probes: the planner split words while bash expanded
@@ -2746,8 +3602,15 @@ make build
         // And each is refused on its own terms, not by some other rule.
         // (`\r` cannot reach a step through a README, which splits lines at
         // it, but bash would keep it in a word that shlex splits.)
-        for probe in probes.iter().filter(|l| !l.contains("cd")).chain(&["make install\rnow"]) {
-            assert!(literal_words(probe).is_none(), "{probe} read as plain words");
+        for probe in probes
+            .iter()
+            .filter(|l| !l.contains("cd"))
+            .chain(&["make install\rnow"])
+        {
+            assert!(
+                literal_words(probe).is_none(),
+                "{probe} read as plain words"
+            );
         }
     }
 
@@ -2770,9 +3633,18 @@ make build
         let root = plugin_with(
             &d,
             readme,
-            &[("Makefile", "all:\n"), ("package.json", "{}\n"), ("pyproject.toml", "[project]\n"), ("show.sh", show)],
+            &[
+                ("Makefile", "all:\n"),
+                ("package.json", "{}\n"),
+                ("pyproject.toml", "[project]\n"),
+                ("show.sh", show),
+            ],
         );
-        std::fs::set_permissions(root.join("show.sh"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(
+            root.join("show.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         let p = plan(&root).unwrap();
         assert_eq!(
             p.commands,
@@ -2787,15 +3659,24 @@ make build
         );
         let script = terminal_script(&p);
         assert!(script.contains("\n'sudo' 'make' 'install'\n"), "{script}");
-        assert!(script.contains("\n'make' 'install' 'PREFIX='\"$HOME\"'/.local'\n"), "{script}");
+        assert!(
+            script.contains("\n'make' 'install' 'PREFIX='\"$HOME\"'/.local'\n"),
+            "{script}"
+        );
         // Run for real, with only the stand-in script as a command.
         let home = d.join("home");
-        let probe = SetupPlan { commands: vec![p.commands[5].clone()], ..p.clone() };
+        let probe = SetupPlan {
+            commands: vec![p.commands[5].clone()],
+            ..p.clone()
+        };
         let (ok, out) = run_script(&probe, &home);
         let _ = std::fs::remove_dir_all(&d);
         let h = home.display();
         assert!(ok, "{out}");
-        assert!(out.contains(&format!("[a b][c d][efg][PREFIX={h}][X={h}/y]\n")), "{out}");
+        assert!(
+            out.contains(&format!("[a b][c d][efg][PREFIX={h}][X={h}/y]\n")),
+            "{out}"
+        );
     }
 
     /// Shown files were kept under the file a symlink leads to, and both
@@ -2809,11 +3690,20 @@ make build
         let root = plugin_with(
             &d,
             "# Install\n```\n./install\nbash tools/x.sh\n```\n",
-            &[("real.sh", "echo real\n"), ("evil.sh", "echo evil\n"), ("t1/x.sh", "echo one\n"), ("t2/x.sh", "echo two\n")],
+            &[
+                ("real.sh", "echo real\n"),
+                ("evil.sh", "echo evil\n"),
+                ("t1/x.sh", "echo one\n"),
+                ("t2/x.sh", "echo two\n"),
+            ],
         );
         symlink("real.sh", root.join("install")).unwrap();
         symlink("t1", root.join("tools")).unwrap();
-        std::fs::set_permissions(root.join("real.sh"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(
+            root.join("real.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
         let p = plan(&root).unwrap();
         assert_eq!(p.commands, ["./install", "bash tools/x.sh"]);
         let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
@@ -2822,11 +3712,20 @@ make build
         assert_eq!(
             p.links,
             [
-                ("./install".to_string(), esc(base.join("real.sh").as_os_str())),
-                ("tools/x.sh".to_string(), esc(base.join("t1/x.sh").as_os_str())),
+                (
+                    "./install".to_string(),
+                    esc(base.join("real.sh").as_os_str())
+                ),
+                (
+                    "tools/x.sh".to_string(),
+                    esc(base.join("t1/x.sh").as_os_str())
+                ),
             ]
         );
-        let probe = SetupPlan { commands: vec!["./install".into()], ..p.clone() };
+        let probe = SetupPlan {
+            commands: vec!["./install".into()],
+            ..p.clone()
+        };
         assert_eq!(unchanged(&p), Ok(()));
         let (ok, out) = run_script(&probe, &d);
         assert!(ok && out.contains("\nreal\n"), "{out}");
@@ -2836,7 +3735,10 @@ make build
         symlink("evil.sh", root.join("install")).unwrap();
         assert_eq!(unchanged(&p), Err("./install".to_string()));
         let (ok, out) = run_script(&probe, &d);
-        assert!(!ok && !out.contains("evil") && out.contains("./install changed after it was shown"), "{out}");
+        assert!(
+            !ok && !out.contains("evil") && out.contains("./install changed after it was shown"),
+            "{out}"
+        );
         std::fs::remove_file(root.join("install")).unwrap();
         symlink("real.sh", root.join("install")).unwrap();
         assert_eq!(unchanged(&p), Ok(()));
@@ -2848,7 +3750,10 @@ make build
         let (ok, out) = run_script(&probe, &d);
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(after, Err("tools/x.sh".to_string()));
-        assert!(!ok && out.contains("tools/x.sh changed after it was shown"), "{out}");
+        assert!(
+            !ok && out.contains("tools/x.sh changed after it was shown"),
+            "{out}"
+        );
     }
 
     /// `systemctl --user enable --now ./x.service` links and starts a unit
@@ -2887,13 +3792,20 @@ make build
         let p = plan(&root).unwrap();
         assert_eq!(p.commands, ["./tools/configure", "make", "ninja"]);
         for held in ["Makefile", "build.ninja"] {
-            assert!(p.absent.contains(&held.to_string()), "{held}: {:?}", p.absent);
+            assert!(
+                p.absent.contains(&held.to_string()),
+                "{held}: {:?}",
+                p.absent
+            );
         }
         std::fs::write(root.join("Makefile"), "all:\n\techo unseen\n").unwrap();
         let after = unchanged(&p);
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(after, Err("Makefile".to_string()));
-        assert_eq!(generated_by("./configure", &["./configure".into()]), ["Makefile"]);
+        assert_eq!(
+            generated_by("./configure", &["./configure".into()]),
+            ["Makefile"]
+        );
         assert!(generated_by("./tools/configure", &["./tools/configure".into()]).is_empty());
     }
 
@@ -2907,7 +3819,11 @@ make build
     fn test_a_link_repointed_at_a_name_ending_in_a_newline_stops_the_run() {
         use std::os::unix::fs::{symlink, PermissionsExt};
         let d = tempdir();
-        let root = plugin_with(&d, "# Install\n```\n./install\n```\n", &[("real.sh", "echo real\n"), ("real.sh\n", "echo unshown\n")]);
+        let root = plugin_with(
+            &d,
+            "# Install\n```\n./install\n```\n",
+            &[("real.sh", "echo real\n"), ("real.sh\n", "echo unshown\n")],
+        );
         for f in ["real.sh", "real.sh\n"] {
             std::fs::set_permissions(root.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -2920,12 +3836,24 @@ make build
         std::fs::remove_file(root.join("install")).unwrap();
         symlink("real.sh\n", root.join("install")).unwrap();
         // The check as it was is fooled: the positive control.
-        let old = format!("cd {} && test \"$(realpath -e -- ./install)\" = {}", shlex_quote(&esc(root.as_os_str())), shlex_quote(&p.links[0].1));
-        assert!(std::process::Command::new("bash").arg("-c").arg(&old).status().unwrap().success());
+        let old = format!(
+            "cd {} && test \"$(realpath -e -- ./install)\" = {}",
+            shlex_quote(&esc(root.as_os_str())),
+            shlex_quote(&p.links[0].1)
+        );
+        assert!(std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&old)
+            .status()
+            .unwrap()
+            .success());
         // Almanac's own check, and the terminal's, are not.
         assert_eq!(unchanged(&p), Err("./install".to_string()));
         let (ok, out) = run_script(&p, &d);
-        assert!(!ok && !out.contains("unshown") && out.contains("./install changed after it was shown"), "{out}");
+        assert!(
+            !ok && !out.contains("unshown") && out.contains("./install changed after it was shown"),
+            "{out}"
+        );
 
         // A digest is held to every byte the same way.
         std::fs::remove_file(root.join("install")).unwrap();
@@ -2933,14 +3861,20 @@ make build
         assert!(run_script(&p, &d).0);
         std::fs::write(root.join("real.sh"), "echo edited\n").unwrap();
         let (ok, out) = run_script(&p, &d);
-        assert!(!ok && !out.contains("edited") && out.contains("real.sh changed after it was shown"), "{out}");
+        assert!(
+            !ok && !out.contains("edited") && out.contains("real.sh changed after it was shown"),
+            "{out}"
+        );
 
         // Pointing there when the plan is made, it is not offered at all.
         std::fs::remove_file(root.join("install")).unwrap();
         symlink("real.sh\n", root.join("install")).unwrap();
         let refused = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
-        assert!(refused.commands.is_empty() && refused.scripts.is_empty(), "{refused:?}");
+        assert!(
+            refused.commands.is_empty() && refused.scripts.is_empty(),
+            "{refused:?}"
+        );
     }
 
     /// Python puts the folder first on sys.path: `python3 -m venv .venv`
@@ -2952,33 +3886,66 @@ make build
         let root = plugin_with(
             &d,
             "# Install\n```\npython3 -m venv --help\nsudo python3 -m pip install .\n```\n",
-            &[("logging.py", "print('planted')\nraise SystemExit(3)\n"), ("pyproject.toml", "[project]\n")],
+            &[
+                ("logging.py", "print('planted')\nraise SystemExit(3)\n"),
+                ("pyproject.toml", "[project]\n"),
+            ],
         );
         let p = plan(&root).unwrap();
-        assert_eq!(p.commands, ["python3 -m venv --help", "sudo python3 -m pip install ."]);
+        assert_eq!(
+            p.commands,
+            ["python3 -m venv --help", "sudo python3 -m pip install ."]
+        );
         let script = terminal_script(&p);
-        assert!(script.contains("\n'python3' '-P' '-m' 'venv' '--help'\n"), "{script}");
-        assert!(script.contains("\n'sudo' 'python3' '-P' '-m' 'pip' 'install' '.'\n"), "{script}");
+        assert!(
+            script.contains("\n'python3' '-P' '-m' 'venv' '--help'\n"),
+            "{script}"
+        );
+        assert!(
+            script.contains("\n'sudo' 'python3' '-P' '-m' 'pip' 'install' '.'\n"),
+            "{script}"
+        );
         assert!(!script.contains("PYTHONSAFEPATH"), "{script}");
-        let texts = |line: &str| python_m_safe(literal_words(line).unwrap()).into_iter().map(|w| w.text).collect::<Vec<_>>();
+        let texts = |line: &str| {
+            python_m_safe(literal_words(line).unwrap())
+                .into_iter()
+                .map(|w| w.text)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(texts("sudo make"), ["sudo", "make"]);
-        assert_eq!(texts("python3 setup.py install"), ["python3", "setup.py", "install"]);
-        assert_eq!(texts("python3 -u -m build"), ["python3", "-P", "-u", "-m", "build"]);
+        assert_eq!(
+            texts("python3 setup.py install"),
+            ["python3", "setup.py", "install"]
+        );
+        assert_eq!(
+            texts("python3 -u -m build"),
+            ["python3", "-P", "-u", "-m", "build"]
+        );
         // Run for real where there is a Python to run.
         let python = |safe: bool| {
             let mut c = std::process::Command::new("python3");
-            c.args(["-m", "venv", "--help"]).current_dir(&root).env_remove("PYTHONSAFEPATH");
+            c.args(["-m", "venv", "--help"])
+                .current_dir(&root)
+                .env_remove("PYTHONSAFEPATH");
             if safe {
                 c.env("PYTHONSAFEPATH", "1");
             }
-            c.output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            c.output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         };
         if let Some(unsafe_out) = python(false) {
             // The positive control: without it, the planted file runs.
             assert!(unsafe_out.contains("planted"), "{unsafe_out}");
-            let probe = SetupPlan { commands: vec![p.commands[0].clone()], ..p.clone() };
+            let probe = SetupPlan {
+                commands: vec![p.commands[0].clone()],
+                ..p.clone()
+            };
             let (ok, out) = run_script(&probe, &d);
-            assert!(ok && !out.contains("planted") && out.contains("usage"), "{out}");
+            assert!(
+                ok && !out.contains("planted") && out.contains("usage"),
+                "{out}"
+            );
         }
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -3037,11 +4004,37 @@ make build
             "just install",
             "gcc -O2 -Wall -Iinclude -o x x.c -lm",
         ];
-        let files = [("cfg/evil.toml", "\n"), ("x.json", "{}\n"), ("args", "-wrapper ./w.sh\n"), ("evil.specs", "\n"), ("w.sh", "#!/bin/sh\n"), ("tc.cmake", "\n"), ("n.ini", "\n"), ("o.json", "{}\n"), ("Cargo.toml", "[package]\n"), ("CMakeLists.txt", "\n"), ("meson.build", "\n"), ("Makefile", "all:\n"), ("go.mod", "module x\n"), ("justfile", "install:\n"), ("x.c", "\n"), ("src/Makefile", "all:\n"), ("include/x.h", "\n")];
+        let files = [
+            ("cfg/evil.toml", "\n"),
+            ("x.json", "{}\n"),
+            ("args", "-wrapper ./w.sh\n"),
+            ("evil.specs", "\n"),
+            ("w.sh", "#!/bin/sh\n"),
+            ("tc.cmake", "\n"),
+            ("n.ini", "\n"),
+            ("o.json", "{}\n"),
+            ("Cargo.toml", "[package]\n"),
+            ("CMakeLists.txt", "\n"),
+            ("meson.build", "\n"),
+            ("Makefile", "all:\n"),
+            ("go.mod", "module x\n"),
+            ("justfile", "install:\n"),
+            ("x.c", "\n"),
+            ("src/Makefile", "all:\n"),
+            ("include/x.h", "\n"),
+        ];
         let readme = format!("# Install\n```\n{}\n```\n", bad.join("\n"));
         let root = plugin_with(&d, &readme, &files);
-        assert!(plan(&root).unwrap().commands.is_empty(), "{:?}", plan(&root).unwrap().commands);
-        std::fs::write(root.join("README.md"), format!("# Install\n```\n{}\n```\n", good.join("\n"))).unwrap();
+        assert!(
+            plan(&root).unwrap().commands.is_empty(),
+            "{:?}",
+            plan(&root).unwrap().commands
+        );
+        std::fs::write(
+            root.join("README.md"),
+            format!("# Install\n```\n{}\n```\n", good.join("\n")),
+        )
+        .unwrap();
         let p = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(p.commands, good);
@@ -3065,7 +4058,10 @@ make build
         ];
         let files = [
             ("CMakeLists.txt", "\n"),
-            ("build/CMakeCache.txt", "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n"),
+            (
+                "build/CMakeCache.txt",
+                "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n",
+            ),
             ("build/Makefile", "all:\n"),
             ("build/tc.cmake", "\n"),
             ("sub/CMakeLists.txt", "\n"),
@@ -3080,7 +4076,11 @@ make build
         let p = plan(&root).unwrap();
         // Built in place, the folder's own cache is shown with the step.
         std::fs::write(root.join("README.md"), "# Install\n```\ncmake .\n```\n").unwrap();
-        std::fs::write(root.join("CMakeCache.txt"), "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n").unwrap();
+        std::fs::write(
+            root.join("CMakeCache.txt"),
+            "CMAKE_PROJECT_INCLUDE:FILEPATH=evil.cmake\n",
+        )
+        .unwrap();
         let q = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert!(p.commands.is_empty(), "{:?}", p.commands);
@@ -3093,7 +4093,11 @@ make build
     #[test]
     fn a_shipped_node_modules_stops_npm() {
         let d = tempdir();
-        let root = plugin_with(&d, "# Install\n```\nnpm run build\n```\n", &[("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n")]);
+        let root = plugin_with(
+            &d,
+            "# Install\n```\nnpm run build\n```\n",
+            &[("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n")],
+        );
         assert_eq!(plan(&root).unwrap().commands, ["npm run build"]);
         std::fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
         std::fs::write(root.join("node_modules/.bin/tsc"), "#!/bin/sh\n").unwrap();
@@ -3108,16 +4112,26 @@ make build
     #[test]
     fn lockfiles_are_shown_and_a_shipped_venv_stops_uv() {
         let d = tempdir();
-        let lock = "{\"packages\": {\"node_modules/foo\": {\"resolved\": \"evil\", \"link\": true}}}\n";
+        let lock =
+            "{\"packages\": {\"node_modules/foo\": {\"resolved\": \"evil\", \"link\": true}}}\n";
         let root = plugin_with(
             &d,
             "# Install\n```\nnpm ci\nuv sync --frozen\n```\n",
-            &[("package.json", "{}\n"), ("package-lock.json", lock), ("pyproject.toml", "[project]\n"), ("uv.lock", "version = 1\n")],
+            &[
+                ("package.json", "{}\n"),
+                ("package-lock.json", lock),
+                ("pyproject.toml", "[project]\n"),
+                ("uv.lock", "version = 1\n"),
+            ],
         );
         let p = plan(&root).unwrap();
         assert_eq!(p.commands, ["npm ci", "uv sync --frozen"]);
         let shown: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
-        assert!(shown.contains(&"package-lock.json".to_string()) && shown.contains(&"uv.lock".to_string()), "{shown:?}");
+        assert!(
+            shown.contains(&"package-lock.json".to_string())
+                && shown.contains(&"uv.lock".to_string()),
+            "{shown:?}"
+        );
         std::fs::create_dir_all(root.join(".venv/bin")).unwrap();
         std::fs::write(root.join(".venv/bin/python"), "#!/bin/sh\n").unwrap();
         let p = plan(&root).unwrap();
@@ -3131,17 +4145,67 @@ make build
     fn test_runners_folders_and_unit_globs_are_not_offered() {
         let d = tempdir();
         let readme = "# Install\n```\nuv run python evil.py\nuv run python -m venv --help\nuv tool run --from . x\npipx run ./x.py\nsystemctl --user stop '*'\nsystemctl --user stop 'x?'\nnpm exec cowsay\nnpm x cowsay\npnpm dlx cowsay\nyarn dlx cowsay\nbun x cowsay\nuv --cache-dir /tmp/c run python evil.py\nuv --color always run python evil.py\nuv --config-file uv.toml run x\nnpm --loglevel silent exec cowsay\npnpm --reporter silent dlx cowsay\nnpm init foo\npipx --verbose run x\nnpm exe cowsay\nnpm innit foo\nnpm crea foo\nnpm install --script-shell ./evil.sh\nnpm install --userconfig ./evil.npmrc\npnpm install --config.script-shell=./evil.sh\nnpm run build --node-options=--require=./evil.js\nuv sync --python ./fakepy\nuv pip install --python ./fakepy .\npipx install --python ./fakepy .\nyarn node evil.js\nnpm explore x -- ./run\nuv tool install --from=./sub x\nuv sync --config-file ./c.toml\nnpm install ./local-pkg\nyarn missing-script\nyarn build\npnpm build\nnpm install foo@..\npnpm add foo@.\nyarn add foo@..\nbun add foo@..\nnpm install evil.tgz\npip install evil.tar.gz\nuv pip install evil.zip\npipx install evil.whl\npip install ./evil.tar.gz\nuv pip install ./evil.zip\nnpm install later.tgz\npip install later.whl\nuv pip install foo@evil-dir\nuv tool install foo@evil-dir\npip install foo@evil-dir\npipx install foo@evil-dir\npip install -r https://example.com/r.txt\npip install --requirement=https://example.com/r.txt\npip install -c https://example.com/c.txt .\nuv pip install -r http://127.0.0.1:8765/r.txt\npip install -r /etc/x\npip install -e ../x\npython3 -m pip install evil.tar.gz\nuv tool install evil.tar.gz\nnpm install foo@~\nnpm install evil-dir\n```\n";
-        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("evil.py", "print('PWNED')\n"), ("venv.py", "print('PWNED')\n"), ("x.py", "\n"), ("evil.sh", "#!/bin/sh\necho PWNED\n"), ("evil.js", "\n"), ("evil.npmrc", "\n"), ("fakepy", "#!/bin/sh\n"), ("c.toml", "\n"), ("sub/pyproject.toml", "[project]\n"), ("local-pkg/package.json", "{}\n"), ("evil.tgz", "x"), ("evil.tar.gz", "x"), ("evil.zip", "x"), ("evil.whl", "x"), ("evil-dir/package.json", "{}\n")]);
+        let root = plugin_with(
+            &d,
+            readme,
+            &[
+                ("pyproject.toml", "[project]\n"),
+                ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"),
+                ("evil.py", "print('PWNED')\n"),
+                ("venv.py", "print('PWNED')\n"),
+                ("x.py", "\n"),
+                ("evil.sh", "#!/bin/sh\necho PWNED\n"),
+                ("evil.js", "\n"),
+                ("evil.npmrc", "\n"),
+                ("fakepy", "#!/bin/sh\n"),
+                ("c.toml", "\n"),
+                ("sub/pyproject.toml", "[project]\n"),
+                ("local-pkg/package.json", "{}\n"),
+                ("evil.tgz", "x"),
+                ("evil.tar.gz", "x"),
+                ("evil.zip", "x"),
+                ("evil.whl", "x"),
+                ("evil-dir/package.json", "{}\n"),
+            ],
+        );
         let p = plan(&root).unwrap();
         assert!(p.commands.is_empty(), "{:?}", p.commands);
 
         let readme = "# Install\n```\nuv sync\n```\n";
-        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), (".python-version", "d\n"), ("d/bin/python", "#!/bin/sh\necho PWNED\n")]);
+        let root = plugin_with(
+            &d,
+            readme,
+            &[
+                ("pyproject.toml", "[project]\n"),
+                (".python-version", "d\n"),
+                ("d/bin/python", "#!/bin/sh\necho PWNED\n"),
+            ],
+        );
         assert!(plan(&root).unwrap().commands.is_empty());
-        for good in ["3.12\n", "3\n", "3.12.1\n", "3.13t\n", "pypy3.10\n", "cpython3.12\n", "pypy@3.10\n", "# pinned\n\n3.12\n"] {
+        for good in [
+            "3.12\n",
+            "3\n",
+            "3.12.1\n",
+            "3.13t\n",
+            "pypy3.10\n",
+            "cpython3.12\n",
+            "pypy@3.10\n",
+            "# pinned\n\n3.12\n",
+        ] {
             assert!(python_versions_only(good, &root), "{good:?}");
         }
-        for bad in ["d\n", "./fakepy\n", "/usr/bin/python3\n", "3.12 d\n", "python\n", "~/py\n", "cpython-3.12\n", "py3\n", "d3\n", "x1\n"] {
+        for bad in [
+            "d\n",
+            "./fakepy\n",
+            "/usr/bin/python3\n",
+            "3.12 d\n",
+            "python\n",
+            "~/py\n",
+            "cpython-3.12\n",
+            "py3\n",
+            "d3\n",
+            "x1\n",
+        ] {
             assert!(!python_versions_only(bad, &root), "{bad:?}");
         }
         // A request that looks like a version but names a folder of the plugin's.
@@ -3152,15 +4216,50 @@ make build
         assert_eq!(plan(&root).unwrap().commands, ["uv sync"]);
 
         // What a README actually writes is still offered.
-        let legit = ["uv sync", "uv pip install .", "uv tool install .", "npm install", "npm ci", "npm run build", "npm install left-pad@1.3.0 @scope/pkg", "pnpm install", "yarn", "yarn run build", "bun install", "pip install requests black==24.1", "pip install -r requirements.txt", "pip install -e .", "pip install --user .", "uv pip install -e .", "python3 -m pip install --user -r requirements.txt", "pipx install ."];
+        let legit = [
+            "uv sync",
+            "uv pip install .",
+            "uv tool install .",
+            "npm install",
+            "npm ci",
+            "npm run build",
+            "npm install left-pad@1.3.0 @scope/pkg",
+            "pnpm install",
+            "yarn",
+            "yarn run build",
+            "bun install",
+            "pip install requests black==24.1",
+            "pip install -r requirements.txt",
+            "pip install -e .",
+            "pip install --user .",
+            "uv pip install -e .",
+            "python3 -m pip install --user -r requirements.txt",
+            "pipx install .",
+        ];
         let readme = format!("# Install\n```\n{}\n```\n", legit.join("\n"));
-        let root = plugin_with(&d, &readme, &[("pyproject.toml", "[project]\n"), ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"), ("requirements.txt", "requests\n")]);
+        let root = plugin_with(
+            &d,
+            &readme,
+            &[
+                ("pyproject.toml", "[project]\n"),
+                ("package.json", "{\"scripts\": {\"build\": \"tsc\"}}\n"),
+                ("requirements.txt", "requests\n"),
+            ],
+        );
         let _ = std::fs::remove_file(root.join(".python-version"));
         assert_eq!(plan(&root).unwrap().commands, legit);
 
-        assert!(service_line(&["--user".into(), "stop".into(), "x.service".into()]));
+        assert!(service_line(&[
+            "--user".into(),
+            "stop".into(),
+            "x.service".into()
+        ]));
         assert!(!service_line(&["--user".into(), "stop".into(), "*".into()]));
-        assert!(!service_line(&["--user".into(), "restart".into(), "x[12].service".into()]));
+        assert!(!service_line(&[
+            "--user".into(),
+            "restart".into(),
+            "x[12].service".into()
+        ]));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -3171,7 +4270,15 @@ make build
     fn test_uv_shows_its_python_version_and_refuses_a_path() {
         let d = tempdir();
         let readme = "# Install\n```\nuv sync\n```\n";
-        let root = plugin_with(&d, readme, &[("pyproject.toml", "[project]\n"), (".python-version", "./fakepy\n"), ("fakepy", "#!/bin/sh\n")]);
+        let root = plugin_with(
+            &d,
+            readme,
+            &[
+                ("pyproject.toml", "[project]\n"),
+                (".python-version", "./fakepy\n"),
+                ("fakepy", "#!/bin/sh\n"),
+            ],
+        );
         assert!(plan(&root).unwrap().commands.is_empty());
         std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
         let p = plan(&root).unwrap();
@@ -3179,12 +4286,20 @@ make build
         let names: Vec<String> = p.scripts.iter().map(|(k, _)| esc(k)).collect();
         assert_eq!(names, ["pyproject.toml", ".python-version"]);
         for absent in ["uv.toml", ".python-versions", "setup.py"] {
-            assert!(p.absent.contains(&absent.to_string()), "{absent}: {:?}", p.absent);
+            assert!(
+                p.absent.contains(&absent.to_string()),
+                "{absent}: {:?}",
+                p.absent
+            );
         }
         // Repointed at a path after the plan: a changed file.
         std::fs::write(root.join(".python-version"), "./fakepy\n").unwrap();
         let after = unchanged(&p);
-        std::fs::write(root.join("uv.toml"), "python-preference = \"only-system\"\n").unwrap();
+        std::fs::write(
+            root.join("uv.toml"),
+            "python-preference = \"only-system\"\n",
+        )
+        .unwrap();
         std::fs::write(root.join(".python-version"), "3.12\n").unwrap();
         let appeared = unchanged(&p);
         let _ = std::fs::remove_dir_all(&d);
@@ -3223,7 +4338,11 @@ make build
             assert_eq!(step_kind(bad), None, "{bad}");
         }
         let d = tempdir();
-        let root = plugin_with(&d, "# Install\n```\nsystemctl --user edit x\nsystemctl --user start x\n```\n", &[]);
+        let root = plugin_with(
+            &d,
+            "# Install\n```\nsystemctl --user edit x\nsystemctl --user start x\n```\n",
+            &[],
+        );
         let p = plan(&root).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(p.commands, ["systemctl --user start x"]);

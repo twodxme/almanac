@@ -1,5 +1,5 @@
 # Every push and pull request, on a clean Arch Linux: the build, the tests,
-# clippy, the desktop and AppStream metadata, a build with the oldest Rust
+# formatting, clippy, the desktop and AppStream metadata, a build with the oldest Rust
 # Cargo.toml allows (rust-version), and a real package build of this commit.
 #
 # Everything runs as an ordinary user with what an Arch desktop gives one:
@@ -67,6 +67,9 @@ jobs:
           # What a clean-chroot package build sees: no display at all. Tests
           # that build widgets must skip themselves there, not crash.
           as-user cargo test --locked
+
+      - name: Formatting
+        run: as-user cargo fmt --check
 
       - name: Clippy
         run: as-user cargo clippy --all-targets --locked -- -D warnings

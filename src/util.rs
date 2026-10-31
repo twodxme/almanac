@@ -80,7 +80,13 @@ pub struct RunOpts<'a> {
 /// in the result, the way the Python callers catch OSError and
 /// TimeoutExpired.
 pub fn run(argv: &[&str], timeout_secs: u64) -> Output {
-    run_with(argv, &RunOpts { timeout: Some(Duration::from_secs(timeout_secs)), ..Default::default() })
+    run_with(
+        argv,
+        &RunOpts {
+            timeout: Some(Duration::from_secs(timeout_secs)),
+            ..Default::default()
+        },
+    )
 }
 
 /// [`run`] with options.
@@ -105,7 +111,10 @@ pub fn run_with(argv: &[&str], opts: &RunOpts) -> Output {
 /// of [`run_with`]; never panics.
 pub fn run_bytes<S: AsRef<OsStr>>(argv: &[S], opts: &RunOpts) -> Output<Vec<u8>> {
     let Some((prog, args)) = argv.split_first() else {
-        return Output { failed_to_start: true, ..Default::default() };
+        return Output {
+            failed_to_start: true,
+            ..Default::default()
+        };
     };
     let not_started = |e: std::io::Error| Output {
         failed_to_start: true,
@@ -116,7 +125,11 @@ pub fn run_bytes<S: AsRef<OsStr>>(argv: &[S], opts: &RunOpts) -> Output<Vec<u8>>
     let mut cmd = Command::new(prog);
     cmd.args(args)
         .stdout(Stdio::piped())
-        .stderr(if opts.discard_stderr { Stdio::null() } else { Stdio::piped() });
+        .stderr(if opts.discard_stderr {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
     match opts.stdin {
         Stdin::Null => cmd.stdin(Stdio::null()),
         Stdin::Inherit => cmd.stdin(Stdio::inherit()),
@@ -159,8 +172,18 @@ pub fn run_bytes<S: AsRef<OsStr>>(argv: &[S], opts: &RunOpts) -> Output<Vec<u8>>
         });
         rx
     };
-    let out_rx = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err_rx = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let out_rx = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err_rx = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
     let deadline = opts.timeout.map(|t| Instant::now() + t);
     let mut timed_out = false;
     let status = match opts.timeout {
@@ -199,7 +222,14 @@ pub fn run_bytes<S: AsRef<OsStr>>(argv: &[S], opts: &RunOpts) -> Output<Vec<u8>>
         }
         _ => (None, None),
     };
-    Output { code, signal, stdout, stderr, timed_out, ..Default::default() }
+    Output {
+        code,
+        signal,
+        stdout,
+        stderr,
+        timed_out,
+        ..Default::default()
+    }
 }
 
 /// Start `cmd` as the leader of a process group of its own, so that a
@@ -220,7 +250,10 @@ pub fn spawn_group(cmd: &mut Command) -> std::io::Result<std::process::Child> {
 /// ignored) once nothing is.
 pub fn kill_group(child: &mut std::process::Child) {
     if let Ok(pid) = i32::try_from(child.id()) {
-        let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), nix::sys::signal::Signal::SIGKILL);
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -238,7 +271,10 @@ fn exits_within(child: &std::process::Child, timeout: Duration) -> bool {
     let pid = Pid::from_child(child);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        while let Err(rustix::io::Errno::INTR) = waitid(WaitId::Pid(pid), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT) {}
+        while let Err(rustix::io::Errno::INTR) = waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        ) {}
         let _ = tx.send(());
     });
     rx.recv_timeout(timeout).is_ok()
@@ -258,12 +294,16 @@ pub fn which(name: &str) -> Option<PathBuf> {
 
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    p.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 /// `Path.home()`.
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 /// Python's `round(x)`: halves go to the even neighbour (`round(2.5) == 2`),
@@ -277,7 +317,9 @@ pub fn py_round(x: f64) -> f64 {
 pub fn py_round_to(x: f64, ndigits: i32) -> f64 {
     // Python rounds the exact decimal value correctly; going through the
     // shortest-repr string and back matches it for every value we display.
-    format!("{:.*}", ndigits.max(0) as usize, x).parse().unwrap_or(x)
+    format!("{:.*}", ndigits.max(0) as usize, x)
+        .parse()
+        .unwrap_or(x)
 }
 
 /// Python's `str.title()`: upper-case the first cased character after any
@@ -317,11 +359,11 @@ pub fn py_islower(s: &str) -> bool {
 const DECIMAL_ZEROS: [u32; 76] = [
     0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
     0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
-    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
-    0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450,
-    0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50,
-    0x11D50, 0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE,
-    0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0,
+    0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50, 0x11D50,
+    0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE, 0x1D7D8,
+    0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
 ];
 
 /// The value of a Unicode decimal digit (`\d`, category Nd), as Python's
@@ -341,7 +383,10 @@ pub fn py_digits_value(digits: &str) -> Option<f64> {
     if digits.bytes().all(|b| b.is_ascii_digit()) {
         return digits.parse().ok();
     }
-    let ascii: Option<String> = digits.chars().map(|c| char::from_digit(decimal_value(c)?, 10)).collect();
+    let ascii: Option<String> = digits
+        .chars()
+        .map(|c| char::from_digit(decimal_value(c)?, 10))
+        .collect();
     ascii?.parse().ok()
 }
 
@@ -357,13 +402,21 @@ pub fn iso_ts(value: &str) -> f64 {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&v) {
         return dt.timestamp() as f64 + f64::from(dt.timestamp_subsec_micros()) / 1e6;
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M%:z"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f%:z",
+        "%Y-%m-%d %H:%M:%S%.f%:z",
+        "%Y-%m-%dT%H:%M%:z",
+    ] {
         if let Ok(dt) = chrono::DateTime::parse_from_str(&v, fmt) {
             return dt.timestamp() as f64 + f64::from(dt.timestamp_subsec_micros()) / 1e6;
         }
     }
     use chrono::TimeZone;
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+    ] {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&v, fmt) {
             if let Some(dt) = chrono::Local.from_local_datetime(&naive).earliest() {
                 return dt.timestamp() as f64 + f64::from(dt.timestamp_subsec_micros()) / 1e6;
@@ -371,7 +424,10 @@ pub fn iso_ts(value: &str) -> f64 {
         }
     }
     if let Ok(d) = chrono::NaiveDate::parse_from_str(&v, "%Y-%m-%d") {
-        if let Some(dt) = d.and_hms_opt(0, 0, 0).and_then(|n| chrono::Local.from_local_datetime(&n).earliest()) {
+        if let Some(dt) = d
+            .and_hms_opt(0, 0, 0)
+            .and_then(|n| chrono::Local.from_local_datetime(&n).earliest())
+        {
             return dt.timestamp() as f64;
         }
     }
@@ -412,7 +468,11 @@ pub fn with_stack<R: Send>(size: usize, f: impl FnOnce() -> R + Send) -> R {
 /// [`with_stack`] on a thread named `name` (None: unnamed) whatever the
 /// caller's, for work that stands in for a Python worker thread wherever it
 /// is called from.
-pub fn with_stack_named<R: Send>(size: usize, name: Option<&str>, f: impl FnOnce() -> R + Send) -> R {
+pub fn with_stack_named<R: Send>(
+    size: usize,
+    name: Option<&str>,
+    f: impl FnOnce() -> R + Send,
+) -> R {
     let mut job = Some(f);
     let out = std::thread::scope(|s| {
         let job = &mut job;
@@ -443,7 +503,12 @@ pub fn read_json(path: &Path) -> Option<serde_json::Value> {
 /// Write JSON atomically (`atomic_write`). Creates the parent directory.
 /// `indent` mirrors `json.dumps(indent=...)`; `sort_keys` mirrors
 /// `sort_keys=True`.
-pub fn write_json(path: &Path, value: &serde_json::Value, indent: Option<usize>, sort_keys: bool) -> std::io::Result<()> {
+pub fn write_json(
+    path: &Path,
+    value: &serde_json::Value,
+    indent: Option<usize>,
+    sort_keys: bool,
+) -> std::io::Result<()> {
     atomic_write(path, dumps(value, indent, sort_keys).as_bytes())
 }
 
@@ -463,10 +528,12 @@ pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::i
     use std::os::unix::fs::PermissionsExt;
     let target = match std::fs::symlink_metadata(path) {
         // A link to a file not there yet still names where it should go.
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| match std::fs::read_link(path) {
-            Ok(to) => path.parent().unwrap_or(Path::new(".")).join(to),
-            Err(_) => path.to_path_buf(),
-        }),
+        Ok(m) if m.file_type().is_symlink() => {
+            std::fs::canonicalize(path).unwrap_or_else(|_| match std::fs::read_link(path) {
+                Ok(to) => path.parent().unwrap_or(Path::new(".")).join(to),
+                Err(_) => path.to_path_buf(),
+            })
+        }
         _ => path.to_path_buf(),
     };
     let parent = match target.parent() {
@@ -474,10 +541,15 @@ pub fn atomic_write_mode(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::i
         _ => Path::new("."),
     };
     std::fs::create_dir_all(parent)?;
-    let mut tmp = tempfile::Builder::new().prefix(".").suffix(".tmp").tempfile_in(parent)?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
     tmp.write_all(bytes)?;
     match (mode, std::fs::metadata(&target)) {
-        (Some(mode), _) => tmp.as_file().set_permissions(std::fs::Permissions::from_mode(mode))?,
+        (Some(mode), _) => tmp
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(mode))?,
         (None, Ok(m)) => tmp.as_file().set_permissions(m.permissions())?,
         (None, Err(_)) => {}
     }
@@ -494,7 +566,11 @@ pub fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
     loop {
         match flock(&file, FlockOperation::LockExclusive) {
             Ok(()) => return Ok(file),
@@ -528,9 +604,15 @@ pub fn build_checkout() -> Option<PathBuf> {
 /// Cargo.toml, when that is Almanac's (`name = "almanac"`) and `exe` is in
 /// its `target` folder. None for anything else.
 fn checkout_of(exe: &Path) -> Option<PathBuf> {
-    let dir = exe.ancestors().skip(1).find(|d| d.join("Cargo.toml").is_file())?;
+    let dir = exe
+        .ancestors()
+        .skip(1)
+        .find(|d| d.join("Cargo.toml").is_file())?;
     let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
-    let ours = manifest.lines().map(str::trim).any(|l| l == "name = \"almanac\"");
+    let ours = manifest
+        .lines()
+        .map(str::trim)
+        .any(|l| l == "name = \"almanac\"");
     (ours && exe.starts_with(dir.join("target"))).then(|| dir.to_path_buf())
 }
 
@@ -560,7 +642,13 @@ pub fn dumps(value: &serde_json::Value, indent: Option<usize>, sort_keys: bool) 
     out
 }
 
-fn dump_into(out: &mut String, v: &serde_json::Value, indent: Option<usize>, sort: bool, level: usize) {
+fn dump_into(
+    out: &mut String,
+    v: &serde_json::Value,
+    indent: Option<usize>,
+    sort: bool,
+    level: usize,
+) {
     use serde_json::Value;
     let nl = |out: &mut String, lvl: usize| {
         if let Some(n) = indent {
@@ -568,7 +656,11 @@ fn dump_into(out: &mut String, v: &serde_json::Value, indent: Option<usize>, sor
             out.push_str(&" ".repeat(n * lvl));
         }
     };
-    let (item_sep, key_sep) = if indent.is_some() { (",", ": ") } else { (", ", ": ") };
+    let (item_sep, key_sep) = if indent.is_some() {
+        (",", ": ")
+    } else {
+        (", ", ": ")
+    };
     match v {
         Value::Array(items) => {
             if items.is_empty() {
@@ -653,7 +745,11 @@ pub fn py_float_repr(f: f64) -> String {
         return "NaN".into();
     }
     if f.is_infinite() {
-        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
+        return if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        };
     }
     let s = format!("{f:?}");
     // Rust's Debug is shortest round-trip too; Python switches to exponent
@@ -722,7 +818,11 @@ pub mod tree {
                 },
                 Work::Build(n, k, is_dict) => {
                     let kids = out.split_off(out.len() - k);
-                    out.push(if is_dict { dict(n, kids) } else { list(n, kids) });
+                    out.push(if is_dict {
+                        dict(n, kids)
+                    } else {
+                        list(n, kids)
+                    });
                 }
             }
         }
@@ -843,7 +943,8 @@ pub mod tree {
                         }
                     }
                 }
-                (Value::Array(_) | Value::Object(_), _) | (_, Value::Array(_) | Value::Object(_)) => return false,
+                (Value::Array(_) | Value::Object(_), _)
+                | (_, Value::Array(_) | Value::Object(_)) => return false,
                 (x, y) => {
                     if x != y {
                         return false;
@@ -1059,10 +1160,17 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let checkout = d.path().join("almanac");
         std::fs::create_dir_all(checkout.join("target/release")).unwrap();
-        std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"almanac\"\n").unwrap();
+        std::fs::write(
+            checkout.join("Cargo.toml"),
+            "[package]\nname = \"almanac\"\n",
+        )
+        .unwrap();
         let exe = checkout.join("target/release/almanac");
         assert_eq!(checkout_of(&exe), Some(checkout.clone()));
-        assert_eq!(checkout_of(&checkout.join("target/debug/deps/almanac-1234")), Some(checkout.clone()));
+        assert_eq!(
+            checkout_of(&checkout.join("target/debug/deps/almanac-1234")),
+            Some(checkout.clone())
+        );
         // Installed elsewhere: no checkout, whatever tree it was built in.
         assert_eq!(checkout_of(Path::new("/usr/bin/almanac")), None);
         assert_eq!(checkout_of(&d.path().join("bin/almanac")), None);
@@ -1115,8 +1223,15 @@ mod tests {
                 });
             }
         });
-        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(left, vec![std::ffi::OsString::from("state.json")], "no temp file is left behind");
+        let left: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            left,
+            vec![std::ffi::OsString::from("state.json")],
+            "no temp file is left behind"
+        );
     }
 
     #[test]
@@ -1129,15 +1244,27 @@ mod tests {
         let link = d.path().join("link.conf");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         atomic_write(&link, b"new").unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
-        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        assert_eq!(
+            std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         // A link whose file is not there yet is written through, too.
         let dangling = d.path().join("dangling.conf");
         std::os::unix::fs::symlink("later.conf", &dangling).unwrap();
         atomic_write(&dangling, b"first").unwrap();
-        assert!(std::fs::symlink_metadata(&dangling).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(d.path().join("later.conf")).unwrap(), "first");
+        assert!(std::fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("later.conf")).unwrap(),
+            "first"
+        );
     }
 
     #[test]
@@ -1147,7 +1274,10 @@ mod tests {
         let mine = d.path().join("mine");
         std::fs::create_dir(&mine).unwrap();
         std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(trusted_dir(&mine), Some(std::fs::canonicalize(&mine).unwrap()));
+        assert_eq!(
+            trusted_dir(&mine),
+            Some(std::fs::canonicalize(&mine).unwrap())
+        );
         std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(trusted_dir(&mine), None, "a world-writable folder");
         std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o775)).unwrap();
@@ -1174,9 +1304,16 @@ mod tests {
 
     #[test]
     fn json_matches_python_dumps() {
-        let v: serde_json::Value = serde_json::from_str(r#"{"b": [1, 2.5, "é"], "a": {}}"#).unwrap();
-        assert_eq!(dumps(&v, None, true), r#"{"a": {}, "b": [1, 2.5, "\u00e9"]}"#);
-        assert_eq!(dumps(&v, Some(2), true), "{\n  \"a\": {},\n  \"b\": [\n    1,\n    2.5,\n    \"\\u00e9\"\n  ]\n}");
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"b": [1, 2.5, "é"], "a": {}}"#).unwrap();
+        assert_eq!(
+            dumps(&v, None, true),
+            r#"{"a": {}, "b": [1, 2.5, "\u00e9"]}"#
+        );
+        assert_eq!(
+            dumps(&v, Some(2), true),
+            "{\n  \"a\": {},\n  \"b\": [\n    1,\n    2.5,\n    \"\\u00e9\"\n  ]\n}"
+        );
         assert_eq!(py_float_repr(1.0), "1.0");
         assert_eq!(py_float_repr(1e16), "1e+16");
     }
@@ -1187,7 +1324,13 @@ mod tests {
         assert!(out.ok());
         assert_eq!(out.stdout, "hi\n");
         assert_eq!(out.stderr, "err\n");
-        let slow = run_with(&["sleep", "5"], &RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() });
+        let slow = run_with(
+            &["sleep", "5"],
+            &RunOpts {
+                timeout: Some(Duration::from_millis(200)),
+                ..Default::default()
+            },
+        );
         assert!(slow.timed_out);
         assert!(run(&["/nonexistent-binary"], 1).failed_to_start);
     }
@@ -1201,27 +1344,42 @@ mod tests {
         assert!(out.ok());
         assert_eq!(out.stdout, b"a\xff\r\n");
         let out = run_bytes(&["sh", "-c", "kill -TERM $$"], &RunOpts::default());
-        assert_eq!((out.code, out.signal, out.timed_out), (None, Some(15), false));
+        assert_eq!(
+            (out.code, out.signal, out.timed_out),
+            (None, Some(15), false)
+        );
         let out = run_bytes(&["/nonexistent-binary"], &RunOpts::default());
         assert!(out.failed_to_start);
         assert_eq!(out.start_errno, Some(2));
         let dir = tempfile::tempdir().unwrap();
         let script = "printf '%s|%s|' \"$0\" \"$ALM_T\"; pwd; cat; echo gone >&2";
-        let out = run_bytes(&["sh", "-c", script], &RunOpts {
-            stdin: Stdin::Input(b"in"),
-            env: vec![("ALM_T".into(), "v".into())],
-            cwd: Some(dir.path()),
-            arg0: Some(OsStr::new("named")),
-            discard_stderr: true,
-            ..Default::default()
-        });
-        let want = format!("named|v|{}\nin", dir.path().canonicalize().unwrap().display());
+        let out = run_bytes(
+            &["sh", "-c", script],
+            &RunOpts {
+                stdin: Stdin::Input(b"in"),
+                env: vec![("ALM_T".into(), "v".into())],
+                cwd: Some(dir.path()),
+                arg0: Some(OsStr::new("named")),
+                discard_stderr: true,
+                ..Default::default()
+            },
+        );
+        let want = format!(
+            "named|v|{}\nin",
+            dir.path().canonicalize().unwrap().display()
+        );
         assert_eq!(String::from_utf8_lossy(&out.stdout), want);
         assert!(out.stderr.is_empty());
         let mut f = tempfile::tempfile().unwrap();
         f.write_all(b"from a file").unwrap();
         std::io::Seek::rewind(&mut f).unwrap();
-        let out = run_bytes(&["cat"], &RunOpts { stdin: Stdin::File(&f), ..Default::default() });
+        let out = run_bytes(
+            &["cat"],
+            &RunOpts {
+                stdin: Stdin::File(&f),
+                ..Default::default()
+            },
+        );
         assert_eq!(out.stdout, b"from a file");
     }
 
@@ -1232,11 +1390,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mark = dir.path().join("survived");
         let script = format!("(sleep 0.6; touch '{}') & sleep 30", mark.display());
-        let opts = RunOpts { timeout: Some(Duration::from_millis(200)), ..Default::default() };
+        let opts = RunOpts {
+            timeout: Some(Duration::from_millis(200)),
+            ..Default::default()
+        };
         let started = Instant::now();
         let out = run_with(&["sh", "-c", &script], &opts);
         assert!(out.timed_out);
-        assert!(started.elapsed() < Duration::from_millis(600), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_millis(600),
+            "{:?}",
+            started.elapsed()
+        );
         // well past the moment the grandchild would have touched the mark
         std::thread::sleep(Duration::from_millis(900));
         assert!(!mark.exists(), "the grandchild outlived the timeout");
@@ -1245,7 +1410,11 @@ mod tests {
         let started = Instant::now();
         let out = run_with(&["sh", "-c", "sleep 30 & echo hi"], &opts);
         assert!(out.timed_out);
-        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
@@ -1258,7 +1427,14 @@ mod tests {
     /// Run `f` on a thread with a deliberately small stack: anything that
     /// recursed once per level of a deep value would overflow it.
     fn on_small_stack<R: Send>(f: impl FnOnce() -> R + Send) -> R {
-        std::thread::scope(|s| std::thread::Builder::new().stack_size(128 << 10).spawn_scoped(s, f).unwrap().join().unwrap())
+        std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .stack_size(128 << 10)
+                .spawn_scoped(s, f)
+                .unwrap()
+                .join()
+                .unwrap()
+        })
     }
 
     #[derive(Debug)]
@@ -1290,7 +1466,11 @@ mod tests {
     fn deep_v(n: usize) -> V {
         let mut v = V::I(7);
         for i in 0..n {
-            v = if i % 2 == 0 { V::L(vec![V::N, v]) } else { V::D(vec![("k".into(), v)]) };
+            v = if i % 2 == 0 {
+                V::L(vec![V::N, v])
+            } else {
+                V::D(vec![("k".into(), v)])
+            };
         }
         v
     }
@@ -1347,11 +1527,25 @@ mod tests {
         // replaced matched with a regex), and each run counts 0-9 from its
         // zero.
         let all: String = (0..=0x10ffffu32).filter_map(char::from_u32).collect();
-        let nd: Vec<char> = regex::Regex::new(r"\p{Nd}").unwrap().find_iter(&all).filter_map(|m| m.as_str().chars().next()).collect();
-        let table: Vec<char> = (0..=0x10ffffu32).filter_map(char::from_u32).filter(|&c| decimal_value(c).is_some()).collect();
+        let nd: Vec<char> = regex::Regex::new(r"\p{Nd}")
+            .unwrap()
+            .find_iter(&all)
+            .filter_map(|m| m.as_str().chars().next())
+            .collect();
+        let table: Vec<char> = (0..=0x10ffffu32)
+            .filter_map(char::from_u32)
+            .filter(|&c| decimal_value(c).is_some())
+            .collect();
         assert_eq!(nd, table);
         assert_eq!(nd.len(), 760);
-        for (c, d) in [('7', 7), ('\u{663}', 3), ('\u{ff19}', 9), ('\u{1d7d9}', 1), ('\u{1e5f1}', 0), ('\u{1fbf9}', 9)] {
+        for (c, d) in [
+            ('7', 7),
+            ('\u{663}', 3),
+            ('\u{ff19}', 9),
+            ('\u{1d7d9}', 1),
+            ('\u{1e5f1}', 0),
+            ('\u{1fbf9}', 9),
+        ] {
             assert_eq!(decimal_value(c), Some(d), "{c:?}");
         }
         for c in ['a', '/', ':', '\u{b2}', '\u{2167}', '\u{1d7cd}'] {
@@ -1365,13 +1559,24 @@ mod tests {
     #[test]
     fn with_stack_gives_deep_recursion_room_and_keeps_the_thread_name() {
         fn down(n: u32) -> u32 {
-            if n == 0 { 0 } else { 1 + std::hint::black_box(down(n - 1)) }
+            if n == 0 {
+                0
+            } else {
+                1 + std::hint::black_box(down(n - 1))
+            }
         }
         let got = std::thread::scope(|s| {
             std::thread::Builder::new()
                 .name("main".into())
                 .stack_size(128 << 10)
-                .spawn_scoped(s, || with_stack(DEEP_STACK, || (down(100_000), std::thread::current().name().map(String::from))))
+                .spawn_scoped(s, || {
+                    with_stack(DEEP_STACK, || {
+                        (
+                            down(100_000),
+                            std::thread::current().name().map(String::from),
+                        )
+                    })
+                })
                 .unwrap()
                 .join()
                 .unwrap()

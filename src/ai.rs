@@ -159,14 +159,22 @@ impl std::ops::DerefMut for PyValues {
 
 impl Clone for PyValues {
     fn clone(&self) -> Self {
-        PyValues(self.0.iter().map(|(k, v)| (k.clone(), util::tree::clone_value(v))).collect())
+        PyValues(
+            self.0
+                .iter()
+                .map(|(k, v)| (k.clone(), util::tree::clone_value(v)))
+                .collect(),
+        )
     }
 }
 
 impl PartialEq for PyValues {
     fn eq(&self, other: &Self) -> bool {
         self.0.len() == other.0.len()
-            && self.0.iter().all(|(k, v)| other.0.get(k).is_some_and(|w| util::tree::eq_value(v, w)))
+            && self
+                .0
+                .iter()
+                .all(|(k, v)| other.0.get(k).is_some_and(|w| util::tree::eq_value(v, w)))
     }
 }
 
@@ -201,7 +209,10 @@ impl Serialize for Entry {
         put("url", self.url.clone().into());
         put("harness", self.harness.clone().into());
         put("action_label", self.action_label.clone().into());
-        put("action", self.action.clone().map(Value::from).unwrap_or(Value::Null));
+        put(
+            "action",
+            self.action.clone().map(Value::from).unwrap_or(Value::Null),
+        );
         put("action_note", self.action_note.clone().into());
         put("items", self.items.clone().into());
         put("icon_key", self.icon_key.clone().into());
@@ -291,14 +302,20 @@ impl Default for Entry {
 /// An org's avatar is the brand mark for most repositories.
 pub fn github_avatar(repo: &str) -> String {
     let owner = repo.split('/').next().unwrap_or("");
-    if owner.is_empty() { String::new() } else { format!("https://github.com/{owner}.png?size=128") }
+    if owner.is_empty() {
+        String::new()
+    } else {
+        format!("https://github.com/{owner}.png?size=128")
+    }
 }
 
 static HOST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z]+://([^/:]+)").unwrap());
 
 /// The host of a `scheme://host...` target, or "".
 pub fn host(target: &str) -> String {
-    HOST.captures(target).map(|c| c[1].to_string()).unwrap_or_default()
+    HOST.captures(target)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default()
 }
 
 /// stdout + stderr of a command, or "" when it could not run.
@@ -323,11 +340,14 @@ pub fn run(cmd: &[&str], timeout: u64) -> Result<String, String> {
 /// the pipes to their end, not only the child's exit: a grandchild that keeps
 /// stdout open past it is a timeout too.
 fn run_bytes(cmd: &[&str], timeout: u64) -> Option<(Vec<u8>, Vec<u8>)> {
-    let out = util::run_bytes(cmd, &util::RunOpts {
-        timeout: Some(Duration::from_secs(timeout)),
-        stdin: util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = util::run_bytes(
+        cmd,
+        &util::RunOpts {
+            timeout: Some(Duration::from_secs(timeout)),
+            stdin: util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
 }
 
@@ -347,10 +367,17 @@ fn py_text(raw: Vec<u8>) -> Result<String, String> {
         if end - start == 1 {
             format!("'utf-8' codec can't decode byte 0x{b:02x} in position {start}: {reason}")
         } else {
-            format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
+            format!(
+                "'utf-8' codec can't decode bytes in position {start}-{}: {reason}",
+                end - 1
+            )
         }
     })?;
-    Ok(if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n") } else { text })
+    Ok(if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text
+    })
 }
 
 /// `shutil.which(name)`: the first `dir/name` on $PATH that exists, is not
@@ -361,7 +388,10 @@ fn py_text(raw: Vec<u8>) -> Result<String, String> {
 fn which(name: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
     let ok = |p: &Path| {
-        p.exists() && rustix::fs::access(p, rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK).is_ok() && !p.is_dir()
+        p.exists()
+            && rustix::fs::access(p, rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK)
+                .is_ok()
+            && !p.is_dir()
     };
     if let Some((dir, file)) = name.rsplit_once('/') {
         // `os.path.split` keeps "/" for a name directly under the root.
@@ -470,7 +500,8 @@ fn py_loads_flat(text: &str) -> Option<Value> {
                 j += 1;
             }
             let tok = &text[i..j];
-            let big = tok.contains(['.', 'e', 'E']) && tok.parse::<f64>().is_ok_and(f64::is_infinite);
+            let big =
+                tok.contains(['.', 'e', 'E']) && tok.parse::<f64>().is_ok_and(f64::is_infinite);
             if !big {
                 i = j;
                 continue;
@@ -611,7 +642,18 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut iter = s.char_indices().peekable();
     while let Some((pos, c)) = iter.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
             out.push(&s[start..pos]);
             let mut next = pos + c.len_utf8();
             if c == '\r' {
@@ -644,10 +686,17 @@ fn py_path_bytes(s: &[u8]) -> Vec<u8> {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = s.split(|&c| c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = s
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut joined = root.to_vec();
     joined.extend(parts.join(&b'/'));
-    if joined.is_empty() { b".".to_vec() } else { joined }
+    if joined.is_empty() {
+        b".".to_vec()
+    } else {
+        joined
+    }
 }
 
 /// `str(path)` as text (U+FFFD for what is not UTF-8).
@@ -664,7 +713,9 @@ fn path_bytes(p: &Path) -> Vec<u8> {
 /// The final component's bytes (`Path.name`).
 fn name_bytes(p: &Path) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
-    p.file_name().map(|n| n.as_bytes().to_vec()).unwrap_or_default()
+    p.file_name()
+        .map(|n| n.as_bytes().to_vec())
+        .unwrap_or_default()
 }
 
 /// A JSON string the way `json.dumps` writes a str decoded from these bytes
@@ -765,7 +816,11 @@ fn py_repr(v: &Value) -> String {
     }
     match v {
         Value::String(s) => {
-            let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+            let q = if s.contains('\'') && !s.contains('"') {
+                '"'
+            } else {
+                '\''
+            };
             let mut out = String::from(q);
             for c in s.chars() {
                 match c {
@@ -796,7 +851,10 @@ fn py_repr(v: &Value) -> String {
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!(
             "{{{}}}",
-            o.iter().map(|(k, x)| format!("{}: {}", py_repr(&Value::String(k.clone())), py_repr(x))).collect::<Vec<_>>().join(", ")
+            o.iter()
+                .map(|(k, x)| format!("{}: {}", py_repr(&Value::String(k.clone())), py_repr(x)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         other => py_str(other),
     }
@@ -805,7 +863,14 @@ fn py_repr(v: &Value) -> String {
 /// `str(v)` (what an f-string prints) for a JSON value.
 fn py_str(v: &Value) -> String {
     if let Some(f) = special_float(v) {
-        return if f.is_nan() { "nan" } else if f > 0.0 { "inf" } else { "-inf" }.into();
+        return if f.is_nan() {
+            "nan"
+        } else if f > 0.0 {
+            "inf"
+        } else {
+            "-inf"
+        }
+        .into();
     }
     match v {
         Value::Null => "None".into(),
@@ -822,7 +887,10 @@ fn py_str(v: &Value) -> String {
 
 /// `d.get(key) or ""` for a dict decoded from JSON.
 fn get_or_empty(d: &serde_json::Map<String, Value>, key: &str) -> String {
-    d.get(key).filter(|v| truthy(v)).map(py_str).unwrap_or_default()
+    d.get(key)
+        .filter(|v| truthy(v))
+        .map(py_str)
+        .unwrap_or_default()
 }
 
 /// `str.isprintable()` for one character: false in the Unicode categories
@@ -830,7 +898,17 @@ fn get_or_empty(d: &serde_json::Map<String, Value>, key: &str) -> String {
 /// these.
 fn py_printable(c: char) -> bool {
     let n = c as u32;
-    NONPRINTABLE.binary_search_by(|&(lo, hi)| if hi < n { std::cmp::Ordering::Less } else if lo > n { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal }).is_err()
+    NONPRINTABLE
+        .binary_search_by(|&(lo, hi)| {
+            if hi < n {
+                std::cmp::Ordering::Less
+            } else if lo > n {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_err()
 }
 
 /// The `[Errno n] strerror: 'path'` text of a Python OSError.
@@ -843,7 +921,8 @@ fn os_err(e: &std::io::Error, path: &Path) -> String {
     }
 }
 
-static FM_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([A-Za-z_-]+):[\s\x1c-\x1f]*(.*)$").unwrap());
+static FM_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([A-Za-z_-]+):[\s\x1c-\x1f]*(.*)$").unwrap());
 
 /// name/description from a SKILL.md header, without a YAML dependency.
 ///
@@ -857,7 +936,9 @@ pub fn frontmatter(path: &Path) -> Map<String, Value> {
         return out;
     };
     // read_text(errors="replace"), with its universal-newline translation.
-    let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n");
+    let text = String::from_utf8_lossy(&bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     if !text.starts_with("---") {
         return out;
     }
@@ -876,7 +957,11 @@ pub fn frontmatter(path: &Path) -> Map<String, Value> {
             }
             key = Some(m[1].to_lowercase());
             let val = py_strip(&m[2]).to_string();
-            buf = if matches!(val.as_str(), ">" | "|" | ">-" | "|-") { Vec::new() } else { vec![val] };
+            buf = if matches!(val.as_str(), ">" | "|" | ">-" | "|-") {
+                Vec::new()
+            } else {
+                vec![val]
+            };
         } else if key.is_some() && !py_strip(line).is_empty() {
             buf.push(py_strip(line).to_string());
         }
@@ -905,8 +990,9 @@ pub fn tilde(path: &str) -> String {
     }
 }
 
-static EXC_PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit|Interrupt|Warning): ").unwrap());
+static EXC_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit|Interrupt|Warning): ").unwrap()
+});
 
 /// `str(exc)` from the "ExcType: message" form other modules report.
 fn py_exc_message(e: &str) -> String {
@@ -930,7 +1016,12 @@ pub fn harnesses() -> Result<Vec<Entry>, String> {
                     "too many values to unpack (expected 2)".to_string()
                 })
             }
-            Some(other) => return Err(format!("cannot unpack non-iterable {} object", py_type(other))),
+            Some(other) => {
+                return Err(format!(
+                    "cannot unpack non-iterable {} object",
+                    py_type(other)
+                ))
+            }
         };
         let has_update = !a.update.is_empty();
         let update_cmd = ex.get("update_cmd").cloned().unwrap_or(Value::Null);
@@ -944,27 +1035,79 @@ pub fn harnesses() -> Result<Vec<Entry>, String> {
             name: a.name.clone(),
             detail: format!(
                 "{}-managed · {}",
-                ex.get("manager").map(py_str).unwrap_or_else(|| "None".into()),
+                ex.get("manager")
+                    .map(py_str)
+                    .unwrap_or_else(|| "None".into()),
                 tilde(&a.exec_path)
             ),
             version: a.version.clone(),
             update: a.update.clone(),
-            status: if has_update { format!("{behind} {kind} behind") } else { "current".into() },
+            status: if has_update {
+                format!("{behind} {kind} behind")
+            } else {
+                "current".into()
+            },
             severity: if has_update { "warn" } else { "ok" }.into(),
             path: a.exec_path.clone(),
-            url: ex.get("url").map(|v| if v.is_null() { String::new() } else { py_str(v) }).unwrap_or_default(),
+            url: ex
+                .get("url")
+                .map(|v| {
+                    if v.is_null() {
+                        String::new()
+                    } else {
+                        py_str(v)
+                    }
+                })
+                .unwrap_or_default(),
             harness: a.name.clone(),
-            action_label: if has_update && truthy(&update_cmd) { "Update".into() } else { String::new() },
-            action: if has_update && !update_cmd.is_null() { Some(cmd_list.clone()) } else { None },
-            action_note: format!("Runs {}.", if truthy(&update_cmd) { cmd_list.join(" ") } else { String::new() }),
+            action_label: if has_update && truthy(&update_cmd) {
+                "Update".into()
+            } else {
+                String::new()
+            },
+            action: if has_update && !update_cmd.is_null() {
+                Some(cmd_list.clone())
+            } else {
+                None
+            },
+            action_note: format!(
+                "Runs {}.",
+                if truthy(&update_cmd) {
+                    cmd_list.join(" ")
+                } else {
+                    String::new()
+                }
+            ),
             icon_key: domain.map(py_str).unwrap_or_else(|| {
-                ex.get("key").map(|v| if v.is_null() { String::new() } else { py_str(v) }).unwrap_or_default()
+                ex.get("key")
+                    .map(|v| {
+                        if v.is_null() {
+                            String::new()
+                        } else {
+                            py_str(v)
+                        }
+                    })
+                    .unwrap_or_default()
             }),
-            icon_domain: ex.get("domain").map(|v| if v.is_null() { String::new() } else { py_str(v) }).unwrap_or_default(),
+            icon_domain: ex
+                .get("domain")
+                .map(|v| {
+                    if v.is_null() {
+                        String::new()
+                    } else {
+                        py_str(v)
+                    }
+                })
+                .unwrap_or_default(),
             icon_url: if domain.is_some() {
                 String::new()
             } else {
-                github_avatar(&ex.get("repo").filter(|v| truthy(v)).map(py_str).unwrap_or_default())
+                github_avatar(
+                    &ex.get("repo")
+                        .filter(|v| truthy(v))
+                        .map(py_str)
+                        .unwrap_or_default(),
+                )
             },
             fallback_icon: "utilities-terminal-symbolic".into(),
             ..Default::default()
@@ -987,8 +1130,24 @@ static MCP_LINE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 const ENTRY_FIELDS: &[&str] = &[
-    "kind", "name", "detail", "status", "severity", "version", "update", "path", "url", "harness",
-    "action_label", "action", "action_note", "items", "icon_key", "icon_domain", "icon_url", "fallback_icon",
+    "kind",
+    "name",
+    "detail",
+    "status",
+    "severity",
+    "version",
+    "update",
+    "path",
+    "url",
+    "harness",
+    "action_label",
+    "action",
+    "action_note",
+    "items",
+    "icon_key",
+    "icon_domain",
+    "icon_url",
+    "fallback_icon",
 ];
 
 /// `Entry(**row)`: None where Python raises TypeError (not a mapping, an
@@ -997,7 +1156,10 @@ const ENTRY_FIELDS: &[&str] = &[
 /// field gets it as `str()` prints it (None as "").
 fn entry_from_row(row: &Value) -> Option<Entry> {
     let obj = row.as_object()?;
-    if !obj.contains_key("kind") || !obj.contains_key("name") || obj.keys().any(|k| !ENTRY_FIELDS.contains(&k.as_str())) {
+    if !obj.contains_key("kind")
+        || !obj.contains_key("name")
+        || obj.keys().any(|k| !ENTRY_FIELDS.contains(&k.as_str()))
+    {
         return None;
     }
     let text = |v: &Value| match py_s(v) {
@@ -1114,7 +1276,11 @@ fn mcp_as_checked(at: f64, rows: Vec<Entry>, now: f64) -> Vec<Entry> {
     let when = ago(now - at);
     rows.into_iter()
         .map(|mut e| {
-            e.status = if e.status.is_empty() { format!("checked {when}") } else { format!("{} · checked {when}", e.status) };
+            e.status = if e.status.is_empty() {
+                format!("checked {when}")
+            } else {
+                format!("{} · checked {when}", e.status)
+            };
             e
         })
         .collect()
@@ -1132,7 +1298,9 @@ fn mcp_servers_in(v: Option<&Value>) -> Vec<(String, Map<String, Value>)> {
 }
 
 fn read_json(path: &Path) -> Option<Value> {
-    py_loads(&std::fs::read_to_string(path).ok()?).ok().flatten()
+    py_loads(&std::fs::read_to_string(path).ok()?)
+        .ok()
+        .flatten()
 }
 
 /// The servers configured in the files `claude mcp list` reads, in its
@@ -1145,7 +1313,9 @@ fn mcp_configured() -> Vec<Entry> {
     let cwd = std::env::current_dir().ok();
     let user = read_json(&home().join(".claude.json"));
     let project = cwd.as_ref().and_then(|d| read_json(&d.join(".mcp.json")));
-    let plugins = run(&["claude", "plugin", "list", "--json"], 60).ok().and_then(|t| py_loads(&t).ok().flatten());
+    let plugins = run(&["claude", "plugin", "list", "--json"], 60)
+        .ok()
+        .and_then(|t| py_loads(&t).ok().flatten());
     mcp_configured_from(
         user.as_ref(),
         cwd.as_deref().map(path_str).as_deref(),
@@ -1174,11 +1344,17 @@ fn mcp_configured_from(
     if let Some(project) = project {
         servers.extend(mcp_servers_in(project.get("mcpServers")));
     }
-    for p in plugins.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+    for p in plugins
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
         if !p.get("enabled").map(truthy).unwrap_or(true) {
             continue;
         }
-        let Some(id) = p.get("id").and_then(py_s) else { continue };
+        let Some(id) = p.get("id").and_then(py_s) else {
+            continue;
+        };
         let plugin = id.split('@').next().unwrap_or(id);
         // Inline in plugin.json, or the plugin's own .mcp.json.
         let mut found = mcp_servers_in(p.get("mcpServers"));
@@ -1190,7 +1366,11 @@ fn mcp_configured_from(
                 };
             }
         }
-        servers.extend(found.into_iter().map(|(name, cfg)| (format!("plugin:{plugin}:{name}"), cfg)));
+        servers.extend(
+            found
+                .into_iter()
+                .map(|(name, cfg)| (format!("plugin:{plugin}:{name}"), cfg)),
+        );
     }
 
     let mut seen = std::collections::HashSet::new();
@@ -1199,16 +1379,31 @@ fn mcp_configured_from(
         let text = |k: &str| cfg.get(k).and_then(py_s).unwrap_or("").to_string();
         let url = text("url");
         let target = if url.is_empty() {
-            let args = cfg.get("args").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+            let args = cfg
+                .get("args")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             std::iter::once(text("command"))
                 .chain(args.iter().filter_map(py_s).map(str::to_string))
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
             let kind = text("type");
-            format!("{url} ({})", if kind.is_empty() { "HTTP".to_string() } else { kind.to_uppercase() })
+            format!(
+                "{url} ({})",
+                if kind.is_empty() {
+                    "HTTP".to_string()
+                } else {
+                    kind.to_uppercase()
+                }
+            )
         };
-        let address = if url.is_empty() { target.clone() } else { url.clone() };
+        let address = if url.is_empty() {
+            target.clone()
+        } else {
+            url.clone()
+        };
         if !address.is_empty() && !seen.insert(address) {
             continue;
         }
@@ -1264,14 +1459,31 @@ pub fn mcp_check() -> Result<Vec<Entry>, String> {
             } else if needs_auth {
                 "needs authentication".into()
             } else {
-                state.trim_matches(|c| matches!(c, '✘' | '!' | ' ')).to_string()
+                state
+                    .trim_matches(|c| matches!(c, '✘' | '!' | ' '))
+                    .to_string()
             },
-            severity: if connected { "ok" } else if needs_auth { "info" } else { "warn" }.into(),
-            url: if m["target"].starts_with("http") { target.to_string() } else { String::new() },
+            severity: if connected {
+                "ok"
+            } else if needs_auth {
+                "info"
+            } else {
+                "warn"
+            }
+            .into(),
+            url: if m["target"].starts_with("http") {
+                target.to_string()
+            } else {
+                String::new()
+            },
             icon_key: host(target),
             icon_domain: host(target),
             fallback_icon: "network-server-symbolic".into(),
-            action_label: if needs_auth { "Authenticate".into() } else { String::new() },
+            action_label: if needs_auth {
+                "Authenticate".into()
+            } else {
+                String::new()
+            },
             action: None,
             action_note: "Authentication happens inside the agent session: \
                           run the server's authenticate tool there."
@@ -1280,7 +1492,10 @@ pub fn mcp_check() -> Result<Vec<Entry>, String> {
         });
     }
     if std::fs::create_dir_all(cache()).is_ok() {
-        let rows: Vec<Value> = out.iter().filter_map(|e| serde_json::to_value(e).ok()).collect();
+        let rows: Vec<Value> = out
+            .iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect();
         let blob = serde_json::json!({"at": util::now(), "rows": rows});
         let _ = crate::util::atomic_write(mcp_cache(), util::dumps(&blob, None, false));
     }
@@ -1342,13 +1557,20 @@ pub fn skills() -> Result<Vec<Entry>, String> {
             let fm = frontmatter(&f);
             let mut e = Entry {
                 kind: SKILL.into(),
-                detail: py_prefix(fm.get("description").and_then(Value::as_str).unwrap_or(""), 300),
+                detail: py_prefix(
+                    fm.get("description").and_then(Value::as_str).unwrap_or(""),
+                    300,
+                ),
                 status: "user skill".into(),
                 severity: "ok".into(),
                 fallback_icon: "text-x-generic-symbolic".into(),
                 ..Default::default()
             };
-            match fm.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            match fm
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
                 Some(n) => e.name = n.to_string(),
                 None => e.set_os("name", name_bytes(&d)),
             }
@@ -1367,12 +1589,19 @@ pub fn skills() -> Result<Vec<Entry>, String> {
         let plugin = f.ancestors().nth(3).map(name_bytes).unwrap_or_default();
         let mut e = Entry {
             kind: SKILL.into(),
-            detail: py_prefix(fm.get("description").and_then(Value::as_str).unwrap_or(""), 300),
+            detail: py_prefix(
+                fm.get("description").and_then(Value::as_str).unwrap_or(""),
+                300,
+            ),
             severity: "ok".into(),
             fallback_icon: "text-x-generic-symbolic".into(),
             ..Default::default()
         };
-        match fm.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        match fm
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             Some(n) => e.name = n.to_string(),
             None => e.set_os("name", name_bytes(&parent)),
         }
@@ -1413,7 +1642,10 @@ pub fn plugins() -> Result<Vec<Entry>, String> {
         let mut py_values = Map::new();
         if py_s(&name_v).is_none() {
             py_values.insert("name".into(), name_v.clone());
-            py_values.insert("action".into(), serde_json::json!(["claude", "plugin", verb, name_v]));
+            py_values.insert(
+                "action".into(),
+                serde_json::json!(["claude", "plugin", verb, name_v]),
+            );
         }
         for (field, key) in [("detail", "description"), ("version", "version")] {
             if let Some(v) = r.get(key).filter(|v| truthy(v) && py_s(v).is_none()) {
@@ -1446,12 +1678,18 @@ fn py_int(s: &str) -> Option<i64> {
         Some(rest) => (true, rest),
         None => (false, t.strip_prefix('+').unwrap_or(t)),
     };
-    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
+    {
         return None;
     }
     let mut n: i64 = 0;
     for c in digits.chars().filter(|&c| c != '_') {
-        n = n.checked_mul(10)?.checked_add(i64::from(crate::util::decimal_value(c)?))?;
+        n = n
+            .checked_mul(10)?
+            .checked_add(i64::from(crate::util::decimal_value(c)?))?;
     }
     Some(if neg { -n } else { n })
 }
@@ -1512,7 +1750,9 @@ pub fn marketplaces() -> Result<Vec<Entry>, String> {
             Some(v) if truthy(v) => v.as_object().ok_or_else(|| attr_err(v, "get"))?,
             _ => &empty,
         };
-        let repo_v = ["repo", "source"].iter().find_map(|k| src.get(*k).filter(|v| truthy(v)));
+        let repo_v = ["repo", "source"]
+            .iter()
+            .find_map(|k| src.get(*k).filter(|v| truthy(v)));
         // `(info.get("lastUpdated") or "")[:10]`, then `.split("-")`.
         let updated = match info.get("lastUpdated").filter(|v| truthy(v)) {
             None => String::new(),
@@ -1521,7 +1761,9 @@ pub fn marketplaces() -> Result<Vec<Entry>, String> {
                 None => match v {
                     Value::Array(_) => return Err(attr_err(v, "split")),
                     Value::Object(_) => return Err("slice(None, 10, None)".into()),
-                    other => return Err(format!("'{}' object is not subscriptable", py_type(other))),
+                    other => {
+                        return Err(format!("'{}' object is not subscriptable", py_type(other)))
+                    }
                 },
             },
         };
@@ -1544,9 +1786,18 @@ pub fn marketplaces() -> Result<Vec<Entry>, String> {
             } else {
                 format!("synced {updated}")
             },
-            severity: if stale || updated.is_empty() { "warn" } else { "info" }.into(),
+            severity: if stale || updated.is_empty() {
+                "warn"
+            } else {
+                "info"
+            }
+            .into(),
             path: path_str(&loc),
-            url: if repo.is_empty() { String::new() } else { format!("https://github.com/{repo}") },
+            url: if repo.is_empty() {
+                String::new()
+            } else {
+                format!("https://github.com/{repo}")
+            },
             icon_key: if repo.is_empty() {
                 String::new()
             } else {
@@ -1555,7 +1806,13 @@ pub fn marketplaces() -> Result<Vec<Entry>, String> {
             icon_url: github_avatar(&repo),
             fallback_icon: "system-software-install-symbolic".into(),
             action_label: "Sync".into(),
-            action: Some(vec!["claude".into(), "plugin".into(), "marketplace".into(), "update".into(), name.clone()]),
+            action: Some(vec![
+                "claude".into(),
+                "plugin".into(),
+                "marketplace".into(),
+                "update".into(),
+                name.clone(),
+            ]),
             action_note: "Re-fetches the marketplace catalogue from its source.".into(),
             ..Default::default()
         });
@@ -1565,7 +1822,8 @@ pub fn marketplaces() -> Result<Vec<Entry>, String> {
 
 // ---- hooks and other extensions ----------------------------------------------
 
-static HOOK_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(/[^\s\x1c-\x1f'"]+)"#).unwrap());
+static HOOK_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(/[^\s\x1c-\x1f'"]+)"#).unwrap());
 static STATUS_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(\$HOME|~)?(/[^\s\x1c-\x1f'"]+)"#).unwrap());
 
@@ -1590,7 +1848,9 @@ pub fn hooks() -> Result<Vec<Entry>, String> {
     let Some(settings) = py_loads(&text)? else {
         return Ok(Vec::new());
     };
-    let settings = settings.as_object().ok_or_else(|| attr_err(&settings, "get"))?;
+    let settings = settings
+        .as_object()
+        .ok_or_else(|| attr_err(&settings, "get"))?;
     let empty = serde_json::Map::new();
     let hooks = match settings.get("hooks") {
         Some(v) if truthy(v) => v.as_object().ok_or_else(|| attr_err(v, "items"))?,
@@ -1613,7 +1873,10 @@ pub fn hooks() -> Result<Vec<Entry>, String> {
                     None => String::new(),
                     Some(v) if py_s(v).is_some() => py_s(v).unwrap_or_default().to_string(),
                     Some(other) => {
-                        return Err(format!("expected string or bytes-like object, got '{}'", py_type(other)))
+                        return Err(format!(
+                            "expected string or bytes-like object, got '{}'",
+                            py_type(other)
+                        ))
                     }
                 };
                 // A hook whose script has been deleted fails silently on every
@@ -1628,7 +1891,13 @@ pub fn hooks() -> Result<Vec<Entry>, String> {
                     status: if missing {
                         "script missing".into()
                     } else {
-                        format!("matches {}", group.get("matcher").map(py_str).unwrap_or_else(|| "*".into()))
+                        format!(
+                            "matches {}",
+                            group
+                                .get("matcher")
+                                .map(py_str)
+                                .unwrap_or_else(|| "*".into())
+                        )
                     },
                     severity: if missing { "warn" } else { "ok" }.into(),
                     fallback_icon: "system-run-symbolic".into(),
@@ -1639,21 +1908,40 @@ pub fn hooks() -> Result<Vec<Entry>, String> {
         }
     }
     let sl = match settings.get("statusLine") {
-        Some(v) if truthy(v) => v.as_object().ok_or_else(|| attr_err(v, "get"))?.get("command").cloned(),
+        Some(v) if truthy(v) => v
+            .as_object()
+            .ok_or_else(|| attr_err(v, "get"))?
+            .get("command")
+            .cloned(),
         _ => None,
     };
     if let Some(sl) = sl.filter(truthy) {
         let Some(sl) = py_s(&sl).map(str::to_string) else {
-            return Err(format!("expected string or bytes-like object, got '{}'", py_type(&sl)));
+            return Err(format!(
+                "expected string or bytes-like object, got '{}'",
+                py_type(&sl)
+            ));
         };
-        let target = STATUS_PATH.captures(&sl).map(|c| c[2].to_string()).unwrap_or_default();
-        let full = if target.is_empty() { String::new() } else { path_str(&home()) + &target };
+        let target = STATUS_PATH
+            .captures(&sl)
+            .map(|c| c[2].to_string())
+            .unwrap_or_default();
+        let full = if target.is_empty() {
+            String::new()
+        } else {
+            path_str(&home()) + &target
+        };
         let missing = !full.is_empty() && !Path::new(&full).exists();
         out.push(Entry {
             kind: HOOK.into(),
             name: "statusLine".into(),
             detail: sl.clone(),
-            status: if missing { "script missing" } else { "configured" }.into(),
+            status: if missing {
+                "script missing"
+            } else {
+                "configured"
+            }
+            .into(),
             severity: if missing { "warn" } else { "ok" }.into(),
             fallback_icon: "system-run-symbolic".into(),
             path: full,
@@ -1673,18 +1961,42 @@ pub type Group = (String, String, Vec<Entry>);
 
 /// (title, kind, loader, description) in display order.
 pub const GROUPS: &[(&str, &str, Loader, &str)] = &[
-    ("Harnesses", HARNESS, harnesses,
-     "The agent CLIs themselves."),
-    ("MCP servers", MCP, mcp_servers,
-     "Tools and data the agents can reach."),
-    ("Skills", SKILL, skills,
-     "Instructions loaded on demand to change how an agent works."),
-    ("Plugins", PLUGIN, plugins,
-     "Bundles of skills, commands, agents and hooks."),
-    ("Marketplaces", MARKET, marketplaces,
-     "Where plugins are installed from."),
-    ("Hooks", HOOK, hooks,
-     "Commands that run around an agent session."),
+    (
+        "Harnesses",
+        HARNESS,
+        harnesses,
+        "The agent CLIs themselves.",
+    ),
+    (
+        "MCP servers",
+        MCP,
+        mcp_servers,
+        "Tools and data the agents can reach.",
+    ),
+    (
+        "Skills",
+        SKILL,
+        skills,
+        "Instructions loaded on demand to change how an agent works.",
+    ),
+    (
+        "Plugins",
+        PLUGIN,
+        plugins,
+        "Bundles of skills, commands, agents and hooks.",
+    ),
+    (
+        "Marketplaces",
+        MARKET,
+        marketplaces,
+        "Where plugins are installed from.",
+    ),
+    (
+        "Hooks",
+        HOOK,
+        hooks,
+        "Commands that run around an agent session.",
+    ),
 ];
 
 /// (title, description, loader) for each group, in display order.
@@ -1697,7 +2009,17 @@ pub fn group_specs() -> Vec<(&'static str, &'static str, Loader)> {
 pub fn group_specs_with(check_mcp: bool) -> Vec<(&'static str, &'static str, Loader)> {
     GROUPS
         .iter()
-        .map(|&(title, kind, f, desc)| (title, desc, if check_mcp && kind == MCP { mcp_check as Loader } else { f }))
+        .map(|&(title, kind, f, desc)| {
+            (
+                title,
+                desc,
+                if check_mcp && kind == MCP {
+                    mcp_check as Loader
+                } else {
+                    f
+                },
+            )
+        })
         .collect()
 }
 
@@ -1746,9 +2068,14 @@ const LOADER_STACK: usize = 256 << 20;
 /// Err, as `catch_unwind` gives it. If no such thread can be made, it runs
 /// here.
 fn on_big_stack(f: Loader) -> std::thread::Result<Result<Vec<Entry>, String>> {
-    std::thread::scope(|s| match std::thread::Builder::new().stack_size(LOADER_STACK).spawn_scoped(s, f) {
-        Ok(h) => h.join(),
-        Err(_) => std::panic::catch_unwind(f),
+    std::thread::scope(|s| {
+        match std::thread::Builder::new()
+            .stack_size(LOADER_STACK)
+            .spawn_scoped(s, f)
+        {
+            Ok(h) => h.join(),
+            Err(_) => std::panic::catch_unwind(f),
+        }
     })
 }
 
@@ -1764,7 +2091,9 @@ pub fn survey() -> Vec<Group> {
         let futures: Vec<_> = GROUPS
             .iter()
             .map(|&(title, _kind, f, desc)| {
-                let h = std::thread::Builder::new().stack_size(LOADER_STACK).spawn_scoped(s, f);
+                let h = std::thread::Builder::new()
+                    .stack_size(LOADER_STACK)
+                    .spawn_scoped(s, f);
                 (title, desc, f, h)
             })
             .collect();
@@ -1784,11 +2113,18 @@ pub fn survey() -> Vec<Group> {
 /// {title: number of entries}, in group order (a repeated title keeps its
 /// first place and its last count, as a dict does).
 pub fn counts(groups: &[Group]) -> Map<String, Value> {
-    groups.iter().map(|(title, _d, entries)| (title.clone(), entries.len().into())).collect()
+    groups
+        .iter()
+        .map(|(title, _d, entries)| (title.clone(), entries.len().into()))
+        .collect()
 }
 
 pub fn needs_attention(groups: &[Group]) -> usize {
-    groups.iter().flat_map(|(_t, _d, entries)| entries).filter(|e| e.severity == "warn").count()
+    groups
+        .iter()
+        .flat_map(|(_t, _d, entries)| entries)
+        .filter(|e| e.severity == "warn")
+        .count()
 }
 
 /// Code points `str.isprintable()` rejects (Python 3.14, Unicode 16.0.0), as
@@ -1938,8 +2274,13 @@ mod tests {
         assert_eq!(r, Ok(true));
         let over = format!("{}{}", "[".repeat(n + 1), "]".repeat(n + 1));
         assert!(py_loads(&over).is_err());
-        assert_eq!(py_loads(&format!("{}{}", "[".repeat(300), "]".repeat(299))), Ok(None));
-        let v = py_loads(&format!("{}1{}", "[".repeat(300), "]".repeat(300))).unwrap().unwrap();
+        assert_eq!(
+            py_loads(&format!("{}{}", "[".repeat(300), "]".repeat(299))),
+            Ok(None)
+        );
+        let v = py_loads(&format!("{}1{}", "[".repeat(300), "]".repeat(300)))
+            .unwrap()
+            .unwrap();
         let mut d = 0;
         let mut cur = &v;
         while let Value::Array(a) = cur {
@@ -1952,41 +2293,85 @@ mod tests {
     #[test]
     fn mcp_servers_read_without_starting_them() {
         let j = |t: &str| serde_json::from_str::<Value>(t).unwrap();
-        let user = j(r#"{"mcpServers": {"mine": {"command": "npx", "args": ["-y", "srv"]}},
+        let user = j(
+            r#"{"mcpServers": {"mine": {"command": "npx", "args": ["-y", "srv"]}},
                          "projects": {"/w": {"mcpServers": {"local": {"type": "sse", "url": "https://l.example.com/sse"}}},
-                                      "/other": {"mcpServers": {"elsewhere": {"command": "x"}}}}}"#);
-        let project = j(r#"{"mcpServers": {"proj": {"type": "http", "url": "https://p.example.com/mcp"}}}"#);
-        let plugins = j(r#"[{"id": "a@m", "enabled": true, "installPath": "/plug/a"},
+                                      "/other": {"mcpServers": {"elsewhere": {"command": "x"}}}}}"#,
+        );
+        let project =
+            j(r#"{"mcpServers": {"proj": {"type": "http", "url": "https://p.example.com/mcp"}}}"#);
+        let plugins = j(
+            r#"[{"id": "a@m", "enabled": true, "installPath": "/plug/a"},
                             {"id": "b@m", "enabled": true, "mcpServers": {"inline": {"command": "uvx", "args": ["b"]}}},
                             {"id": "c@m", "enabled": false, "installPath": "/plug/c"},
-                            {"id": "d@m", "enabled": true, "installPath": "/plug/d"}]"#);
+                            {"id": "d@m", "enabled": true, "installPath": "/plug/d"}]"#,
+        );
         let files = |dir: &str| match dir {
             // A plugin's .mcp.json, with or without the mcpServers wrapper;
             // the second "dup" is at an address already listed.
-            "/plug/a" => Some(j(r#"{"mcpServers": {"web": {"type": "http", "url": "https://a.example.com/mcp"}}}"#)),
+            "/plug/a" => Some(j(
+                r#"{"mcpServers": {"web": {"type": "http", "url": "https://a.example.com/mcp"}}}"#,
+            )),
             "/plug/c" => Some(j(r#"{"off": {"command": "never"}}"#)),
-            "/plug/d" => Some(j(r#"{"dup": {"type": "http", "url": "https://a.example.com/mcp"}, "own": {"url": "https://d.example.com"}}"#)),
+            "/plug/d" => Some(j(
+                r#"{"dup": {"type": "http", "url": "https://a.example.com/mcp"}, "own": {"url": "https://d.example.com"}}"#,
+            )),
             _ => None,
         };
-        let rows = mcp_configured_from(Some(&user), Some("/w"), Some(&project), Some(&plugins), &files);
-        let got: Vec<(&str, &str, &str)> = rows.iter().map(|e| (e.name.as_str(), e.detail.as_str(), e.url.as_str())).collect();
+        let rows = mcp_configured_from(
+            Some(&user),
+            Some("/w"),
+            Some(&project),
+            Some(&plugins),
+            &files,
+        );
+        let got: Vec<(&str, &str, &str)> = rows
+            .iter()
+            .map(|e| (e.name.as_str(), e.detail.as_str(), e.url.as_str()))
+            .collect();
         assert_eq!(
             got,
             vec![
                 ("mine", "npx -y srv", ""),
-                ("local", "https://l.example.com/sse (SSE)", "https://l.example.com/sse"),
-                ("proj", "https://p.example.com/mcp (HTTP)", "https://p.example.com/mcp"),
-                ("plugin:a:web", "https://a.example.com/mcp (HTTP)", "https://a.example.com/mcp"),
+                (
+                    "local",
+                    "https://l.example.com/sse (SSE)",
+                    "https://l.example.com/sse"
+                ),
+                (
+                    "proj",
+                    "https://p.example.com/mcp (HTTP)",
+                    "https://p.example.com/mcp"
+                ),
+                (
+                    "plugin:a:web",
+                    "https://a.example.com/mcp (HTTP)",
+                    "https://a.example.com/mcp"
+                ),
                 ("plugin:b:inline", "uvx b", ""),
-                ("plugin:d:own", "https://d.example.com (HTTP)", "https://d.example.com"),
+                (
+                    "plugin:d:own",
+                    "https://d.example.com (HTTP)",
+                    "https://d.example.com"
+                ),
             ]
         );
-        assert!(rows.iter().all(|e| e.kind == MCP && e.status == "not checked" && e.severity == "ok"));
+        assert!(rows
+            .iter()
+            .all(|e| e.kind == MCP && e.status == "not checked" && e.severity == "ok"));
         assert_eq!(rows[3].icon_domain, "a.example.com");
 
         // A check within MCP_TTL is shown as it was; past it, dated.
-        let checked = vec![Entry { kind: MCP.into(), name: "s".into(), status: "connected".into(), ..Default::default() }];
-        assert_eq!(mcp_as_checked(1000.0, checked.clone(), 1000.0 + 3600.0)[0].status, "connected");
+        let checked = vec![Entry {
+            kind: MCP.into(),
+            name: "s".into(),
+            status: "connected".into(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            mcp_as_checked(1000.0, checked.clone(), 1000.0 + 3600.0)[0].status,
+            "connected"
+        );
         let old = mcp_as_checked(1000.0, checked, 1000.0 + MCP_TTL as f64 + 3600.0);
         assert_eq!(old[0].status, "connected · checked 13 hours ago");
         assert_eq!(ago(3.0 * 86400.0), "3 days ago");
@@ -1996,7 +2381,11 @@ mod tests {
     #[test]
     fn mcp_health_check_only_on_request() {
         let mcp_loader = |check: bool| {
-            group_specs_with(check).into_iter().find(|(t, _, _)| *t == "MCP servers").map(|(_, _, f)| f as usize).unwrap()
+            group_specs_with(check)
+                .into_iter()
+                .find(|(t, _, _)| *t == "MCP servers")
+                .map(|(_, _, f)| f as usize)
+                .unwrap()
         };
         assert_eq!(mcp_loader(false), mcp_servers as Loader as usize);
         assert_eq!(mcp_loader(true), mcp_check as Loader as usize);
@@ -2016,8 +2405,14 @@ mod tests {
 
     #[test]
     fn paths_from_home_read_as_tilde() {
-        let home = util::home().to_string_lossy().trim_end_matches('/').to_string();
-        assert_eq!(tilde(&format!("{home}/.local/bin/claude")), "~/.local/bin/claude");
+        let home = util::home()
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
+        assert_eq!(
+            tilde(&format!("{home}/.local/bin/claude")),
+            "~/.local/bin/claude"
+        );
         assert_eq!(tilde("/usr/bin/x"), "/usr/bin/x");
     }
 
@@ -2026,10 +2421,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("almanac-ai-fm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("SKILL.md");
-        std::fs::write(&f, "---\nName: x\ndescription: >\n  one\n  two\n---\nbody\n").unwrap();
+        std::fs::write(
+            &f,
+            "---\nName: x\ndescription: >\n  one\n  two\n---\nbody\n",
+        )
+        .unwrap();
         let fm = frontmatter(&f);
         assert_eq!(fm.get("name").and_then(Value::as_str), Some("x"));
-        assert_eq!(fm.get("description").and_then(Value::as_str), Some("one two"));
+        assert_eq!(
+            fm.get("description").and_then(Value::as_str),
+            Some("one two")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

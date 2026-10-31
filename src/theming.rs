@@ -81,7 +81,10 @@ fn py_path(raw: &[u8]) -> PathBuf {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = raw.split(|&b| b == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = raw
+        .split(|&b| b == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend(parts.join(&b'/'));
     if out.is_empty() {
@@ -217,7 +220,10 @@ fn py_int16(s: &str) -> Result<i64, String> {
         let Some(d) = char::from(b).to_digit(16) else {
             return err();
         };
-        value = match value.checked_mul(16).and_then(|v| v.checked_add(i64::from(d))) {
+        value = match value
+            .checked_mul(16)
+            .and_then(|v| v.checked_add(i64::from(d)))
+        {
             Some(v) => v,
             None => return err(),
         };
@@ -259,7 +265,11 @@ fn py_round_hex02(x: f64) -> Result<String, String> {
     let exp = ((bits >> 52) & 0x7ff) as i64 - 1075;
     let mant = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
     let digits = format!("{:x}", mant << (exp % 4)) + &"0".repeat((exp / 4) as usize);
-    Ok(if r < 0.0 { format!("-{digits}") } else { digits })
+    Ok(if r < 0.0 {
+        format!("-{digits}")
+    } else {
+        digits
+    })
 }
 
 /// `s[i:j]` in code points.
@@ -345,7 +355,9 @@ fn try_load_palette_at(current: &Path, frames: usize) -> Result<BTreeMap<String,
     let raw = match tomllib::loads(&text, frames + 2) {
         Ok(raw) => raw,
         Err(tomllib::Error::Value) => return Ok(BTreeMap::new()),
-        Err(tomllib::Error::Recursion) => return Err("RecursionError: maximum recursion depth exceeded".into()),
+        Err(tomllib::Error::Recursion) => {
+            return Err("RecursionError: maximum recursion depth exceeded".into())
+        }
         Err(tomllib::Error::Index) => return Err("IndexError: list index out of range".into()),
     };
 
@@ -517,7 +529,9 @@ mod tomllib {
             }
         }
         fn unset_all(&mut self, key: &[String]) {
-            let Some((stem, parent)) = key.split_last() else { return };
+            let Some((stem, parent)) = key.split_last() else {
+                return;
+            };
             let mut cont = &mut self.flags;
             for k in parent {
                 match cont.get_mut(k) {
@@ -528,7 +542,9 @@ mod tomllib {
             cont.remove(stem);
         }
         fn set(&mut self, key: &[String], flag: u8, recursive: bool) {
-            let Some((stem, parent)) = key.split_last() else { return };
+            let Some((stem, parent)) = key.split_last() else {
+                return;
+            };
             let mut cont = &mut self.flags;
             for k in parent {
                 cont = &mut cont.entry(k.clone()).or_default().nested;
@@ -546,13 +562,16 @@ mod tomllib {
             };
             let mut cont = &self.flags;
             for k in parent {
-                let Some(inner) = cont.get(k) else { return false };
+                let Some(inner) = cont.get(k) else {
+                    return false;
+                };
                 if inner.recursive_flags & flag != 0 {
                     return true;
                 }
                 cont = &inner.nested;
             }
-            cont.get(stem).is_some_and(|n| (n.flags | n.recursive_flags) & flag != 0)
+            cont.get(stem)
+                .is_some_and(|n| (n.flags | n.recursive_flags) & flag != 0)
         }
     }
 
@@ -563,12 +582,18 @@ mod tomllib {
     }
 
     /// `NestedDict.get_or_create_nest`.
-    fn get_or_create_nest<'a>(mut cont: &'a mut Table, key: &[String], access_lists: bool) -> Result<&'a mut Table, NestErr> {
+    fn get_or_create_nest<'a>(
+        mut cont: &'a mut Table,
+        key: &[String],
+        access_lists: bool,
+    ) -> Result<&'a mut Table, NestErr> {
         for k in key {
             if !cont.contains(k) {
                 cont.insert(k, Value::Table(Table::default()));
             }
-            let Some(v) = cont.get_mut(k) else { return Err(NestErr::Key) };
+            let Some(v) = cont.get_mut(k) else {
+                return Err(NestErr::Key);
+            };
             let v = match (access_lists, v) {
                 (true, Value::Array(a)) => a.last_mut().ok_or(NestErr::Index)?,
                 (_, v) => v,
@@ -583,7 +608,9 @@ mod tomllib {
 
     /// `NestedDict.append_nest_to_list`.
     fn append_nest_to_list(data: &mut Table, key: &[String]) -> Result<(), NestErr> {
-        let Some((last, parent)) = key.split_last() else { return Err(NestErr::Index) };
+        let Some((last, parent)) = key.split_last() else {
+            return Err(NestErr::Index);
+        };
         let cont = get_or_create_nest(data, parent, true)?;
         match cont.get_mut(last) {
             Some(Value::Array(list)) => list.push(Value::Table(Table::default())),
@@ -617,7 +644,10 @@ mod tomllib {
     /// unoptimised build) has room for.
     pub fn loads(s: &str, caller: usize) -> R<Table> {
         std::thread::scope(|scope| {
-            match std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, || loads_here(s, caller)) {
+            match std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn_scoped(scope, || loads_here(s, caller))
+            {
                 Ok(h) => h.join().unwrap_or(Err(Error::Recursion)),
                 Err(_) => loads_here(s, caller),
             }
@@ -634,7 +664,10 @@ mod tomllib {
         // Output() and, inside it, NestedDict() and Flags(); then
         // make_safe_parse_float().
         check(d + 2)?;
-        let mut out = Output { data: Table::default(), flags: Flags::default() };
+        let mut out = Output {
+            data: Table::default(),
+            flags: Flags::default(),
+        };
         let mut header: Key = Vec::new();
         let mut pos = 0;
 
@@ -702,7 +735,14 @@ mod tomllib {
         Ok(pos)
     }
 
-    fn skip_until(src: &str, pos: usize, expect: &str, error_on: fn(char) -> bool, error_on_eof: bool, d: usize) -> R<usize> {
+    fn skip_until(
+        src: &str,
+        pos: usize,
+        expect: &str,
+        error_on: fn(char) -> bool,
+        error_on_eof: bool,
+        d: usize,
+    ) -> R<usize> {
         check(d)?;
         let new_pos = match tail(src, pos).find(expect) {
             Some(i) => pos + i,
@@ -788,10 +828,18 @@ mod tomllib {
         Ok((pos, key))
     }
 
-    fn key_value_rule(src: &str, pos: usize, out: &mut Output, header: &[String], d: usize) -> R<usize> {
+    fn key_value_rule(
+        src: &str,
+        pos: usize,
+        out: &mut Output,
+        header: &[String],
+        d: usize,
+    ) -> R<usize> {
         check(d)?;
         let (pos, key, value) = parse_key_value_pair(src, pos, d + 1)?;
-        let Some((key_stem, key_parent)) = key.split_last() else { return Err(Error::Index) };
+        let Some((key_stem, key_parent)) = key.split_last() else {
+            return Err(Error::Index);
+        };
         let abs_key_parent: Key = header.iter().chain(key_parent).cloned().collect();
 
         // (The generator, Flags.is_ and the rest are frames at d + 1, which
@@ -924,7 +972,9 @@ mod tomllib {
         loop {
             let (p, key, value) = parse_key_value_pair(src, pos, d + 1)?;
             pos = p;
-            let Some((key_stem, key_parent)) = key.split_last() else { return Err(Error::Index) };
+            let Some((key_stem, key_parent)) = key.split_last() else {
+                return Err(Error::Index);
+            };
             if flags.is_(&key, FROZEN) {
                 return decode_err(d); // Cannot mutate immutable namespace {key}
             }
@@ -951,7 +1001,12 @@ mod tomllib {
         }
     }
 
-    fn parse_basic_str_escape(src: &str, pos: usize, multiline: bool, d: usize) -> R<(usize, String)> {
+    fn parse_basic_str_escape(
+        src: &str,
+        pos: usize,
+        multiline: bool,
+        d: usize,
+    ) -> R<(usize, String)> {
         check(d)?;
         // escape_id = src[pos : pos + 2]; pos += 2
         let second = char_at(src, pos + 1);
@@ -1015,7 +1070,12 @@ mod tomllib {
         Ok((pos + 1, src[start_pos..pos].to_string())) // Skip ending apostrophe
     }
 
-    fn parse_multiline_str(src: &str, mut pos: usize, literal: bool, d: usize) -> R<(usize, String)> {
+    fn parse_multiline_str(
+        src: &str,
+        mut pos: usize,
+        literal: bool,
+        d: usize,
+    ) -> R<(usize, String)> {
         check(d)?;
         pos += 3;
         if tail(src, pos).starts_with('\n') {
@@ -1051,7 +1111,11 @@ mod tomllib {
 
     fn parse_basic_str(src: &str, mut pos: usize, multiline: bool, d: usize) -> R<(usize, String)> {
         check(d)?;
-        let error_on = if multiline { illegal_multiline_str } else { illegal_basic_str };
+        let error_on = if multiline {
+            illegal_multiline_str
+        } else {
+            illegal_basic_str
+        };
         let mut result = String::new();
         let mut start_pos = pos;
         loop {
@@ -1140,7 +1204,10 @@ mod tomllib {
         if let Some(m) = re_datetime().captures(rest) {
             // match_to_datetime()
             check(d + 1)?;
-            let num = |i: usize| m.get(i).map_or(0, |g| g.as_str().parse::<u32>().unwrap_or(0));
+            let num = |i: usize| {
+                m.get(i)
+                    .map_or(0, |g| g.as_str().parse::<u32>().unwrap_or(0))
+            };
             if let Some(sign) = m.get(9) {
                 // cached_tz() is an lru_cache: a Python frame only the first
                 // time this process sees the offset.
@@ -1173,7 +1240,11 @@ mod tomllib {
             check(d + 1)?;
             let text = m.get(0).map_or("", |g| g.as_str());
             let float = m.name("floatpart").is_some_and(|g| !g.as_str().is_empty());
-            if !float && !text.starts_with("0x") && !text.starts_with("0o") && !text.starts_with("0b") {
+            if !float
+                && !text.starts_with("0x")
+                && !text.starts_with("0o")
+                && !text.starts_with("0b")
+            {
                 // int(s, 0) refuses a decimal of more than 4300 digits
                 // (underscores and sign not counted): a ValueError.
                 if text.bytes().filter(u8::is_ascii_digit).count() > MAX_STR_DIGITS {
@@ -1187,7 +1258,10 @@ mod tomllib {
         if rest.starts_with("inf") || rest.starts_with("nan") {
             return Ok((pos + 3, Value::Other));
         }
-        if ["-inf", "+inf", "-nan", "+nan"].iter().any(|s| rest.starts_with(s)) {
+        if ["-inf", "+inf", "-nan", "+nan"]
+            .iter()
+            .any(|s| rest.starts_with(s))
+        {
             return Ok((pos + 4, Value::Other));
         }
 
@@ -1200,7 +1274,8 @@ mod tomllib {
     /// Whether Python's `date(year, month, day)` accepts it (month and day
     /// are already in 1..=12 and 1..=31 by the pattern).
     fn valid_date(year: u32, month: u32, day: u32) -> bool {
-        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+        let leap =
+            year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let days = match month {
             2 if leap => 29,
             2 => 28,
@@ -1263,7 +1338,13 @@ pub fn luminance(value: &str) -> f64 {
     }
     let conv: Vec<f64> = chan
         .iter()
-        .map(|&c| if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) })
+        .map(|&c| {
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        })
         .collect();
     0.2126 * conv[0] + 0.7152 * conv[1] + 0.0722 * conv[2]
 }
@@ -1332,11 +1413,21 @@ pub fn legible(color: &str, toward: &str, surfaces: &[&str], target: f64) -> Str
 }
 
 /// [`legible`] exactly as the Python behaves, ValueError included.
-pub fn try_legible(color: &str, toward: &str, surfaces: &[&str], target: f64) -> Result<String, String> {
+pub fn try_legible(
+    color: &str,
+    toward: &str,
+    surfaces: &[&str],
+    target: f64,
+) -> Result<String, String> {
     if color.is_empty() {
         return Ok(String::new());
     }
-    let reaches = |c: &str| surfaces.iter().filter(|s| !s.is_empty()).all(|s| contrast(c, s) >= target);
+    let reaches = |c: &str| {
+        surfaces
+            .iter()
+            .filter(|s| !s.is_empty())
+            .all(|s| contrast(c, s) >= target)
+    };
     for step in 0..=50 {
         let c = try_mix(color, toward, f64::from(step) / 50.0)?;
         if reaches(&c) {
@@ -1346,7 +1437,13 @@ pub fn try_legible(color: &str, toward: &str, surfaces: &[&str], target: f64) ->
     // The theme's own text is not enough (a light theme's foreground can
     // itself be ~5:1): go on toward black or white, whichever the surface
     // wants.
-    let extreme = readable_on(surfaces.iter().copied().find(|s| !s.is_empty()).unwrap_or("#000000"));
+    let extreme = readable_on(
+        surfaces
+            .iter()
+            .copied()
+            .find(|s| !s.is_empty())
+            .unwrap_or("#000000"),
+    );
     for step in 1..=50 {
         let c = try_mix(toward, &extreme, f64::from(step) / 50.0)?;
         if reaches(&c) {
@@ -1405,7 +1502,11 @@ pub fn pill_css(fills: &BTreeMap<String, String>, prefer: &[&str]) -> String {
         if fill.is_empty() {
             continue;
         }
-        let own: Vec<&str> = prefer.iter().copied().filter(|c| !c.is_empty() && contrast(c, &fill) >= 7.0).collect();
+        let own: Vec<&str> = prefer
+            .iter()
+            .copied()
+            .filter(|c| !c.is_empty() && contrast(c, &fill) >= 7.0)
+            .collect();
         let text = if own.is_empty() {
             readable_on(&fill)
         } else {
@@ -1442,7 +1543,9 @@ pub fn try_pick_css(card: &str, fg: &str, accent: &str) -> Result<String, String
     let wash = try_mix(&card, &accent, PICK_WASH)?;
     let text = try_legible(&fg, &readable_on(&wash), &[&wash], BODY_TARGET)?;
     let eyebrow = try_legible(&accent, &text, &[&wash], TEXT_TARGET)?;
-    Ok(format!(".pick-card {{ color: {text}; }}\n.pick-eyebrow {{ color: {eyebrow}; }}\n"))
+    Ok(format!(
+        ".pick-card {{ color: {text}; }}\n.pick-eyebrow {{ color: {eyebrow}; }}\n"
+    ))
 }
 
 /// A colour with alpha (0-1 channels), as the opaque hex it shows as
@@ -1453,7 +1556,10 @@ pub fn flatten(rgba: (f64, f64, f64, f64), under: Option<(f64, f64, f64)>) -> St
 }
 
 /// [`flatten`] exactly as the Python behaves (NaN or infinity raise).
-pub fn try_flatten(rgba: (f64, f64, f64, f64), under: Option<(f64, f64, f64)>) -> Result<String, String> {
+pub fn try_flatten(
+    rgba: (f64, f64, f64, f64),
+    under: Option<(f64, f64, f64)>,
+) -> Result<String, String> {
     let (mut r, mut g, mut b, a) = rgba;
     if let Some((ur, ug, ub)) = under {
         if a < 1.0 {
@@ -1518,7 +1624,10 @@ pub fn try_css_for(palette: &BTreeMap<String, String>) -> Result<String, String>
 
     let bg = pick(palette, &["background"]);
     let bg_dark = pick(palette, &["dark_background", "background"]);
-    let bg_dkr = pick(palette, &["darker_background", "dark_background", "background"]);
+    let bg_dkr = pick(
+        palette,
+        &["darker_background", "dark_background", "background"],
+    );
     let bg_lit = pick(palette, &["lighter_background", "background"]);
     let mut fg = pick(palette, &["foreground"]);
     // Primary text held to 7:1 on the lightest surface it is drawn on (the
@@ -1539,7 +1648,14 @@ pub fn try_css_for(palette: &BTreeMap<String, String>) -> Result<String, String>
     let mut pairs: Vec<(&str, String)> = vec![
         ("accent_bg_color", accent.clone()),
         ("accent_color", accent.clone()),
-        ("accent_fg_color", if accent.is_empty() { String::new() } else { readable_on(&accent) }),
+        (
+            "accent_fg_color",
+            if accent.is_empty() {
+                String::new()
+            } else {
+                readable_on(&accent)
+            },
+        ),
         ("window_bg_color", bg.clone()),
         ("window_fg_color", fg.clone()),
         ("view_bg_color", bg_dark.clone()),
@@ -1579,7 +1695,13 @@ pub fn try_css_for(palette: &BTreeMap<String, String>) -> Result<String, String>
     let surfaces: [&str; 2] = [&bg_lit, &bg];
     let css_pairs_raw = pairs.clone();
     if !fg.is_empty() {
-        let text = ["accent_color", "success_color", "warning_color", "error_color", "destructive_color"];
+        let text = [
+            "accent_color",
+            "success_color",
+            "warning_color",
+            "error_color",
+            "destructive_color",
+        ];
         for (name, value) in pairs.iter_mut() {
             if text.contains(name) && !value.is_empty() {
                 *value = try_legible(value, &fg, &surfaces, TEXT_TARGET)?;
@@ -1599,9 +1721,16 @@ pub fn try_css_for(palette: &BTreeMap<String, String>) -> Result<String, String>
     // theme's "dark_foreground" used to be painted here as dim text; it is a
     // terminal colour, and read at 1.5:1.)
     if !fg.is_empty() && !bg.is_empty() {
-        lines.push(format!(":root {{ --dim-opacity: {}%; }}", try_dim_opacity(&fg, &surfaces, TEXT_TARGET)?));
+        lines.push(format!(
+            ":root {{ --dim-opacity: {}%; }}",
+            try_dim_opacity(&fg, &surfaces, TEXT_TARGET)?
+        ));
         let card = if bg_lit.is_empty() { &bg } else { &bg_lit };
-        lines.push(try_pick_css(card, &fg, &accent)?.trim_end_matches('\n').to_string());
+        lines.push(
+            try_pick_css(card, &fg, &accent)?
+                .trim_end_matches('\n')
+                .to_string(),
+        );
         // dict(css_pairs_raw): the last value of a repeated name wins.
         let mut raw: BTreeMap<&str, String> = BTreeMap::new();
         for (name, value) in &css_pairs_raw {
@@ -1613,7 +1742,11 @@ pub fn try_css_for(palette: &BTreeMap<String, String>) -> Result<String, String>
         fills.insert("warning".to_string(), get("warning_bg_color"));
         fills.insert("success".to_string(), get("success_bg_color"));
         fills.insert("accent".to_string(), accent.clone());
-        lines.push(pill_css(&fills, &[&bg_dkr, &fg]).trim_end_matches('\n').to_string());
+        lines.push(
+            pill_css(&fills, &[&bg_dkr, &fg])
+                .trim_end_matches('\n')
+                .to_string(),
+        );
     }
     if !select.is_empty() {
         lines.push(format!("@define-color accent_hover_color {select};"));
@@ -1695,7 +1828,9 @@ fn try_theme_name_at(current: &Path, lenient: bool) -> Result<String, String> {
             Err(_) => {}
         }
     }
-    Ok(theme_dir_at(current).and_then(|d| d.file_name().map(escaped_name)).unwrap_or_default())
+    Ok(theme_dir_at(current)
+        .and_then(|d| d.file_name().map(escaped_name))
+        .unwrap_or_default())
 }
 
 /// `shutil.which(cmd)` for a bare command name. Not `util::which`, which
@@ -1738,11 +1873,14 @@ fn py_access_check(name: &Path) -> bool {
 /// `communicate(timeout=10)` does: a child that exits but leaves something
 /// holding its stdout (a background job) times out too.
 fn omarchy_theme_current() -> Result<Option<(Option<i32>, String)>, String> {
-    let out = crate::util::run_bytes(&["omarchy", "theme", "current"], &crate::util::RunOpts {
-        timeout: Some(Duration::from_secs(10)),
-        stdin: crate::util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = crate::util::run_bytes(
+        &["omarchy", "theme", "current"],
+        &crate::util::RunOpts {
+            timeout: Some(Duration::from_secs(10)),
+            stdin: crate::util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     if out.failed_to_start || out.timed_out {
         return Ok(None);
     }
@@ -1750,7 +1888,10 @@ fn omarchy_theme_current() -> Result<Option<(Option<i32>, String)>, String> {
     let decode = |b: Vec<u8>| {
         String::from_utf8(b)
             .map(|t| universal_newlines(&t))
-            .map_err(|_| "UnicodeDecodeError: 'utf-8' codec can't decode `omarchy theme current` output".to_string())
+            .map_err(|_| {
+                "UnicodeDecodeError: 'utf-8' codec can't decode `omarchy theme current` output"
+                    .to_string()
+            })
     };
     let stdout = decode(out.stdout)?;
     decode(out.stderr)?;
@@ -1771,7 +1912,18 @@ fn universal_newlines(s: &str) -> String {
 fn py_splitlines_first(s: &str) -> &str {
     let end = s
         .find(|c: char| {
-            matches!(c, '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}')
+            matches!(
+                c,
+                '\n' | '\r'
+                    | '\u{0b}'
+                    | '\u{0c}'
+                    | '\u{1c}'
+                    | '\u{1d}'
+                    | '\u{1e}'
+                    | '\u{85}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+            )
         })
         .unwrap_or(s.len());
     &s[..end]
@@ -1810,22 +1962,63 @@ fn py_islower(s: &str) -> bool {
 /// Full titlecase mappings (SpecialCasing included) that differ from both
 /// the character and its uppercase mapping, from Python's unicodedata.
 const TITLE_FULL: &[(char, &str)] = &[
-    ('\u{DF}', "\u{53}\u{73}"), ('\u{1C4}', "\u{1C5}"), ('\u{1C6}', "\u{1C5}"), ('\u{1C7}', "\u{1C8}"),
-    ('\u{1C9}', "\u{1C8}"), ('\u{1CA}', "\u{1CB}"), ('\u{1CC}', "\u{1CB}"), ('\u{1F1}', "\u{1F2}"),
-    ('\u{1F3}', "\u{1F2}"), ('\u{587}', "\u{535}\u{582}"), ('\u{1F80}', "\u{1F88}"), ('\u{1F81}', "\u{1F89}"),
-    ('\u{1F82}', "\u{1F8A}"), ('\u{1F83}', "\u{1F8B}"), ('\u{1F84}', "\u{1F8C}"), ('\u{1F85}', "\u{1F8D}"),
-    ('\u{1F86}', "\u{1F8E}"), ('\u{1F87}', "\u{1F8F}"), ('\u{1F90}', "\u{1F98}"), ('\u{1F91}', "\u{1F99}"),
-    ('\u{1F92}', "\u{1F9A}"), ('\u{1F93}', "\u{1F9B}"), ('\u{1F94}', "\u{1F9C}"), ('\u{1F95}', "\u{1F9D}"),
-    ('\u{1F96}', "\u{1F9E}"), ('\u{1F97}', "\u{1F9F}"), ('\u{1FA0}', "\u{1FA8}"), ('\u{1FA1}', "\u{1FA9}"),
-    ('\u{1FA2}', "\u{1FAA}"), ('\u{1FA3}', "\u{1FAB}"), ('\u{1FA4}', "\u{1FAC}"), ('\u{1FA5}', "\u{1FAD}"),
-    ('\u{1FA6}', "\u{1FAE}"), ('\u{1FA7}', "\u{1FAF}"), ('\u{1FB2}', "\u{1FBA}\u{345}"), ('\u{1FB3}', "\u{1FBC}"),
-    ('\u{1FB4}', "\u{386}\u{345}"), ('\u{1FB7}', "\u{391}\u{342}\u{345}"), ('\u{1FC2}', "\u{1FCA}\u{345}"),
-    ('\u{1FC3}', "\u{1FCC}"), ('\u{1FC4}', "\u{389}\u{345}"), ('\u{1FC7}', "\u{397}\u{342}\u{345}"),
-    ('\u{1FF2}', "\u{1FFA}\u{345}"), ('\u{1FF3}', "\u{1FFC}"), ('\u{1FF4}', "\u{38F}\u{345}"),
-    ('\u{1FF7}', "\u{3A9}\u{342}\u{345}"), ('\u{FB00}', "\u{46}\u{66}"), ('\u{FB01}', "\u{46}\u{69}"),
-    ('\u{FB02}', "\u{46}\u{6C}"), ('\u{FB03}', "\u{46}\u{66}\u{69}"), ('\u{FB04}', "\u{46}\u{66}\u{6C}"),
-    ('\u{FB05}', "\u{53}\u{74}"), ('\u{FB06}', "\u{53}\u{74}"), ('\u{FB13}', "\u{544}\u{576}"),
-    ('\u{FB14}', "\u{544}\u{565}"), ('\u{FB15}', "\u{544}\u{56B}"), ('\u{FB16}', "\u{54E}\u{576}"),
+    ('\u{DF}', "\u{53}\u{73}"),
+    ('\u{1C4}', "\u{1C5}"),
+    ('\u{1C6}', "\u{1C5}"),
+    ('\u{1C7}', "\u{1C8}"),
+    ('\u{1C9}', "\u{1C8}"),
+    ('\u{1CA}', "\u{1CB}"),
+    ('\u{1CC}', "\u{1CB}"),
+    ('\u{1F1}', "\u{1F2}"),
+    ('\u{1F3}', "\u{1F2}"),
+    ('\u{587}', "\u{535}\u{582}"),
+    ('\u{1F80}', "\u{1F88}"),
+    ('\u{1F81}', "\u{1F89}"),
+    ('\u{1F82}', "\u{1F8A}"),
+    ('\u{1F83}', "\u{1F8B}"),
+    ('\u{1F84}', "\u{1F8C}"),
+    ('\u{1F85}', "\u{1F8D}"),
+    ('\u{1F86}', "\u{1F8E}"),
+    ('\u{1F87}', "\u{1F8F}"),
+    ('\u{1F90}', "\u{1F98}"),
+    ('\u{1F91}', "\u{1F99}"),
+    ('\u{1F92}', "\u{1F9A}"),
+    ('\u{1F93}', "\u{1F9B}"),
+    ('\u{1F94}', "\u{1F9C}"),
+    ('\u{1F95}', "\u{1F9D}"),
+    ('\u{1F96}', "\u{1F9E}"),
+    ('\u{1F97}', "\u{1F9F}"),
+    ('\u{1FA0}', "\u{1FA8}"),
+    ('\u{1FA1}', "\u{1FA9}"),
+    ('\u{1FA2}', "\u{1FAA}"),
+    ('\u{1FA3}', "\u{1FAB}"),
+    ('\u{1FA4}', "\u{1FAC}"),
+    ('\u{1FA5}', "\u{1FAD}"),
+    ('\u{1FA6}', "\u{1FAE}"),
+    ('\u{1FA7}', "\u{1FAF}"),
+    ('\u{1FB2}', "\u{1FBA}\u{345}"),
+    ('\u{1FB3}', "\u{1FBC}"),
+    ('\u{1FB4}', "\u{386}\u{345}"),
+    ('\u{1FB7}', "\u{391}\u{342}\u{345}"),
+    ('\u{1FC2}', "\u{1FCA}\u{345}"),
+    ('\u{1FC3}', "\u{1FCC}"),
+    ('\u{1FC4}', "\u{389}\u{345}"),
+    ('\u{1FC7}', "\u{397}\u{342}\u{345}"),
+    ('\u{1FF2}', "\u{1FFA}\u{345}"),
+    ('\u{1FF3}', "\u{1FFC}"),
+    ('\u{1FF4}', "\u{38F}\u{345}"),
+    ('\u{1FF7}', "\u{3A9}\u{342}\u{345}"),
+    ('\u{FB00}', "\u{46}\u{66}"),
+    ('\u{FB01}', "\u{46}\u{69}"),
+    ('\u{FB02}', "\u{46}\u{6C}"),
+    ('\u{FB03}', "\u{46}\u{66}\u{69}"),
+    ('\u{FB04}', "\u{46}\u{66}\u{6C}"),
+    ('\u{FB05}', "\u{53}\u{74}"),
+    ('\u{FB06}', "\u{53}\u{74}"),
+    ('\u{FB13}', "\u{544}\u{576}"),
+    ('\u{FB14}', "\u{544}\u{565}"),
+    ('\u{FB15}', "\u{544}\u{56B}"),
+    ('\u{FB16}', "\u{54E}\u{576}"),
     ('\u{FB17}', "\u{544}\u{56D}"),
 ];
 
@@ -1863,7 +2056,11 @@ fn py_title(s: &str) -> String {
             // lower-cased length is this Σ's offset in the whole.
             let all = lowered.get_or_insert_with(|| py_lower(s));
             let at = py_lower(&s[..i]).len();
-            out.push(if all[at..].starts_with('\u{3c2}') { '\u{3c2}' } else { '\u{3c3}' });
+            out.push(if all[at..].starts_with('\u{3c2}') {
+                '\u{3c2}'
+            } else {
+                '\u{3c3}'
+            });
         } else if unicode17_new(c) {
             out.push(c);
         } else {
@@ -1897,7 +2094,13 @@ fn escaped_name(name: &OsStr) -> String {
 /// An escaped name as text to show: each escaped byte as U+FFFD.
 fn shown(s: &str) -> String {
     s.chars()
-        .map(|c| if (ESCAPE_BASE + 0x80..=ESCAPE_BASE + 0xFF).contains(&(c as u32)) { '\u{fffd}' } else { c })
+        .map(|c| {
+            if (ESCAPE_BASE + 0x80..=ESCAPE_BASE + 0xFF).contains(&(c as u32)) {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -1919,7 +2122,10 @@ pub fn watch(on_change: impl Fn() + 'static) -> Vec<gio::FileMonitor> {
 }
 
 fn watch_at(current: &Path, _on_change: impl Fn() + 'static) -> Vec<gio::FileMonitor> {
-    let mut targets: Vec<PathBuf> = vec![current.parent().unwrap_or(Path::new("")).to_path_buf(), current.to_path_buf()];
+    let mut targets: Vec<PathBuf> = vec![
+        current.parent().unwrap_or(Path::new("")).to_path_buf(),
+        current.to_path_buf(),
+    ];
     if let Some(colors) = colors_path_at(current) {
         targets.push(colors);
     }
@@ -1958,53 +2164,84 @@ fn try_describe_at(current: &Path, lenient: bool) -> Result<String, String> {
         name = d.file_name().map(escaped_name).unwrap_or_default();
     }
     if palette.is_empty() {
-        return Ok(format!("{name} (no readable colors.toml — using the system theme)"));
+        return Ok(format!(
+            "{name} (no readable colors.toml — using the system theme)"
+        ));
     }
-    Ok(format!("Following the Omarchy theme: {name} ({})", palette.get("mode").map(String::as_str).unwrap_or("?")))
+    Ok(format!(
+        "Following the Omarchy theme: {name} ({})",
+        palette.get("mode").map(String::as_str).unwrap_or("?")
+    ))
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // TextContrast: every kind of text measured against the surfaces it sits
     // on, for a low-contrast dark palette (Everforest) and a light one.
     fn everforest() -> BTreeMap<String, String> {
         map(&[
-            ("mode", "dark"), ("background", "#2d353b"), ("dark_background", "#21272c"),
-            ("darker_background", "#181d20"), ("lighter_background", "#343f44"),
-            ("foreground", "#d3c6aa"), ("dark_foreground", "#4f585e"),
-            ("accent", "#7fbbb3"), ("red", "#e67e80"), ("yellow", "#dbbc7f"),
+            ("mode", "dark"),
+            ("background", "#2d353b"),
+            ("dark_background", "#21272c"),
+            ("darker_background", "#181d20"),
+            ("lighter_background", "#343f44"),
+            ("foreground", "#d3c6aa"),
+            ("dark_foreground", "#4f585e"),
+            ("accent", "#7fbbb3"),
+            ("red", "#e67e80"),
+            ("yellow", "#dbbc7f"),
             ("green", "#a7c080"),
         ])
     }
 
     fn light() -> BTreeMap<String, String> {
         map(&[
-            ("mode", "light"), ("background", "#fdf6e3"), ("dark_background", "#eee8d5"),
-            ("darker_background", "#e4ddc8"), ("lighter_background", "#ffffff"),
-            ("foreground", "#586e75"), ("accent", "#268bd2"), ("red", "#dc322f"),
-            ("yellow", "#b58900"), ("green", "#859900"),
+            ("mode", "light"),
+            ("background", "#fdf6e3"),
+            ("dark_background", "#eee8d5"),
+            ("darker_background", "#e4ddc8"),
+            ("lighter_background", "#ffffff"),
+            ("foreground", "#586e75"),
+            ("accent", "#268bd2"),
+            ("red", "#dc322f"),
+            ("yellow", "#b58900"),
+            ("green", "#859900"),
         ])
     }
 
     fn pill_pairs(css: &str) -> Vec<(String, String)> {
         let re = regex::Regex::new(r"background: (#[0-9a-f]{6}); color: (#[0-9a-f]{6})").unwrap();
-        re.captures_iter(css).map(|c| (c[1].to_string(), c[2].to_string())).collect()
+        re.captures_iter(css)
+            .map(|c| (c[1].to_string(), c[2].to_string()))
+            .collect()
     }
 
     fn check(pal: &BTreeMap<String, String>) -> String {
         let css = css_for(pal);
         let re = regex::Regex::new(r"@define-color (\w+) (#[0-9a-f]{6});").unwrap();
-        let colours: BTreeMap<String, String> =
-            re.captures_iter(&css).map(|c| (c[1].to_string(), c[2].to_string())).collect();
-        let surfaces = [pal["lighter_background"].as_str(), pal["background"].as_str()];
-        for name in ["accent_color", "success_color", "warning_color", "error_color"] {
+        let colours: BTreeMap<String, String> = re
+            .captures_iter(&css)
+            .map(|c| (c[1].to_string(), c[2].to_string()))
+            .collect();
+        let surfaces = [
+            pal["lighter_background"].as_str(),
+            pal["background"].as_str(),
+        ];
+        for name in [
+            "accent_color",
+            "success_color",
+            "warning_color",
+            "error_color",
+        ] {
             for surf in surfaces {
                 assert!(contrast(&colours[name], surf) >= 5.5, "{name} on {surf}");
             }
@@ -2013,7 +2250,10 @@ mod tests {
         for surf in surfaces {
             assert!(contrast(fg, surf) >= 7.0, "text on {surf}");
         }
-        let pct: u32 = regex::Regex::new(r"--dim-opacity: (\d+)%").unwrap().captures(&css).unwrap()[1]
+        let pct: u32 = regex::Regex::new(r"--dim-opacity: (\d+)%")
+            .unwrap()
+            .captures(&css)
+            .unwrap()[1]
             .parse()
             .unwrap();
         for surf in surfaces {
@@ -2042,7 +2282,12 @@ mod tests {
     #[test]
     fn test_stock_theme_pills_are_measured() {
         let css = pill_css(
-            &map(&[("error", "#c01c28"), ("warning", "#cd9309"), ("success", "#2ec27e"), ("accent", "#3584e4")]),
+            &map(&[
+                ("error", "#c01c28"),
+                ("warning", "#cd9309"),
+                ("success", "#2ec27e"),
+                ("accent", "#3584e4"),
+            ]),
             &[],
         );
         for (fill, text) in pill_pairs(&css) {
@@ -2054,10 +2299,16 @@ mod tests {
     /// plain white, the pick card got black text on a dark card.
     #[test]
     fn test_translucent_theme_colours_are_measured_as_shown() {
-        let card = flatten((1.0, 1.0, 1.0, 0.08), Some((34.0 / 255.0, 34.0 / 255.0, 38.0 / 255.0)));
+        let card = flatten(
+            (1.0, 1.0, 1.0, 0.08),
+            Some((34.0 / 255.0, 34.0 / 255.0, 38.0 / 255.0)),
+        );
         assert!(luminance(&card) < 0.05);
         let css = pick_css(&card, "#ffffff", "#78aeed");
-        let text = regex::Regex::new(r"\.pick-card \{ color: (#[0-9a-f]{6})").unwrap().captures(&css).unwrap()[1]
+        let text = regex::Regex::new(r"\.pick-card \{ color: (#[0-9a-f]{6})")
+            .unwrap()
+            .captures(&css)
+            .unwrap()[1]
             .to_string();
         assert!(luminance(&text) > 0.5);
     }
@@ -2068,7 +2319,13 @@ mod tests {
     fn test_the_wash_keeps_accent_text_legible() {
         let mut cases: Vec<(String, String, String)> = [everforest(), light()]
             .iter()
-            .map(|p| (p["lighter_background"].clone(), p["foreground"].clone(), p["accent"].clone()))
+            .map(|p| {
+                (
+                    p["lighter_background"].clone(),
+                    p["foreground"].clone(),
+                    p["accent"].clone(),
+                )
+            })
             .collect();
         cases.push(("#ffffff".into(), "#000000cc"[..7].into(), "#3584e4".into())); // Adwaita light
         cases.push(("#383838".into(), "#ffffff".into(), "#78aeed".into())); // Adwaita dark
@@ -2118,7 +2375,10 @@ mod tests {
         assert_eq!(py_round_hex02(2.5).unwrap(), "02");
         assert_eq!(py_round_hex02(-5.0).unwrap(), "-5");
         assert_eq!(py_round_hex02(2f64.powi(64)).unwrap(), "10000000000000000");
-        assert_eq!(py_round_hex02(-(2f64.powi(70))).unwrap(), "-400000000000000000");
+        assert_eq!(
+            py_round_hex02(-(2f64.powi(70))).unwrap(),
+            "-400000000000000000"
+        );
         assert!(py_round_hex02(f64::NAN).is_err());
         assert!(py_round_hex02(f64::INFINITY).is_err());
     }
@@ -2146,7 +2406,10 @@ mod tests {
         assert_eq!(loads("d = 0000-01-01\n"), Err(Value));
         assert_eq!(loads("d = 1979-02-29\n"), Err(Value));
         assert_eq!(loads("d = 1980-02-29T00:00:00+23:59\n"), Ok(()));
-        assert_eq!(loads("99999999999999999999 = 1\n99999999999999999999 = 2\n"), Err(Value));
+        assert_eq!(
+            loads("99999999999999999999 = 1\n99999999999999999999 = 2\n"),
+            Err(Value)
+        );
         assert_eq!(loads("x = 099999999999999999999\n"), Err(Value));
         // int() stops at 4300 decimal digits; underscores, signs and
         // power-of-two bases do not count.
@@ -2163,7 +2426,15 @@ mod tests {
         use tomllib::Error::{Recursion, Value};
         let arr = |d: usize| format!("x = {}{}\n", "[".repeat(d), "]".repeat(d));
         let tbl = |d: usize| format!("x = {}1{}\n", "{a=".repeat(d), "}".repeat(d));
-        let keys = |n: usize| format!("x.{} = 1\n", (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>().join("."));
+        let keys = |n: usize| {
+            format!(
+                "x.{} = 1\n",
+                (0..n)
+                    .map(|i| format!("k{i}"))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            )
+        };
         // loads at frame 7: key_value_rule 8, parse_key_value_pair 9, then
         // two frames an array level and skip_comments_and_array_ws +
         // skip_chars under the innermost: 11 + 2d <= 1000.

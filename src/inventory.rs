@@ -21,26 +21,26 @@ use serde_json::{json, Map, Value};
 use crate::util;
 use crate::util::pyjson::{self, Build, Num};
 
-mod py;
-mod health;
 mod app;
-mod pacman;
 mod appimages;
-mod flatpak;
-mod local;
 mod discover;
+mod flatpak;
+mod health;
+mod local;
+mod pacman;
 mod plugin_registry;
+mod py;
 mod snapshot;
 
-use py::*;
-pub use health::*;
 pub use app::*;
-pub use pacman::*;
 pub use appimages::*;
-pub use flatpak::*;
-pub use local::*;
 pub use discover::*;
+pub use flatpak::*;
+pub use health::*;
+pub use local::*;
+pub use pacman::*;
 pub use plugin_registry::*;
+use py::*;
 pub use snapshot::*;
 
 // Runtime data, deliberately not where the code lives.
@@ -94,28 +94,73 @@ pub const CRITICAL: &[(&str, &[&str])] = &[
     (
         "security",
         &[
-            "chromium", "google-chrome", "firefox", "brave", "vivaldi", "opera",
-            "openssl", "openssh", "gnutls", "curl", "wget", "nss", "ca-certificates",
-            "sudo", "polkit", "1password", "bitwarden", "keepassxc", "gnupg",
-            "wpa_supplicant", "networkmanager", "dnsmasq", "nginx", "openvpn",
-            "wireguard-tools", "tailscale", "nordvpn-bin",
+            "chromium",
+            "google-chrome",
+            "firefox",
+            "brave",
+            "vivaldi",
+            "opera",
+            "openssl",
+            "openssh",
+            "gnutls",
+            "curl",
+            "wget",
+            "nss",
+            "ca-certificates",
+            "sudo",
+            "polkit",
+            "1password",
+            "bitwarden",
+            "keepassxc",
+            "gnupg",
+            "wpa_supplicant",
+            "networkmanager",
+            "dnsmasq",
+            "nginx",
+            "openvpn",
+            "wireguard-tools",
+            "tailscale",
+            "nordvpn-bin",
         ],
     ),
     (
         "core",
         &[
-            "linux", "linux-lts", "linux-zen", "linux-firmware", "glibc", "systemd",
-            "mkinitcpio", "limine", "grub", "mesa", "pacman", "btrfs-progs", "dkms",
+            "linux",
+            "linux-lts",
+            "linux-zen",
+            "linux-firmware",
+            "glibc",
+            "systemd",
+            "mkinitcpio",
+            "limine",
+            "grub",
+            "mesa",
+            "pacman",
+            "btrfs-progs",
+            "dkms",
             // What builds the initramfs or unlocks and assembles the root
             // before it is mounted: a bad update here fails at the next boot.
-            "dracut", "booster", "limine-mkinitcpio-hook", "plymouth", "cryptsetup",
-            "lvm2", "mdadm", "efibootmgr", "refind",
+            "dracut",
+            "booster",
+            "limine-mkinitcpio-hook",
+            "plymouth",
+            "cryptsetup",
+            "lvm2",
+            "mdadm",
+            "efibootmgr",
+            "refind",
             // Copied into every initramfs (busybox for the `base` hook, kmod to
             // load modules), what writes or signs the boot entries, and ZFS
             // roots. Not util-linux or the fsck tools: they update often and a
             // bad build of them does not stop the kernel reaching userspace.
-            "mkinitcpio-busybox", "kmod", "limine-snapper-sync", "systemd-ukify", "sbctl",
-            "shim-signed", "zfs-utils",
+            "mkinitcpio-busybox",
+            "kmod",
+            "limine-snapper-sync",
+            "systemd-ukify",
+            "sbctl",
+            "shim-signed",
+            "zfs-utils",
         ],
     ),
 ];
@@ -142,7 +187,10 @@ pub fn criticality(name: &str) -> String {
     // Kernels, the GPU drivers built for them and CPU microcode: all take
     // effect only at the next boot, and a bad one stops it. By rule, since
     // each has flavours and branches too many to list.
-    if [base.as_str(), lower.as_str()].iter().any(|n| is_kernel(n) || is_nvidia_driver(n) || n.ends_with("-ucode")) {
+    if [base.as_str(), lower.as_str()]
+        .iter()
+        .any(|n| is_kernel(n) || is_nvidia_driver(n) || n.ends_with("-ucode"))
+    {
         return "core".to_string();
     }
     String::new()
@@ -156,8 +204,8 @@ pub fn criticality(name: &str) -> String {
 /// allowlist: `linux-wifi-hotspot`, `linux-api-headers`, `linux-tools-meta`,
 /// `linux-atm` and the `-docs` packages are userland and stay ordinary.
 const KERNEL_FLAVOURS: &[&str] = &[
-    "lts", "zen", "hardened", "rt", "mainline", "next", "libre", "lqx", "clear", "pf", "g14", "surface", "asahi",
-    "vfio", "git",
+    "lts", "zen", "hardened", "rt", "mainline", "next", "libre", "lqx", "clear", "pf", "g14",
+    "surface", "asahi", "vfio", "git",
 ];
 
 /// Flavour families with their own variants after a dash
@@ -169,7 +217,9 @@ const KERNEL_FAMILIES: &[&str] = &["cachyos", "xanmod", "tkg", "omarchy", "amd",
 /// One flavour word: a listed one, or `lts` with its series' digits.
 fn is_flavour(word: &str) -> bool {
     KERNEL_FLAVOURS.contains(&word)
-        || word.strip_prefix("lts").is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        || word
+            .strip_prefix("lts")
+            .is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// A kernel, its headers (DKMS builds against them, so they move with it)
@@ -213,9 +263,14 @@ fn is_nvidia_driver(name: &str) -> bool {
         return false;
     };
     let parts: Vec<&str> = rest.split('-').skip(1).collect();
-    let legacy = |p: &str| p.strip_suffix("xx").is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+    let legacy = |p: &str| {
+        p.strip_suffix("xx")
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    };
     (rest.is_empty() || rest.starts_with('-'))
-        && parts.iter().all(|p| ["open", "lts", "beta", "utils"].contains(p) || legacy(p))
+        && parts
+            .iter()
+            .all(|p| ["open", "lts", "beta", "utils"].contains(p) || legacy(p))
         && (!lib32 || parts.last() == Some(&"utils"))
 }
 
@@ -243,10 +298,16 @@ pub fn duplicates(apps: &[App]) -> Vec<(String, Vec<String>)> {
     }
     seen.into_iter()
         .filter(|(_, v)| v.len() > 1)
-        .map(|(k, v)| (k, v.iter().map(|a| format!("{} ({})", a.name, a.source)).collect()))
+        .map(|(k, v)| {
+            (
+                k,
+                v.iter()
+                    .map(|a| format!("{} ({})", a.name, a.source))
+                    .collect(),
+            )
+        })
         .collect()
 }
-
 
 /// Stack for each [`collect`] thread: the 8 MiB of `ui::shell::BG_STACK`,
 /// Python's own thread stack. It was `util::JSON_STACK` while a collector
@@ -290,7 +351,11 @@ pub fn collect() -> Vec<App> {
     std::thread::scope(|s| {
         let handles: Vec<_> = sources
             .iter()
-            .map(|f| std::thread::Builder::new().stack_size(COLLECTOR_STACK).spawn_scoped(s, f))
+            .map(|f| {
+                std::thread::Builder::new()
+                    .stack_size(COLLECTOR_STACK)
+                    .spawn_scoped(s, f)
+            })
             .collect();
         for h in handles {
             let Ok(h) = h else { continue };
@@ -330,13 +395,23 @@ pub fn try_details(app: &App) -> Result<Extra, String> {
                     continue;
                 }
             }
-            let Some((k, v)) = line.split_once(':') else { continue };
+            let Some((k, v)) = line.split_once(':') else {
+                continue;
+            };
             let k = py_strip(k).to_string();
             acc.insert(k.clone(), py_strip(v).to_string());
             field = Some(k);
         }
-        for key in ["Depends On", "Required By", "Optional Deps", "Provides",
-                    "Conflicts With", "Packager", "Architecture", "Validated By"] {
+        for key in [
+            "Depends On",
+            "Required By",
+            "Optional Deps",
+            "Provides",
+            "Conflicts With",
+            "Packager",
+            "Architecture",
+            "Validated By",
+        ] {
             if let Some(v) = acc.get(key) {
                 if !v.is_empty() && v != "None" {
                     out.insert(key.to_string(), json!(v));
@@ -363,7 +438,10 @@ mod tests {
     /// non-str update included.
     #[test]
     fn a_row_marked_updated_has_no_update_left() {
-        let mut a = App { update: "2.0".into(), ..App::new("x", "1.0", REPO) };
+        let mut a = App {
+            update: "2.0".into(),
+            ..App::new("x", "1.0", REPO)
+        };
         assert!(a.has_update());
         let done = a.as_updated();
         assert!(!done.has_update());
@@ -390,8 +468,19 @@ mod tests {
         assert_eq!(criticality("linux"), "core");
         assert_eq!(criticality("mkinitcpio"), "core");
         for name in [
-            "dracut", "booster", "cryptsetup", "lvm2", "mdadm", "plymouth", "limine-mkinitcpio-hook",
-            "mkinitcpio-busybox", "kmod", "limine-snapper-sync", "systemd-ukify", "sbctl", "zfs-utils",
+            "dracut",
+            "booster",
+            "cryptsetup",
+            "lvm2",
+            "mdadm",
+            "plymouth",
+            "limine-mkinitcpio-hook",
+            "mkinitcpio-busybox",
+            "kmod",
+            "limine-snapper-sync",
+            "systemd-ukify",
+            "sbctl",
+            "zfs-utils",
             "linux-git-headers",
         ] {
             assert_eq!(criticality(name), "core", "{name}");
@@ -400,7 +489,14 @@ mod tests {
 
     #[test]
     fn test_dkms_modules_are_core() {
-        for name in ["dkms", "nvidia-dkms", "virtualbox-host-dkms", "zfs-dkms", "zfs-dkms-git", "Broadcom-WL-DKMS"] {
+        for name in [
+            "dkms",
+            "nvidia-dkms",
+            "virtualbox-host-dkms",
+            "zfs-dkms",
+            "zfs-dkms-git",
+            "Broadcom-WL-DKMS",
+        ] {
             assert_eq!(criticality(name), "core", "{name}");
         }
         // only the suffix: a name that merely mentions dkms is not a module
@@ -410,29 +506,98 @@ mod tests {
     #[test]
     fn kernels_drivers_and_microcode_are_core_by_rule() {
         for name in [
-            "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-rt-lts", "linux-rt-lts-headers",
-            "linux-headers", "linux-zen-headers", "linux-cachyos", "linux-cachyos-bore", "linux-cachyos-lts-headers",
-            "linux-xanmod", "linux-xanmod-edge", "linux-xanmod-lts-bin", "linux-tkg-pds", "linux-mainline",
-            "linux-mainline-git", "linux-git", "linux-omarchy", "linux-omarchy-eevdf-headers", "linux-firmware",
-            "linux-firmware-amdgpu", "linux-firmware-git", "nvidia", "nvidia-open", "nvidia-lts", "nvidia-open-lts",
-            "nvidia-utils", "lib32-nvidia-utils", "nvidia-580xx-utils", "lib32-nvidia-580xx-utils",
-            "nvidia-open-beta", "nvidia-open-dkms", "intel-ucode", "amd-ucode", "linux-vfio-lts",
-            "linux-vfio-lts-headers", "linux-lts66", "linux-lts515", "linux-lts515-headers", "linux-amd",
-            "linux-amd-znver3", "linux-amd-znver2-headers", "linux-ck", "linux-ck-generic-v3",
-            "linux-ck-generic-v3-headers", "linux-vfio", "linux-zen-lts", "linux-firmware-cirrus-dx13260",
+            "linux",
+            "linux-lts",
+            "linux-zen",
+            "linux-hardened",
+            "linux-rt",
+            "linux-rt-lts",
+            "linux-rt-lts-headers",
+            "linux-headers",
+            "linux-zen-headers",
+            "linux-cachyos",
+            "linux-cachyos-bore",
+            "linux-cachyos-lts-headers",
+            "linux-xanmod",
+            "linux-xanmod-edge",
+            "linux-xanmod-lts-bin",
+            "linux-tkg-pds",
+            "linux-mainline",
+            "linux-mainline-git",
+            "linux-git",
+            "linux-omarchy",
+            "linux-omarchy-eevdf-headers",
+            "linux-firmware",
+            "linux-firmware-amdgpu",
+            "linux-firmware-git",
+            "nvidia",
+            "nvidia-open",
+            "nvidia-lts",
+            "nvidia-open-lts",
+            "nvidia-utils",
+            "lib32-nvidia-utils",
+            "nvidia-580xx-utils",
+            "lib32-nvidia-580xx-utils",
+            "nvidia-open-beta",
+            "nvidia-open-dkms",
+            "intel-ucode",
+            "amd-ucode",
+            "linux-vfio-lts",
+            "linux-vfio-lts-headers",
+            "linux-lts66",
+            "linux-lts515",
+            "linux-lts515-headers",
+            "linux-amd",
+            "linux-amd-znver3",
+            "linux-amd-znver2-headers",
+            "linux-ck",
+            "linux-ck-generic-v3",
+            "linux-ck-generic-v3-headers",
+            "linux-vfio",
+            "linux-zen-lts",
+            "linux-firmware-cirrus-dx13260",
             "linux-firmware-other",
         ] {
             assert_eq!(criticality(name), "core", "{name}");
         }
         // linux-* userland, and the tools around a driver: ordinary.
         for name in [
-            "linux-wifi-hotspot", "linux-api-headers", "linux-docs", "linux-zen-docs", "linux-cachyos-docs",
-            "linux-tools-meta", "linux-atm", "linux-pam", "linuxqq", "util-linux", "nvidia-settings", "nvidia-prime",
-            "nvidia-container-toolkit", "nvidia-cg-toolkit", "libnvidia-container", "opencl-nvidia",
-            "lib32-opencl-nvidia", "libva-nvidia-driver", "python-nvidia-ml-py", "nvidiax", "lib32-nvidia",
-            "iucode-tool", "linux-firmware-whence", "linux-lts-docs", "linux-lts66-docs", "linux-amd-docs",
-            "linux-ck-generic-v3-docs", "linux-lts-foo", "linux-ltsx", "linux-lts6x", "linux-vfio-hotspot",
-            "linux-amdgpu-tools", "linux-cka", "linux-tools", "linux-lts-", "linux-",
+            "linux-wifi-hotspot",
+            "linux-api-headers",
+            "linux-docs",
+            "linux-zen-docs",
+            "linux-cachyos-docs",
+            "linux-tools-meta",
+            "linux-atm",
+            "linux-pam",
+            "linuxqq",
+            "util-linux",
+            "nvidia-settings",
+            "nvidia-prime",
+            "nvidia-container-toolkit",
+            "nvidia-cg-toolkit",
+            "libnvidia-container",
+            "opencl-nvidia",
+            "lib32-opencl-nvidia",
+            "libva-nvidia-driver",
+            "python-nvidia-ml-py",
+            "nvidiax",
+            "lib32-nvidia",
+            "iucode-tool",
+            "linux-firmware-whence",
+            "linux-lts-docs",
+            "linux-lts66-docs",
+            "linux-amd-docs",
+            "linux-ck-generic-v3-docs",
+            "linux-lts-foo",
+            "linux-ltsx",
+            "linux-lts6x",
+            "linux-vfio-hotspot",
+            "linux-amdgpu-tools",
+            "linux-cka",
+            "linux-tools",
+            "linux-lts-",
+            "linux-",
         ] {
             assert_eq!(criticality(name), "", "{name}");
         }
@@ -480,7 +645,10 @@ mod tests {
             .spawn(move || {
                 let v = py_loads(&text).unwrap();
                 let copy = v.clone();
-                let out = py_dumps(&Value::Object(Map::from_iter([("c".to_string(), copy)])), Some(2));
+                let out = py_dumps(
+                    &Value::Object(Map::from_iter([("c".to_string(), copy)])),
+                    Some(2),
+                );
                 drop(v);
                 out.len() > 900
             })

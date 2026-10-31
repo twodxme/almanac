@@ -27,20 +27,26 @@ mod tables;
 mod watch;
 mod window;
 
-pub use app::{run, AlmanacApp, PAGE_ALIASES, application_id, icons_dir, resolve_page};
+pub use app::{application_id, icons_dir, resolve_page, run, AlmanacApp, PAGE_ALIASES};
 pub(in crate::ui) use helpers::as_text;
 pub use helpers::{
-    age, compact, exc_str, fallback_icon, fmt_size, lower_cmp, name, primary_category, reverse_text,
-    source_label, spawn_bg, spawn_bg_checked, on_bg_failure, panic_text, thumb_bg, version_text, SwitchGuard, CSS, FALLBACK_ICON, INSTALL_ICON,
-    SOURCE_LABEL,
+    age, compact, exc_str, fallback_icon, fmt_size, lower_cmp, name, on_bg_failure, panic_text,
+    primary_category, reverse_text, source_label, spawn_bg, spawn_bg_checked, thumb_bg,
+    version_text, SwitchGuard, CSS, FALLBACK_ICON, INSTALL_ICON, SOURCE_LABEL,
 };
 pub use items::{AppItem, PluginItem};
-pub use shape::{arrow_space, page_body, section_note, severity_pill, PAGE_MARGIN, PAGE_MARGIN_BOTTOM, PAGE_SPACING};
-pub use tables::{
-    page_accel, page_spec, sorts_discover, sorts_installed, GroupItem, PageSpec, COLLAPSED_BY_DEFAULT,
-    GROUPS, PAGES, PAGE_KEYS,
+pub use shape::{
+    arrow_space, page_body, section_note, severity_pill, PAGE_MARGIN, PAGE_MARGIN_BOTTOM,
+    PAGE_SPACING,
 };
-pub use window::{tex_bytes, Findings, GroupHeader, Inner, Shared, SidebarRow, State, TexCache, WeakWin, Win, TEX_BUDGET};
+pub use tables::{
+    page_accel, page_spec, sorts_discover, sorts_installed, GroupItem, PageSpec,
+    COLLAPSED_BY_DEFAULT, GROUPS, PAGES, PAGE_KEYS,
+};
+pub use window::{
+    tex_bytes, Findings, GroupHeader, Inner, Shared, SidebarRow, State, TexCache, WeakWin, Win,
+    TEX_BUDGET,
+};
 
 /// `self._primary`: (label, enabled, tooltip, handler) of the current page's
 /// main action. One type for both sections: the packages section defines it,

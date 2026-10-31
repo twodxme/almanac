@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use gtk::glib;
 
-use crate::ui::shell::{Win, WeakWin};
+use crate::ui::shell::{WeakWin, Win};
 use crate::verify::{Outcome, ProbeValue};
 
 mod appimage_add;
@@ -25,8 +25,8 @@ pub(in crate::ui) use pyisms::truthy;
 pub use rows::releases_url;
 pub(in crate::ui) use update::{appimage_update_work, popen_new_session, update_cmd};
 pub use update::{
-    delete_appimage_files, needs_full_upgrade, remove_appimage_with, update_one,
-    with_snapshot, yay_argv, Removal, UpdateOne,
+    delete_appimage_files, needs_full_upgrade, remove_appimage_with, update_one, with_snapshot,
+    yay_argv, Removal, UpdateOne,
 };
 
 #[derive(Default)]
@@ -55,7 +55,9 @@ struct MainGuard(Option<glib::thread_guard::ThreadGuard<WeakWin>>);
 
 impl MainGuard {
     fn new(win: &Win) -> Guard {
-        Arc::new(MainGuard(Some(glib::thread_guard::ThreadGuard::new(win.downgrade()))))
+        Arc::new(MainGuard(Some(glib::thread_guard::ThreadGuard::new(
+            win.downgrade(),
+        ))))
     }
 
     fn upgrade(&self) -> Option<Win> {
@@ -119,9 +121,17 @@ mod tests {
         let dir = root.with_extension("");
         std::iter::once(root.to_path_buf())
             .chain(
-                ["rows.rs", "verification.rs", "takeovers.rs", "link.rs", "update.rs", "appimage_add.rs", "pyisms.rs"]
-                    .iter()
-                    .map(|f| dir.join(f)),
+                [
+                    "rows.rs",
+                    "verification.rs",
+                    "takeovers.rs",
+                    "link.rs",
+                    "update.rs",
+                    "appimage_add.rs",
+                    "pyisms.rs",
+                ]
+                .iter()
+                .map(|f| dir.join(f)),
             )
             .map(|p| {
                 let src = std::fs::read_to_string(p).unwrap_or_default();
@@ -134,15 +144,28 @@ mod tests {
     /// test_every_pill_class_is_defined_in_the_stylesheet (this section)
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
-        const PILLS: [&str; 6] = ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+        const PILLS: [&str; 6] = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ];
         let re = regex::Regex::new(r#""(pill(?:-[a-z]+)?)""#).unwrap();
         let code = code();
         assert!(!code.is_empty());
         let used: Vec<String> = re.captures_iter(&code).map(|c| c[1].to_string()).collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(CSS.contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(PILLS.contains(&name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                CSS.contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                PILLS.contains(&name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
     }
 
@@ -188,7 +211,9 @@ mod tests {
         let re = regex::Regex::new(r#""([a-z0-9-]+-symbolic)""#).unwrap();
         for c in re.captures_iter(&code()) {
             let n = &c[1];
-            let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("icons").join(format!("{n}.svg"));
+            let shipped = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("icons")
+                .join(format!("{n}.svg"));
             let found = shipped.exists()
                 || glob::glob(&format!("{}/**/{n}.*", adwaita.display()))
                     .map(|mut g| g.next().is_some())

@@ -32,11 +32,15 @@ pub(super) fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Cap
     use crate::util::{run_bytes, RunOpts, Stdin};
 
     let Some((prog, args)) = argv.split_first() else {
-        return Err(RunError::Os("[Errno 2] No such file or directory: ''".to_string()));
+        return Err(RunError::Os(
+            "[Errno 2] No such file or directory: ''".to_string(),
+        ));
     };
     // _fork_exec turns each argument into a C string before anything runs.
     if argv.iter().any(|a| a.as_bytes().contains(&0)) {
-        return Err(RunError::Raise("ValueError: embedded null byte".to_string()));
+        return Err(RunError::Raise(
+            "ValueError: embedded null byte".to_string(),
+        ));
     }
     let opts = RunOpts {
         timeout: timeout.map(Duration::from_secs),
@@ -58,7 +62,11 @@ pub(super) fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Cap
         }
         if !out.failed_to_start {
             let code = out.code.unwrap_or_else(|| -out.signal.unwrap_or(0));
-            return Ok(Captured { code, stdout: out.stdout, stderr: out.stderr });
+            return Ok(Captured {
+                code,
+                stdout: out.stdout,
+                stderr: out.stderr,
+            });
         }
         let n = out.start_errno.unwrap_or(libc::ENOENT);
         if n != libc::ENOENT && n != libc::ENOTDIR && first_err.is_none() {
@@ -67,7 +75,11 @@ pub(super) fn run_capture(argv: &[OsString], timeout: Option<u64>) -> Result<Cap
         last_err = Some(n);
     }
     let n = first_err.or(last_err).unwrap_or(libc::ENOENT);
-    Err(RunError::Os(format!("[Errno {n}] {}: {}", strerror(n), py_str_repr(&prog.to_string_lossy()))))
+    Err(RunError::Os(format!(
+        "[Errno {n}] {}: {}",
+        strerror(n),
+        py_str_repr(&prog.to_string_lossy())
+    )))
 }
 
 /// The paths CPython's `_execute_child` tries for `prog`: itself when it has a
@@ -81,7 +93,11 @@ pub(super) fn exec_candidates(prog: &OsStr) -> Vec<OsString> {
     path.as_bytes()
         .split(|&c| c == b':')
         .map(|dir| {
-            let mut p = if dir.is_empty() { b"./".to_vec() } else { dir.to_vec() };
+            let mut p = if dir.is_empty() {
+                b"./".to_vec()
+            } else {
+                dir.to_vec()
+            };
             if p.last() != Some(&b'/') {
                 p.push(b'/');
             }
@@ -118,7 +134,9 @@ pub(super) fn decode_text(b: &[u8]) -> Result<String, String> {
             } else {
                 format!("bytes in position {pos}-{}", pos + n - 1)
             };
-            Err(format!("UnicodeDecodeError: 'utf-8' codec can't decode {at}: {reason}"))
+            Err(format!(
+                "UnicodeDecodeError: 'utf-8' codec can't decode {at}: {reason}"
+            ))
         }
     }
 }
@@ -148,7 +166,8 @@ pub(super) fn passwd_home() -> Option<OsString> {
     let uid = rustix::process::getuid().as_raw().to_string();
     let from_line = |line: &[u8]| -> Option<OsString> {
         let fields: Vec<&[u8]> = line.split(|&c| c == b':').collect();
-        (fields.len() >= 6 && fields[2] == uid.as_bytes()).then(|| OsString::from_vec(fields[5].to_vec()))
+        (fields.len() >= 6 && fields[2] == uid.as_bytes())
+            .then(|| OsString::from_vec(fields[5].to_vec()))
     };
     if let Ok(text) = std::fs::read("/etc/passwd") {
         if let Some(home) = text.split(|&c| c == b'\n').find_map(from_line) {
@@ -171,7 +190,10 @@ pub(super) fn py_path(p: &OsStr) -> OsString {
     } else {
         (b"//", &b[2..])
     };
-    let parts: Vec<&[u8]> = rel.split(|&c| c == b'/').filter(|x| !x.is_empty() && *x != b".").collect();
+    let parts: Vec<&[u8]> = rel
+        .split(|&c| c == b'/')
+        .filter(|x| !x.is_empty() && *x != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend(parts.join(&b'/'));
     if out.is_empty() {
@@ -198,15 +220,22 @@ mod tests {
     #[test]
     fn run_capture_reports_signals_and_errno_like_python() {
         let argv = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
-        let out = run_capture(&argv(&["sh", "-c", "kill -9 $$"]), Some(5)).ok().unwrap();
+        let out = run_capture(&argv(&["sh", "-c", "kill -9 $$"]), Some(5))
+            .ok()
+            .unwrap();
         assert_eq!(out.code, -9);
         let start = Instant::now();
-        assert!(matches!(run_capture(&argv(&["sh", "-c", "sleep 5 & sleep 5"]), Some(1)), Err(RunError::Timeout)));
+        assert!(matches!(
+            run_capture(&argv(&["sh", "-c", "sleep 5 & sleep 5"]), Some(1)),
+            Err(RunError::Timeout)
+        ));
         assert!(start.elapsed() < Duration::from_secs(3));
         match run_capture(&argv(&["/proc"]), Some(1)) {
             Err(RunError::Os(m)) => assert_eq!(m, "[Errno 13] Permission denied: '/proc'"),
             _ => panic!("a directory cannot run"),
         }
-        assert!(decode_text(b"caf\xe9").unwrap_err().starts_with("UnicodeDecodeError"));
+        assert!(decode_text(b"caf\xe9")
+            .unwrap_err()
+            .starts_with("UnicodeDecodeError"));
     }
 }

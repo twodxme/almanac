@@ -35,23 +35,23 @@ impl DefaultValue {
 /// Every setting and its default, in the Python dict's order.
 pub const DEFAULTS: &[(&str, DefaultValue)] = &[
     // General
-    ("start_page", DefaultValue::Str("last")),           // last | featured | updates | plugins
+    ("start_page", DefaultValue::Str("last")), // last | featured | updates | plugins
     // Notifications
     ("notify_plugin_updates", DefaultValue::Bool(true)), // from the background watcher
     ("notify_resets", DefaultValue::Bool(true)),         // a config file put back to its defaults
     ("notify_no_change", DefaultValue::Bool(true)),      // an action that ran but changed nothing
     // Updates
-    ("hold_majors", DefaultValue::Bool(true)),           // major agent releases wait for a person
-    ("plugin_scope", DefaultValue::Str("all")),          // see plugins.SCOPES
+    ("hold_majors", DefaultValue::Bool(true)), // major agent releases wait for a person
+    ("plugin_scope", DefaultValue::Str("all")), // see plugins.SCOPES
     // Network: each thing Almanac fetches, by what it is for
-    ("net_vendor_icons", DefaultValue::Bool(true)),      // logos from each vendor's own domain
-    ("net_security_tracker", DefaultValue::Bool(true)),  // security.archlinux.org advisories
-    ("net_market_omarchy", DefaultValue::Bool(true)),    // plugins.omarchy.org catalogue
-    ("net_market_artcraft", DefaultValue::Bool(true)),   // getartcraft.com + GitHub releases
-    ("net_market_themes", DefaultValue::Bool(true)),     // the omarchy-theme topic on GitHub
-    ("net_gh_token", DefaultValue::Bool(true)),          // use `gh auth token` for GitHub requests
-    ("net_daily_picks", DefaultValue::Bool(true)),       // GitHub stats for Today's picks
-    ("net_arch_news", DefaultValue::Bool(true)),         // archlinux.org news feed, hourly
+    ("net_vendor_icons", DefaultValue::Bool(true)), // logos from each vendor's own domain
+    ("net_security_tracker", DefaultValue::Bool(true)), // security.archlinux.org advisories
+    ("net_market_omarchy", DefaultValue::Bool(true)), // plugins.omarchy.org catalogue
+    ("net_market_artcraft", DefaultValue::Bool(true)), // getartcraft.com + GitHub releases
+    ("net_market_themes", DefaultValue::Bool(true)), // the omarchy-theme topic on GitHub
+    ("net_gh_token", DefaultValue::Bool(true)),     // use `gh auth token` for GitHub requests
+    ("net_daily_picks", DefaultValue::Bool(true)),  // GitHub stats for Today's picks
+    ("net_arch_news", DefaultValue::Bool(true)),    // archlinux.org news feed, hourly
 ];
 
 pub const START_PAGES: &[(&str, &str)] = &[
@@ -67,7 +67,9 @@ pub fn default_for(key: &str) -> Option<DefaultValue> {
 }
 
 pub fn path() -> PathBuf {
-    crate::xdg::state_home().join("almanac").join("settings.json")
+    crate::xdg::state_home()
+        .join("almanac")
+        .join("settings.json")
 }
 
 // The settings file is read and written back whole, so every value in it --
@@ -123,7 +125,11 @@ fn on_main_thread() -> bool {
 }
 
 fn max_depth() -> usize {
-    if on_main_thread() { MAX_DEPTH_MAIN } else { MAX_DEPTH_THREAD }
+    if on_main_thread() {
+        MAX_DEPTH_MAIN
+    } else {
+        MAX_DEPTH_THREAD
+    }
 }
 
 /// CPython's RecursionError text for a container that would nest too deep:
@@ -145,14 +151,21 @@ enum JsonError {
 
 impl Doc {
     fn empty() -> Doc {
-        Doc { nodes: vec![Node::Obj(Vec::new())] }
+        Doc {
+            nodes: vec![Node::Obj(Vec::new())],
+        }
     }
 
     /// `data.get(key)` on the top-level dict.
     fn get(&self, key: &str) -> Option<&Node> {
-        let Node::Obj(entries) = &self.nodes[0] else { return None };
+        let Node::Obj(entries) = &self.nodes[0] else {
+            return None;
+        };
         let key = py_str(key);
-        entries.iter().find(|(k, _)| *k == key).map(|(_, id)| &self.nodes[*id])
+        entries
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, id)| &self.nodes[*id])
     }
 
     /// `data[key] = value` on the top-level dict.
@@ -173,7 +186,9 @@ impl Doc {
         let base = self.nodes.len();
         self.nodes.extend(other.nodes.iter().map(|n| match n {
             Node::Arr(items) => Node::Arr(items.iter().map(|c| c + base).collect()),
-            Node::Obj(entries) => Node::Obj(entries.iter().map(|(k, c)| (k.clone(), c + base)).collect()),
+            Node::Obj(entries) => {
+                Node::Obj(entries.iter().map(|(k, c)| (k.clone(), c + base)).collect())
+            }
             other => other.clone(),
         }));
         root + base
@@ -190,9 +205,11 @@ impl Doc {
             },
             Value::String(s) => Node::Str(py_str(s)),
             Value::Array(items) => Node::Arr(items.iter().map(|x| self.push_value(x)).collect()),
-            Value::Object(map) => {
-                Node::Obj(map.iter().map(|(k, x)| (py_str(k), self.push_value(x))).collect())
-            }
+            Value::Object(map) => Node::Obj(
+                map.iter()
+                    .map(|(k, x)| (py_str(k), self.push_value(x)))
+                    .collect(),
+            ),
         };
         self.nodes.push(node);
         self.nodes.len() - 1
@@ -220,7 +237,9 @@ impl Doc {
             |n| match &self.nodes[n] {
                 Node::Null => Value::Null,
                 Node::Bool(b) => Value::Bool(*b),
-                Node::Int(s) => s.parse::<i64>().map(Value::from)
+                Node::Int(s) => s
+                    .parse::<i64>()
+                    .map(Value::from)
                     .or_else(|_| s.parse::<u64>().map(Value::from))
                     .unwrap_or_else(|_| float_value(s.parse::<f64>().unwrap_or(f64::NAN))),
                 Node::Float(f) => float_value(*f),
@@ -229,7 +248,9 @@ impl Doc {
             },
             |_, kids| Value::Array(kids),
             |n, kids| match &self.nodes[n] {
-                Node::Obj(entries) => Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect()),
+                Node::Obj(entries) => {
+                    Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect())
+                }
                 _ => Value::Null,
             },
         )
@@ -283,7 +304,9 @@ impl Doc {
                 }
             }
             let level = stack.len();
-            let Some((children, i, close)) = stack.last_mut() else { break };
+            let Some((children, i, close)) = stack.last_mut() else {
+                break;
+            };
             if *i < children.len() {
                 let (key, child) = children[*i];
                 if *i > 0 {
@@ -312,7 +335,9 @@ fn py_str(s: &str) -> PyStr {
 }
 
 fn lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 fn float_value(f: f64) -> Value {
@@ -335,7 +360,11 @@ fn push_json_str(out: &mut String, s: &[u32]) {
             0x20..=0x7e => out.push(char::from(c as u8)),
             0x10000.. => {
                 let v = c - 0x10000;
-                out.push_str(&format!("\\u{:04x}\\u{:04x}", 0xd800 | (v >> 10), 0xdc00 | (v & 0x3ff)));
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xd800 | (v >> 10),
+                    0xdc00 | (v & 0x3ff)
+                ));
             }
             _ => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -459,7 +488,10 @@ impl Setting {
     }
 
     fn leaf(node: Node) -> Setting {
-        Setting { doc: Doc { nodes: vec![node] }, root: 0 }
+        Setting {
+            doc: Doc { nodes: vec![node] },
+            root: 0,
+        }
     }
 }
 
@@ -530,9 +562,9 @@ pub fn set(key: &str, value: impl Into<Setting>) -> Result<(), String> {
     let p = path();
     // Written by Doc::dumps, not util::write_json: the file may hold values
     // a serde `Value` cannot (see Doc).
-    crate::util::atomic_write(&p, data.dumps(Some(2), true).as_bytes()).map_err(|e| format!("OSError: {e}"))
+    crate::util::atomic_write(&p, data.dumps(Some(2), true).as_bytes())
+        .map_err(|e| format!("OSError: {e}"))
 }
-
 
 #[cfg(test)]
 fn restore(old: Option<std::ffi::OsString>) {
@@ -557,11 +589,17 @@ mod tests {
 
     impl Env {
         fn new() -> Env {
-            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let old = std::env::var_os("XDG_STATE_HOME");
             std::env::set_var("XDG_STATE_HOME", tmp.path());
-            Env { _guard: guard, _tmp: tmp, old }
+            Env {
+                _guard: guard,
+                _tmp: tmp,
+                old,
+            }
         }
     }
 
@@ -588,12 +626,24 @@ mod tests {
     #[test]
     fn test_switched_off_network_features_make_no_request() {
         let _env = Env::new();
-        for key in ["net_vendor_icons", "net_security_tracker", "net_gh_token",
-                    "net_market_omarchy", "net_market_artcraft", "net_market_themes"] {
+        for key in [
+            "net_vendor_icons",
+            "net_security_tracker",
+            "net_gh_token",
+            "net_market_omarchy",
+            "net_market_artcraft",
+            "net_market_themes",
+        ] {
             set(key, Value::Bool(false)).unwrap();
         }
-        for key in ["net_vendor_icons", "net_security_tracker", "net_gh_token",
-                    "net_market_omarchy", "net_market_artcraft", "net_market_themes"] {
+        for key in [
+            "net_vendor_icons",
+            "net_security_tracker",
+            "net_gh_token",
+            "net_market_omarchy",
+            "net_market_artcraft",
+            "net_market_themes",
+        ] {
             assert!(!get_bool(key));
         }
         assert!(get_bool("net_daily_picks"));
@@ -623,7 +673,8 @@ mod tests {
         assert_eq!(get("hold_majors").unwrap(), Value::Bool(false));
         set("start_page", Value::String("plugins".into())).unwrap();
         let text = std::fs::read_to_string(path()).unwrap();
-        assert!(text.starts_with("{\n  \"big\": -123456789012345678901234567890,\n  \"deep\": [\n    [\n"));
+        assert!(text
+            .starts_with("{\n  \"big\": -123456789012345678901234567890,\n  \"deep\": [\n    [\n"));
         assert!(text.contains("\"f\": [\n    Infinity,\n    NaN,\n    -Infinity,\n    2.225073858507201e-308,\n    9007199254740992.0\n  ],"));
         assert!(text.contains("\"s\": \"\\udc00\\ud800\\ud83d\\ude00\","));
         assert!(text.ends_with("\"start_page\": \"plugins\",\n  \"z\": 0\n}"));
@@ -636,7 +687,11 @@ mod tests {
         std::fs::write(path(), format!("{}{}", "[".repeat(n), "]".repeat(n))).unwrap();
         assert_eq!(get("hold_majors").unwrap(), Value::Bool(true));
         // More digits than int() takes: a ValueError, so the defaults.
-        std::fs::write(path(), format!(r#"{{"hold_majors": false, "n": {}}}"#, "1".repeat(4301))).unwrap();
+        std::fs::write(
+            path(),
+            format!(r#"{{"hold_majors": false, "n": {}}}"#, "1".repeat(4301)),
+        )
+        .unwrap();
         assert_eq!(get("hold_majors").unwrap(), Value::Bool(true));
     }
 
@@ -645,8 +700,10 @@ mod tests {
         let _env = Env::new();
         set("start_page", Value::String("plugins".into())).unwrap();
         set("hold_majors", Value::Bool(false)).unwrap();
-        assert_eq!(std::fs::read_to_string(path()).unwrap(),
-                   "{\n  \"hold_majors\": false,\n  \"start_page\": \"plugins\"\n}");
+        assert_eq!(
+            std::fs::read_to_string(path()).unwrap(),
+            "{\n  \"hold_majors\": false,\n  \"start_page\": \"plugins\"\n}"
+        );
         assert_eq!(get_str("start_page"), "plugins");
         assert!(set("no_such_setting", Value::Bool(true)).is_err());
     }
@@ -658,12 +715,24 @@ mod tests {
         let _env = Env::new();
         std::fs::create_dir_all(path().parent().unwrap()).unwrap();
         std::fs::write(path(), r#"{"plugin_scope": "a\udfffb"}"#).unwrap();
-        assert_eq!(get_exact("plugin_scope").unwrap().to_json(), r#""a\udfffb""#);
+        assert_eq!(
+            get_exact("plugin_scope").unwrap().to_json(),
+            r#""a\udfffb""#
+        );
         assert_eq!(get_str("plugin_scope"), "a\u{fffd}b");
         set("plugin_scope", get_exact("plugin_scope").unwrap()).unwrap();
-        assert_eq!(std::fs::read_to_string(path()).unwrap(), "{\n  \"plugin_scope\": \"a\\udfffb\"\n}");
-        set("start_page", Setting::from_json("18446744073709551616").unwrap()).unwrap();
-        assert!(std::fs::read_to_string(path()).unwrap().contains("\"start_page\": 18446744073709551616\n"));
+        assert_eq!(
+            std::fs::read_to_string(path()).unwrap(),
+            "{\n  \"plugin_scope\": \"a\\udfffb\"\n}"
+        );
+        set(
+            "start_page",
+            Setting::from_json("18446744073709551616").unwrap(),
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(path())
+            .unwrap()
+            .contains("\"start_page\": 18446744073709551616\n"));
         assert_eq!(get_exact("hold_majors").unwrap().to_json(), "true");
     }
 }

@@ -48,10 +48,10 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
                 description: py_strip(line).to_string(),
                 extra: json!({"installable": true, "repo_name": repo, "origin": REPO,
                               "is_app": true})
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into(),
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+                .into(),
                 ..Default::default()
             });
         }
@@ -59,7 +59,10 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
     }
 
     // --- AUR ---
-    let url = format!("https://aur.archlinux.org/rpc/v5/search/{}?by=name-desc", py_quote(query));
+    let url = format!(
+        "https://aur.archlinux.org/rpc/v5/search/{}?by=name-desc",
+        py_quote(query)
+    );
     // json.loads(...).get("results", []) inside the try: a reply that is not
     // an object is caught like a failed fetch.
     let results: Value = match http_json(&url, 20) {
@@ -67,7 +70,10 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
         _ => json!([]),
     };
     let Value::Array(mut results) = results else {
-        return Err(format!("'{}' object has no attribute 'sort'", py_type(&results)));
+        return Err(format!(
+            "'{}' object has no attribute 'sort'",
+            py_type(&results)
+        ));
     };
 
     // Popularity first: on the AUR it is the only signal that separates a
@@ -83,11 +89,16 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
                 Value::Number(n) => n.as_f64().unwrap_or(0.0),
                 Value::Bool(_) => 1.0,
                 // NaN, an infinity, an int past 64 bits.
-                Value::String(_) if matches!(exotic(v), Some(Exotic::Float(_) | Exotic::Int(_))) => {
+                Value::String(_)
+                    if matches!(exotic(v), Some(Exotic::Float(_) | Exotic::Int(_))) =>
+                {
                     py_float_value(v).unwrap_or(f64::INFINITY)
                 }
                 other => {
-                    return Err(format!("bad operand type for unary -: '{}'", py_type(other)))
+                    return Err(format!(
+                        "bad operand type for unary -: '{}'",
+                        py_type(other)
+                    ))
                 }
             },
             _ => 0.0,
@@ -110,7 +121,9 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
             continue;
         }
         let description = match rec.get("Description") {
-            Some(d) if real_str(d).is_some() => py_strip(&real_str(d).unwrap_or_default()).to_string(),
+            Some(d) if real_str(d).is_some() => {
+                py_strip(&real_str(d).unwrap_or_default()).to_string()
+            }
             Some(v) if truthy(v) => {
                 return Err(format!("'{}' object has no attribute 'strip'", py_type(v)))
             }
@@ -120,7 +133,9 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
         let popularity = match rec.get("Popularity") {
             Some(v) if truthy(v) => match v {
                 Value::Bool(_) => json!(1),
-                Value::Number(n) if n.is_f64() => json!(util::py_round_to(n.as_f64().unwrap_or(0.0), 2)),
+                Value::Number(n) if n.is_f64() => {
+                    json!(util::py_round_to(n.as_f64().unwrap_or(0.0), 2))
+                }
                 _ => v.clone(),
             },
             _ => json!(0),
@@ -135,11 +150,20 @@ pub fn try_search_available(query: &str, limit: usize) -> Result<Vec<App>, Strin
         extra.insert("installable".into(), json!(true));
         extra.insert("origin".into(), json!(AUR));
         extra.insert("is_app".into(), json!(true));
-        extra.insert("votes".into(), rec.get("NumVotes").cloned().unwrap_or(json!(0)));
+        extra.insert(
+            "votes".into(),
+            rec.get("NumVotes").cloned().unwrap_or(json!(0)),
+        );
         extra.insert("popularity".into(), popularity);
         extra.insert("maintainer".into(), or_empty("Maintainer"));
-        extra.insert("orphaned".into(), json!(!rec.get("Maintainer").is_some_and(truthy)));
-        extra.insert("flagged".into(), json!(rec.get("OutOfDate").is_some_and(truthy)));
+        extra.insert(
+            "orphaned".into(),
+            json!(!rec.get("Maintainer").is_some_and(truthy)),
+        );
+        extra.insert(
+            "flagged".into(),
+            json!(rec.get("OutOfDate").is_some_and(truthy)),
+        );
         extra.insert("url".into(), or_empty("URL"));
         found.push(App {
             name: py_str(&nm),

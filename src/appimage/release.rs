@@ -7,15 +7,24 @@ use serde_json::Value;
 
 use crate::ghcache;
 
+use super::pyisms::{
+    fnmatch, py_int, py_norm, py_path, py_str, py_strip, py_type, run_bytes, truthy, version_re,
+};
 use super::{LatestRelease, UpdateSpec};
-use super::pyisms::{fnmatch, py_int, py_norm, py_path, py_str, py_strip, py_type, run_bytes, truthy, version_re};
 
 /// The raw .upd_info string, or '' when the AppImage carries none.
 pub fn read_update_info(path: &Path) -> String {
     let p = py_norm(path);
     let arg = |s: &'static str| std::ffi::OsStr::new(s);
     let Some(out) = run_bytes(
-        &[arg("objcopy"), arg("-O"), arg("binary"), arg("--only-section=.upd_info"), p.as_os_str(), arg("/dev/stdout")],
+        &[
+            arg("objcopy"),
+            arg("-O"),
+            arg("binary"),
+            arg("--only-section=.upd_info"),
+            p.as_os_str(),
+            arg("/dev/stdout"),
+        ],
         20,
         None,
     ) else {
@@ -67,28 +76,43 @@ pub fn vkey(v: &str) -> Result<Vec<BigInt>, String> {
 /// The hex sha256 of a GitHub release asset's `digest` (`"sha256:<hex>"`),
 /// lowercased; "" when there is none, or it is not a sha256 digest.
 pub fn sha256_of_digest(digest: Option<&Value>) -> String {
-    match digest.and_then(Value::as_str).and_then(|d| d.strip_prefix("sha256:")) {
-        Some(hex) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => hex.to_ascii_lowercase(),
+    match digest
+        .and_then(Value::as_str)
+        .and_then(|d| d.strip_prefix("sha256:"))
+    {
+        Some(hex) if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            hex.to_ascii_lowercase()
+        }
         _ => String::new(),
     }
 }
 
 fn release_url(owner: &str, repo: &str, release: &Value) -> String {
     let latest = matches!(release.as_str(), Some("latest") | Some(""));
-    let tag = if latest { "releases/latest".to_string() } else { format!("releases/tags/{}", py_str(release)) };
+    let tag = if latest {
+        "releases/latest".to_string()
+    } else {
+        format!("releases/tags/{}", py_str(release))
+    };
     format!("https://api.github.com/repos/{owner}/{repo}/{tag}")
 }
 
 /// The body of `latest_github` after the fetch: `data` is what the cache
 /// gave back, `pattern` is `None` when the spec's pattern is not a string.
-fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<LatestRelease>, String> {
+fn latest_from(
+    data: Option<Value>,
+    pattern: Option<&Value>,
+) -> Result<Option<LatestRelease>, String> {
     let Some(Value::Object(data)) = data else {
         return Ok(None); // offline or rate-limited: no update shown
     };
     let pattern = match pattern {
         Some(Value::String(s)) => s.as_str(),
         Some(other) => {
-            return Err(format!("AttributeError: '{}' object has no attribute 'endswith'", py_type(other)))
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'endswith'",
+                py_type(other)
+            ))
         }
         None => "*.AppImage",
     };
@@ -108,11 +132,19 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
         Value::Object(_) | Value::String(_) => {
             return Err("AttributeError: 'str' object has no attribute 'get'".into())
         }
-        other => return Err(format!("TypeError: '{}' object is not iterable", py_type(other))),
+        other => {
+            return Err(format!(
+                "TypeError: '{}' object is not iterable",
+                py_type(other)
+            ))
+        }
     };
     for a in items {
         let Some(a) = a.as_object() else {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", py_type(a)));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                py_type(a)
+            ));
         };
         let name = match a.get("name") {
             None => "",
@@ -126,19 +158,29 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
         };
         if fnmatch(name, want) {
             // Passed through as it is: None or a number survives into "url".
-            asset_url = a.get("browser_download_url").cloned().unwrap_or_else(|| Value::String(String::new()));
+            asset_url = a
+                .get("browser_download_url")
+                .cloned()
+                .unwrap_or_else(|| Value::String(String::new()));
             asset_name = name.to_string();
             asset_sha = sha256_of_digest(a.get("digest"));
             break;
         }
     }
 
-    let tag_name = data.get("tag_name").cloned().unwrap_or_else(|| Value::String(String::new()));
+    let tag_name = data
+        .get("tag_name")
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()));
     // `_version_of(tag_name) or _version_of(asset_name) or tag_name`
     let mut version = Value::String(version_of_value(&tag_name)?);
     if version.as_str() == Some("") {
         let v = version_of(&asset_name);
-        version = if v.is_empty() { tag_name.clone() } else { Value::String(v) };
+        version = if v.is_empty() {
+            tag_name.clone()
+        } else {
+            Value::String(v)
+        };
     }
     // `(data.get("published_at") or "")[:10]`
     let published = match data.get("published_at").filter(|v| truthy(v)) {
@@ -146,9 +188,17 @@ fn latest_from(data: Option<Value>, pattern: Option<&Value>) -> Result<Option<La
         Some(Value::String(s)) => Value::String(s.chars().take(10).collect()),
         Some(Value::Array(a)) => Value::Array(a.iter().take(10).cloned().collect()),
         Some(Value::Object(_)) => return Err("KeyError: slice(None, 10, None)".into()),
-        Some(other) => return Err(format!("TypeError: '{}' object is not subscriptable", py_type(other))),
+        Some(other) => {
+            return Err(format!(
+                "TypeError: '{}' object is not subscriptable",
+                py_type(other)
+            ))
+        }
     };
-    let page = data.get("html_url").cloned().unwrap_or_else(|| Value::String(String::new()));
+    let page = data
+        .get("html_url")
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()));
     let mut out = LatestRelease::default();
     out.set("version", version);
     out.set("tag", tag_name);
@@ -167,7 +217,10 @@ fn version_of_value(v: &Value) -> Result<String, String> {
     match v {
         _ if !truthy(v) => Ok(String::new()),
         Value::String(s) => Ok(version_of(s)),
-        other => Err(format!("TypeError: expected string or bytes-like object, got '{}'", py_type(other))),
+        other => Err(format!(
+            "TypeError: expected string or bytes-like object, got '{}'",
+            py_type(other)
+        )),
     }
 }
 
@@ -190,7 +243,9 @@ fn latest_impl(
 // `try: data = ghcache.get_json(url) / except Exception: data = None`:
 // what get_json raises is "no update shown" here.
 fn fetch_github(url: &str) -> Option<Value> {
-    ghcache::try_get_json(url, ghcache::DEFAULT_TTL, true, ghcache::ACCEPT).ok().flatten()
+    ghcache::try_get_json(url, ghcache::DEFAULT_TTL, true, ghcache::ACCEPT)
+        .ok()
+        .flatten()
 }
 
 /// Newest release plus the asset matching the AppImage's own pattern.
@@ -198,7 +253,12 @@ fn fetch_github(url: &str) -> Option<Value> {
 /// `None` when GitHub gave nothing (offline or rate-limited: no update
 /// shown). `release` is "latest" (or "") or a tag name. An error is a
 /// malformed release document the Python would raise on.
-pub fn latest_github(owner: &str, repo: &str, pattern: &str, release: &str) -> Result<Option<LatestRelease>, String> {
+pub fn latest_github(
+    owner: &str,
+    repo: &str,
+    pattern: &str,
+    release: &str,
+) -> Result<Option<LatestRelease>, String> {
     latest_impl(
         owner,
         repo,
@@ -208,12 +268,16 @@ pub fn latest_github(owner: &str, repo: &str, pattern: &str, release: &str) -> R
     )
 }
 
-type LatestFn<'a> = &'a dyn Fn(&str, &str, Option<&Value>, &Value) -> Result<Option<LatestRelease>, String>;
+type LatestFn<'a> =
+    &'a dyn Fn(&str, &str, Option<&Value>, &Value) -> Result<Option<LatestRelease>, String>;
 
 fn check_impl(record: &Value, latest_fn: LatestFn) -> Result<Option<LatestRelease>, String> {
     // `record.get(...)`: anything but a dict has no such method.
     let Some(record) = record.as_object() else {
-        return Err(format!("AttributeError: '{}' object has no attribute 'get'", py_type(record)));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py_type(record)
+        ));
     };
     let get = |k: &str| record.get(k);
     let path = match get("path") {
@@ -237,7 +301,10 @@ fn check_impl(record: &Value, latest_fn: LatestFn) -> Result<Option<LatestReleas
             .unwrap_or_else(|| Value::Object(Default::default())),
     };
     let Some(obj) = spec.as_object() else {
-        return Err(format!("AttributeError: '{}' object has no attribute 'get'", py_type(&spec)));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py_type(&spec)
+        ));
     };
     if obj.get("kind").and_then(Value::as_str) != Some("github") {
         return Ok(None);
@@ -252,7 +319,9 @@ fn check_impl(record: &Value, latest_fn: LatestFn) -> Result<Option<LatestReleas
         obj.get("pattern"),
         obj.get("release").unwrap_or(&default_release),
     )?;
-    let Some(mut latest) = latest else { return Ok(None) };
+    let Some(mut latest) = latest else {
+        return Ok(None);
+    };
     if !truthy(&latest.value("url")) {
         return Ok(None);
     }
@@ -287,7 +356,9 @@ fn check_impl(record: &Value, latest_fn: LatestFn) -> Result<Option<LatestReleas
 /// `None` is the Python's `{}`; an error is what the Python raises on a
 /// malformed record (a spec without an owner, say).
 pub fn check(record: &Value) -> Result<Option<LatestRelease>, String> {
-    check_impl(record, &|o, r, p, rel| latest_impl(o, r, p, rel, &fetch_github))
+    check_impl(record, &|o, r, p, rel| {
+        latest_impl(o, r, p, rel, &fetch_github)
+    })
 }
 
 #[cfg(test)]
@@ -296,7 +367,11 @@ mod tests {
     use serde_json::json;
 
     fn latest(version: &str, url: &str) -> LatestRelease {
-        LatestRelease { version: version.into(), url: url.into(), ..Default::default() }
+        LatestRelease {
+            version: version.into(),
+            url: url.into(),
+            ..Default::default()
+        }
     }
 
     // AppImageUpdateInfo
@@ -342,7 +417,10 @@ mod tests {
         let fake = |_: &str, _: &str, _: Option<&Value>, _: &Value| Ok(Some(latest("2.0.0", "u")));
         let rec = json!({"path": file!(), "version": "1.0.0",
                          "update_spec": {"kind": "github", "owner": "o", "repo": "r"}});
-        assert_eq!(check_impl(&rec, &fake).unwrap().map(|l| l.version), Some("2.0.0".to_string()));
+        assert_eq!(
+            check_impl(&rec, &fake).unwrap().map(|l| l.version),
+            Some("2.0.0".to_string())
+        );
     }
 
     #[test]
@@ -360,15 +438,21 @@ mod tests {
                           "assets": [{"name": "a.AppImage", "browser_download_url": null}]});
         let r = latest_from(Some(data), None).unwrap().unwrap();
         let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(v, json!({"version": null, "tag": null, "url": null, "asset": "a.AppImage",
-                             "published": "", "page": 7, "sha256": ""}));
+        assert_eq!(
+            v,
+            json!({"version": null, "tag": null, "url": null, "asset": "a.AppImage",
+                             "published": "", "page": 7, "sha256": ""})
+        );
         let back: LatestRelease = serde_json::from_value(v.clone()).unwrap();
         assert_eq!(serde_json::to_value(&back).unwrap(), v);
         // A stored dict comes back as it was: odd keys, order, a null spec.
         let stored = json!({"url": "u", "x": [1], "version": "2", "spec": null});
         let back: LatestRelease = serde_json::from_value(stored.clone()).unwrap();
         assert_eq!(back.value("url"), json!("u"));
-        assert_eq!(serde_json::to_string(&back).unwrap(), serde_json::to_string(&stored).unwrap());
+        assert_eq!(
+            serde_json::to_string(&back).unwrap(),
+            serde_json::to_string(&stored).unwrap()
+        );
         assert!(latest_from(Some(json!({"tag_name": 5})), None).is_err());
         assert!(latest_from(Some(json!({"published_at": true})), None).is_err());
     }
@@ -383,14 +467,20 @@ mod tests {
         let data = json!({"tag_name": "v2.0.0", "assets": [
             {"name": "x.AppImage.zsync", "digest": "sha256:00"},
             {"name": "x-2.0.0.AppImage", "browser_download_url": "u", "digest": format!("sha256:{hex}")}]});
-        let r = latest_from(Some(data), Some(&json!("x-*.AppImage"))).unwrap().unwrap();
+        let r = latest_from(Some(data), Some(&json!("x-*.AppImage")))
+            .unwrap()
+            .unwrap();
         assert_eq!(r.sha256, hex.to_lowercase());
-        assert_eq!(serde_json::to_value(&r).unwrap()["sha256"], json!(hex.to_lowercase()));
+        assert_eq!(
+            serde_json::to_value(&r).unwrap()["sha256"],
+            json!(hex.to_lowercase())
+        );
         assert_eq!(sha256_of_digest(Some(&json!("sha512:abcd"))), "");
         assert_eq!(sha256_of_digest(Some(&json!("sha256:xyz"))), "");
         assert_eq!(sha256_of_digest(None), "");
         // A dict stored before the key existed reads as "no digest".
-        let old: LatestRelease = serde_json::from_value(json!({"url": "u", "version": "2"})).unwrap();
+        let old: LatestRelease =
+            serde_json::from_value(json!({"url": "u", "version": "2"})).unwrap();
         assert_eq!(old.sha256, "");
     }
 

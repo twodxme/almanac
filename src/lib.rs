@@ -20,8 +20,8 @@ pub mod i18n;
 pub mod icons;
 pub mod inventory;
 pub mod maintenance;
-pub mod mirror;
 pub mod mimeguard;
+pub mod mirror;
 pub mod news;
 pub mod patches;
 pub mod picks;
@@ -44,5 +44,5 @@ pub mod verify;
 pub mod watcher;
 pub mod xdg;
 
-pub mod util;
 pub mod ui;
+pub mod util;

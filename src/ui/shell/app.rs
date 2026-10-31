@@ -16,23 +16,39 @@ use super::window::Win;
 /// keybinding can land on Updates without a click -- and makes a screenshot
 /// of a given page reproducible.
 pub const PAGE_ALIASES: &[(&str, &str)] = &[
-    ("featured", "featured"), ("home", "featured"), ("today", "featured"),
-    ("store", "discover"), ("app-store", "discover"), ("discover", "discover"),
-    ("themes", "themes"), ("theme", "themes"),
-    ("updates", "updates"), ("update", "updates"),
-    ("ai", inventory::AGENT), ("agents", inventory::AGENT),
-    ("health", "maintenance"), ("maintenance", "maintenance"),
-    ("history", "history"), ("timeline", "history"),
-    ("plugins", "plugins"), ("plugin", "plugins"),
-    ("switchboard", "switchboard"), ("switches", "switchboard"),
-    ("apps", "apps"), ("applications", "apps"),
-    ("all", "all"), ("everything", "all"),
+    ("featured", "featured"),
+    ("home", "featured"),
+    ("today", "featured"),
+    ("store", "discover"),
+    ("app-store", "discover"),
+    ("discover", "discover"),
+    ("themes", "themes"),
+    ("theme", "themes"),
+    ("updates", "updates"),
+    ("update", "updates"),
+    ("ai", inventory::AGENT),
+    ("agents", inventory::AGENT),
+    ("health", "maintenance"),
+    ("maintenance", "maintenance"),
+    ("history", "history"),
+    ("timeline", "history"),
+    ("plugins", "plugins"),
+    ("plugin", "plugins"),
+    ("switchboard", "switchboard"),
+    ("switches", "switchboard"),
+    ("apps", "apps"),
+    ("applications", "apps"),
+    ("all", "all"),
+    ("everything", "all"),
     ("orphans", inventory::ORPHAN),
 ];
 
 /// `PAGE_ALIASES.get(wanted)`.
 pub fn resolve_page(wanted: &str) -> Option<&'static str> {
-    PAGE_ALIASES.iter().find(|(k, _)| *k == wanted).map(|(_, v)| *v)
+    PAGE_ALIASES
+        .iter()
+        .find(|(k, _)| *k == wanted)
+        .map(|(_, v)| *v)
 }
 
 /// The D-Bus name, which the desktop file and metadata use too.
@@ -76,9 +92,11 @@ impl AlmanacApp {
             win: Rc::new(RefCell::new(None)),
         };
         let t = this.clone();
-        this.app.connect_handle_local_options(move |_app, opts| t.local_options(opts));
+        this.app
+            .connect_handle_local_options(move |_app, opts| t.local_options(opts));
         let t = this.clone();
-        this.app.connect_command_line(move |_app, cmd| t.command_line(cmd));
+        this.app
+            .connect_command_line(move |_app, cmd| t.command_line(cmd));
         let t = this.clone();
         this.app.connect_startup(move |_app| t.startup());
         let t = this.clone();
@@ -144,16 +162,18 @@ impl AlmanacApp {
             None => {
                 let w = Win::new(&self.app);
                 crate::ui::timings::mark("window built");
-                w.window.connect_map(|_| crate::ui::timings::mark("window mapped"));
+                w.window
+                    .connect_map(|_| crate::ui::timings::mark("window mapped"));
                 w.window.add_tick_callback(|_, _| {
                     crate::ui::timings::mark("first frame");
                     glib::ControlFlow::Break
                 });
                 let weak = w.downgrade();
-                w.window.connect_close_request(move |_| match weak.upgrade() {
-                    Some(w) => AlmanacApp::on_close(&w),
-                    None => glib::Propagation::Proceed,
-                });
+                w.window
+                    .connect_close_request(move |_| match weak.upgrade() {
+                        Some(w) => AlmanacApp::on_close(&w),
+                        None => glib::Propagation::Proceed,
+                    });
                 *self.win.borrow_mut() = Some(w.clone());
                 // Old thumbnails and cache files, orphaned AppImage copies:
                 // at most once a day, never on the main thread.
@@ -170,11 +190,13 @@ impl AlmanacApp {
                     // Timer units an older Almanac put in ~/.config override
                     // the packaged ones (and run an older script) until
                     // they are replaced.
-                    let _ = std::thread::Builder::new().name("timer-migration".into()).spawn(|| {
-                        if let Err(e) = crate::autoupdate::migrate_legacy_units() {
-                            eprintln!("almanac: {e}");
-                        }
-                    });
+                    let _ = std::thread::Builder::new()
+                        .name("timer-migration".into())
+                        .spawn(|| {
+                            if let Err(e) = crate::autoupdate::migrate_legacy_units() {
+                                eprintln!("almanac: {e}");
+                            }
+                        });
                 }
                 w
             }
@@ -208,7 +230,11 @@ impl Default for AlmanacApp {
 
 /// `(opts.get("page") or "").strip().lower()`.
 fn wanted_page(opts: &glib::VariantDict) -> String {
-    let page = opts.lookup::<String>("page").ok().flatten().unwrap_or_default();
+    let page = opts
+        .lookup::<String>("page")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     py_strip(&page).to_lowercase()
 }
 
@@ -250,7 +276,11 @@ fn py_printable(c: char) -> bool {
 /// `repr(str)` for the error message: single quotes unless the text holds one
 /// and no double quote; what is not printable escaped as Python escapes it.
 fn py_repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -312,7 +342,8 @@ mod tests {
         assert_eq!(py_strip("\x1c updates\u{a0}\x1f"), "updates");
         assert_eq!(py_strip("\u{200b}x"), "\u{200b}x"); // not whitespace to Python either
         let msg = unknown_page_message("nope");
-        assert!(msg.starts_with("almanac: unknown page 'nope'. Try one of: agents, ai, all, app-store,"));
+        assert!(msg
+            .starts_with("almanac: unknown page 'nope'. Try one of: agents, ai, all, app-store,"));
         assert!(msg.ends_with("today, update, updates\n"));
     }
 
@@ -320,7 +351,10 @@ mod tests {
     fn py_repr_quotes() {
         assert_eq!(py_repr_str("abc"), "'abc'");
         assert_eq!(py_repr_str("it's"), "\"it's\"");
-        assert_eq!(py_repr_str("a\u{200b}\u{a0}\x1c\u{e000}\u{10ffff}é日"), "'a\\u200b\\xa0\\x1c\\ue000\\U0010ffffé日'");
+        assert_eq!(
+            py_repr_str("a\u{200b}\u{a0}\x1c\u{e000}\u{10ffff}é日"),
+            "'a\\u200b\\xa0\\x1c\\ue000\\U0010ffffé日'"
+        );
         assert_eq!(py_repr_str("a\"b'c"), "'a\"b\\'c'");
     }
 }

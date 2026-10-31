@@ -18,8 +18,18 @@ pub fn git_in(root: &Path, args: &[&str], timeout: u64) -> Result<(i32, String),
         Err(RunError::Os(msg)) => Ok((1, msg)),
         Err(RunError::Raise(e)) => Err(e),
         Err(RunError::Timeout) => {
-            let cmd: Vec<String> = argv.iter().map(|a| py_str_repr(&a.to_string_lossy())).collect();
-            Ok((1, format!("Command '[{}]' timed out after {} seconds", cmd.join(", "), timeout)))
+            let cmd: Vec<String> = argv
+                .iter()
+                .map(|a| py_str_repr(&a.to_string_lossy()))
+                .collect();
+            Ok((
+                1,
+                format!(
+                    "Command '[{}]' timed out after {} seconds",
+                    cmd.join(", "),
+                    timeout
+                ),
+            ))
         }
         Ok(out) => {
             let text = decode_text(&out.stdout)? + &decode_text(&out.stderr)?;
@@ -121,6 +131,9 @@ mod tests {
 
     #[test]
     fn embedded_nul_raises_like_python() {
-        assert_eq!(git_in(&ROOT, &["status\0x"], 5), Err("ValueError: embedded null byte".to_string()));
+        assert_eq!(
+            git_in(&ROOT, &["status\0x"], 5),
+            Err("ValueError: embedded null byte".to_string())
+        );
     }
 }

@@ -38,7 +38,12 @@ pub fn snapshot_here() -> BTreeMap<String, String> {
     let mut dirs = vec![std::env::var("XDG_DATA_HOME")
         .ok()
         .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| util::home().join(".local/share").to_string_lossy().into_owned())];
+        .unwrap_or_else(|| {
+            util::home()
+                .join(".local/share")
+                .to_string_lossy()
+                .into_owned()
+        })];
     dirs.extend(
         std::env::var("XDG_DATA_DIRS")
             .ok()
@@ -49,7 +54,9 @@ pub fn snapshot_here() -> BTreeMap<String, String> {
     );
     let mut types = BTreeSet::new();
     for d in dirs {
-        let Ok(text) = std::fs::read_to_string(std::path::Path::new(&d).join("applications/mimeinfo.cache")) else {
+        let Ok(text) =
+            std::fs::read_to_string(std::path::Path::new(&d).join("applications/mimeinfo.cache"))
+        else {
             continue;
         };
         for line in text.lines() {
@@ -71,7 +78,10 @@ pub fn snapshot_here() -> BTreeMap<String, String> {
 
 /// `--mime-snapshot`: print `snapshot_here` as JSON on stdout.
 pub fn print_snapshot() {
-    println!("{}", serde_json::to_string(&snapshot_here()).unwrap_or_else(|_| "{}".into()));
+    println!(
+        "{}",
+        serde_json::to_string(&snapshot_here()).unwrap_or_else(|_| "{}".into())
+    );
 }
 
 /// {mime type: desktop id} for every type something can open.
@@ -85,7 +95,6 @@ pub fn snapshot() -> Option<BTreeMap<String, String>> {
     }
     serde_json::from_slice::<BTreeMap<String, String>>(&stdout).ok()
 }
-
 
 /// `subprocess.run(argv, capture_output=True, timeout=secs)` keeping the raw
 /// bytes: (returncode, stdout, stderr), or None on OSError / TimeoutExpired.
@@ -101,11 +110,14 @@ fn run_bytes(argv: &[&str], timeout_secs: u64) -> Option<(Option<i32>, Vec<u8>, 
 
 /// `run_bytes` with any timeout (the tests use a fraction of a second).
 fn run_bytes_within(argv: &[&str], timeout: Duration) -> Option<(Option<i32>, Vec<u8>, Vec<u8>)> {
-    let out = util::run_bytes(argv, &util::RunOpts {
-        timeout: Some(timeout),
-        stdin: util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = util::run_bytes(
+        argv,
+        &util::RunOpts {
+            timeout: Some(timeout),
+            stdin: util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     (!out.failed_to_start && !out.timed_out).then_some((out.code, out.stdout, out.stderr))
 }
 
@@ -144,8 +156,10 @@ impl OldId for serde_json::Value {
 ///
 /// `after` is walked in its own order (a Python dict's insertion order), so it
 /// is any iterable of pairs: a snapshot's map, or an ordered list.
-pub fn changes<'a, V, A>(before: Option<&BTreeMap<String, V>>, after: Option<A>)
-    -> Vec<(String, V, String)>
+pub fn changes<'a, V, A>(
+    before: Option<&BTreeMap<String, V>>,
+    after: Option<A>,
+) -> Vec<(String, V, String)>
 where
     V: OldId,
     A: IntoIterator<Item = (&'a String, &'a String)>,
@@ -185,7 +199,10 @@ pub fn app_name(desktop_id: &str) -> String {
             return desktop_id.to_string();
         }
     }
-    desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id).to_string()
+    desktop_id
+        .strip_suffix(".desktop")
+        .unwrap_or(desktop_id)
+        .to_string()
 }
 
 /// A file type as a person names it: '.docx' rather than the MIME string.
@@ -215,9 +232,10 @@ pub fn try_summary(moved: &[(String, String, String)]) -> Result<Vec<String>, St
     summary_with(moved, &mut try_label)
 }
 
-fn summary_with(moved: &[(String, String, String)],
-                label: &mut dyn FnMut(&str) -> Result<String, String>)
-    -> Result<Vec<String>, String> {
+fn summary_with(
+    moved: &[(String, String, String)],
+    label: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
     // Insertion-ordered {new: [(type, old)]}, as the Python dict is.
     let mut by_new: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for (t, old, new) in moved {
@@ -228,17 +246,23 @@ fn summary_with(moved: &[(String, String, String)],
     }
     let mut lines = Vec::new();
     for (new, pairs) in &by_new {
-        let kinds: BTreeSet<String> = pairs.iter().map(|(t, _o)| label(t))
+        let kinds: BTreeSet<String> = pairs
+            .iter()
+            .map(|(t, _o)| label(t))
             .collect::<Result<_, _>>()?;
         let kinds = kinds.into_iter().take(8).collect::<Vec<_>>().join(", ");
-        let olds: BTreeSet<String> = pairs.iter()
+        let olds: BTreeSet<String> = pairs
+            .iter()
             .filter(|(_t, o)| !o.is_empty())
             .map(|(_t, o)| app_name(o))
             .collect();
         let was = if olds.is_empty() {
             String::new()
         } else {
-            format!(" — before: {}", olds.into_iter().collect::<Vec<_>>().join(", "))
+            format!(
+                " — before: {}",
+                olds.into_iter().collect::<Vec<_>>().join(", ")
+            )
         };
         lines.push(format!("{} now opens {kinds}{was}", app_name(new)));
     }
@@ -252,8 +276,10 @@ fn summary_with(moved: &[(String, String, String)],
 /// byte') for a NUL in the type or the old id, which the Python does not
 /// catch -- the caller must stop there, as the Python's code after the call
 /// never runs.
-pub fn try_restore(moved: &[(String, String, String)], log: Option<&mut dyn FnMut(&str)>)
-    -> Result<usize, String> {
+pub fn try_restore(
+    moved: &[(String, String, String)],
+    log: Option<&mut dyn FnMut(&str)>,
+) -> Result<usize, String> {
     restore_with(moved, log, &mut |argv| xdg_mime_ok(argv))
 }
 
@@ -265,8 +291,11 @@ fn xdg_mime_ok(argv: &[&str]) -> bool {
 
 /// `restore` with the command runner passed in (the Python tests patch
 /// `subprocess.run`; the port's tests pass a fake here).
-fn restore_with(moved: &[(String, String, String)], log: Option<&mut dyn FnMut(&str)>,
-                run: &mut dyn FnMut(&[&str]) -> bool) -> Result<usize, String> {
+fn restore_with(
+    moved: &[(String, String, String)],
+    log: Option<&mut dyn FnMut(&str)>,
+    run: &mut dyn FnMut(&[&str]) -> bool,
+) -> Result<usize, String> {
     let mut print = |s: &str| println!("{s}");
     let log: &mut dyn FnMut(&str) = match log {
         Some(l) => l,
@@ -301,14 +330,14 @@ fn restore_with(moved: &[(String, String, String)], log: Option<&mut dyn FnMut(&
 /// `mimetypes.knownfiles`.
 const KNOWNFILES: &[&str] = &[
     "/etc/mime.types",
-    "/etc/httpd/mime.types",                    // Mac OS X
-    "/etc/httpd/conf/mime.types",               // Apache
-    "/etc/apache/mime.types",                   // Apache 1
-    "/etc/apache2/mime.types",                  // Apache 2
+    "/etc/httpd/mime.types",      // Mac OS X
+    "/etc/httpd/conf/mime.types", // Apache
+    "/etc/apache/mime.types",     // Apache 1
+    "/etc/apache2/mime.types",    // Apache 2
     "/usr/local/etc/httpd/conf/mime.types",
     "/usr/local/lib/netscape/mime.types",
-    "/usr/local/etc/httpd/conf/mime.types",     // Apache 1.2
-    "/usr/local/etc/mime.types",                // Apache 1.3
+    "/usr/local/etc/httpd/conf/mime.types", // Apache 1.2
+    "/usr/local/etc/mime.types",            // Apache 1.3
 ];
 
 const TYPES_MAP_DEFAULT: &[(&str, &str)] = &[
@@ -352,9 +381,18 @@ const TYPES_MAP_DEFAULT: &[(&str, &str)] = &[
     (".odp", "application/vnd.oasis.opendocument.presentation"),
     (".ods", "application/vnd.oasis.opendocument.spreadsheet"),
     (".odt", "application/vnd.oasis.opendocument.text"),
-    (".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-    (".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-    (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    (
+        ".pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ),
+    (
+        ".xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+    (
+        ".docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
     (".rar", "application/vnd.rar"),
     (".wasm", "application/wasm"),
     (".7z", "application/x-7z-compressed"),
@@ -535,7 +573,9 @@ impl MimeDb {
         if type_.is_empty() {
             return;
         }
-        let exts = self.inv[strict as usize].entry(type_.to_string()).or_default();
+        let exts = self.inv[strict as usize]
+            .entry(type_.to_string())
+            .or_default();
         if !exts.iter().any(|e| e == ext) {
             exts.push(ext.to_string());
         }
@@ -550,7 +590,9 @@ impl MimeDb {
             if let Some(i) = words.iter().position(|w| w.starts_with('#')) {
                 words.truncate(i);
             }
-            let Some((type_, suffixes)) = words.split_first() else { continue };
+            let Some((type_, suffixes)) = words.split_first() else {
+                continue;
+            };
             // A type holding an undecodable byte (a lone surrogate in Python)
             // can never equal a type asked about; nothing to record.
             if type_.chars().any(is_escaped_byte) {
@@ -621,7 +663,10 @@ fn os_error(e: &std::io::Error, filename: &str) -> String {
     match e.raw_os_error() {
         Some(code) => {
             let msg = std::io::Error::from_raw_os_error(code).to_string();
-            let msg = msg.strip_suffix(&format!(" (os error {code})")).unwrap_or(&msg).to_string();
+            let msg = msg
+                .strip_suffix(&format!(" (os error {code})"))
+                .unwrap_or(&msg)
+                .to_string();
             format!("[Errno {code}] {msg}: '{filename}'")
         }
         None => e.to_string(),
@@ -640,10 +685,12 @@ fn guess_extension(type_: &str, strict: bool) -> Result<Option<String>, String> 
             }
         }
     }
-    Ok(extensions.into_iter().next()
-        .map(|e| e.chars().map(|c| if is_escaped_byte(c) { '\u{fffd}' } else { c }).collect()))
+    Ok(extensions.into_iter().next().map(|e| {
+        e.chars()
+            .map(|c| if is_escaped_byte(c) { '\u{fffd}' } else { c })
+            .collect()
+    }))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -651,7 +698,10 @@ mod tests {
     use std::time::Instant;
 
     fn m(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn row(t: &str, o: &str, n: &str) -> (String, String, String) {
@@ -660,20 +710,33 @@ mod tests {
 
     #[test]
     fn test_a_takeover_is_listed_with_what_it_replaced() {
-        let before = m(&[("application/vnd.oasis.opendocument.text", "writer.desktop"),
-                         ("text/plain", "nvim.desktop")]);
-        let after = m(&[("application/vnd.oasis.opendocument.text", "wordcraft.desktop"),
-                        ("text/plain", "nvim.desktop")]);
-        assert_eq!(changes(Some(&before), Some(&after)),
-                   vec![row("application/vnd.oasis.opendocument.text",
-                            "writer.desktop", "wordcraft.desktop")]);
+        let before = m(&[
+            ("application/vnd.oasis.opendocument.text", "writer.desktop"),
+            ("text/plain", "nvim.desktop"),
+        ]);
+        let after = m(&[
+            (
+                "application/vnd.oasis.opendocument.text",
+                "wordcraft.desktop",
+            ),
+            ("text/plain", "nvim.desktop"),
+        ]);
+        assert_eq!(
+            changes(Some(&before), Some(&after)),
+            vec![row(
+                "application/vnd.oasis.opendocument.text",
+                "writer.desktop",
+                "wordcraft.desktop"
+            )]
+        );
     }
 
     #[test]
     fn readfp_reads_like_the_stdlib() {
         // Universal newlines, str.split() whitespace, surrogateescape.
         let mut db = MimeDb::default();
-        let text = decode_surrogateescape(b"a/b x\rc/d y\r\ne/f p\x1cq # no\ng/\xff z\nh/i \xffj\n");
+        let text =
+            decode_surrogateescape(b"a/b x\rc/d y\r\ne/f p\x1cq # no\ng/\xff z\nh/i \xffj\n");
         db.readfp(&text, true);
         let get = |t: &str| db.inv[1].get(t).cloned().unwrap_or_default();
         assert_eq!(get("a/b"), vec![".x"]);
@@ -687,57 +750,84 @@ mod tests {
     fn changes_walks_after_in_its_own_order() {
         let before = m(&[("a/a", "o"), ("z/z", "o")]);
         let after: Vec<(String, String)> = [("z/z", "n"), ("m/m", "n"), ("a/a", "n")]
-            .iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
         let got = changes(Some(&before), Some(after.iter().map(|(a, b)| (a, b))));
-        assert_eq!(got.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["z/z", "m/m", "a/a"]);
+        assert_eq!(
+            got.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["z/z", "m/m", "a/a"]
+        );
     }
 
     #[test]
     fn restore_raises_on_a_nul() {
         let mut log = |_: &str| {};
-        let r = restore_with(&[row("text/x", "a\0b.desktop", "wc.desktop")], Some(&mut log),
-                             &mut |_| true);
+        let r = restore_with(
+            &[row("text/x", "a\0b.desktop", "wc.desktop")],
+            Some(&mut log),
+            &mut |_| true,
+        );
         assert_eq!(r, Err("embedded null byte".to_string()));
     }
 
     #[test]
     fn changes_carries_a_none_old_id_through() {
         let before: BTreeMap<String, serde_json::Value> =
-            [("a/b".to_string(), serde_json::Value::Null)].into_iter().collect();
+            [("a/b".to_string(), serde_json::Value::Null)]
+                .into_iter()
+                .collect();
         let after = m(&[("a/b", "x")]);
-        assert_eq!(changes(Some(&before), Some(&after)),
-                   vec![("a/b".to_string(), serde_json::Value::Null, "x".to_string())]);
+        assert_eq!(
+            changes(Some(&before), Some(&after)),
+            vec![("a/b".to_string(), serde_json::Value::Null, "x".to_string())]
+        );
     }
 
     #[test]
     fn run_bytes_times_out_on_a_pipe_held_by_a_descendant() {
         // The child exits at once; its background sleep keeps stdout open.
         let t = Instant::now();
-        let r = run_bytes_within(&["/bin/sh", "-c", "/usr/bin/sleep 3 & exit 0"], Duration::from_millis(200));
+        let r = run_bytes_within(
+            &["/bin/sh", "-c", "/usr/bin/sleep 3 & exit 0"],
+            Duration::from_millis(200),
+        );
         assert_eq!(r, None);
         assert!(t.elapsed() < Duration::from_millis(1500));
-        assert_eq!(run_bytes(&["/bin/sh", "-c", "echo hi; exit 3"], 5),
-                   Some((Some(3), b"hi\n".to_vec(), Vec::new())));
+        assert_eq!(
+            run_bytes(&["/bin/sh", "-c", "echo hi; exit 3"], 5),
+            Some((Some(3), b"hi\n".to_vec(), Vec::new()))
+        );
     }
 
     #[test]
     fn test_no_snapshot_means_no_claim() {
-        assert_eq!(changes(None::<&BTreeMap<String, String>>, Some(&m(&[("a/b", "x")]))), vec![]);
+        assert_eq!(
+            changes(None::<&BTreeMap<String, String>>, Some(&m(&[("a/b", "x")]))),
+            vec![]
+        );
     }
 
     #[test]
     fn test_restoring_uses_the_standard_tool() {
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut log = |_: &str| {};
-        let n = restore_with(&[row("text/rtf", "writer.desktop", "wc.desktop"),
-                               row("text/x-new", "", "wc.desktop")],
-                             Some(&mut log),
-                             &mut |argv| {
-                                 calls.push(argv.iter().map(|s| s.to_string()).collect());
-                                 true
-                             }).unwrap();
+        let n = restore_with(
+            &[
+                row("text/rtf", "writer.desktop", "wc.desktop"),
+                row("text/x-new", "", "wc.desktop"),
+            ],
+            Some(&mut log),
+            &mut |argv| {
+                calls.push(argv.iter().map(|s| s.to_string()).collect());
+                true
+            },
+        )
+        .unwrap();
         assert_eq!(n, 1);
-        assert_eq!(calls.last().unwrap(),
-                   &vec!["xdg-mime", "default", "writer.desktop", "text/rtf"]);
+        assert_eq!(
+            calls.last().unwrap(),
+            &vec!["xdg-mime", "default", "writer.desktop", "text/rtf"]
+        );
     }
 }

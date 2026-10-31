@@ -82,8 +82,9 @@ impl Win {
                 }
             };
         }
-        let explicit =
-            Win::count_items(&items, |i| i.source == inventory::REPO || i.source == inventory::AUR);
+        let explicit = Win::count_items(&items, |i| {
+            i.source == inventory::REPO || i.source == inventory::AUR
+        });
         let foreign = Win::count_items(&items, |i| i.source == inventory::AUR);
         // Counting packages, not releases: summing release deltas across
         // date-versioned and epoch-versioned packages produced numbers in the
@@ -157,7 +158,8 @@ impl Win {
 
         for (n, (label, value, tip)) in rows.iter().enumerate() {
             let n = n as i32;
-            self.stats.attach(&self.stat_row(label, value, tip), n % 2, n / 2, 1, 1);
+            self.stats
+                .attach(&self.stat_row(label, value, tip), n % 2, n / 2, 1, 1);
         }
         Ok(())
     }
@@ -236,7 +238,10 @@ impl Win {
                     && i.source != inventory::ORPHAN
             }),
         );
-        counts.insert("all".into(), Win::count_items(&items, |i| i.source != inventory::ORPHAN));
+        counts.insert(
+            "all".into(),
+            Win::count_items(&items, |i| i.source != inventory::ORPHAN),
+        );
         for src in [
             inventory::SYSTEM,
             inventory::REPO,
@@ -279,8 +284,16 @@ impl Win {
         let security = Win::count_items(&items, |i| i.critical == "security");
         for row in rows {
             let key = row.key.as_str();
-            if ["maintenance", "history", "plugins", "switchboard", inventory::AGENT, "featured", "themes"]
-                .contains(&key)
+            if [
+                "maintenance",
+                "history",
+                "plugins",
+                "switchboard",
+                inventory::AGENT,
+                "featured",
+                "themes",
+            ]
+            .contains(&key)
             {
                 continue; // their badges count findings, not packages
             }
@@ -307,7 +320,15 @@ impl Win {
             );
             // Red means "a security update is waiting", nothing else. Pending
             // updates are a number, not an emergency.
-            Win::badge(&row.count, n, if key == "updates" && security != 0 { "crit" } else { "" });
+            Win::badge(
+                &row.count,
+                n,
+                if key == "updates" && security != 0 {
+                    "crit"
+                } else {
+                    ""
+                },
+            );
         }
     }
 }
@@ -323,7 +344,10 @@ mod tests {
         // other tests in this binary read ALMANAC_DEMO concurrently.
         let kernel = Win::kernel_version_for(true);
         let uptime = Win::uptime_for(true).unwrap_or_default();
-        let real = rustix::system::uname().release().to_string_lossy().to_string();
+        let real = rustix::system::uname()
+            .release()
+            .to_string_lossy()
+            .to_string();
         let real = real.split('-').next().unwrap_or("").to_string();
         if !real.is_empty() {
             assert!(!kernel.contains(&real));
@@ -338,7 +362,11 @@ mod tests {
         assert_eq!(Win::uptime_from("59").as_deref(), Ok("0m"));
         assert_eq!(Win::uptime_from("junk 1").as_deref(), Ok(""));
         assert!(Win::uptime_from("").unwrap_err().starts_with("IndexError"));
-        assert!(Win::uptime_from("inf").unwrap_err().starts_with("OverflowError"));
-        assert!(Win::uptime_from("nan").unwrap_err().starts_with("ValueError"));
+        assert!(Win::uptime_from("inf")
+            .unwrap_err()
+            .starts_with("OverflowError"));
+        assert!(Win::uptime_from("nan")
+            .unwrap_err()
+            .starts_with("ValueError"));
     }
 }

@@ -115,9 +115,14 @@ pub fn new_run_files_in(dir: &Path) -> Result<RunFiles, String> {
 }
 
 fn prune(dir: &Path, older: Duration) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
-        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > older));
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > older));
         if old && e.file_name().to_string_lossy().starts_with("update-") {
             let _ = std::fs::remove_file(e.path());
         }
@@ -213,7 +218,12 @@ pub enum Wait {
 /// Read `exited_at` before the status file: the script writes its status
 /// before the terminal can close, so a terminal seen gone has left its
 /// status for the read that follows.
-pub fn wait_step(elapsed: Duration, exited_at: Option<Duration>, status: &RunStatus, watching: bool) -> Wait {
+pub fn wait_step(
+    elapsed: Duration,
+    exited_at: Option<Duration>,
+    status: &RunStatus,
+    watching: bool,
+) -> Wait {
     if status.finished() {
         return Wait::Done;
     }
@@ -225,7 +235,9 @@ pub fn wait_step(elapsed: Duration, exited_at: Option<Duration>, status: &RunSta
         Some(_) if status.started.is_none() && elapsed > NO_START => {
             Wait::GiveUp("The update did not start in the terminal")
         }
-        _ if elapsed > GIVE_UP => Wait::GiveUp("Stopped waiting for the update — rescan when it is done"),
+        _ if elapsed > GIVE_UP => {
+            Wait::GiveUp("Stopped waiting for the update — rescan when it is done")
+        }
         _ => Wait::Keep,
     }
 }
@@ -241,7 +253,8 @@ pub fn log_offset(path: &Path) -> Option<u64> {
 pub fn read_log_since(path: &Path, offset: u64) -> Option<String> {
     let mut fh = std::fs::File::open(path).ok()?;
     let len = fh.metadata().ok()?.len();
-    fh.seek(SeekFrom::Start(if len < offset { 0 } else { offset })).ok()?;
+    fh.seek(SeekFrom::Start(if len < offset { 0 } else { offset }))
+        .ok()?;
     let mut buf = Vec::new();
     fh.read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
@@ -273,20 +286,28 @@ pub struct LogScan {
 static LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[(?P<ts>[^\]]+)\] \[(?P<who>[^\]]+)\] (?P<msg>.*)$").unwrap());
 static CHANGE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?P<op>upgraded|installed|removed|downgraded|reinstalled) (?P<name>\S+) \((?P<v>.*)\)$").unwrap()
+    Regex::new(
+        r"^(?P<op>upgraded|installed|removed|downgraded|reinstalled) (?P<name>\S+) \((?P<v>.*)\)$",
+    )
+    .unwrap()
 });
-static PACNEW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^warning: .+ installed as (?P<p>.+\.pacnew)$").unwrap());
-static PACSAVE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^warning: .+ saved as (?P<p>.+\.pacsave)$").unwrap());
-static HOOK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^running '(?P<h>[^']+)'\.\.\.$").unwrap());
+static PACNEW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^warning: .+ installed as (?P<p>.+\.pacnew)$").unwrap());
+static PACSAVE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^warning: .+ saved as (?P<p>.+\.pacsave)$").unwrap());
+static HOOK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^running '(?P<h>[^']+)'\.\.\.$").unwrap());
 static KEYRING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)signature|keyring|\bpgp\b|unknown trust|marginal trust|public key|could not be looked up remotely|invalid or corrupted package",
     )
     .unwrap()
 });
-static LOCKED: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(unable to|could not|failed to) lock database|db\.lck").unwrap());
-static BUILD_FAILED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"error making: (?P<p>\S+)").unwrap());
+static LOCKED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(unable to|could not|failed to) lock database|db\.lck").unwrap()
+});
+static BUILD_FAILED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"error making: (?P<p>\S+)").unwrap());
 static ANSI: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]").unwrap()
 });
@@ -301,7 +322,9 @@ pub fn scan_log(text: &str) -> LogScan {
     let mut hook: Option<String> = None;
     let mut failed_script = false;
     for line in text.lines() {
-        let Some(m) = LINE.captures(line) else { continue };
+        let Some(m) = LINE.captures(line) else {
+            continue;
+        };
         let (who, msg) = (&m["who"], m["msg"].trim_end());
         if who == "ALPM-SCRIPTLET" {
             scriptlet_line(msg, &mut scan);
@@ -351,7 +374,9 @@ pub fn scan_output(raw: &str, scan: &mut LogScan) {
         let line = line.trim();
         if let Some(c) = BUILD_FAILED.captures(line) {
             scan.builds.push(c["p"].trim_end_matches(':').to_string());
-        } else if line.starts_with("error:") || (line.starts_with("warning:") && KEYRING.is_match(line)) {
+        } else if line.starts_with("error:")
+            || (line.starts_with("warning:") && KEYRING.is_match(line))
+        {
             message(line, scan, false);
         }
     }
@@ -387,10 +412,14 @@ fn change(op: &str, name: String, v: &str) -> Change {
 
 fn scriptlet_line(msg: &str, scan: &mut LogScan) {
     let lower = msg.to_lowercase();
-    if msg.contains("Error!") || (lower.contains("dkms") && (lower.contains("error") || lower.contains("failed"))) {
+    if msg.contains("Error!")
+        || (lower.contains("dkms") && (lower.contains("error") || lower.contains("failed")))
+    {
         scan.dkms.push(msg.trim().to_string());
     } else if msg.contains("==> ERROR")
-        || ((lower.contains("initcpio") || lower.contains("image generation") || lower.contains("mkinitcpio"))
+        || ((lower.contains("initcpio")
+            || lower.contains("image generation")
+            || lower.contains("mkinitcpio"))
             && lower.contains("fail"))
     {
         // "==> WARNING: Possibly missing firmware" is everyday noise; only
@@ -532,7 +561,11 @@ pub fn probe_after(pending: bool) -> After {
 
 pub fn probe_before(pending: bool) -> Before {
     if crate::demo::active() {
-        return Before { pending: pending.then(BTreeSet::new), units: Some(BTreeSet::new()), rebuild: None };
+        return Before {
+            pending: pending.then(BTreeSet::new),
+            units: Some(BTreeSet::new()),
+            rebuild: None,
+        };
     }
     let rebuild_tool = pending && have_checkrebuild();
     std::thread::scope(|s| {
@@ -562,7 +595,17 @@ pub fn locking(comm: &str, args: &[String]) -> bool {
 
 /// AUR helpers and front ends that run pacman, or take its lock through
 /// libalpm, for what they are asked to do.
-const HELPERS: &[&str] = &["yay", "paru", "pikaur", "aura", "powerpill", "pacaur", "trizen", "pakku", "aurman"];
+const HELPERS: &[&str] = &[
+    "yay",
+    "paru",
+    "pikaur",
+    "aura",
+    "powerpill",
+    "pacaur",
+    "trizen",
+    "pakku",
+    "aurman",
+];
 
 /// Services that take the lock through libalpm whenever a client asks
 /// them to. They sit idle most of the time, so one running is no reason to
@@ -588,7 +631,9 @@ fn is_query(args: &[String]) -> bool {
     let mut shorts = String::new();
     for a in args {
         match a.as_str() {
-            "--query" | "--deptest" | "--files" | "--print" | "--getpkgbuild" | "--show" => return true,
+            "--query" | "--deptest" | "--files" | "--print" | "--getpkgbuild" | "--show" => {
+                return true
+            }
             "--search" | "--info" | "--list" | "--groups" => return true,
             s if s.starts_with('-') && !s.starts_with("--") => shorts.push_str(&s[1..]),
             _ => {}
@@ -597,7 +642,9 @@ fn is_query(args: &[String]) -> bool {
     if shorts.contains(['Q', 'T', 'F', 'G', 'P']) {
         return true;
     }
-    shorts.contains('S') && shorts.contains(['s', 'i', 'l', 'g', 'p']) && !shorts.contains(['y', 'u'])
+    shorts.contains('S')
+        && shorts.contains(['s', 'i', 'l', 'g', 'p'])
+        && !shorts.contains(['y', 'u'])
 }
 
 /// What the processes in /proc say about pacman's lock.
@@ -624,7 +671,9 @@ impl LockScan {
 /// interpreter (`python /usr/bin/pikaur`), the script's.
 fn program_names(comm: &str, args: &[String]) -> Vec<String> {
     let mut names = vec![comm.to_string()];
-    let interpreter = ["python", "perl", "bash", "sh", "ruby", "node"].iter().any(|i| comm.starts_with(i));
+    let interpreter = ["python", "perl", "bash", "sh", "ruby", "node"]
+        .iter()
+        .any(|i| comm.starts_with(i));
     if interpreter {
         if let Some(script) = args.iter().find(|a| !a.starts_with('-')) {
             names.push(script.rsplit('/').next().unwrap_or(script).to_string());
@@ -672,7 +721,10 @@ pub fn lock_scan_in(proc_root: &Path, lock: &Path) -> LockScan {
             .map(|a| String::from_utf8_lossy(a).into_owned())
             .collect();
         let has_open = std::fs::read_dir(e.path().join("fd"))
-            .map(|fds| fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t == lock)))
+            .map(|fds| {
+                fds.flatten()
+                    .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t == lock))
+            })
             .unwrap_or(false);
         let names = program_names(&comm, &args);
         let name = names.last().cloned().unwrap_or_default();
@@ -695,7 +747,8 @@ pub fn lockers_in(proc_root: &Path) -> Vec<String> {
 
 /// Whether pacman's lock file is there and nothing uses it.
 pub fn lock_is_stale() -> bool {
-    Path::new(DB_LOCK).exists() && lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).nothing_uses_it()
+    Path::new(DB_LOCK).exists()
+        && lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).nothing_uses_it()
 }
 
 /// Free bytes for an unprivileged user on the filesystem holding `path`.
@@ -711,7 +764,9 @@ pub fn free_total(paths: &[&Path]) -> Option<u64> {
     let mut seen = Vec::new();
     let mut total = 0u64;
     for p in paths {
-        let Ok(st) = rustix::fs::statvfs(*p) else { continue };
+        let Ok(st) = rustix::fs::statvfs(*p) else {
+            continue;
+        };
         let size = st.f_blocks.saturating_mul(st.f_frsize);
         if seen.contains(&size) {
             continue;
@@ -733,8 +788,16 @@ pub struct Battery {
 /// The laptop battery under `/sys/class/power_supply`, or None without one.
 /// A mouse's battery ("scope" Device) is not the machine's.
 pub fn battery_in(root: &Path) -> Option<Battery> {
-    let read = |p: PathBuf| std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default();
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(root).ok()?.flatten().map(|e| e.path()).collect();
+    let read = |p: PathBuf| {
+        std::fs::read_to_string(p)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
     entries.sort();
     let mut mains_online = false;
     let mut found: Option<(u8, bool)> = None;
@@ -742,7 +805,9 @@ pub fn battery_in(root: &Path) -> Option<Battery> {
         match read(e.join("type")).as_str() {
             "Mains" | "USB" => mains_online |= read(e.join("online")) == "1",
             "Battery" if read(e.join("scope")) != "Device" => {
-                let Ok(pct) = read(e.join("capacity")).parse::<u8>() else { continue };
+                let Ok(pct) = read(e.join("capacity")).parse::<u8>() else {
+                    continue;
+                };
                 let discharging = read(e.join("status")) == "Discharging";
                 // Two batteries (some ThinkPads): the lower one is the worry.
                 if found.is_none_or(|(p, _)| pct < p) {
@@ -752,7 +817,10 @@ pub fn battery_in(root: &Path) -> Option<Battery> {
             _ => {}
         }
     }
-    found.map(|(percent, discharging)| Battery { percent, on_battery: discharging && !mains_online })
+    found.map(|(percent, discharging)| Battery {
+        percent,
+        on_battery: discharging && !mains_online,
+    })
 }
 
 /// What is looked at before an update starts.
@@ -767,7 +835,10 @@ pub struct Preflight {
 pub fn probe_preflight() -> Preflight {
     // Demo mode: the machine is not looked at, and nothing stands in the way.
     if crate::demo::active() {
-        return Preflight { free_root: Some(50 * GIB), ..Default::default() };
+        return Preflight {
+            free_root: Some(50 * GIB),
+            ..Default::default()
+        };
     }
     Preflight {
         free_root: free_bytes(Path::new("/")),
@@ -927,7 +998,10 @@ pub enum Repair {
     Keyring,
     Retry(Vec<String>),
     Rebuild(Vec<String>),
-    Restart { system: Vec<String>, user: Vec<String> },
+    Restart {
+        system: Vec<String>,
+        user: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -941,8 +1015,20 @@ pub struct Check {
 }
 
 impl Check {
-    fn new(id: CheckId, status: Status, title: impl Into<String>, detail: impl Into<String>) -> Check {
-        Check { id, title: title.into(), status, detail: detail.into(), items: Vec::new(), repair: None }
+    fn new(
+        id: CheckId,
+        status: Status,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Check {
+        Check {
+            id,
+            title: title.into(),
+            status,
+            detail: detail.into(),
+            items: Vec::new(),
+            repair: None,
+        }
     }
 
     fn items(mut self, items: impl IntoIterator<Item = String>) -> Check {
@@ -999,7 +1085,12 @@ pub fn build_report(i: &Inputs) -> Report {
     let scan = i.log.clone().unwrap_or_default();
 
     checks.push(match i.exit {
-        Some(0) => Check::new(CheckId::Exit, Status::Pass, "Update command", "Finished without an error."),
+        Some(0) => Check::new(
+            CheckId::Exit,
+            Status::Pass,
+            "Update command",
+            "Finished without an error.",
+        ),
         Some(n) => Check::new(
             CheckId::Exit,
             Status::Fail,
@@ -1062,7 +1153,10 @@ pub fn build_report(i: &Inputs) -> Report {
             Check::new(
                 CheckId::Pacnew,
                 Status::Info,
-                format!("{} to merge", plural(configs.len(), "new config file", "new config files")),
+                format!(
+                    "{} to merge",
+                    plural(configs.len(), "new config file", "new config files")
+                ),
                 "Not merged automatically: merging needs your decisions, file by file. \
                  Health lists them under Unmerged config files.",
             )
@@ -1071,8 +1165,13 @@ pub fn build_report(i: &Inputs) -> Report {
     }
     if !scan.warnings.is_empty() {
         checks.push(
-            Check::new(CheckId::Warnings, Status::Info, "Warnings from pacman", "Shown for reference.")
-                .items(scan.warnings.clone()),
+            Check::new(
+                CheckId::Warnings,
+                Status::Info,
+                "Warnings from pacman",
+                "Shown for reference.",
+            )
+            .items(scan.warnings.clone()),
         );
     }
 
@@ -1084,13 +1183,20 @@ pub fn build_report(i: &Inputs) -> Report {
         .filter_map(|c| c.repair.clone())
         .filter(|r| matches!(r, Repair::Keyring | Repair::RemoveLock | Repair::Retry(_)))
         .collect();
-    if let Some(exit) = checks.iter_mut().find(|c| c.id == CheckId::Exit && c.status == Status::Fail) {
+    if let Some(exit) = checks
+        .iter_mut()
+        .find(|c| c.id == CheckId::Exit && c.status == Status::Fail)
+    {
         if let Some(r) = cause.into_iter().next() {
             exit.repair = Some(r);
         }
     }
 
-    Report { checks, changes: scan.changes, log: String::new() }
+    Report {
+        checks,
+        changes: scan.changes,
+        log: String::new(),
+    }
 }
 
 fn pending_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<String>>) -> Check {
@@ -1107,7 +1213,10 @@ fn pending_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<Stri
         let detail = if before.is_empty() {
             "Nothing was waiting.".to_string()
         } else {
-            format!("All {} installed.", plural(before.len(), "update", "updates"))
+            format!(
+                "All {} installed.",
+                plural(before.len(), "update", "updates")
+            )
         };
         return Check::new(CheckId::Pending, Status::Pass, "Updates installed", detail);
     }
@@ -1186,42 +1295,79 @@ fn log_checks(scan: &LogScan) -> Vec<Check> {
             .items(scan.builds.clone()),
         );
     }
-    let others: Vec<String> = scan.errors.iter().filter(|e| !(scan.locked && LOCKED.is_match(e))).cloned().collect();
+    let others: Vec<String> = scan
+        .errors
+        .iter()
+        .filter(|e| !(scan.locked && LOCKED.is_match(e)))
+        .cloned()
+        .collect();
     if !others.is_empty() {
         out.push(
-            Check::new(CheckId::Log, Status::Fail, "pacman’s log", format!("{}.", plural(others.len(), "error", "errors")))
-                .items(others),
+            Check::new(
+                CheckId::Log,
+                Status::Fail,
+                "pacman’s log",
+                format!("{}.", plural(others.len(), "error", "errors")),
+            )
+            .items(others),
         );
     }
     if out.is_empty() {
-        out.push(Check::new(CheckId::Log, Status::Pass, "pacman’s log", "No errors."));
+        out.push(Check::new(
+            CheckId::Log,
+            Status::Pass,
+            "pacman’s log",
+            "No errors.",
+        ));
     }
     out
 }
 
 fn units_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<String>>) -> Check {
     let Some(after) = after else {
-        return Check::new(CheckId::Units, Status::Unknown, "Services", "Could not ask systemd which services failed.");
+        return Check::new(
+            CheckId::Units,
+            Status::Unknown,
+            "Services",
+            "Could not ask systemd which services failed.",
+        );
     };
     let new: Vec<String> = match before {
         Some(b) => after.difference(b).cloned().collect(),
         None => after.iter().cloned().collect(),
     };
     if new.is_empty() {
-        return Check::new(CheckId::Units, Status::Pass, "Services", "No service failed since the update began.");
+        return Check::new(
+            CheckId::Units,
+            Status::Pass,
+            "Services",
+            "No service failed since the update began.",
+        );
     }
     let unit = |scope: &str| -> Vec<String> {
-        new.iter().filter_map(|u| u.strip_prefix(scope).map(str::to_string)).collect()
+        new.iter()
+            .filter_map(|u| u.strip_prefix(scope).map(str::to_string))
+            .collect()
     };
     let (system, user) = (unit("system "), unit("user "));
     let mut c = Check::new(
         CheckId::Units,
-        if before.is_some() { Status::Fail } else { Status::Unknown },
+        if before.is_some() {
+            Status::Fail
+        } else {
+            Status::Unknown
+        },
         "Services",
         if before.is_some() {
-            format!("{} since the update began.", plural(new.len(), "service failed", "services failed"))
+            format!(
+                "{} since the update began.",
+                plural(new.len(), "service failed", "services failed")
+            )
         } else {
-            format!("{} failed now; it is not known whether before.", plural(new.len(), "service has", "services have"))
+            format!(
+                "{} failed now; it is not known whether before.",
+                plural(new.len(), "service has", "services have")
+            )
         },
     )
     .items(new.clone());
@@ -1233,13 +1379,26 @@ fn units_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<String
 
 fn rebuild_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<String>>) -> Check {
     let Some(after) = after else {
-        return Check::new(CheckId::Rebuild, Status::Unknown, "AUR packages", "checkrebuild did not answer.");
+        return Check::new(
+            CheckId::Rebuild,
+            Status::Unknown,
+            "AUR packages",
+            "checkrebuild did not answer.",
+        );
     };
     // Flagged before the update is not this update's doing (and a -bin
     // package checkrebuild always flags would otherwise fail every run).
-    let new: Vec<String> = after.difference(&before.clone().unwrap_or_default()).cloned().collect();
+    let new: Vec<String> = after
+        .difference(&before.clone().unwrap_or_default())
+        .cloned()
+        .collect();
     if new.is_empty() {
-        return Check::new(CheckId::Rebuild, Status::Pass, "AUR packages", "None needs rebuilding.");
+        return Check::new(
+            CheckId::Rebuild,
+            Status::Pass,
+            "AUR packages",
+            "None needs rebuilding.",
+        );
     }
     Check::new(
         CheckId::Rebuild,
@@ -1265,7 +1424,10 @@ impl Report {
     }
 
     pub fn notes(&self) -> Vec<&Check> {
-        self.checks.iter().filter(|c| c.status == Status::Info).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.status == Status::Info)
+            .collect()
     }
 
     /// The repairs for what failed, each once, in the order they should
@@ -1292,12 +1454,22 @@ impl Report {
                 Some(false) => Status::Fail,
                 None => Status::Unknown,
             };
-            self.checks.push(Check::new(CheckId::Item, status, name.clone(), out.message.clone()));
+            self.checks.push(Check::new(
+                CheckId::Item,
+                status,
+                name.clone(),
+                out.message.clone(),
+            ));
         }
         if !held.is_empty() {
             self.checks.push(
-                Check::new(CheckId::Held, Status::Info, "Held back", "Each keeps its own Update button.")
-                    .items(held.to_vec()),
+                Check::new(
+                    CheckId::Held,
+                    Status::Info,
+                    "Held back",
+                    "Each keeps its own Update button.",
+                )
+                .items(held.to_vec()),
             );
         }
     }
@@ -1305,16 +1477,25 @@ impl Report {
     /// The one line a toast has room for, when everything passed.
     pub fn summary(&self) -> String {
         let n = self.changes.iter().filter(|c| !c.to.is_empty()).count()
-            + self.checks.iter().filter(|c| c.id == CheckId::Item && c.status == Status::Pass).count();
+            + self
+                .checks
+                .iter()
+                .filter(|c| c.id == CheckId::Item && c.status == Status::Pass)
+                .count();
         let mut s = if n == 0 {
             "Everything is up to date — every check passed".to_string()
         } else {
-            format!("{} installed — every check passed", plural(n, "update", "updates"))
+            format!(
+                "{} installed — every check passed",
+                plural(n, "update", "updates")
+            )
         };
         for c in self.notes() {
             match c.id {
                 CheckId::Kernel => s.push_str(" · restart to finish"),
-                CheckId::Pacnew => s.push_str(&format!(" · {} (see Health)", c.title.to_lowercase())),
+                CheckId::Pacnew => {
+                    s.push_str(&format!(" · {} (see Health)", c.title.to_lowercase()))
+                }
                 _ => {}
             }
         }
@@ -1335,7 +1516,9 @@ impl Report {
                 CheckId::Units => {
                     // The units this run found failed, asked again.
                     let now = after.units.clone().map(|u| {
-                        u.into_iter().filter(|x| c.items.contains(x)).collect::<BTreeSet<_>>()
+                        u.into_iter()
+                            .filter(|x| c.items.contains(x))
+                            .collect::<BTreeSet<_>>()
                     });
                     units_check(&Some(BTreeSet::new()), &now)
                 }
@@ -1352,7 +1535,12 @@ impl Report {
                 CheckId::Keyring | CheckId::Exit => {
                     let pending = pending_check(&before.pending, &after.pending);
                     if pending.status == Status::Pass && !after.stale_lock {
-                        Check::new(c.id, Status::Pass, c.title.clone(), "Repaired: nothing is left waiting.")
+                        Check::new(
+                            c.id,
+                            Status::Pass,
+                            c.title.clone(),
+                            "Repaired: nothing is left waiting.",
+                        )
                     } else {
                         c.clone()
                     }
@@ -1361,7 +1549,11 @@ impl Report {
             };
             checks.push(again);
         }
-        Report { checks, changes: self.changes.clone(), log: self.log.clone() }
+        Report {
+            checks,
+            changes: self.changes.clone(),
+            log: self.log.clone(),
+        }
     }
 }
 
@@ -1375,23 +1567,44 @@ pub fn repair_steps(repairs: &[Repair], have_yay: bool) -> Vec<Step> {
     for r in repairs {
         match r {
             Repair::RemoveLock => {
-                out.push(Step::call("Removing pacman’s stale lock file", Arc::new(remove_stale_lock)));
+                out.push(Step::call(
+                    "Removing pacman’s stale lock file",
+                    Arc::new(remove_stale_lock),
+                ));
             }
             Repair::Keyring => {
                 out.push(Step::argv(
                     "Reloading the Arch keys",
-                    s(&[tasks::PKEXEC, "/usr/bin/pacman-key", "--populate", "archlinux"]),
+                    s(&[
+                        tasks::PKEXEC,
+                        "/usr/bin/pacman-key",
+                        "--populate",
+                        "archlinux",
+                    ]),
                 ));
                 out.push(Step::argv(
                     "Updating the keyring",
-                    s(&[tasks::PKEXEC, "/usr/bin/pacman", "-Sy", "--needed", "--noconfirm", "archlinux-keyring"]),
+                    s(&[
+                        tasks::PKEXEC,
+                        "/usr/bin/pacman",
+                        "-Sy",
+                        "--needed",
+                        "--noconfirm",
+                        "archlinux-keyring",
+                    ]),
                 ));
             }
             Repair::Retry(names) => {
                 let argv = if have_yay {
                     tasks::yay_install(names)
                 } else {
-                    let mut a = s(&[tasks::PKEXEC, "/usr/bin/pacman", "-S", "--needed", "--noconfirm"]);
+                    let mut a = s(&[
+                        tasks::PKEXEC,
+                        "/usr/bin/pacman",
+                        "-S",
+                        "--needed",
+                        "--noconfirm",
+                    ]);
                     a.extend(names.iter().cloned());
                     a
                 };
@@ -1465,8 +1678,12 @@ pub fn log_text(section: Option<&str>, output: &str, unrecorded: Option<&str>) -
 /// `script`, which records it, is not installed.
 pub fn unrecorded_why(files_error: Option<&str>, have_script: bool) -> Option<String> {
     match files_error {
-        Some(e) => Some(format!("Almanac could not create the files for this run ({e})")),
-        None if !have_script => Some("`script` (util-linux) is not installed to record it".to_string()),
+        Some(e) => Some(format!(
+            "Almanac could not create the files for this run ({e})"
+        )),
+        None if !have_script => {
+            Some("`script` (util-linux) is not installed to record it".to_string())
+        }
         None => None,
     }
 }
@@ -1474,10 +1691,19 @@ pub fn unrecorded_why(files_error: Option<&str>, have_script: bool) -> Option<St
 /// `yay -S --rebuild`: build the targets even though they are installed
 /// and current. No `--needed`, which would skip exactly those.
 pub fn rebuild_argv(names: &[String]) -> Vec<String> {
-    let mut argv: Vec<String> = [crate::inventory::YAY, "-S", "--rebuild", "--noconfirm", "--sudo", tasks::PKEXEC, "--pacman", "/usr/bin/pacman"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut argv: Vec<String> = [
+        crate::inventory::YAY,
+        "-S",
+        "--rebuild",
+        "--noconfirm",
+        "--sudo",
+        tasks::PKEXEC,
+        "--pacman",
+        "/usr/bin/pacman",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     argv.extend(names.iter().cloned());
     argv
 }
@@ -1498,14 +1724,19 @@ fn remove_stale_lock(log: LogFn<'_>) -> Result<(), String> {
         return Err(format!("not removed: {} is running", running.join(", ")));
     }
     if !scan.nothing_uses_it() {
-        return Err("not removed: other users’ programs are hidden here, so it may be in use".to_string());
+        return Err(
+            "not removed: other users’ programs are hidden here, so it may be in use".to_string(),
+        );
     }
     let out = crate::util::run(&[tasks::PKEXEC, "/usr/bin/rm", "-f", DB_LOCK], 300);
     if Path::new(DB_LOCK).exists() {
         return Err(if out.code == Some(126) || out.code == Some(127) {
             "not removed: the password was not given".to_string()
         } else {
-            format!("not removed (exit status {})", out.code.map_or("?".into(), |c| c.to_string()))
+            format!(
+                "not removed (exit status {})",
+                out.code.map_or("?".into(), |c| c.to_string())
+            )
         });
     }
     log(&format!("removed {DB_LOCK}"));
@@ -1518,17 +1749,26 @@ fn remove_stale_lock(log: LogFn<'_>) -> Result<(), String> {
 pub fn cleanup_steps(have_paccache: bool, updated: &[String]) -> Vec<Step> {
     let mut out = Vec::new();
     if have_paccache {
-        out.extend(tasks::fix_steps("Trimming the package cache", Some(crate::maintenance::paccache_trim_fix())));
+        out.extend(tasks::fix_steps(
+            "Trimming the package cache",
+            Some(crate::maintenance::paccache_trim_fix()),
+        ));
     }
     if let Some(fix) = crate::maintenance::yay_cache_fix_for(updated) {
-        out.extend(tasks::fix_steps("Clearing the AUR build cache of what was updated", Some(fix)));
+        out.extend(tasks::fix_steps(
+            "Clearing the AUR build cache of what was updated",
+            Some(fix),
+        ));
     }
     out
 }
 
 /// The filesystems a tidy-up frees space on.
 pub fn cache_paths() -> Vec<PathBuf> {
-    vec![PathBuf::from(crate::maintenance::PACMAN_CACHE), crate::maintenance::YAY_CACHE.clone()]
+    vec![
+        PathBuf::from(crate::maintenance::PACMAN_CACHE),
+        crate::maintenance::YAY_CACHE.clone(),
+    ]
 }
 
 /// The snapshot this run took, when snapper says so: the newest one dated
@@ -1537,7 +1777,18 @@ pub fn cache_paths() -> Vec<PathBuf> {
 /// time from the click to the end of the run (`ended`): the snapshot comes
 /// when pacman starts, which is after the password, however long that took.
 pub fn snapshot_since(started: f64, ended: f64) -> Option<String> {
-    let out = crate::util::run(&["/usr/bin/snapper", "--csvout", "-c", "root", "list", "--columns", "number,date"], 20);
+    let out = crate::util::run(
+        &[
+            "/usr/bin/snapper",
+            "--csvout",
+            "-c",
+            "root",
+            "list",
+            "--columns",
+            "number,date",
+        ],
+        20,
+    );
     if out.code == Some(0) {
         if let Some(n) = newest_since(&out.stdout, started) {
             return Some(n);
@@ -1564,8 +1815,12 @@ pub fn newest_since(csv: &str, started: f64) -> Option<String> {
         .filter_map(|l| {
             let (n, date) = l.split_once(',')?;
             let n: u64 = n.trim().parse().ok()?;
-            let dt = chrono::NaiveDateTime::parse_from_str(date.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
-            let ts = chrono::Local.from_local_datetime(&dt).earliest()?.timestamp() as f64;
+            let dt =
+                chrono::NaiveDateTime::parse_from_str(date.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+            let ts = chrono::Local
+                .from_local_datetime(&dt)
+                .earliest()?
+                .timestamp() as f64;
             (ts + 1.0 >= started).then_some(n)
         })
         .max()
@@ -1595,7 +1850,11 @@ fn check_result(c: &Check) -> CheckResult {
     if !c.items.is_empty() {
         detail = format!("{detail} [{}]", c.items.join(", "));
     }
-    CheckResult { name: c.title.clone(), ok, detail }
+    CheckResult {
+        name: c.title.clone(),
+        ok,
+        detail,
+    }
 }
 
 impl RunRecord {
@@ -1616,7 +1875,11 @@ impl RunRecord {
         ActionLog {
             commands: self.commands.clone(),
             changes,
-            checks: self.report.iter().flat_map(|r| r.checks.iter().map(check_result)).collect(),
+            checks: self
+                .report
+                .iter()
+                .flat_map(|r| r.checks.iter().map(check_result))
+                .collect(),
             // Each repaired check as the recheck found it.
             repairs: match (&self.report, &self.recheck) {
                 (Some(first), Some(again)) => first
@@ -1643,14 +1906,20 @@ impl RunRecord {
         }
         match self.last() {
             Some(r) if r.passed() => parts.push("every check passed".to_string()),
-            Some(r) => parts.push(format!("{} not passed", plural(r.attention().len(), "check", "checks"))),
+            Some(r) => parts.push(format!(
+                "{} not passed",
+                plural(r.attention().len(), "check", "checks")
+            )),
             None => {}
         }
         if self.recheck.is_some() {
             parts.push("repaired".to_string());
         }
         if let Some(b) = self.freed.filter(|b| *b > 0) {
-            parts.push(format!("{} freed", crate::maintenance::fmt_size(b as f64 / 1048576.0)));
+            parts.push(format!(
+                "{} freed",
+                crate::maintenance::fmt_size(b as f64 / 1048576.0)
+            ));
         }
         parts.join(" · ")
     }
@@ -1703,9 +1972,19 @@ mod tests {
     fn a_clean_upgrade_lists_its_changes_and_nothing_else() {
         let s = scan_log(CLEAN);
         assert_eq!(s.changes.len(), 3);
-        assert_eq!(s.changes[0], Change { name: "1password".into(), from: "8.12.40-3".into(), to: "8.12.42-1".into() });
+        assert_eq!(
+            s.changes[0],
+            Change {
+                name: "1password".into(),
+                from: "8.12.40-3".into(),
+                to: "8.12.42-1".into()
+            }
+        );
         assert!(s.errors.is_empty() && s.warnings.is_empty() && s.scriptlets.is_empty());
-        assert!(s.initramfs.is_empty(), "a missing-firmware warning is not a failed boot image");
+        assert!(
+            s.initramfs.is_empty(),
+            "a missing-firmware warning is not a failed boot image"
+        );
         assert!(!s.locked && s.keyring.is_empty());
     }
 
@@ -1717,11 +1996,19 @@ mod tests {
              [2026-10-19T14:36:01-0700] [ALPM] reinstalled foo (1-1)\n\
              [2026-10-19T14:36:01-0700] [ALPM] downgraded bar (2-1 -> 1-1)\n",
         );
-        let pairs: Vec<(&str, &str, &str)> =
-            s.changes.iter().map(|c| (c.name.as_str(), c.from.as_str(), c.to.as_str())).collect();
+        let pairs: Vec<(&str, &str, &str)> = s
+            .changes
+            .iter()
+            .map(|c| (c.name.as_str(), c.from.as_str(), c.to.as_str()))
+            .collect();
         assert_eq!(
             pairs,
-            vec![("almanac", "", "2.1.6-1"), ("gst-plugin-gtk", "1.28.8-1", ""), ("foo", "1-1", "1-1"), ("bar", "2-1", "1-1")]
+            vec![
+                ("almanac", "", "2.1.6-1"),
+                ("gst-plugin-gtk", "1.28.8-1", ""),
+                ("foo", "1-1", "1-1"),
+                ("bar", "2-1", "1-1")
+            ]
         );
     }
 
@@ -1751,8 +2038,14 @@ mod tests {
              [2026-10-20T13:43:34-0700] [ALPM] running '90-mkinitcpio-install.hook'...\n\
              [2026-10-20T13:43:34-0700] [ALPM] error: command failed to execute correctly\n",
         );
-        assert_eq!(s.scriptlets, strs(&["package bad", "hook '90-mkinitcpio-install.hook'"]));
-        assert!(s.errors.is_empty(), "counted once, as the script that failed");
+        assert_eq!(
+            s.scriptlets,
+            strs(&["package bad", "hook '90-mkinitcpio-install.hook'"])
+        );
+        assert!(
+            s.errors.is_empty(),
+            "counted once, as the script that failed"
+        );
     }
 
     #[test]
@@ -1786,16 +2079,29 @@ mod tests {
         assert_eq!(s.keyring.len(), 2, "{:?}", s.keyring);
         assert!(s.locked);
         assert_eq!(s.builds, strs(&["hyprshade-git"]));
-        assert!(s.warnings.is_empty(), "--needed's skipping is not worth a word");
-        let r = build_report(&Inputs { exit: Some(1), log: Some(s), ..Default::default() });
+        assert!(
+            s.warnings.is_empty(),
+            "--needed's skipping is not worth a word"
+        );
+        let r = build_report(&Inputs {
+            exit: Some(1),
+            log: Some(s),
+            ..Default::default()
+        });
         assert!(r.repairs().contains(&Repair::Keyring));
         // The lock line is not counted again as a generic error.
-        assert!(r.checks.iter().all(|c| !c.items.iter().any(|i| i.contains("could not lock"))));
+        assert!(r
+            .checks
+            .iter()
+            .all(|c| !c.items.iter().any(|i| i.contains("could not lock"))));
     }
 
     #[test]
     fn terminal_output_loses_its_escapes_and_redraws() {
-        assert_eq!(clean_output("\x1b[1m::\x1b[0m Proceed?\r\n50%\r100%\n"), ":: Proceed?\n100%\n");
+        assert_eq!(
+            clean_output("\x1b[1m::\x1b[0m Proceed?\r\n50%\r100%\n"),
+            ":: Proceed?\n100%\n"
+        );
     }
 
     #[test]
@@ -1818,19 +2124,41 @@ mod tests {
         let st = parse_status("start 100\n");
         assert!(!st.finished());
         let st = parse_status("start 100\nexit 1 160\n");
-        assert_eq!(st, RunStatus { started: Some(100), exit: Some(1), ended: Some(160) });
+        assert_eq!(
+            st,
+            RunStatus {
+                started: Some(100),
+                exit: Some(1),
+                ended: Some(160)
+            }
+        );
         assert_eq!(st.secs(), Some(60.0));
         assert_eq!(parse_status("garbage\nexit x 5\n").exit, None);
     }
 
     #[test]
     fn the_script_reports_its_status_before_waiting_for_a_key() {
-        let files = RunFiles { status: "/run/user/1000/almanac/update-runs/update-a b.status".into(), output: "/r/o.log".into() };
-        let s = terminal_script("omarchy update", Some(&files), Some(Path::new("/usr/bin/script")));
+        let files = RunFiles {
+            status: "/run/user/1000/almanac/update-runs/update-a b.status".into(),
+            output: "/r/o.log".into(),
+        };
+        let s = terminal_script(
+            "omarchy update",
+            Some(&files),
+            Some(Path::new("/usr/bin/script")),
+        );
         assert!(s.starts_with("printf 'start %s\\n' \"$(date +%s)\" >> '/run/user/1000/almanac/update-runs/update-a b.status';"), "{s}");
-        assert!(s.contains("SHELL=/usr/bin/bash /usr/bin/script -qefc 'omarchy update' /r/o.log; rc=$?;"), "{s}");
+        assert!(
+            s.contains(
+                "SHELL=/usr/bin/bash /usr/bin/script -qefc 'omarchy update' /r/o.log; rc=$?;"
+            ),
+            "{s}"
+        );
         let exit_at = s.find("printf 'exit").unwrap();
-        assert!(exit_at < s.find("read -n1").unwrap(), "a terminal left open still reports back");
+        assert!(
+            exit_at < s.find("read -n1").unwrap(),
+            "a terminal left open still reports back"
+        );
         // Without `script`, the command still runs in a shell of its own.
         let s = terminal_script("a; exit 3", Some(&files), None);
         assert!(s.contains("/usr/bin/bash -c 'a; exit 3'; rc=$?;"), "{s}");
@@ -1866,22 +2194,51 @@ mod tests {
     #[test]
     fn a_terminal_that_returns_at_once_is_watched_until_the_status_comes() {
         let quick = Some(Duration::from_secs(1));
-        let running = RunStatus { started: Some(1), ..Default::default() };
-        assert_eq!(wait_step(Duration::from_secs(600), quick, &running, true), Wait::Keep);
+        let running = RunStatus {
+            started: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            wait_step(Duration::from_secs(600), quick, &running, true),
+            Wait::Keep
+        );
         let done = parse_status("start 1\nexit 0 9\n");
-        assert_eq!(wait_step(Duration::from_secs(600), quick, &done, true), Wait::Done);
+        assert_eq!(
+            wait_step(Duration::from_secs(600), quick, &done, true),
+            Wait::Done
+        );
         // Never started: given up on, not waited for all night.
-        assert!(matches!(wait_step(NO_START + Duration::from_secs(1), quick, &RunStatus::default(), true), Wait::GiveUp(_)));
-        assert!(matches!(wait_step(GIVE_UP + Duration::from_secs(1), quick, &running, true), Wait::GiveUp(_)));
+        assert!(matches!(
+            wait_step(
+                NO_START + Duration::from_secs(1),
+                quick,
+                &RunStatus::default(),
+                true
+            ),
+            Wait::GiveUp(_)
+        ));
+        assert!(matches!(
+            wait_step(GIVE_UP + Duration::from_secs(1), quick, &running, true),
+            Wait::GiveUp(_)
+        ));
         // No status file to watch: nothing to wait for.
-        assert!(matches!(wait_step(Duration::from_secs(2), quick, &RunStatus::default(), false), Wait::GiveUp(_)));
+        assert!(matches!(
+            wait_step(Duration::from_secs(2), quick, &RunStatus::default(), false),
+            Wait::GiveUp(_)
+        ));
     }
 
     #[test]
     fn a_terminal_that_ran_the_update_itself_is_done_when_it_closes() {
         let slow = Some(Duration::from_secs(90));
-        assert_eq!(wait_step(Duration::from_secs(90), slow, &RunStatus::default(), true), Wait::Done);
-        assert_eq!(wait_step(Duration::from_secs(30), None, &RunStatus::default(), true), Wait::Keep);
+        assert_eq!(
+            wait_step(Duration::from_secs(90), slow, &RunStatus::default(), true),
+            Wait::Done
+        );
+        assert_eq!(
+            wait_step(Duration::from_secs(30), None, &RunStatus::default(), true),
+            Wait::Keep
+        );
     }
 
     fn inputs() -> Inputs {
@@ -1889,8 +2246,19 @@ mod tests {
             system: true,
             exit: Some(0),
             log: Some(scan_log(CLEAN)),
-            before: Before { pending: Some(set(&["1password", "mise-bin", "omarchy"])), units: Some(set(&[])), rebuild: Some(set(&[])) },
-            after: After { pending: Some(set(&[])), units: Some(set(&[])), rebuild: Some(set(&[])), rebuild_tool: true, kernel_gone: Some(false), stale_lock: false },
+            before: Before {
+                pending: Some(set(&["1password", "mise-bin", "omarchy"])),
+                units: Some(set(&[])),
+                rebuild: Some(set(&[])),
+            },
+            after: After {
+                pending: Some(set(&[])),
+                units: Some(set(&[])),
+                rebuild: Some(set(&[])),
+                rebuild_tool: true,
+                kernel_gone: Some(false),
+                stale_lock: false,
+            },
         }
     }
 
@@ -1910,8 +2278,16 @@ mod tests {
         let r = build_report(&i);
         let pending = r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap();
         assert_eq!(pending.status, Status::Fail);
-        assert_eq!(pending.items, strs(&["omarchy"]), "a release that appeared since is not a failure");
-        assert_eq!(r.repairs(), vec![Repair::Retry(strs(&["omarchy"]))], "one repair, for the command and the list");
+        assert_eq!(
+            pending.items,
+            strs(&["omarchy"]),
+            "a release that appeared since is not a failure"
+        );
+        assert_eq!(
+            r.repairs(),
+            vec![Repair::Retry(strs(&["omarchy"]))],
+            "one repair, for the command and the list"
+        );
     }
 
     #[test]
@@ -1921,7 +2297,12 @@ mod tests {
         i.after.pending = None;
         i.log = None;
         let r = build_report(&i);
-        let unknown: Vec<CheckId> = r.checks.iter().filter(|c| c.status == Status::Unknown).map(|c| c.id).collect();
+        let unknown: Vec<CheckId> = r
+            .checks
+            .iter()
+            .filter(|c| c.status == Status::Unknown)
+            .map(|c| c.id)
+            .collect();
         assert_eq!(unknown, vec![CheckId::Exit, CheckId::Pending, CheckId::Log]);
         assert!(!r.passed());
     }
@@ -1930,11 +2311,18 @@ mod tests {
     fn only_services_that_failed_since_count_and_each_is_restarted_where_it_runs() {
         let mut i = inputs();
         i.before.units = Some(set(&["system old.service"]));
-        i.after.units = Some(set(&["system old.service", "system cups.service", "user waybar.service"]));
+        i.after.units = Some(set(&[
+            "system old.service",
+            "system cups.service",
+            "user waybar.service",
+        ]));
         let r = build_report(&i);
         let units = r.checks.iter().find(|c| c.id == CheckId::Units).unwrap();
         assert_eq!(units.status, Status::Fail);
-        assert_eq!(units.items, strs(&["system cups.service", "user waybar.service"]));
+        assert_eq!(
+            units.items,
+            strs(&["system cups.service", "user waybar.service"])
+        );
         let steps = repair_steps(&r.repairs(), true);
         let argvs: Vec<String> = steps
             .iter()
@@ -1945,22 +2333,33 @@ mod tests {
             .collect();
         assert_eq!(
             argvs,
-            vec!["systemctl --user restart waybar.service", "/usr/bin/pkexec /usr/bin/systemctl restart cups.service"]
+            vec![
+                "systemctl --user restart waybar.service",
+                "/usr/bin/pkexec /usr/bin/systemctl restart cups.service"
+            ]
         );
     }
 
     #[test]
     fn only_aur_packages_newly_needing_a_rebuild_are_rebuilt() {
-        assert_eq!(parse_checkrebuild("foreign\tzoom\ncore\tlinux\nforeign\tsome-bin\n"), set(&["some-bin", "zoom"]));
+        assert_eq!(
+            parse_checkrebuild("foreign\tzoom\ncore\tlinux\nforeign\tsome-bin\n"),
+            set(&["some-bin", "zoom"])
+        );
         let mut i = inputs();
         i.before.rebuild = Some(set(&["always-flagged-bin"]));
         i.after.rebuild = Some(set(&["always-flagged-bin", "python-thing"]));
         let r = build_report(&i);
         assert_eq!(r.repairs(), vec![Repair::Rebuild(strs(&["python-thing"]))]);
         let steps = repair_steps(&r.repairs(), true);
-        let tasks::StepAction::Argv(a) = &steps[0].action else { panic!("an argv") };
+        let tasks::StepAction::Argv(a) = &steps[0].action else {
+            panic!("an argv")
+        };
         assert_eq!(a.join(" "), "/usr/bin/yay -S --rebuild --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman python-thing");
-        assert!(!a.contains(&"--needed".to_string()), "--needed would skip the rebuild");
+        assert!(
+            !a.contains(&"--needed".to_string()),
+            "--needed would skip the rebuild"
+        );
         // Without yay there is nothing to rebuild with.
         assert!(repair_steps(&r.repairs(), false).is_empty());
     }
@@ -1975,8 +2374,16 @@ mod tests {
         let r = build_report(&i);
         assert!(r.passed());
         assert_eq!(r.notes().len(), 2);
-        assert!(r.summary().ends_with(" · restart to finish · 1 new config file to merge (see Health)"), "{}", r.summary());
-        assert!(r.repairs().is_empty(), "configs are never merged automatically");
+        assert!(
+            r.summary()
+                .ends_with(" · restart to finish · 1 new config file to merge (see Health)"),
+            "{}",
+            r.summary()
+        );
+        assert!(
+            r.repairs().is_empty(),
+            "configs are never merged automatically"
+        );
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("6.17.2-arch1-1")).unwrap();
         assert!(!kernel_gone("6.17.2-arch1-1", dir.path()));
@@ -2002,23 +2409,50 @@ mod tests {
             ]
         );
         for a in &argvs {
-            assert_eq!(tasks::elevate(&a.split(' ').map(String::from).collect::<Vec<_>>()).join(" "), *a, "not wrapped twice");
+            assert_eq!(
+                tasks::elevate(&a.split(' ').map(String::from).collect::<Vec<_>>()).join(" "),
+                *a,
+                "not wrapped twice"
+            );
         }
     }
 
     #[test]
     fn each_repair_is_described_before_it_runs() {
-        assert_eq!(describe(&Repair::Retry(strs(&["a", "b"])), true).unwrap(), "Install what is still waiting: a, b");
-        assert_eq!(describe(&Repair::Rebuild(strs(&["x"])), false), None, "not offered without yay");
-        let r = Repair::Restart { system: strs(&["cups.service"]), user: strs(&["waybar.service"]) };
-        assert_eq!(describe(&r, true).unwrap(), "Restart cups.service, waybar.service");
+        assert_eq!(
+            describe(&Repair::Retry(strs(&["a", "b"])), true).unwrap(),
+            "Install what is still waiting: a, b"
+        );
+        assert_eq!(
+            describe(&Repair::Rebuild(strs(&["x"])), false),
+            None,
+            "not offered without yay"
+        );
+        let r = Repair::Restart {
+            system: strs(&["cups.service"]),
+            user: strs(&["waybar.service"]),
+        };
+        assert_eq!(
+            describe(&r, true).unwrap(),
+            "Restart cups.service, waybar.service"
+        );
     }
 
     #[test]
     fn the_log_shown_is_the_section_then_the_terminal() {
-        let t = log_text(Some("[x] [ALPM] upgraded a (1 -> 2)\n"), "\x1b[1mdone\x1b[0m\r\n", None);
-        assert_eq!(t, "/var/log/pacman.log\n\n[x] [ALPM] upgraded a (1 -> 2)\n\nIn the terminal\n\ndone");
-        assert_eq!(log_text(None, "", None), "/var/log/pacman.log could not be read.");
+        let t = log_text(
+            Some("[x] [ALPM] upgraded a (1 -> 2)\n"),
+            "\x1b[1mdone\x1b[0m\r\n",
+            None,
+        );
+        assert_eq!(
+            t,
+            "/var/log/pacman.log\n\n[x] [ALPM] upgraded a (1 -> 2)\n\nIn the terminal\n\ndone"
+        );
+        assert_eq!(
+            log_text(None, "", None),
+            "/var/log/pacman.log could not be read."
+        );
         // The run's files could not be made: said, not "Nothing was logged".
         let why = unrecorded_why(Some("[Errno 28] No space left on device"), true);
         assert_eq!(
@@ -2028,17 +2462,27 @@ mod tests {
         );
         assert!(unrecorded_why(None, false).unwrap().contains("script"));
         assert_eq!(unrecorded_why(None, true), None);
-        let b = Before { pending: Some(set(&["a", "b"])), ..Default::default() };
-        let a = After { pending: Some(set(&["b", "c"])), ..Default::default() };
+        let b = Before {
+            pending: Some(set(&["a", "b"])),
+            ..Default::default()
+        };
+        let a = After {
+            pending: Some(set(&["b", "c"])),
+            ..Default::default()
+        };
         assert_eq!(installed_since(&b, &a), strs(&["a"]));
-        assert!(installed_since(&b, &After::default()).is_empty(), "not known: nothing is marked");
+        assert!(
+            installed_since(&b, &After::default()).is_empty(),
+            "not known: nothing is marked"
+        );
     }
 
     #[test]
     fn repairs_run_lock_first_and_keyring_before_installs() {
         let r = Report {
             checks: vec![
-                Check::new(CheckId::Pending, Status::Fail, "", "").repair(Repair::Retry(strs(&["a"]))),
+                Check::new(CheckId::Pending, Status::Fail, "", "")
+                    .repair(Repair::Retry(strs(&["a"]))),
                 Check::new(CheckId::Keyring, Status::Fail, "", "").repair(Repair::Keyring),
                 Check::new(CheckId::Lock, Status::Fail, "", "").repair(Repair::RemoveLock),
                 Check::new(CheckId::Exit, Status::Fail, "", "").repair(Repair::Keyring),
@@ -2046,14 +2490,25 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert_eq!(r.repairs(), vec![Repair::RemoveLock, Repair::Keyring, Repair::Retry(strs(&["a"]))]);
+        assert_eq!(
+            r.repairs(),
+            vec![
+                Repair::RemoveLock,
+                Repair::Keyring,
+                Repair::Retry(strs(&["a"]))
+            ]
+        );
     }
 
     #[test]
     fn the_recheck_asks_again_only_what_was_repaired() {
         let mut i = inputs();
         i.exit = Some(1);
-        i.log = Some(LogScan { keyring: strs(&["error: signature is unknown trust"]), scriptlets: strs(&["package x"]), ..Default::default() });
+        i.log = Some(LogScan {
+            keyring: strs(&["error: signature is unknown trust"]),
+            scriptlets: strs(&["package x"]),
+            ..Default::default()
+        });
         i.after.pending = Some(set(&["omarchy"]));
         let r = build_report(&i);
         assert!(r.repairs().contains(&Repair::Keyring));
@@ -2064,10 +2519,22 @@ mod tests {
         assert_eq!(status(CheckId::Pending), Status::Pass);
         assert_eq!(status(CheckId::Keyring), Status::Pass);
         assert_eq!(status(CheckId::Exit), Status::Pass);
-        assert_eq!(status(CheckId::Scriptlets), Status::Fail, "no repair for it: it stands");
+        assert_eq!(
+            status(CheckId::Scriptlets),
+            Status::Fail,
+            "no repair for it: it stands"
+        );
         // Still waiting: still failed.
         let again = r.recheck(&i.before, &i.after);
-        assert_eq!(again.checks.iter().find(|c| c.id == CheckId::Keyring).unwrap().status, Status::Fail);
+        assert_eq!(
+            again
+                .checks
+                .iter()
+                .find(|c| c.id == CheckId::Keyring)
+                .unwrap()
+                .status,
+            Status::Fail
+        );
     }
 
     #[test]
@@ -2076,14 +2543,23 @@ mod tests {
         r.add_items(
             &[
                 ("Ghostty".into(), Outcome::new(Some(true), "Ghostty 1 → 2")),
-                ("claude".into(), Outcome::new(Some(false), "claude did not change")),
-                ("plugin".into(), Outcome::new(None, "plugin: could not be checked")),
+                (
+                    "claude".into(),
+                    Outcome::new(Some(false), "claude did not change"),
+                ),
+                (
+                    "plugin".into(),
+                    Outcome::new(None, "plugin: could not be checked"),
+                ),
             ],
             &["git-thing — has local edits".into()],
         );
         let attention: Vec<&str> = r.attention().iter().map(|c| c.title.as_str()).collect();
         assert_eq!(attention, vec!["claude", "plugin"]);
-        assert_eq!(r.notes().last().unwrap().items, strs(&["git-thing — has local edits"]));
+        assert_eq!(
+            r.notes().last().unwrap().items,
+            strs(&["git-thing — has local edits"])
+        );
     }
 
     #[test]
@@ -2109,7 +2585,11 @@ mod tests {
             let p = dir.path().join(pid);
             std::fs::create_dir(&p).unwrap();
             std::fs::write(p.join("comm"), format!("{comm}\n")).unwrap();
-            std::fs::write(p.join("cmdline"), args.iter().map(|a| format!("{a}\0")).collect::<String>()).unwrap();
+            std::fs::write(
+                p.join("cmdline"),
+                args.iter().map(|a| format!("{a}\0")).collect::<String>(),
+            )
+            .unwrap();
         };
         mk("10", "pacman", &["pacman", "-Syu"]);
         mk("11", "pacman", &["pacman", "-Qq"]);
@@ -2125,10 +2605,22 @@ mod tests {
     #[test]
     fn a_pacman_on_a_database_of_its_own_does_not_hold_the_lock() {
         let q = |c: &str, a: &[&str]| locking(c, &strs(a));
-        assert!(!q("pacman", &["-Sy", "--dbpath", "/tmp/checkup-db-1000", "--logfile", "/dev/null"]));
+        assert!(!q(
+            "pacman",
+            &[
+                "-Sy",
+                "--dbpath",
+                "/tmp/checkup-db-1000",
+                "--logfile",
+                "/dev/null"
+            ]
+        ));
         assert!(!q("pacman", &["-Sy", "--dbpath=/tmp/checkup-db-1000"]));
         assert!(!q("pacman", &["-b", "/tmp/x", "-Syu"]));
-        assert!(q("pacman", &["-Syu", "--dbpath", "/var/lib/pacman/"]), "the system's own, spelled out");
+        assert!(
+            q("pacman", &["-Syu", "--dbpath", "/var/lib/pacman/"]),
+            "the system's own, spelled out"
+        );
         assert!(q("pikaur", &["-Syu"]));
         assert!(q("paru", &[]));
     }
@@ -2137,7 +2629,11 @@ mod tests {
         let p = dir.join(pid);
         std::fs::create_dir(&p).unwrap();
         std::fs::write(p.join("comm"), format!("{comm}\n")).unwrap();
-        std::fs::write(p.join("cmdline"), args.iter().map(|a| format!("{a}\0")).collect::<String>()).unwrap();
+        std::fs::write(
+            p.join("cmdline"),
+            args.iter().map(|a| format!("{a}\0")).collect::<String>(),
+        )
+        .unwrap();
         p
     }
 
@@ -2149,10 +2645,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lock = dir.path().join("db.lck");
         fake_proc(dir.path(), "1", "systemd", &["/sbin/init"]);
-        assert!(lock_scan_in(dir.path(), &lock).nothing_uses_it(), "init alone: free");
-        fake_proc(dir.path(), "20", "python3", &["/usr/bin/python3", "/usr/bin/pikaur", "-Syu"]);
+        assert!(
+            lock_scan_in(dir.path(), &lock).nothing_uses_it(),
+            "init alone: free"
+        );
+        fake_proc(
+            dir.path(),
+            "20",
+            "python3",
+            &["/usr/bin/python3", "/usr/bin/pikaur", "-Syu"],
+        );
         fake_proc(dir.path(), "21", "pamac-daemon", &["/usr/bin/pamac-daemon"]);
-        fake_proc(dir.path(), "22", "pacman", &["pacman", "-Sy", "--dbpath", "/tmp/checkup-db-1000"]);
+        fake_proc(
+            dir.path(),
+            "22",
+            "pacman",
+            &["pacman", "-Sy", "--dbpath", "/tmp/checkup-db-1000"],
+        );
         let scan = lock_scan_in(dir.path(), &lock);
         assert_eq!(scan.running, strs(&["pikaur (20)"]));
         assert_eq!(scan.daemons, strs(&["pamac-daemon (21)"]));
@@ -2164,7 +2673,10 @@ mod tests {
         let p = fake_proc(held.path(), "30", "alpm-thing", &["alpm-thing"]);
         std::fs::create_dir(p.join("fd")).unwrap();
         std::os::unix::fs::symlink(&lock, p.join("fd").join("3")).unwrap();
-        assert_eq!(lock_scan_in(held.path(), &lock).running, strs(&["alpm-thing (30)"]));
+        assert_eq!(
+            lock_scan_in(held.path(), &lock).running,
+            strs(&["alpm-thing (30)"])
+        );
 
         // /proc mounted hidepid: init (root's) cannot be seen, so neither
         // could root's pacman. Never stale.
@@ -2179,15 +2691,28 @@ mod tests {
     /// the machine, and a repair does not touch it.
     #[test]
     fn demo_mode_neither_reads_nor_changes_the_machine() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
         let r = std::panic::catch_unwind(|| {
             let log = |_: &str| {};
-            (probe_preflight(), probe_after(true), probe_before(true), remove_stale_lock(&log))
+            (
+                probe_preflight(),
+                probe_after(true),
+                probe_before(true),
+                remove_stale_lock(&log),
+            )
         });
         crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
         let (pre, after, before, removed) = r.unwrap();
-        assert_eq!(pre, Preflight { free_root: Some(50 * GIB), ..Default::default() });
+        assert_eq!(
+            pre,
+            Preflight {
+                free_root: Some(50 * GIB),
+                ..Default::default()
+            }
+        );
         assert_eq!(after, demo_after());
         assert_eq!(before.pending, Some(BTreeSet::new()));
         assert!(removed.is_err());
@@ -2197,7 +2722,10 @@ mod tests {
     fn a_lock_that_may_be_in_use_is_never_offered_for_removal() {
         let hidden = Preflight {
             free_root: Some(50 * GIB),
-            lock: LockScan { hidden: true, ..Default::default() },
+            lock: LockScan {
+                hidden: true,
+                ..Default::default()
+            },
             lock_file: true,
             battery: None,
         };
@@ -2206,13 +2734,23 @@ mod tests {
         assert_eq!(issues[0].level, Level::Warn);
         assert_eq!(issues[0].fix, None);
         // A package service running with the lock file there: it may be its.
-        let service = LockScan { daemons: strs(&["pamac-daemon (21)"]), ..Default::default() };
-        let p = Preflight { lock: service.clone(), ..hidden.clone() };
+        let service = LockScan {
+            daemons: strs(&["pamac-daemon (21)"]),
+            ..Default::default()
+        };
+        let p = Preflight {
+            lock: service.clone(),
+            ..hidden.clone()
+        };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues[0].level, Level::Block);
         assert!(issues[0].detail.contains("pamac-daemon"));
         // Idle, with no lock file: no reason to wait.
-        let p = Preflight { lock: service, lock_file: false, ..hidden };
+        let p = Preflight {
+            lock: service,
+            lock_file: false,
+            ..hidden
+        };
         assert!(preflight_issues(&p, true).is_empty());
     }
 
@@ -2232,35 +2770,63 @@ mod tests {
         w("hidpp_battery_0", "capacity", "5");
         w("AC", "type", "Mains");
         w("AC", "online", "0");
-        assert_eq!(battery_in(dir.path()), Some(Battery { percent: 15, on_battery: true }), "the mouse is not the laptop");
+        assert_eq!(
+            battery_in(dir.path()),
+            Some(Battery {
+                percent: 15,
+                on_battery: true
+            }),
+            "the mouse is not the laptop"
+        );
         w("AC", "online", "1");
-        assert_eq!(battery_in(dir.path()), Some(Battery { percent: 15, on_battery: false }));
+        assert_eq!(
+            battery_in(dir.path()),
+            Some(Battery {
+                percent: 15,
+                on_battery: false
+            })
+        );
     }
 
     #[test]
     fn preflight_blocks_what_would_fail_and_warns_about_the_rest() {
-        let ok = Preflight { free_root: Some(50 * GIB), ..Default::default() };
+        let ok = Preflight {
+            free_root: Some(50 * GIB),
+            ..Default::default()
+        };
         assert!(preflight_issues(&ok, true).is_empty());
         let p = Preflight {
             free_root: Some(GIB),
             lock: LockScan::default(),
             lock_file: true,
-            battery: Some(Battery { percent: 10, on_battery: true }),
+            battery: Some(Battery {
+                percent: 10,
+                on_battery: true,
+            }),
         };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues[0].level, Level::Block, "the blocking one first");
         assert_eq!(issues.iter().filter(|i| i.level == Level::Warn).count(), 2);
-        assert_eq!(issues.iter().find(|i| i.fix.is_some()).unwrap().fix, Some(Repair::RemoveLock));
+        assert_eq!(
+            issues.iter().find(|i| i.fix.is_some()).unwrap().fix,
+            Some(Repair::RemoveLock)
+        );
         let p = Preflight {
             free_root: Some(3 * GIB),
-            lock: LockScan { running: strs(&["pacman (10)"]), ..Default::default() },
+            lock: LockScan {
+                running: strs(&["pacman (10)"]),
+                ..Default::default()
+            },
             lock_file: true,
             battery: None,
         };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues.len(), 2);
         assert!(issues[0].detail.contains("pacman (10)"));
-        assert!(issues.iter().all(|i| i.fix.is_none()), "never remove a lock something holds");
+        assert!(
+            issues.iter().all(|i| i.fix.is_none()),
+            "never remove a lock something holds"
+        );
         // Updating only AppImages and plugins: pacman's lock is no concern.
         assert_eq!(preflight_issues(&p, false).len(), 1);
     }
@@ -2268,10 +2834,16 @@ mod tests {
     #[test]
     fn the_newest_snapshot_since_the_start_is_this_runs() {
         use chrono::TimeZone;
-        let start = chrono::Local.with_ymd_and_hms(2026, 10, 20, 13, 43, 0).unwrap().timestamp() as f64;
+        let start = chrono::Local
+            .with_ymd_and_hms(2026, 10, 20, 13, 43, 0)
+            .unwrap()
+            .timestamp() as f64;
         let csv = "number,date\n0,\n40,2026-10-19 10:00:00\n41,2026-10-20 13:43:05\n42,2026-10-20 13:43:40\n";
         assert_eq!(newest_since(csv, start).as_deref(), Some("42"));
-        assert_eq!(newest_since("number,date\n40,2026-10-19 10:00:00\n", start), None);
+        assert_eq!(
+            newest_since("number,date\n40,2026-10-19 10:00:00\n", start),
+            None
+        );
     }
 
     /// The journal is asked about the whole run, not its first minute: a
@@ -2280,7 +2852,10 @@ mod tests {
     #[test]
     fn the_journal_is_asked_about_the_whole_run() {
         let (since, until) = snapshot_window(1000.0, 1000.0 + 3600.0);
-        assert!(since <= 1000.0 && since > 1000.0 - 60.0, "not a snapshot from before the click");
+        assert!(
+            since <= 1000.0 && since > 1000.0 - 60.0,
+            "not a snapshot from before the click"
+        );
         assert!(until >= 4600.0);
     }
 
@@ -2290,22 +2865,44 @@ mod tests {
         i.after.pending = Some(set(&["omarchy"]));
         let report = build_report(&i);
         let rec = RunRecord {
-            commands: vec![CommandRun { argv: "omarchy update".into(), exit: Some(0), secs: Some(60.0) }],
+            commands: vec![CommandRun {
+                argv: "omarchy update".into(),
+                exit: Some(0),
+                secs: Some(60.0),
+            }],
             report: Some(report.clone()),
-            recheck: Some(report.recheck(&i.before, &After { pending: Some(set(&[])), ..i.after.clone() })),
+            recheck: Some(report.recheck(
+                &i.before,
+                &After {
+                    pending: Some(set(&[])),
+                    ..i.after.clone()
+                },
+            )),
             freed: Some(3 * 1048576),
             snapshot: Some("42".into()),
             ..Default::default()
         };
         let a = rec.action(75.0);
         assert_eq!(a.changes.len(), 3);
-        assert!(a.checks.iter().any(|c| c.name == "Updates installed" && c.ok == Some(false)));
-        assert!(a.repairs.iter().any(|c| c.name == "Updates installed" && c.ok == Some(true)));
+        assert!(a
+            .checks
+            .iter()
+            .any(|c| c.name == "Updates installed" && c.ok == Some(false)));
+        assert!(a
+            .repairs
+            .iter()
+            .any(|c| c.name == "Updates installed" && c.ok == Some(true)));
         assert_eq!(a.freed_bytes, Some(3 * 1048576));
         assert_eq!(a.duration_secs, Some(75.0));
         assert_eq!(rec.severity(), "");
-        assert_eq!(rec.detail(), "3 changes · every check passed · repaired · 3 MB freed");
-        let failed = RunRecord { report: Some(report), ..Default::default() };
+        assert_eq!(
+            rec.detail(),
+            "3 changes · every check passed · repaired · 3 MB freed"
+        );
+        let failed = RunRecord {
+            report: Some(report),
+            ..Default::default()
+        };
         assert_eq!(failed.severity(), "warn");
     }
 }

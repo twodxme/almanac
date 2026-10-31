@@ -34,7 +34,10 @@ fn core_holds(rest: &[String]) -> i32 {
                 .map_err(|e| format!("reading stdin: {e}"))
                 .and_then(|_| almanac::autorun::core_holds(&String::from_utf8_lossy(&raw)))
         }
-        _ => Err(format!("unexpected arguments after --core-holds: {}", rest.join(" "))),
+        _ => Err(format!(
+            "unexpected arguments after --core-holds: {}",
+            rest.join(" ")
+        )),
     };
     match names {
         Ok(names) => {
@@ -55,7 +58,8 @@ fn record_hold(rest: &[String]) -> i32 {
         eprintln!("usage: almanac-autorun --record-hold TITLE DETAIL");
         return 2;
     };
-    let history = almanac::history::record_checked(almanac::history::AUTOUPDATE, title, detail, "warn", &[]);
+    let history =
+        almanac::history::record_checked(almanac::history::AUTOUPDATE, title, detail, "warn", &[]);
     match history {
         Ok(()) => 0,
         Err(e) => {

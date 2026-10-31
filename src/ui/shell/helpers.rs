@@ -120,7 +120,10 @@ pub const FALLBACK_ICON: &[(&str, &str)] = &[
 
 /// `_FALLBACK_ICON.get(source)`.
 pub fn fallback_icon(source: &str) -> Option<&'static str> {
-    FALLBACK_ICON.iter().find(|(k, _)| *k == source).map(|(_, v)| *v)
+    FALLBACK_ICON
+        .iter()
+        .find(|(k, _)| *k == source)
+        .map(|(_, v)| *v)
 }
 
 /// Epoch -> "3d ago". An age answers "is this stale?"; a timestamp doesn't.
@@ -161,7 +164,14 @@ pub fn primary_category(cats: &str) -> String {
     }
     let parts: Vec<&str> = cats.split(';').filter(|c| !c.is_empty()).collect();
     const GENERIC: &[&str] = &[
-        "Application", "Utility", "System", "Settings", "GTK", "Qt", "GNOME", "KDE",
+        "Application",
+        "Utility",
+        "System",
+        "Settings",
+        "GTK",
+        "Qt",
+        "GNOME",
+        "KDE",
         "ConsoleOnly",
     ];
     for c in &parts {
@@ -201,7 +211,10 @@ pub fn reverse_text(a: &str, b: &str) -> Ordering {
 /// else is lowered as `str::to_lowercase` does it, final sigma included.
 pub fn lower_cmp(a: &str, b: &str) -> Ordering {
     if a.is_ascii() && b.is_ascii() {
-        return a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
+        return a
+            .bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
     }
     a.to_lowercase().cmp(&b.to_lowercase())
 }
@@ -210,7 +223,10 @@ pub fn lower_cmp(a: &str, b: &str) -> Ordering {
 pub fn version_text(it: &AppItem) -> String {
     if it.git_behind != 0 {
         let suffix = if it.git_dirty { " · local edits" } else { "" };
-        return format!("{} · {} commits behind{}", it.app.version, it.git_behind, suffix);
+        return format!(
+            "{} · {} commits behind{}",
+            it.app.version, it.git_behind, suffix
+        );
     }
     if !it.has_update {
         return it.app.version.clone();
@@ -292,7 +308,8 @@ pub fn exc_str(e: &str) -> String {
     match e.split_once(": ") {
         Some((t, m))
             if t.ends_with("Error")
-                && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
+                && t.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
         {
             m.to_string()
         }
@@ -386,7 +403,8 @@ pub fn spawn_bg_checked<T: Send + 'static>(
     // pool thread's, and an overflow there aborts the app).
     let handle = gio::spawn_blocking(move || {
         crate::util::with_stack(BG_STACK, move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).map_err(|e| panic_text(&*e))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .map_err(|e| panic_text(&*e))
         })
     });
     glib::spawn_future_local(async move {
@@ -397,7 +415,6 @@ pub fn spawn_bg_checked<T: Send + 'static>(
         done(result);
     });
 }
-
 
 /// `self._thumb_pool.submit(work)` + `GLib.idle_add(done, result)`: like
 /// `spawn_bg`, but on the window's small image pool, so 5,600 cards cannot
@@ -447,7 +464,9 @@ mod tests {
         if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
             return;
         }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gdk::Display::default().is_none() {
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
+            || gdk::Display::default().is_none()
+        {
             return;
         }
         let sw = gtk::Switch::new();
@@ -479,13 +498,19 @@ mod tests {
         ctx.with_thread_default(|| {
             let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
             let g = got.clone();
-            spawn_bg_checked(|| -> i32 { panic!("boom") }, move |r| g.borrow_mut().push(format!("{r:?}")));
+            spawn_bg_checked(
+                || -> i32 { panic!("boom") },
+                move |r| g.borrow_mut().push(format!("{r:?}")),
+            );
             let g = got.clone();
             spawn_bg_checked(|| 7, move |r| g.borrow_mut().push(format!("{r:?}")));
             let g = got.clone();
             on_bg_failure(move |msg| g.borrow_mut().push(format!("failed: {msg}")));
             let g = got.clone();
-            spawn_bg(|| -> i32 { panic!("bang") }, move |v| g.borrow_mut().push(format!("done {v}")));
+            spawn_bg(
+                || -> i32 { panic!("bang") },
+                move |v| g.borrow_mut().push(format!("done {v}")),
+            );
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
             while got.borrow().len() < 3 && std::time::Instant::now() < deadline {
                 ctx.iteration(true);
@@ -500,12 +525,43 @@ mod tests {
     #[test]
     fn lower_cmp_orders_as_lowering_first_does() {
         let words = [
-            "", "a", "A", "ab", "aB", "Ab", "b", "B", "_x", "[x", "Zed", "zed", "zeta", "Émile", "émile", "eMile",
-            "ΟΔΟΣ", "οδος", "οδοσ", "İstanbul", "istanbul", "ß", "SS", "ss", "Ä", "a\u{308}", "日本", "Z9", "z10",
+            "",
+            "a",
+            "A",
+            "ab",
+            "aB",
+            "Ab",
+            "b",
+            "B",
+            "_x",
+            "[x",
+            "Zed",
+            "zed",
+            "zeta",
+            "Émile",
+            "émile",
+            "eMile",
+            "ΟΔΟΣ",
+            "οδος",
+            "οδοσ",
+            "İstanbul",
+            "istanbul",
+            "ß",
+            "SS",
+            "ss",
+            "Ä",
+            "a\u{308}",
+            "日本",
+            "Z9",
+            "z10",
         ];
         for a in words {
             for b in words {
-                assert_eq!(lower_cmp(a, b), a.to_lowercase().cmp(&b.to_lowercase()), "{a:?} vs {b:?}");
+                assert_eq!(
+                    lower_cmp(a, b),
+                    a.to_lowercase().cmp(&b.to_lowercase()),
+                    "{a:?} vs {b:?}"
+                );
             }
         }
     }
@@ -513,7 +569,10 @@ mod tests {
     /// test_star_counts_fit_a_chip
     #[test]
     fn star_counts_fit_a_chip() {
-        let got: Vec<String> = [198, 2151, 2000, 15419, 66175].iter().map(|n| compact(*n)).collect();
+        let got: Vec<String> = [198, 2151, 2000, 15419, 66175]
+            .iter()
+            .map(|n| compact(*n))
+            .collect();
         assert_eq!(got, ["198", "2.2k", "2k", "15k", "66k"]);
     }
 

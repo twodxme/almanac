@@ -93,7 +93,10 @@ pub fn run_title(items: &[String]) -> Option<String> {
 pub fn record_run(items: &[String]) -> Result<(), String> {
     match run_title(items) {
         Some(title) => {
-            let action = crate::history::ActionLog { changes: items.iter().map(|i| run_change(i)).collect(), ..Default::default() };
+            let action = crate::history::ActionLog {
+                changes: items.iter().map(|i| run_change(i)).collect(),
+                ..Default::default()
+            };
             crate::history::record_action(crate::history::AUTOUPDATE, &title, "", "", &action)
         }
         None => Ok(()),
@@ -132,8 +135,14 @@ pub fn log(msg: &str) {
 /// when it names one; `surrogateescape` in UTF-8 mode and in the C/POSIX
 /// locale (which Python coerces to C.UTF-8); `strict` otherwise.
 fn stdout_errors() -> String {
-    let get = |k: &str| std::env::var_os(k).map(|v| v.to_string_lossy().into_owned()).filter(|v| !v.is_empty());
-    if let Some(errors) = get("PYTHONIOENCODING").and_then(|v| v.split_once(':').map(|(_, e)| e.to_string())) {
+    let get = |k: &str| {
+        std::env::var_os(k)
+            .map(|v| v.to_string_lossy().into_owned())
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(errors) =
+        get("PYTHONIOENCODING").and_then(|v| v.split_once(':').map(|(_, e)| e.to_string()))
+    {
         if !errors.is_empty() {
             return errors;
         }
@@ -141,7 +150,9 @@ fn stdout_errors() -> String {
     if get("PYTHONUTF8").as_deref() == Some("1") {
         return "surrogateescape".into();
     }
-    let ctype = get("LC_ALL").or_else(|| get("LC_CTYPE")).or_else(|| get("LANG"));
+    let ctype = get("LC_ALL")
+        .or_else(|| get("LC_CTYPE"))
+        .or_else(|| get("LANG"));
     match ctype.as_deref() {
         None | Some("C") | Some("POSIX") => "surrogateescape".into(),
         Some(_) => "strict".into(),
@@ -209,7 +220,15 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     while let Some((i, c)) = it.next() {
         let is_break = matches!(
             c,
-            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if !is_break {
             continue;
@@ -324,10 +343,16 @@ fn py_encode(s: &[u32], errors: &str) -> Result<Vec<u8>, String> {
             "backslashreplace" | "namereplace" => {
                 out.extend(run.iter().flat_map(|c| format!("\\u{c:04x}").into_bytes()));
             }
-            "xmlcharrefreplace" => out.extend(run.iter().flat_map(|c| format!("&#{c};").into_bytes())),
+            "xmlcharrefreplace" => {
+                out.extend(run.iter().flat_map(|c| format!("&#{c};").into_bytes()))
+            }
             "surrogatepass" => {
                 for c in run {
-                    out.extend([0xe0 | (c >> 12) as u8, 0x80 | ((c >> 6) & 0x3f) as u8, 0x80 | (c & 0x3f) as u8]);
+                    out.extend([
+                        0xe0 | (c >> 12) as u8,
+                        0x80 | ((c >> 6) & 0x3f) as u8,
+                        0x80 | (c & 0x3f) as u8,
+                    ]);
                 }
             }
             _ => return Err(encode_error(s, start, i)),
@@ -363,7 +388,11 @@ fn py_isprintable(c: u32) -> bool {
 /// `repr(str)`: single quotes unless the text has one and no double quote;
 /// every character that is not printable is escaped.
 fn py_repr_py(s: &[u32]) -> String {
-    let q = if s.contains(&u32::from('\'')) && !s.contains(&u32::from('"')) { '"' } else { '\'' };
+    let q = if s.contains(&u32::from('\'')) && !s.contains(&u32::from('"')) {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for &c in s {
@@ -396,7 +425,10 @@ fn py_repr(s: &str) -> String {
 fn py_value_repr(v: &Value) -> String {
     match v {
         Value::String(s) => py_repr(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_value_repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter().map(py_value_repr).collect::<Vec<_>>().join(", ")
+        ),
         Value::Object(m) => format!(
             "{{{}}}",
             m.iter()
@@ -443,9 +475,16 @@ fn truthy(v: &Value) -> bool {
 fn py_exc_str(e: &str) -> String {
     if let Some((head, rest)) = e.split_once(": ") {
         let ident = !head.is_empty()
-            && head.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && head.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-        if ident && (head.ends_with("Error") || head.ends_with("Exception") || head.ends_with("Expired")) {
+            && head
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && head
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+        if ident
+            && (head.ends_with("Error") || head.ends_with("Exception") || head.ends_with("Expired"))
+        {
             return rest.to_string();
         }
     }
@@ -463,7 +502,10 @@ fn py_path_bytes(b: &[u8]) -> PathBuf {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = b.split(|c| *c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = b
+        .split(|c| *c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend(parts.join(&b'/'));
     if out.is_empty() {
@@ -506,7 +548,9 @@ fn record_path(reg: &PyJson, rec: usize) -> Result<PathBuf, String> {
 
 /// The text with each lone surrogate as U+FFFD (what a Rust String can hold).
 fn render_lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 // ------------------------------------------------------------ Python json --
@@ -558,7 +602,10 @@ enum JsonFail {
 impl PyJson {
     /// A document holding what a serde value holds.
     pub fn from_value(v: &Value) -> PyJson {
-        let mut doc = PyJson { nodes: Vec::new(), root: 0 };
+        let mut doc = PyJson {
+            nodes: Vec::new(),
+            root: 0,
+        };
         doc.root = doc.push_value(v);
         doc
     }
@@ -578,7 +625,11 @@ impl PyJson {
             },
             Value::String(s) => Node::Str(pystr(s)),
             Value::Array(items) => Node::Arr(items.iter().map(|x| self.push_value(x)).collect()),
-            Value::Object(map) => Node::Obj(map.iter().map(|(k, x)| (pystr(k), self.push_value(x))).collect()),
+            Value::Object(map) => Node::Obj(
+                map.iter()
+                    .map(|(k, x)| (pystr(k), self.push_value(x)))
+                    .collect(),
+            ),
         };
         self.nodes.push(node);
         self.nodes.len() - 1
@@ -590,7 +641,9 @@ impl PyJson {
         let base = self.nodes.len();
         self.nodes.extend(other.nodes.iter().map(|n| match n {
             Node::Arr(items) => Node::Arr(items.iter().map(|c| c + base).collect()),
-            Node::Obj(entries) => Node::Obj(entries.iter().map(|(k, c)| (k.clone(), c + base)).collect()),
+            Node::Obj(entries) => {
+                Node::Obj(entries.iter().map(|(k, c)| (k.clone(), c + base)).collect())
+            }
             other => other.clone(),
         }));
         root + base
@@ -598,7 +651,9 @@ impl PyJson {
 
     /// `d.get(key)` on a dict node.
     fn get(&self, id: usize, key: &str) -> Option<usize> {
-        let Node::Obj(entries) = &self.nodes[id] else { return None };
+        let Node::Obj(entries) = &self.nodes[id] else {
+            return None;
+        };
         let key = pystr(key);
         entries.iter().find(|(k, _)| *k == key).map(|(_, c)| *c)
     }
@@ -691,7 +746,6 @@ impl PyJson {
     fn to_value(&self, id: usize) -> Value {
         self.value_with(id, render_lossy)
     }
-
 
     fn value_with(&self, id: usize, text: fn(&[u32]) -> String) -> Value {
         crate::util::tree::fold_ids(
@@ -849,7 +903,11 @@ fn py_float_str(f: f64) -> String {
     if f.is_nan() {
         "nan".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "inf".into() } else { "-inf".into() }
+        if f > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }
     } else {
         crate::util::py_float_repr(f)
     }
@@ -871,7 +929,11 @@ fn push_json_str(out: &mut String, s: &[u32]) {
             0x20..=0x7e => out.push(char::from(c as u8)),
             0x10000.. => {
                 let v = c - 0x10000;
-                out.push_str(&format!("\\u{:04x}\\u{:04x}", 0xd800 + (v >> 10), 0xdc00 + (v & 0x3ff)));
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xd800 + (v >> 10),
+                    0xdc00 + (v & 0x3ff)
+                ));
             }
             _ => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -887,7 +949,10 @@ fn parse_json(text: &str) -> Result<PyJson, JsonFail> {
     use crate::util::pyjson;
     let mut sink = Nodes(Vec::new());
     match pyjson::loads_into(text, pyjson::Limit::containers(JSON_MAX_DEPTH), &mut sink) {
-        Ok(root) => Ok(PyJson { nodes: sink.0, root }),
+        Ok(root) => Ok(PyJson {
+            nodes: sink.0,
+            root,
+        }),
         Err(pyjson::Error::Value(_)) => Err(JsonFail::Value),
         Err(pyjson::Error::Recursion(is_obj)) => Err(JsonFail::Recursion(is_obj)),
     }
@@ -951,7 +1016,10 @@ impl crate::util::pyjson::Sink for Nodes {
 /// the filename(s) the call was given, as Python's `OSError` prints them.
 fn py_os_error(e: &std::io::Error, files: &[&Path]) -> String {
     use std::os::unix::ffi::OsStrExt;
-    let files: Vec<PyStr> = files.iter().map(|f| fsdecode(f.as_os_str().as_bytes())).collect();
+    let files: Vec<PyStr> = files
+        .iter()
+        .map(|f| fsdecode(f.as_os_str().as_bytes()))
+        .collect();
     py_os_error_py(e, &files)
 }
 
@@ -1027,7 +1095,10 @@ fn exec_candidates(prog: &[u8]) -> Vec<Vec<u8>> {
     }
     use std::os::unix::ffi::OsStrExt;
     let path = std::env::var_os("PATH");
-    let path: &[u8] = path.as_deref().map(|p| p.as_bytes()).unwrap_or(b"/bin:/usr/bin");
+    let path: &[u8] = path
+        .as_deref()
+        .map(|p| p.as_bytes())
+        .unwrap_or(b"/bin:/usr/bin");
     path.split(|c| *c == b':')
         .map(|dir| {
             let mut c = dir.to_vec();
@@ -1093,11 +1164,19 @@ fn run_capture(argv: &[PyStr], timeout: u64) -> Result<Captured, String> {
     let mut ran = None;
     for cand in exec_candidates(&bytes[0]) {
         let out = if cand.is_empty() {
-            crate::util::Output { failed_to_start: true, start_errno: Some(libc::ENOENT), ..Default::default() }
+            crate::util::Output {
+                failed_to_start: true,
+                start_errno: Some(libc::ENOENT),
+                ..Default::default()
+            }
         } else {
             // a name without a slash (an empty PATH entry) is exec'd from
             // the cwd, not searched for again
-            let cand = if cand.contains(&b'/') { cand } else { [b"./".as_slice(), &cand].concat() };
+            let cand = if cand.contains(&b'/') {
+                cand
+            } else {
+                [b"./".as_slice(), &cand].concat()
+            };
             let mut full: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::from_bytes(&cand)];
             full.extend(bytes[1..].iter().map(|b| std::ffi::OsStr::from_bytes(b)));
             crate::util::run_bytes(&full, &opts)
@@ -1223,7 +1302,10 @@ fn py_list(v: &Value) -> Result<Vec<Value>, String> {
         Value::Array(a) => Ok(a.clone()),
         Value::String(s) => Ok(s.chars().map(|c| Value::String(c.to_string())).collect()),
         Value::Object(m) => Ok(m.keys().map(|k| Value::String(k.clone())).collect()),
-        other => Err(format!("TypeError: '{}' object is not iterable", py_type(other))),
+        other => Err(format!(
+            "TypeError: '{}' object is not iterable",
+            py_type(other)
+        )),
     }
 }
 
@@ -1277,7 +1359,11 @@ pub fn update_appimages() -> Result<usize, String> {
                 .map(|d| d.checksum_verified)
                 .map_err(|e| py_net_error(&e))
         },
-        &mut |dest, key| appimage::install_desktop_entry(dest, key).map(|_| ()).map_err(|e| py_net_error(&e)),
+        &mut |dest, key| {
+            appimage::install_desktop_entry(dest, key)
+                .map(|_| ())
+                .map_err(|e| py_net_error(&e))
+        },
         &mut save_updated,
     )
 }
@@ -1299,7 +1385,10 @@ fn save_updated(key: &PyStr, version: &Value, dest: &Path) -> Result<(), String>
     };
     let Some(rec) = rec.filter(|&r| matches!(reg.node(r), Node::Obj(_))) else {
         let _ = std::fs::remove_file(dest);
-        return Err("RuntimeError: it was removed while it downloaded, so the download was discarded".into());
+        return Err(
+            "RuntimeError: it was removed while it downloaded, so the download was discarded"
+                .into(),
+        );
     };
     mark_updated(&mut reg, rec, version);
     save_registry(&reg)
@@ -1349,10 +1438,13 @@ fn save_registry(data: &PyJson) -> Result<(), String> {
     let text = data.dumps_indent2(data.root) + "\n";
     let written = (|| {
         use std::io::Write;
-        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp])))?;
-        f.write_all(text.as_bytes()).map_err(|e| format!("OSError: {}", py_os_error(&e, &[])))?;
+        let mut f = std::fs::File::create(&tmp)
+            .map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp])))?;
+        f.write_all(text.as_bytes())
+            .map_err(|e| format!("OSError: {}", py_os_error(&e, &[])))?;
         // atomic: a crash mid-write cannot truncate it
-        std::fs::rename(&tmp, &reg).map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp, &reg])))
+        std::fs::rename(&tmp, &reg)
+            .map_err(|e| format!("OSError: {}", py_os_error(&e, &[&tmp, &reg])))
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -1452,7 +1544,9 @@ fn py_net_error(e: &str) -> String {
     if let Some((head, tail)) = e.rsplit_once(" (os error ") {
         if let Some(n) = tail.strip_suffix(')').filter(|n| n.parse::<i32>().is_ok()) {
             let (ty, msg) = match head.split_once(": ") {
-                Some((ty, msg)) if ty.ends_with("Error") && !ty.contains(' ') => (format!("{ty}: "), msg),
+                Some((ty, msg)) if ty.ends_with("Error") && !ty.contains(' ') => {
+                    (format!("{ty}: "), msg)
+                }
                 _ => (String::new(), head),
             };
             return format!("{ty}[Errno {n}] {msg}");
@@ -1465,7 +1559,10 @@ fn py_net_error(e: &str) -> String {
 /// dict is the AttributeError Python raises; `{}` when there is nothing newer.
 fn check_record(rec: &Value) -> Result<Value, String> {
     if !rec.is_object() {
-        return Err(format!("AttributeError: '{}' object has no attribute 'get'", py_type(rec)));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py_type(rec)
+        ));
     }
     let latest = appimage::check(rec).map_err(|e| {
         // Python 3.14's pathlib words this TypeError more fully than the
@@ -1516,21 +1613,30 @@ pub fn update_appimages_with(
         let latest = match checked {
             Ok(l) => l,
             Err(exc) => {
-                log_py(&cat(&[&key, &pystr(&format!(": check failed: {}", py_exc_str(&exc)))]))?;
+                log_py(&cat(&[
+                    &key,
+                    &pystr(&format!(": check failed: {}", py_exc_str(&exc))),
+                ]))?;
                 continue;
             }
         };
         // `latest.get("url")`, `rec.get('version')` and `latest['version']`
         // sit outside the try: a failure there ends the run.
         let Value::Object(latest) = latest else {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", py_type(&latest)));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                py_type(&latest)
+            ));
         };
         let url = latest.get("url").cloned().unwrap_or(Value::Null);
         if !truthy(&url) {
             continue;
         }
         if !matches!(reg.node(rec), Node::Obj(_)) {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", reg.type_name(rec)));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                reg.type_name(rec)
+            ));
         }
         let have = match reg.get(rec, "version") {
             // repr of a value nested past its stack: RecursionError
@@ -1540,9 +1646,17 @@ pub fn update_appimages_with(
         let Some(version) = latest.get("version").cloned() else {
             return Err("KeyError: 'version'".into());
         };
-        log_py(&cat(&[&key, &pystr(": "), &have, &pystr(&format!(" → {}", py_str(&version)))]))?;
+        log_py(&cat(&[
+            &key,
+            &pystr(": "),
+            &have,
+            &pystr(&format!(" → {}", py_str(&version))),
+        ]))?;
         // Checked against the asset's published sha256 when it has one.
-        let sha256 = latest.get("sha256").and_then(Value::as_str).unwrap_or_default();
+        let sha256 = latest
+            .get("sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let attempt = (|| -> Result<(), String> {
             let dest = record_path(&reg, rec)?;
             // Without a digest the build is only as trusted as TLS and the
@@ -1559,7 +1673,12 @@ pub fn update_appimages_with(
             Ok(()) => {
                 done += 1;
                 log(&format!("  installed {}", py_str(&version)));
-                updated(format!("{} {} → {}", key_s, render(&have), py_str(&version)));
+                updated(format!(
+                    "{} {} → {}",
+                    key_s,
+                    render(&have),
+                    py_str(&version)
+                ));
             }
             Err(exc) => {
                 // download() swaps atomically, so a failure here leaves the
@@ -1612,9 +1731,21 @@ fn trust_map(plugins: Vec<store::Plugin>) -> Result<BTreeMap<String, plugins::Li
             return Err(format!("TypeError: unhashable type: '{}'", py_type(&id)));
         }
         let key = trust_key(&v)?;
-        let text = |f: &str| v.get(f).and_then(Value::as_str).unwrap_or_default().to_string();
+        let text = |f: &str| {
+            v.get(f)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
         if let Value::String(id) = id {
-            out.insert(id, plugins::Listing { key, repo: text("repo"), validated_commit: text("validated_commit") });
+            out.insert(
+                id,
+                plugins::Listing {
+                    key,
+                    repo: text("repo"),
+                    validated_commit: text("validated_commit"),
+                },
+            );
         }
     }
     Ok(out)
@@ -1632,18 +1763,26 @@ fn trust_key(v: &Value) -> Result<String, String> {
         match f(k) {
             Value::String(_) | Value::Array(_) => Ok(()),
             Value::Object(_) => Err("KeyError: slice(None, 10, None)".into()),
-            other => Err(format!("TypeError: '{}' object is not subscriptable", py_type(other))),
+            other => Err(format!(
+                "TypeError: '{}' object is not subscriptable",
+                py_type(other)
+            )),
         }
     };
     let market = f("market");
     let hashable = || -> Result<(), String> {
         match market {
-            Value::Array(_) | Value::Object(_) => Err(format!("TypeError: unhashable type: '{}'", py_type(market))),
+            Value::Array(_) | Value::Object(_) => {
+                Err(format!("TypeError: unhashable type: '{}'", py_type(market)))
+            }
             _ => Ok(()),
         }
     };
-    let is = |k: &str, want: &[&str]| matches!(f(k), Value::String(s) if want.contains(&s.as_str()));
-    let drifted = truthy(f("validated_commit")) && truthy(f("upstream_commit")) && f("validated_commit") != f("upstream_commit");
+    let is =
+        |k: &str, want: &[&str]| matches!(f(k), Value::String(s) if want.contains(&s.as_str()));
+    let drifted = truthy(f("validated_commit"))
+        && truthy(f("upstream_commit"))
+        && f("validated_commit") != f("upstream_commit");
     if truthy(f("built_in")) {
         hashable()?; // self.market_name
         return Ok("official".into());
@@ -1653,7 +1792,10 @@ fn trust_key(v: &Value) -> Result<String, String> {
     if let Some(m) = m.filter(|m| !m.first_party_owner.is_empty()) {
         // self.owner: [x for x in self.repo.split("/") if x][2]
         let Value::String(repo) = f("repo") else {
-            return Err(format!("AttributeError: '{}' object has no attribute 'split'", py_type(f("repo"))));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'split'",
+                py_type(f("repo"))
+            ));
         };
         let parts: Vec<&str> = repo.split('/').filter(|x| !x.is_empty()).collect();
         let owner = if parts.len() > 2 { parts[2] } else { "" };
@@ -1670,7 +1812,12 @@ fn trust_key(v: &Value) -> Result<String, String> {
         if truthy(f("reviewed_at")) {
             slice("reviewed_at")?;
         }
-        return Ok(if drifted { "reviewed-stale" } else { "reviewed" }.into());
+        return Ok(if drifted {
+            "reviewed-stale"
+        } else {
+            "reviewed"
+        }
+        .into());
     }
     if is("coverage", &["snapshot-verified"]) && !drifted {
         slice("validated_commit")?;
@@ -1706,7 +1853,10 @@ fn classify(d: &Path) -> plugins::State {
     if d.to_str().is_some() {
         return plugins::classify(d, Some(&mut cache), true);
     }
-    if d.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if d.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return plugins::State::new("", plugins::LOCAL, "symlink", 0, "");
     }
     let Ok(prev) = std::env::current_dir() else {
@@ -1722,10 +1872,18 @@ fn classify(d: &Path) -> plugins::State {
 
 /// `update_plugins` with the plugins directory, the scope and the
 /// marketplace's trust keys (`{id: trust.key}`) passed in.
-pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, plugins::Listing>) -> Result<usize, String> {
+pub fn update_plugins_in(
+    pdir: &Path,
+    scope: &str,
+    trust: &BTreeMap<String, plugins::Listing>,
+) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
     let mut done = 0;
-    let dirs = if pdir.is_dir() { glob_star(pdir) } else { Vec::new() };
+    let dirs = if pdir.is_dir() {
+        glob_star(pdir)
+    } else {
+        Vec::new()
+    };
     for d in dirs {
         if !d.join("manifest.json").is_file() {
             continue;
@@ -1737,19 +1895,39 @@ pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, plug
         // `st.id` is `d.name`. A name that is not UTF-8 keeps its bytes as
         // surrogate escapes, as Python's does; the port's State holds it
         // lossily, so it is taken from the path here.
-        let id: PyStr = d.file_name().map(|n| fsdecode(n.as_bytes())).unwrap_or_default();
-        let key = String::from_utf8(d.file_name().map(|n| n.as_bytes().to_vec()).unwrap_or_default()).ok();
+        let id: PyStr = d
+            .file_name()
+            .map(|n| fsdecode(n.as_bytes()))
+            .unwrap_or_default();
+        let key = String::from_utf8(
+            d.file_name()
+                .map(|n| n.as_bytes().to_vec())
+                .unwrap_or_default(),
+        )
+        .ok();
         let listing = key.as_ref().and_then(|k| trust.get(k));
         let trust_key = plugins::listed_trust(&st.url, listing);
         if !plugins::in_scope(trust_key, scope) {
-            log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" held back by the update scope ({scope})"))]))?;
+            log_py(&cat(&[
+                &pystr("plugins: "),
+                &id,
+                &pystr(&format!(" held back by the update scope ({scope})")),
+            ]))?;
             continue;
         }
         if let Some(why) = plugins::pin_hold(&st, listing.filter(|_| trust_key.is_some()), scope) {
-            log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" held back: {why}"))]))?;
+            log_py(&cat(&[
+                &pystr("plugins: "),
+                &id,
+                &pystr(&format!(" held back: {why}")),
+            ]))?;
             continue;
         }
-        log_py(&cat(&[&pystr("plugins: "), &id, &pystr(&format!(" ({} commits)", st.behind))]))?;
+        log_py(&cat(&[
+            &pystr("plugins: "),
+            &id,
+            &pystr(&format!(" ({} commits)", st.behind)),
+        ]))?;
         // plugins.update_argv(st.id), with the id as Python holds it
         const ID: &str = "\u{0}almanac-plugin-id\u{0}";
         let argv: Vec<PyStr> = plugins::update_argv(ID)
@@ -1761,9 +1939,14 @@ pub fn update_plugins_in(pdir: &Path, scope: &str, trust: &BTreeMap<String, plug
             updated(format!("{} ({} commits)", render(&id), st.behind));
             // `omarchy plugin update` takes no commit: upstream may have
             // moved again between the check and the pull.
-            let pinned = scope == "verified" && listing.is_some_and(|l| !l.validated_commit.trim().is_empty());
+            let pinned = scope == "verified"
+                && listing.is_some_and(|l| !l.validated_commit.trim().is_empty());
             if pinned && !plugins::checkout_head(&d).eq_ignore_ascii_case(&st.remote) {
-                log_py(&cat(&[&pystr("plugins: "), &id, &pystr(" is past the reviewed commit: upstream changed during the update")]))?;
+                log_py(&cat(&[
+                    &pystr("plugins: "),
+                    &id,
+                    &pystr(" is past the reviewed commit: upstream changed during the update"),
+                ]))?;
             }
         }
     }
@@ -1859,33 +2042,44 @@ fn parse_args(argv: &[PyStr]) -> Parsed {
             continue;
         }
         // (action, explicit argument) for this option string
-        let (dest, sep, explicit): (&str, Option<&str>, Option<PyStr>) = if let Some(o) = option_named(arg) {
-            (dest_of(o), None, None)
-        } else if let Some((o, val)) = split_eq(arg).and_then(|(o, v)| option_named(o).map(|o| (o, v))) {
-            (dest_of(o), Some("="), Some(val.to_vec()))
-        } else if arg.starts_with(&[dash, dash]) {
-            let (prefix, val) = match split_eq(arg) {
-                Some((p, v)) => (p, Some(v.to_vec())),
-                None => (arg, None),
+        let (dest, sep, explicit): (&str, Option<&str>, Option<PyStr>) =
+            if let Some(o) = option_named(arg) {
+                (dest_of(o), None, None)
+            } else if let Some((o, val)) =
+                split_eq(arg).and_then(|(o, v)| option_named(o).map(|o| (o, v)))
+            {
+                (dest_of(o), Some("="), Some(val.to_vec()))
+            } else if arg.starts_with(&[dash, dash]) {
+                let (prefix, val) = match split_eq(arg) {
+                    Some((p, v)) => (p, Some(v.to_vec())),
+                    None => (arg, None),
+                };
+                let matches: Vec<&str> = OPTIONS
+                    .iter()
+                    .copied()
+                    .filter(|o| pystr(o).starts_with(prefix))
+                    .collect();
+                match matches.len() {
+                    0 => {
+                        extras.push(arg);
+                        continue;
+                    }
+                    1 => (dest_of(matches[0]), val.as_ref().map(|_| "="), val),
+                    _ => {
+                        return Parsed::Error(format!(
+                            "ambiguous option: {} could match {}",
+                            render(arg),
+                            matches.join(", ")
+                        ))
+                    }
+                }
+            } else if arg.starts_with(&pystr("-h")) {
+                // A single-dash cluster: `-h` then more short flags.
+                (dest_of("-h"), Some(""), Some(arg[2..].to_vec()))
+            } else {
+                extras.push(arg);
+                continue;
             };
-            let matches: Vec<&str> = OPTIONS.iter().copied().filter(|o| pystr(o).starts_with(prefix)).collect();
-            match matches.len() {
-                0 => {
-                    extras.push(arg);
-                    continue;
-                }
-                1 => (dest_of(matches[0]), val.as_ref().map(|_| "="), val),
-                _ => {
-                    return Parsed::Error(format!("ambiguous option: {} could match {}", render(arg), matches.join(", ")))
-                }
-            }
-        } else if arg.starts_with(&pystr("-h")) {
-            // A single-dash cluster: `-h` then more short flags.
-            (dest_of("-h"), Some(""), Some(arg[2..].to_vec()))
-        } else {
-            extras.push(arg);
-            continue;
-        };
         match (dest, explicit) {
             (d, None) => match d {
                 "help" => return Parsed::Help,
@@ -1991,11 +2185,17 @@ fn py_int(text: &str) -> Option<i64> {
 /// number; otherwise (or when `$LINES` is not) the terminal on stdout is
 /// asked, and 80 is the fallback.
 fn columns() -> i64 {
-    let env = |k: &str| std::env::var_os(k).and_then(|v| v.to_str().and_then(py_int)).unwrap_or(0);
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .and_then(|v| v.to_str().and_then(py_int))
+            .unwrap_or(0)
+    };
     let mut columns = env("COLUMNS");
     let lines = env("LINES");
     if columns <= 0 || lines <= 0 {
-        let size = rustix::termios::tcgetwinsize(std::io::stdout()).map(|w| w.ws_col as i64).unwrap_or(80);
+        let size = rustix::termios::tcgetwinsize(std::io::stdout())
+            .map(|w| w.ws_col as i64)
+            .unwrap_or(80);
         if columns <= 0 {
             columns = if size == 0 { 80 } else { size };
         }
@@ -2063,7 +2263,15 @@ fn can_colorize() -> bool {
 /// `_colorize.decolor`.
 fn decolor(s: &str) -> String {
     let mut out = s.to_string();
-    for t in [COLOR.usage, COLOR.prog, COLOR.summary_long_option, COLOR.summary_short_option, COLOR.long_option, COLOR.short_option, COLOR.reset] {
+    for t in [
+        COLOR.usage,
+        COLOR.prog,
+        COLOR.summary_long_option,
+        COLOR.summary_short_option,
+        COLOR.long_option,
+        COLOR.short_option,
+        COLOR.reset,
+    ] {
         out = out.replace(t, "");
     }
     out
@@ -2171,7 +2379,10 @@ fn tw_wrap(text: &str, width: i64) -> Vec<String> {
         if chunks.last().is_some_and(|c| len(c) > width) {
             // _handle_long_word
             let space_left = if width < 1 { 1 } else { width - cur_len };
-            let chunk: Vec<char> = chunks.last().map(|c| c.chars().collect()).unwrap_or_default();
+            let chunk: Vec<char> = chunks
+                .last()
+                .map(|c| c.chars().collect())
+                .unwrap_or_default();
             if space_left <= 0 {
                 // no room left on this line: a word alone on one is put
                 // there whole, otherwise it starts the next line
@@ -2228,7 +2439,10 @@ fn format_usage(prog: &str, width: i64, t: &Theme) -> String {
     let text_width = width;
     let done = |usage: &str| {
         let rest = usage.strip_prefix(prog).unwrap_or(usage);
-        format!("{}{prefix}{}{}{}{}{rest}", t.usage, t.reset, t.prog, prog, t.reset)
+        format!(
+            "{}{prefix}{}{}{}{}{rest}",
+            t.usage, t.reset, t.prog, prog, t.reset
+        )
     };
     if len(prefix) + len(&usage) <= text_width {
         return done(&usage);
@@ -2296,10 +2510,18 @@ fn format_help(prog: &str, columns: i64, t: &Theme) -> String {
     // -h, --help: widths from the text without colour codes, then the
     // coloured header swapped in
     let header = "-h, --help";
-    let header_color = format!("{}-h{}, {}--help{}", t.short_option, t.reset, t.long_option, t.reset);
+    let header_color = format!(
+        "{}-h{}, {}--help{}",
+        t.short_option, t.reset, t.long_option, t.reset
+    );
     let help_lines = tw_wrap("show this help message and exit", help_width);
     let indent_first = if header.len() as i64 <= action_width {
-        let line = format!("{}{:<w$}  ", pad(indent), header, w = action_width.max(0) as usize);
+        let line = format!(
+            "{}{:<w$}  ",
+            pad(indent),
+            header,
+            w = action_width.max(0) as usize
+        );
         out.push_str(&line.replace(header, &header_color));
         0
     } else {
@@ -2311,7 +2533,12 @@ fn format_help(prog: &str, columns: i64, t: &Theme) -> String {
         out.push_str(&format!("{}{line}\n", pad(lead)));
     }
     for opt in ["--agents", "--appimages", "--plugins"] {
-        out.push_str(&format!("{}{}{opt}{}\n", pad(indent), t.long_option, t.reset));
+        out.push_str(&format!(
+            "{}{}{opt}{}\n",
+            pad(indent),
+            t.long_option,
+            t.reset
+        ));
     }
     out
 }
@@ -2363,7 +2590,14 @@ fn run_main(
     let explicit = agents || appimages || plugins;
     let setting = |key: &str, default: bool| cfg.get(key).map(truthy).unwrap_or(default);
     let want = [
-        ("agents", if explicit { agents } else { setting("agents", true) }),
+        (
+            "agents",
+            if explicit {
+                agents
+            } else {
+                setting("agents", true)
+            },
+        ),
         (
             "appimages",
             if explicit {
@@ -2372,7 +2606,14 @@ fn run_main(
                 setting("appimages", true)
             },
         ),
-        ("plugins", if explicit { plugins } else { setting("plugins", false) }),
+        (
+            "plugins",
+            if explicit {
+                plugins
+            } else {
+                setting("plugins", false)
+            },
+        ),
     ];
 
     let mut changed = 0;
@@ -2407,7 +2648,10 @@ pub fn main(argv: Option<&[String]>) -> i32 {
     // escapes (and argparse reports it); it must not stop the port.
     let args: Vec<PyStr> = match argv {
         Some(a) => a.iter().map(|s| pystr(s)).collect(),
-        None => std::env::args_os().skip(1).map(|a| fsdecode(a.as_bytes())).collect(),
+        None => std::env::args_os()
+            .skip(1)
+            .map(|a| fsdecode(a.as_bytes()))
+            .collect(),
     };
     // Python walks a deeply nested registry (repr, json.dumps) where this
     // port recurses: give the run a stack that cannot run out first.
@@ -2476,7 +2720,8 @@ pub fn core_holds(pending: &str) -> Result<Vec<String>, String> {
     static ANSI: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap());
     static LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"^([a-zA-Z0-9@_+][a-zA-Z0-9@._+-]*) \S+ -> \S+( \[[^\]\s]*\])*$").unwrap()
+        regex::Regex::new(r"^([a-zA-Z0-9@_+][a-zA-Z0-9@._+-]*) \S+ -> \S+( \[[^\]\s]*\])*$")
+            .unwrap()
     });
     let mut names = Vec::new();
     for raw in pending.lines() {
@@ -2510,7 +2755,10 @@ pub fn core_holds_checked(out: &crate::util::Output) -> Result<Vec<String>, Stri
     match out.code {
         Some(0) => core_holds(&out.stdout),
         Some(2) => Ok(Vec::new()),
-        Some(code) => Err(format!("checkupdates failed (exit {code}): {}", out.stderr.trim())),
+        Some(code) => Err(format!(
+            "checkupdates failed (exit {code}): {}",
+            out.stderr.trim()
+        )),
         None => Err("checkupdates was killed by a signal".into()),
     }
 }
@@ -2524,7 +2772,6 @@ fn recording_run(calls: std::rc::Rc<RefCell<Vec<Value>>>, ok: bool) -> RunFake {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2537,25 +2784,49 @@ mod tests {
     fn core_holds_reads_repo_and_aur_lines() {
         let repo = "linux 6.11.1.arch1-1 -> 6.11.2.arch1-1\nfirefox 131.0-1 -> 131.0.2-1\n\n";
         let aur = "  \nlinux-firmware-git 20240909-1 -> 20241010-1\nyay-bin 12.3.5-1 -> 12.4.2-1\n";
-        assert_eq!(core_holds(&format!("{repo}{aur}")).unwrap(), vec!["linux", "linux-firmware-git"]);
+        assert_eq!(
+            core_holds(&format!("{repo}{aur}")).unwrap(),
+            vec!["linux", "linux-firmware-git"]
+        );
         assert!(core_holds("").unwrap().is_empty());
         assert!(core_holds("\n\n   \n").unwrap().is_empty());
         assert!(core_holds("firefox 1 -> 2").unwrap().is_empty());
         // a DKMS module is rebuilt against the next kernel: held like one
-        assert_eq!(core_holds("nvidia-dkms 560.35-1 -> 565.57-1\nzfs-dkms 2.2.6-1 -> 2.2.7-1\n").unwrap(), vec!["nvidia-dkms", "zfs-dkms"]);
+        assert_eq!(
+            core_holds("nvidia-dkms 560.35-1 -> 565.57-1\nzfs-dkms 2.2.6-1 -> 2.2.7-1\n").unwrap(),
+            vec!["nvidia-dkms", "zfs-dkms"]
+        );
         // yay's colours and pacman's [ignored] mark are read through
-        assert_eq!(core_holds("\x1b[1mlinux\x1b[0m \x1b[31m1-1\x1b[0m -> \x1b[32m2-1\x1b[0m\n").unwrap(), vec!["linux"]);
-        assert_eq!(core_holds("linux 1-1 -> 2-1 [ignored]\n").unwrap(), vec!["linux"]);
-        assert_eq!(core_holds("sidra-bin 1.2.0-1 -> 1.2.1-1 [1d9h]\nlinux-zen 1 -> 2 [3h]\n").unwrap(), vec!["linux-zen"]);
+        assert_eq!(
+            core_holds("\x1b[1mlinux\x1b[0m \x1b[31m1-1\x1b[0m -> \x1b[32m2-1\x1b[0m\n").unwrap(),
+            vec!["linux"]
+        );
+        assert_eq!(
+            core_holds("linux 1-1 -> 2-1 [ignored]\n").unwrap(),
+            vec!["linux"]
+        );
+        assert_eq!(
+            core_holds("sidra-bin 1.2.0-1 -> 1.2.1-1 [1d9h]\nlinux-zen 1 -> 2 [3h]\n").unwrap(),
+            vec!["linux-zen"]
+        );
     }
 
     /// Whatever cannot be read is not "nothing core": the script would
     /// install a kernel unattended on it.
     #[test]
     fn core_holds_refuses_lines_it_cannot_read() {
-        for bad in ["warning: linux: local (2-1) is newer than core (1-1)", "linux", ":: linux 1 -> 2",
-                    "linux 1 → 2", "-> linux 1 2", "error: failed to synchronize all databases"] {
-            assert!(core_holds(&format!("firefox 1 -> 2\n{bad}\n")).is_err(), "{bad:?}");
+        for bad in [
+            "warning: linux: local (2-1) is newer than core (1-1)",
+            "linux",
+            ":: linux 1 -> 2",
+            "linux 1 → 2",
+            "-> linux 1 2",
+            "error: failed to synchronize all databases",
+        ] {
+            assert!(
+                core_holds(&format!("firefox 1 -> 2\n{bad}\n")).is_err(),
+                "{bad:?}"
+            );
         }
     }
 
@@ -2564,34 +2835,71 @@ mod tests {
     #[test]
     fn core_holds_from_checkupdates_fail_closed() {
         use crate::util::Output;
-        let ran = |code: Option<i32>, stdout: &str| Output { code, stdout: stdout.into(), ..Default::default() };
-        assert_eq!(core_holds_checked(&ran(Some(0), "linux 1 -> 2\nfirefox 1 -> 2\n")), Ok(vec!["linux".to_owned()]));
+        let ran = |code: Option<i32>, stdout: &str| Output {
+            code,
+            stdout: stdout.into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            core_holds_checked(&ran(Some(0), "linux 1 -> 2\nfirefox 1 -> 2\n")),
+            Ok(vec!["linux".to_owned()])
+        );
         assert_eq!(core_holds_checked(&ran(Some(2), "")), Ok(vec![]));
-        let err = core_holds_checked(&Output { code: Some(1), stderr: "==> ERROR: Cannot fetch updates\n".into(), ..Default::default() })
-            .unwrap_err();
-        assert_eq!(err, "checkupdates failed (exit 1): ==> ERROR: Cannot fetch updates");
+        let err = core_holds_checked(&Output {
+            code: Some(1),
+            stderr: "==> ERROR: Cannot fetch updates\n".into(),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "checkupdates failed (exit 1): ==> ERROR: Cannot fetch updates"
+        );
         // A failure that still printed lines is not trusted either.
         assert!(core_holds_checked(&ran(Some(1), "linux 1 -> 2\n")).is_err());
-        assert!(core_holds_checked(&Output { timed_out: true, ..Default::default() }).unwrap_err().contains("timed out"));
-        assert!(core_holds_checked(&Output { failed_to_start: true, ..Default::default() })
-            .unwrap_err()
-            .contains("could not be started"));
+        assert!(core_holds_checked(&Output {
+            timed_out: true,
+            ..Default::default()
+        })
+        .unwrap_err()
+        .contains("timed out"));
+        assert!(core_holds_checked(&Output {
+            failed_to_start: true,
+            ..Default::default()
+        })
+        .unwrap_err()
+        .contains("could not be started"));
         assert!(core_holds_checked(&ran(None, "")).is_err());
     }
 
     #[test]
     fn what_a_scheduled_run_updated_reads_as_changes() {
         let c = run_change("wordcraft 0.7.0 → 0.8.0");
-        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("wordcraft", "0.7.0", "0.8.0"));
+        assert_eq!(
+            (c.name.as_str(), c.from.as_str(), c.to.as_str()),
+            ("wordcraft", "0.7.0", "0.8.0")
+        );
         let c = run_change("weather (3 commits)");
-        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("weather", "", "(3 commits)"));
+        assert_eq!(
+            (c.name.as_str(), c.from.as_str(), c.to.as_str()),
+            ("weather", "", "(3 commits)")
+        );
         let c = run_change("bare");
-        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("bare", "", ""));
+        assert_eq!(
+            (c.name.as_str(), c.from.as_str(), c.to.as_str()),
+            ("bare", "", "")
+        );
         // An agent's name can have spaces in it: read from the right.
         let c = run_change("GitHub Copilot CLI 1.0.101 → 1.0.103");
-        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("GitHub Copilot CLI", "1.0.101", "1.0.103"));
+        assert_eq!(
+            (c.name.as_str(), c.from.as_str(), c.to.as_str()),
+            ("GitHub Copilot CLI", "1.0.101", "1.0.103")
+        );
         let c = run_change("my plugin (3 commits)");
-        assert_eq!((c.name.as_str(), c.from.as_str(), c.to.as_str()), ("my plugin", "", "(3 commits)"));
+        assert_eq!(
+            (c.name.as_str(), c.from.as_str(), c.to.as_str()),
+            ("my plugin", "", "(3 commits)")
+        );
     }
 
     #[test]
@@ -2603,7 +2911,11 @@ mod tests {
             Some("Scheduled update: updated wordcraft")
         );
         assert_eq!(
-            run_title(&items(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"])).as_deref(),
+            run_title(&items(&[
+                "vectorcraft 0.12.0 → 0.13.1",
+                "wordcraft 0.7.0 → 0.8.0"
+            ]))
+            .as_deref(),
             Some("Scheduled update: updated vectorcraft and wordcraft")
         );
         assert_eq!(
@@ -2621,15 +2933,22 @@ mod tests {
     /// downloaded stays, and an app removed meanwhile is not brought back.
     #[test]
     fn an_update_keeps_what_changed_while_it_downloaded() {
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         std::env::set_var("XDG_STATE_HOME", d.path());
         let reg_path = inventory::registry();
         std::fs::create_dir_all(reg_path.parent().unwrap()).unwrap();
-        std::fs::write(&reg_path, serde_json::to_string(&json!({
-            "a": {"version": "1", "path": "/x/a.AppImage", "latest": {"version": "2"}},
-            "b": {"version": "1", "path": "/x/b.AppImage"},
-        })).unwrap()).unwrap();
+        std::fs::write(
+            &reg_path,
+            serde_json::to_string(&json!({
+                "a": {"version": "1", "path": "/x/a.AppImage", "latest": {"version": "2"}},
+                "b": {"version": "1", "path": "/x/b.AppImage"},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         // Meanwhile the window renamed one entry's description and added
         // another; then the update of `a` lands.
         let mut now = inventory::load_registry();
@@ -2651,8 +2970,10 @@ mod tests {
         assert!(save_updated(&pystr("a"), &json!("3"), &dest).is_err());
         assert!(!inventory::load_registry().contains_key("a"));
         assert!(!dest.exists());
-        let names: Vec<_> = std::fs::read_dir(reg_path.parent().unwrap()).unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<_> = std::fs::read_dir(reg_path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
     }
 
@@ -2664,13 +2985,21 @@ mod tests {
         let mut check = |_k: &str, _r: &Value| {
             Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0", "sha256": hex}))
         };
-        let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+        let reg = PyJson::from_value(
+            &json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}),
+        );
         let mut seen = Vec::new();
         let (r, _) = capture_log(|| {
-            update_appimages_with(reg, &mut check, &mut |_, _, sha| {
-                seen.push(sha.to_string());
-                Ok(true)
-            }, &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            update_appimages_with(
+                reg,
+                &mut check,
+                &mut |_, _, sha| {
+                    seen.push(sha.to_string());
+                    Ok(true)
+                },
+                &mut |_, _| Ok(()),
+                &mut |_, _, _| Ok(()),
+            )
         });
         assert_eq!(r, Ok(1));
         assert_eq!(seen, vec![hex.clone()]);
@@ -2683,13 +3012,29 @@ mod tests {
     fn an_unverified_download_is_logged() {
         take_updated();
         for (verified, want) in [(false, true), (true, false)] {
-            let mut check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
-            let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+            let mut check = |_k: &str, _r: &Value| {
+                Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}))
+            };
+            let reg = PyJson::from_value(
+                &json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}),
+            );
             let (r, lines) = capture_log(|| {
-                update_appimages_with(reg, &mut check, &mut |_, _, _| Ok(verified), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+                update_appimages_with(
+                    reg,
+                    &mut check,
+                    &mut |_, _, _| Ok(verified),
+                    &mut |_, _| Ok(()),
+                    &mut |_, _, _| Ok(()),
+                )
             });
             assert_eq!(r, Ok(1));
-            assert_eq!(lines.iter().any(|l| l == "  unverified (no checksum published)"), want, "{lines:?}");
+            assert_eq!(
+                lines
+                    .iter()
+                    .any(|l| l == "  unverified (no checksum published)"),
+                want,
+                "{lines:?}"
+            );
         }
         take_updated();
     }
@@ -2697,10 +3042,20 @@ mod tests {
     #[test]
     fn successful_updates_are_remembered_for_history() {
         take_updated();
-        let mut no_check = |_k: &str, _r: &Value| Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}));
-        let reg = PyJson::from_value(&json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}));
+        let mut no_check = |_k: &str, _r: &Value| {
+            Ok(json!({"url": "https://example.org/x.AppImage", "version": "0.8.0"}))
+        };
+        let reg = PyJson::from_value(
+            &json!({"wordcraft": {"version": "0.7.0", "path": "/nonexistent/wordcraft.AppImage"}}),
+        );
         let (r, _) = capture_log(|| {
-            update_appimages_with(reg, &mut no_check, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()))
+            update_appimages_with(
+                reg,
+                &mut no_check,
+                &mut |_, _, _| Ok(true),
+                &mut |_, _| Ok(()),
+                &mut |_, _, _| Ok(()),
+            )
         });
         assert_eq!(r, Ok(1));
         assert_eq!(take_updated(), vec!["wordcraft 0.7.0 → 0.8.0".to_string()]);
@@ -2752,8 +3107,16 @@ mod tests {
             git(&["add", "."], &up);
             git(&["commit", "-qm", "one"], &up);
             let plug = d.join("plugins").join("a.plugin");
-            git(&["clone", "-q", up.to_str().unwrap(), plug.to_str().unwrap()], &d);
-            PluginStates { _tmp: tmp, d, up, plug }
+            git(
+                &["clone", "-q", up.to_str().unwrap(), plug.to_str().unwrap()],
+                &d,
+            );
+            PluginStates {
+                _tmp: tmp,
+                d,
+                up,
+                plug,
+            }
         }
 
         fn advance_upstream(&self) {
@@ -2791,7 +3154,8 @@ mod tests {
     fn help_matches_argparse_at_80_columns() {
         let help = format_help("autorun.py", 80, &NO_COLOR);
         assert!(help.starts_with("usage: autorun.py [-h] [--agents] [--appimages] [--plugins]\n\n"));
-        assert!(help.contains("\noptions:\n  -h, --help   show this help message and exit\n  --agents\n"));
+        assert!(help
+            .contains("\noptions:\n  -h, --help   show this help message and exit\n  --agents\n"));
         assert!(help.contains("the scheduled update. omarchy-auto-update handles repo\nand AUR"));
     }
 
@@ -2805,7 +3169,9 @@ mod tests {
 
     #[test]
     fn output_that_is_not_utf8_ends_the_run() {
-        let argv: Vec<String> = ["sh", "-c", "printf 'ok\\377\\n'"].map(String::from).to_vec();
+        let argv: Vec<String> = ["sh", "-c", "printf 'ok\\377\\n'"]
+            .map(String::from)
+            .to_vec();
         let (r, _) = capture_log(|| _run(&argv, 30));
         assert_eq!(
             r,
@@ -2819,7 +3185,9 @@ mod tests {
 
     #[test]
     fn the_timeout_covers_pipes_a_grandchild_holds_open() {
-        let argv: Vec<String> = ["sh", "-c", "(sleep 3) & exit 0"].map(String::from).to_vec();
+        let argv: Vec<String> = ["sh", "-c", "(sleep 3) & exit 0"]
+            .map(String::from)
+            .to_vec();
         let t = Instant::now();
         let (r, lines) = capture_log(|| _run(&argv, 1));
         assert_eq!(r, Ok(false));
@@ -2839,15 +3207,30 @@ mod tests {
         assert_eq!(r, Err("TypeError: 'int' object is not iterable".into()));
         a.extra.insert("update_cmd".into(), json!(["true", 1]));
         let (r, _) = capture_log(|| update_agents_from(vec![a]));
-        assert_eq!(r, Err("TypeError: sequence item 1: expected str instance, int found".into()));
+        assert_eq!(
+            r,
+            Err("TypeError: sequence item 1: expected str instance, int found".into())
+        );
     }
 
     #[test]
     fn a_registry_that_is_not_a_dict_is_an_error() {
         let mut no = |_: &str, _: &Value| -> Result<Value, String> { Ok(json!({})) };
-        let r = update_appimages_with(PyJson::from_value(&json!([1, 2])), &mut no, &mut |_, _, _| Ok(true), &mut |_, _| Ok(()), &mut |_, _, _| Ok(()));
-        assert_eq!(r, Err("AttributeError: 'list' object has no attribute 'items'".into()));
-        assert_eq!(check_record(&json!("x")), Err("AttributeError: 'str' object has no attribute 'get'".into()));
+        let r = update_appimages_with(
+            PyJson::from_value(&json!([1, 2])),
+            &mut no,
+            &mut |_, _, _| Ok(true),
+            &mut |_, _| Ok(()),
+            &mut |_, _, _| Ok(()),
+        );
+        assert_eq!(
+            r,
+            Err("AttributeError: 'list' object has no attribute 'items'".into())
+        );
+        assert_eq!(
+            check_record(&json!("x")),
+            Err("AttributeError: 'str' object has no attribute 'get'".into())
+        );
     }
 
     #[test]
@@ -2900,14 +3283,19 @@ mod tests {
     fn an_empty_program_is_searched_along_path_as_python_does() {
         let (r, lines) = capture_log(|| _run(&[String::new()], 30));
         assert_eq!(r, Ok(false));
-        assert_eq!(lines[1], "  failed to start: [Errno 13] Permission denied: ''");
+        assert_eq!(
+            lines[1],
+            "  failed to start: [Errno 13] Permission denied: ''"
+        );
     }
 
     #[test]
     fn the_child_gets_no_inherited_descriptors() {
         // a descriptor this process holds open: not passed on
         let f = tempfile::tempfile().unwrap();
-        let argv: Vec<String> = ["sh", "-c", "ls /proc/self/fd | wc -l"].map(String::from).to_vec();
+        let argv: Vec<String> = ["sh", "-c", "ls /proc/self/fd | wc -l"]
+            .map(String::from)
+            .to_vec();
         let (r, lines) = capture_log(|| _run(&argv, 30));
         drop(f);
         assert_eq!(r, Ok(true));
@@ -2917,7 +3305,9 @@ mod tests {
 
     #[test]
     fn json_reads_and_writes_as_python_does() {
-        let doc = match parse_json(r#"{"a": 100000000000000000000, "b": -0, "c": 1e400, "d": NaN, "a": [1.5, "\udcff"]}"#) {
+        let doc = match parse_json(
+            r#"{"a": 100000000000000000000, "b": -0, "c": 1e400, "d": NaN, "a": [1.5, "\udcff"]}"#,
+        ) {
             Ok(d) => d,
             Err(_) => panic!("parse"),
         };
@@ -2925,7 +3315,10 @@ mod tests {
             doc.dumps_indent2(doc.root),
             "{\n  \"a\": [\n    1.5,\n    \"\\udcff\"\n  ],\n  \"b\": 0,\n  \"c\": Infinity,\n  \"d\": NaN\n}"
         );
-        assert_eq!(render(&doc.py_str(doc.get(doc.root, "c").unwrap()).unwrap()), "inf");
+        assert_eq!(
+            render(&doc.py_str(doc.get(doc.root, "c").unwrap()).unwrap()),
+            "inf"
+        );
         for bad in ["", "[1,]", "{\"a\": 01}", "1 x", "\u{feff}1", "\"\t\""] {
             assert!(parse_json(bad).is_err(), "{bad:?}");
         }
@@ -2941,7 +3334,13 @@ mod tests {
             store::Plugin::from_row(m.as_object().unwrap()).unwrap()
         };
         let ok = row(json!({"upstream_status": "failed", "upstream_checked_at": "2026-01-01"}));
-        assert_eq!(trust_map(vec![ok]).unwrap().get("p").map(|l| l.key.as_str()), Some("unreachable"));
+        assert_eq!(
+            trust_map(vec![ok])
+                .unwrap()
+                .get("p")
+                .map(|l| l.key.as_str()),
+            Some("unreachable")
+        );
         let bad = row(json!({"upstream_status": "failed", "upstream_checked_at": null}));
         assert!(trust_map(vec![bad]).is_err());
     }
@@ -2960,10 +3359,19 @@ mod tests {
 
     #[test]
     fn os_and_http_errors_read_as_python_prints_them() {
-        assert_eq!(py_net_error("HTTPError: HTTP Error 404"), "HTTPError: HTTP Error 404: Not Found");
-        assert_eq!(py_net_error("OSError: No space left on device (os error 28)"), "OSError: [Errno 28] No space left on device");
+        assert_eq!(
+            py_net_error("HTTPError: HTTP Error 404"),
+            "HTTPError: HTTP Error 404: Not Found"
+        );
+        assert_eq!(
+            py_net_error("OSError: No space left on device (os error 28)"),
+            "OSError: [Errno 28] No space left on device"
+        );
         let e = std::io::Error::from_raw_os_error(13);
-        assert_eq!(py_os_error(&e, &[Path::new("/a.tmp")]), "[Errno 13] Permission denied: '/a.tmp'");
+        assert_eq!(
+            py_os_error(&e, &[Path::new("/a.tmp")]),
+            "[Errno 13] Permission denied: '/a.tmp'"
+        );
     }
 
     #[test]
@@ -2990,7 +3398,9 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
-        let shallow = parse_json("{\"k\": [[1, {\"a\": []}], \"x\"]}").ok().unwrap();
+        let shallow = parse_json("{\"k\": [[1, {\"a\": []}], \"x\"]}")
+            .ok()
+            .unwrap();
         let k = shallow.get(shallow.root, "k").unwrap();
         assert_eq!(render(&shallow.py_str(k).unwrap()), "[[1, {'a': []}], 'x']");
         assert_eq!(shallow.dumps_indent2(shallow.root), "{\n  \"k\": [\n    [\n      1,\n      {\n        \"a\": []\n      }\n    ],\n    \"x\"\n  ]\n}");

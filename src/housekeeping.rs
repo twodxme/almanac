@@ -29,7 +29,13 @@ const STALE: &[&str] = &["store-catalog.json"];
 /// What an AppImage leaves beside `<key>.AppImage` in the apps directory
 /// (see `appimage::download_verified` and `sources::install_appimage`),
 /// longest first so `.previous.new` is not read as `.new`.
-const LEFTOVERS: &[&str] = &[".previous.new", ".download.lock", ".previous", ".download", ".unverified"];
+const LEFTOVERS: &[&str] = &[
+    ".previous.new",
+    ".download.lock",
+    ".previous",
+    ".download",
+    ".unverified",
+];
 
 /// What one pass removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +88,10 @@ pub fn run(now: SystemTime) -> Swept {
         swept.add(remove(&cache.join(name)));
     }
     if let Some(cutoff) = now.checked_sub(ORPHAN_AGE) {
-        swept.add(prune_orphans(&crate::inventory::state().join("apps"), cutoff));
+        swept.add(prune_orphans(
+            &crate::inventory::state().join("apps"),
+            cutoff,
+        ));
     }
     swept
 }
@@ -90,14 +99,19 @@ pub fn run(now: SystemTime) -> Swept {
 /// Remove one regular file, counting it.
 fn remove(path: &Path) -> Swept {
     match std::fs::symlink_metadata(path) {
-        Ok(m) if m.is_file() && std::fs::remove_file(path).is_ok() => Swept { files: 1, bytes: m.len() },
+        Ok(m) if m.is_file() && std::fs::remove_file(path).is_ok() => Swept {
+            files: 1,
+            bytes: m.len(),
+        },
         _ => Swept::default(),
     }
 }
 
 /// The regular files directly in `dir` last modified before `cutoff`.
 fn older_than(dir: &Path, cutoff: SystemTime) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     entries
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -133,15 +147,22 @@ pub fn prune_orphans(apps: &Path, cutoff: SystemTime) -> Swept {
         .into_iter()
         .filter_map(|p| {
             let name = p.file_name()?.to_str()?.to_string();
-            let stem = LEFTOVERS.iter().find_map(|s| name.strip_suffix(s))?.to_string();
+            let stem = LEFTOVERS
+                .iter()
+                .find_map(|s| name.strip_suffix(s))?
+                .to_string();
             Some((p, stem))
         })
         .collect();
     if candidates.is_empty() {
         return swept;
     }
-    let Ok(_lock) = crate::inventory::lock_registry() else { return swept };
-    let Some(registered) = registered_stems(apps) else { return swept };
+    let Ok(_lock) = crate::inventory::lock_registry() else {
+        return swept;
+    };
+    let Some(registered) = registered_stems(apps) else {
+        return swept;
+    };
     for (path, stem) in candidates {
         if !registered.contains(&stem) {
             swept.add(remove(&path));
@@ -155,13 +176,17 @@ pub fn prune_orphans(apps: &Path, cutoff: SystemTime) -> Swept {
 /// cannot be read as an object.
 fn registered_stems(apps: &Path) -> Option<Vec<String>> {
     let reg = crate::inventory::registry();
-    let Value::Object(map) = crate::inventory::load_registry_value() else { return None };
+    let Value::Object(map) = crate::inventory::load_registry_value() else {
+        return None;
+    };
     if map.is_empty() && std::fs::read_to_string(&reg).is_ok_and(|t| t.trim() != "{}") {
         return None; // there, but not readable: `load_registry_value` said {}
     }
     let mut stems: Vec<String> = map.keys().cloned().collect();
     for entry in map.values() {
-        let Some(path) = entry.get("path").and_then(Value::as_str) else { continue };
+        let Some(path) = entry.get("path").and_then(Value::as_str) else {
+            continue;
+        };
         let path = Path::new(path);
         if path.parent() == Some(apps) {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -196,14 +221,22 @@ mod tests {
         assert!(d.path().join("new.webp").exists());
         assert!(d.path().join("sub").is_dir());
         // a missing directory is nothing to do
-        assert_eq!(prune_unused(&d.path().join("nope"), SystemTime::now()), Swept::default());
+        assert_eq!(
+            prune_unused(&d.path().join("nope"), SystemTime::now()),
+            Swept::default()
+        );
     }
 
     /// Runs `f` with the state and cache directories in a temp dir.
     fn sandboxed(f: impl FnOnce(&Path)) {
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
-        let (state, cache) = (std::env::var_os("XDG_STATE_HOME"), std::env::var_os("XDG_CACHE_HOME"));
+        let (state, cache) = (
+            std::env::var_os("XDG_STATE_HOME"),
+            std::env::var_os("XDG_CACHE_HOME"),
+        );
         std::env::set_var("XDG_STATE_HOME", d.path().join("state"));
         std::env::set_var("XDG_CACHE_HOME", d.path().join("cache"));
         f(d.path());
@@ -226,8 +259,16 @@ mod tests {
                 "byname": {"path": apps.join("other-name.AppImage").to_str().unwrap()},
             });
             std::fs::write(crate::inventory::registry(), reg.to_string()).unwrap();
-            for name in ["kept.previous", "kept.download", "other-name.previous", "gone.previous", "gone.unverified",
-                         "gone.previous.new", "gone.AppImage", "notes.txt"] {
+            for name in [
+                "kept.previous",
+                "kept.download",
+                "other-name.previous",
+                "gone.previous",
+                "gone.unverified",
+                "gone.previous.new",
+                "gone.AppImage",
+                "notes.txt",
+            ] {
                 aged(&apps.join(name), 3 * DAY);
             }
             aged(&apps.join("fresh.download"), Duration::from_secs(60));
@@ -238,8 +279,14 @@ mod tests {
             }
             // registered apps keep theirs; the app itself, anything that is
             // not a leftover, and a download in progress are not touched
-            for kept in ["kept.previous", "kept.download", "other-name.previous", "gone.AppImage", "notes.txt",
-                         "fresh.download"] {
+            for kept in [
+                "kept.previous",
+                "kept.download",
+                "other-name.previous",
+                "gone.AppImage",
+                "notes.txt",
+                "fresh.download",
+            ] {
                 assert!(apps.join(kept).exists(), "{kept}");
             }
         });
@@ -252,13 +299,22 @@ mod tests {
             std::fs::create_dir_all(&apps).unwrap();
             aged(&apps.join("app.previous"), 3 * DAY);
             std::fs::write(crate::inventory::registry(), "{ not json").unwrap();
-            assert_eq!(prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE), Swept::default());
+            assert_eq!(
+                prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE),
+                Swept::default()
+            );
             std::fs::write(crate::inventory::registry(), "[]").unwrap();
-            assert_eq!(prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE), Swept::default());
+            assert_eq!(
+                prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE),
+                Swept::default()
+            );
             assert!(apps.join("app.previous").exists());
             // an empty registry that says so is read as empty
             std::fs::write(crate::inventory::registry(), "{}\n").unwrap();
-            assert_eq!(prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE).files, 1);
+            assert_eq!(
+                prune_orphans(&apps, SystemTime::now() - ORPHAN_AGE).files,
+                1
+            );
         });
     }
 

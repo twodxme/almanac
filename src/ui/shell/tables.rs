@@ -13,36 +13,68 @@ pub const GROUPS: &[(&str, Option<&str>, &[GroupItem])] = &[
     // The two primary destinations, ungrouped: getting software and
     // keeping it current are what the app is for, and a header above them
     // would rank them as peers of "Sources".
-    ("primary", None, &[
-        // "featured" stays the key: saved state and --page featured keep
-        // working. Nothing here is featured by anyone; it is what is true
-        // today.
-        ("featured", "Today", "weather-clear-symbolic"),
-        ("discover", "App Store", "system-software-install-symbolic"),
-        ("themes", "Themes", "preferences-desktop-wallpaper-symbolic"),
-        ("updates", "Updates", "software-update-available-symbolic"),
-        (inventory::AGENT, "AI", "applications-science-symbolic"),
-    ]),
-    ("library", Some("Library"), &[
-        ("apps", "Applications", "view-grid-symbolic"),
-        ("plugins", "Plugins", "application-x-addon-symbolic"),
-        ("switchboard", "Switchboard", "almanac-switchboard-symbolic"),
-        ("all", "Everything", "view-list-symbolic"),
-    ]),
-    ("sources", Some("Sources"), &[
-        (inventory::SYSTEM, "System", "preferences-system-symbolic"),
-        (inventory::REPO, "Repositories", "package-x-generic-symbolic"),
-        (inventory::AUR, "AUR", "package-x-generic-symbolic"),
-        (inventory::APPIMAGE, "AppImages", "application-x-executable-symbolic"),
-        (inventory::FLATPAK, "Flatpak", "application-x-executable-symbolic"),
-        (inventory::LOCAL, "Local builds", "applications-engineering-symbolic"),
-        (inventory::TOOL, "Dev tools", "utilities-terminal-symbolic"),
-    ]),
-    ("maintenance", Some("Maintenance"), &[
-        ("maintenance", "Health check", "object-select-symbolic"),
-        ("history", "History", "document-open-recent-symbolic"),
-        (inventory::ORPHAN, "Orphans", "user-trash-symbolic"),
-    ]),
+    (
+        "primary",
+        None,
+        &[
+            // "featured" stays the key: saved state and --page featured keep
+            // working. Nothing here is featured by anyone; it is what is true
+            // today.
+            ("featured", "Today", "weather-clear-symbolic"),
+            ("discover", "App Store", "system-software-install-symbolic"),
+            ("themes", "Themes", "preferences-desktop-wallpaper-symbolic"),
+            ("updates", "Updates", "software-update-available-symbolic"),
+            (inventory::AGENT, "AI", "applications-science-symbolic"),
+        ],
+    ),
+    (
+        "library",
+        Some("Library"),
+        &[
+            ("apps", "Applications", "view-grid-symbolic"),
+            ("plugins", "Plugins", "application-x-addon-symbolic"),
+            ("switchboard", "Switchboard", "almanac-switchboard-symbolic"),
+            ("all", "Everything", "view-list-symbolic"),
+        ],
+    ),
+    (
+        "sources",
+        Some("Sources"),
+        &[
+            (inventory::SYSTEM, "System", "preferences-system-symbolic"),
+            (
+                inventory::REPO,
+                "Repositories",
+                "package-x-generic-symbolic",
+            ),
+            (inventory::AUR, "AUR", "package-x-generic-symbolic"),
+            (
+                inventory::APPIMAGE,
+                "AppImages",
+                "application-x-executable-symbolic",
+            ),
+            (
+                inventory::FLATPAK,
+                "Flatpak",
+                "application-x-executable-symbolic",
+            ),
+            (
+                inventory::LOCAL,
+                "Local builds",
+                "applications-engineering-symbolic",
+            ),
+            (inventory::TOOL, "Dev tools", "utilities-terminal-symbolic"),
+        ],
+    ),
+    (
+        "maintenance",
+        Some("Maintenance"),
+        &[
+            ("maintenance", "Health check", "object-select-symbolic"),
+            ("history", "History", "document-open-recent-symbolic"),
+            (inventory::ORPHAN, "Orphans", "user-trash-symbolic"),
+        ],
+    ),
 ];
 
 /// Sources collapse by default: they answer "where did this come from",
@@ -73,36 +105,108 @@ pub struct PageSpec {
 /// and hidden from seventeen places across six methods, which is how a page
 /// ends up with another page's toolbar.
 pub const PAGES: &[PageSpec] = &[
-    PageSpec { key: "featured", view: "featured", title: "Today", search: None,
-               search_translated: false, update: false, sort: false, filters: false,
-               market: None },
-    PageSpec { key: "discover", view: "store", title: "App Store",
-               search: Some("Search plugins and apps…"), search_translated: false,
-               update: false, sort: false, filters: true, market: None },
+    PageSpec {
+        key: "featured",
+        view: "featured",
+        title: "Today",
+        search: None,
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: "discover",
+        view: "store",
+        title: "App Store",
+        search: Some("Search plugins and apps…"),
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: true,
+        market: None,
+    },
     // The same view, pinned to one marketplace. Without this themes were
     // reachable only through the filter drawer, and the first one did not
     // appear until the thirtieth card of the default ordering.
-    PageSpec { key: "themes", view: "store", title: "Themes",
-               search: Some("Search Omarchy themes…"), search_translated: false,
-               update: false, sort: false, filters: true, market: Some("themes") },
-    PageSpec { key: "packages", view: "list", title: "Software",
-               search: Some("Search installed software"), search_translated: false,
-               update: true, sort: true, filters: false, market: None },
-    PageSpec { key: "maintenance", view: "maintenance", title: "Health check", search: None,
-               search_translated: false, update: false, sort: false, filters: false,
-               market: None },
-    PageSpec { key: "plugins", view: "plugins", title: "Plugins",
-               search: Some("Search plugins"), search_translated: true,
-               update: false, sort: false, filters: false, market: None },
-    PageSpec { key: "switchboard", view: "switchboard", title: "Switchboard",
-               search: Some("Search the switchboard"), search_translated: true,
-               update: false, sort: false, filters: false, market: None },
-    PageSpec { key: "history", view: "history", title: "History", search: None,
-               search_translated: false, update: false, sort: false, filters: false,
-               market: None },
-    PageSpec { key: inventory::AGENT, view: "ai", title: "AI", search: None,
-               search_translated: false, update: false, sort: false, filters: false,
-               market: None },
+    PageSpec {
+        key: "themes",
+        view: "store",
+        title: "Themes",
+        search: Some("Search Omarchy themes…"),
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: true,
+        market: Some("themes"),
+    },
+    PageSpec {
+        key: "packages",
+        view: "list",
+        title: "Software",
+        search: Some("Search installed software"),
+        search_translated: false,
+        update: true,
+        sort: true,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: "maintenance",
+        view: "maintenance",
+        title: "Health check",
+        search: None,
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: "plugins",
+        view: "plugins",
+        title: "Plugins",
+        search: Some("Search plugins"),
+        search_translated: true,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: "switchboard",
+        view: "switchboard",
+        title: "Switchboard",
+        search: Some("Search the switchboard"),
+        search_translated: true,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: "history",
+        view: "history",
+        title: "History",
+        search: None,
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
+    PageSpec {
+        key: inventory::AGENT,
+        view: "ai",
+        title: "AI",
+        search: None,
+        search_translated: false,
+        update: false,
+        sort: false,
+        filters: false,
+        market: None,
+    },
 ];
 
 /// `PAGES.get(key)`.
@@ -113,8 +217,16 @@ pub fn page_spec(key: &str) -> Option<&'static PageSpec> {
 /// Ctrl+1 … Ctrl+0, in sidebar order. At most ten: there is no Ctrl+10, and
 /// an invalid accelerator makes the window fail to open at all.
 pub const PAGE_KEYS: &[&str] = &[
-    "featured", "discover", "themes", "updates", inventory::AGENT, "apps", "plugins",
-    "switchboard", "maintenance", "history",
+    "featured",
+    "discover",
+    "themes",
+    "updates",
+    inventory::AGENT,
+    "apps",
+    "plugins",
+    "switchboard",
+    "maintenance",
+    "history",
 ];
 
 /// The accelerator of the `n`th page key (1-based): `f"<Control>{n % 10}"`.
@@ -169,7 +281,9 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for i in 1..=PAGE_KEYS.len() {
             let accel = page_accel(i);
-            let key = accel.strip_prefix("<Control>").expect("a <Control> accelerator");
+            let key = accel
+                .strip_prefix("<Control>")
+                .expect("a <Control> accelerator");
             assert!(gdk::Key::from_name(key).is_some(), "{accel}: no such key");
             assert!(seen.insert(accel.clone()), "{accel} used twice");
         }

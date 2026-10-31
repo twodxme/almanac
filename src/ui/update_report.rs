@@ -21,7 +21,9 @@ use adw::prelude::*;
 use crate::history::{self, CommandRun};
 use crate::i18n::tr;
 use crate::inventory::App;
-use crate::postupdate::{self, After, Before, CheckId, Repair, Report, RunFiles, RunRecord, Status};
+use crate::postupdate::{
+    self, After, Before, CheckId, Repair, Report, RunFiles, RunRecord, Status,
+};
 use crate::tasks::{self, Step, StepAction};
 use crate::ui::shell::{spawn_bg, Win};
 use crate::verify::Outcome;
@@ -87,7 +89,14 @@ fn step_text(s: &Step) -> String {
 fn ran(steps: &[Step], ok: bool) -> Vec<CommandRun> {
     // A task reports one result for all its steps: each is known to have
     // exited 0 only when the whole task did.
-    steps.iter().map(|s| CommandRun { argv: step_text(s), exit: ok.then_some(0), secs: None }).collect()
+    steps
+        .iter()
+        .map(|s| CommandRun {
+            argv: step_text(s),
+            exit: ok.then_some(0),
+            secs: None,
+        })
+        .collect()
 }
 
 fn icon(status: Status) -> &'static str {
@@ -114,7 +123,10 @@ impl Win {
         let attention = report.attention().len();
         let repairs = if first { report.repairs() } else { Vec::new() };
         let has_yay = Path::new(crate::inventory::YAY).exists();
-        let lines: Vec<String> = repairs.iter().filter_map(|r| postupdate::describe(r, has_yay)).collect();
+        let lines: Vec<String> = repairs
+            .iter()
+            .filter_map(|r| postupdate::describe(r, has_yay))
+            .collect();
         let fixable = !postupdate::repair_steps(&repairs, has_yay).is_empty();
 
         let mut body = if first {
@@ -134,27 +146,44 @@ impl Win {
         };
 
         let list = Win::note_list();
-        let dialog = adw::AlertDialog::builder().heading(if first {
-            tr("The update needs a look")
-        } else {
-            tr("Not everything is right yet")
-        })
-        .body(body)
-        .build();
+        let dialog = adw::AlertDialog::builder()
+            .heading(if first {
+                tr("The update needs a look")
+            } else {
+                tr("Not everything is right yet")
+            })
+            .body(body)
+            .build();
         dialog.set_body_use_markup(false);
-        for c in report.checks.iter().filter(|c| c.needs_attention() || c.status == Status::Info) {
+        for c in report
+            .checks
+            .iter()
+            .filter(|c| c.needs_attention() || c.status == Status::Info)
+        {
             let mut text = c.detail.clone();
-            let shown: Vec<&String> = c.items.iter().filter(|i| !c.detail.contains(i.as_str())).take(8).collect();
+            let shown: Vec<&String> = c
+                .items
+                .iter()
+                .filter(|i| !c.detail.contains(i.as_str()))
+                .take(8)
+                .collect();
             if !shown.is_empty() {
                 text += "\n";
-                text += &shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                text += &shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 if c.items.len() > 8 {
                     text += "\n…";
                 }
             }
             let row = Win::note_row(icon(c.status), &c.title, &text);
             if c.id == CheckId::Pacnew {
-                let open = gtk::Button::builder().label(tr("Open Health")).valign(gtk::Align::Center).build();
+                let open = gtk::Button::builder()
+                    .label(tr("Open Health"))
+                    .valign(gtk::Align::Center)
+                    .build();
                 let (w, d) = (self.downgrade(), dialog.downgrade());
                 open.connect_clicked(move |_| {
                     if let Some(d) = d.upgrade() {
@@ -169,14 +198,21 @@ impl Win {
             list.append(&row);
         }
         if fixable {
-            list.append(&Win::note_row("emblem-system-symbolic", &tr("Fix will"), &lines.join("\n")));
+            list.append(&Win::note_row(
+                "emblem-system-symbolic",
+                &tr("Fix will"),
+                &lines.join("\n"),
+            ));
         }
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroll.set_propagate_natural_height(true);
         scroll.set_max_content_height(380);
         scroll.set_child(Some(&list));
-        let show_log = gtk::Button::builder().label(tr("Show log")).halign(gtk::Align::Start).build();
+        let show_log = gtk::Button::builder()
+            .label(tr("Show log"))
+            .halign(gtk::Align::Start)
+            .build();
         show_log.add_css_class("flat");
         let log = log_shown(&report.log, run.borrow().terminal);
         let w = self.downgrade();
@@ -203,7 +239,9 @@ impl Win {
         let w = self.downgrade();
         let run = RefCell::new(Some(run));
         dialog.connect_response(None, move |_d, resp| {
-            let (Some(win), Some(run)) = (w.upgrade(), run.borrow_mut().take()) else { return };
+            let (Some(win), Some(run)) = (w.upgrade(), run.borrow_mut().take()) else {
+                return;
+            };
             if resp == "fix" {
                 win.run_update_repairs(run, repairs.clone(), report.clone());
             } else {
@@ -217,7 +255,12 @@ impl Win {
     fn show_update_log(&self, text: &str) {
         let buf = gtk::TextBuffer::new(None);
         buf.set_text(text);
-        let view = gtk::TextView::builder().buffer(&buf).editable(false).monospace(true).cursor_visible(false).build();
+        let view = gtk::TextView::builder()
+            .buffer(&buf)
+            .editable(false)
+            .monospace(true)
+            .cursor_visible(false)
+            .build();
         view.set_wrap_mode(gtk::WrapMode::WordChar);
         view.set_left_margin(8);
         view.set_right_margin(8);
@@ -282,15 +325,28 @@ impl Win {
         let steps = {
             let r = run.borrow();
             let passed = r.record.last().is_some_and(Report::passed);
-            let names: Vec<String> =
-                r.report.changes.iter().filter(|c| !c.to.is_empty()).map(|c| c.name.clone()).collect();
-            tidy_steps(r.pacman && r.terminal && passed, Path::new(postupdate::PACCACHE).exists(), &names)
+            let names: Vec<String> = r
+                .report
+                .changes
+                .iter()
+                .filter(|c| !c.to.is_empty())
+                .map(|c| c.name.clone())
+                .collect();
+            tidy_steps(
+                r.pacman && r.terminal && passed,
+                Path::new(postupdate::PACCACHE).exists(),
+                &names,
+            )
         };
         self.finish_update(run);
         let Some(steps) = steps else {
             return self.say(message, 8);
         };
-        let toast = adw::Toast::builder().title(message).use_markup(false).timeout(15).build();
+        let toast = adw::Toast::builder()
+            .title(message)
+            .use_markup(false)
+            .timeout(15)
+            .build();
         toast.set_button_label(Some(&tr("Tidy up")));
         let w = self.downgrade();
         let once = Cell::new(Some(steps));
@@ -331,16 +387,31 @@ impl Win {
                             ..Default::default()
                         };
                         let detail = match freed.filter(|b| *b > 0) {
-                            Some(b) => format!("{} freed", crate::maintenance::fmt_size(b as f64 / 1048576.0)),
+                            Some(b) => format!(
+                                "{} freed",
+                                crate::maintenance::fmt_size(b as f64 / 1048576.0)
+                            ),
                             None => String::new(),
                         };
                         let severity = if ok { "" } else { "warn" };
-                        if let Err(e) = history::record_action(history::ALMANAC, "Tidy up after Update all", &detail, severity, &action) {
+                        if let Err(e) = history::record_action(
+                            history::ALMANAC,
+                            "Tidy up after Update all",
+                            &detail,
+                            severity,
+                            &action,
+                        ) {
                             eprintln!("almanac: {e}");
                         }
                         let Some(win) = w.upgrade() else { return };
                         if let Some(b) = freed.filter(|b| *b >= 1048576) {
-                            win.say(&format!("Freed {}", crate::maintenance::fmt_size(b as f64 / 1048576.0)), 5);
+                            win.say(
+                                &format!(
+                                    "Freed {}",
+                                    crate::maintenance::fmt_size(b as f64 / 1048576.0)
+                                ),
+                                5,
+                            );
                         }
                     });
                 })),
@@ -353,7 +424,13 @@ impl Win {
         {
             let r = run.borrow();
             let action = r.record.action(r.started.elapsed().as_secs_f64());
-            if let Err(e) = history::record_action(history::ALMANAC, "Update all", &r.record.detail(), r.record.severity(), &action) {
+            if let Err(e) = history::record_action(
+                history::ALMANAC,
+                "Update all",
+                &r.record.detail(),
+                r.record.severity(),
+                &action,
+            ) {
                 eprintln!("almanac: {e}");
             }
             if let Some(f) = &r.files {
@@ -368,7 +445,11 @@ impl Win {
 /// What a passing run offers to tidy up, or None: only after a system
 /// update that went through, and only what there is something to do it with.
 fn tidy_steps(eligible: bool, have_paccache: bool, updated: &[String]) -> Option<Vec<Step>> {
-    let steps = if eligible { postupdate::cleanup_steps(have_paccache, updated) } else { Vec::new() };
+    let steps = if eligible {
+        postupdate::cleanup_steps(have_paccache, updated)
+    } else {
+        Vec::new()
+    };
     (!steps.is_empty()).then_some(steps)
 }
 
@@ -382,7 +463,8 @@ fn log_shown(text: &str, terminal: bool) -> String {
         "Nothing was recorded for this update: pacman’s log and the terminal’s output could not be read."
             .to_string()
     } else {
-        "No system update ran, so there is no pacman log. Each item’s result is in the report.".to_string()
+        "No system update ran, so there is no pacman log. Each item’s result is in the report."
+            .to_string()
     }
 }
 
@@ -395,14 +477,30 @@ mod tests {
     #[test]
     fn the_tidy_up_is_offered_not_run() {
         let code = include_str!("update_report.rs");
-        let body = |f: &str| code.split(f).nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("").to_string();
+        let body = |f: &str| {
+            code.split(f)
+                .nth(1)
+                .and_then(|s| s.split("\n    }\n").next())
+                .unwrap_or("")
+                .to_string()
+        };
         let surface = body("fn surface_update(");
-        assert!(surface.contains("self.passed("), "the split found surface_update");
+        assert!(
+            surface.contains("self.passed("),
+            "the split found surface_update"
+        );
         assert!(!surface.contains("tidy_up("));
         assert!(!body("fn run_update_repairs(").contains("tidy_up("));
         let passed = body("fn passed(");
-        assert!(passed.contains("connect_button_clicked"), "only the toast's button tidies up");
-        assert_eq!(tidy_steps(false, true, &[]).map(|s| s.len()), None, "nothing offered after a failed update");
+        assert!(
+            passed.contains("connect_button_clicked"),
+            "only the toast's button tidies up"
+        );
+        assert_eq!(
+            tidy_steps(false, true, &[]).map(|s| s.len()),
+            None,
+            "nothing offered after a failed update"
+        );
     }
 
     #[test]

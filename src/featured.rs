@@ -73,7 +73,6 @@ pub const DAY: i64 = 86400;
 /// just "whichever catalogue has the biggest projects in it".
 pub const PER_MARKET: usize = 3;
 
-
 /// `_diversify` for any Python number: the parity hook passes floats and
 /// bools through, as Python compares them as they are (`len(out) >= 2.5`).
 fn _diversify_n(ranked: &[Plugin], limit: f64, per_market: f64) -> Vec<Plugin> {
@@ -82,7 +81,11 @@ fn _diversify_n(ranked: &[Plugin], limit: f64, per_market: f64) -> Vec<Plugin> {
     let mut out: Vec<Plugin> = Vec::new();
     for p in ranked {
         let market = p.market.as_str();
-        let n = seen.iter().find(|(m, _)| m == market).map(|(_, n)| *n).unwrap_or(0);
+        let n = seen
+            .iter()
+            .find(|(m, _)| m == market)
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
         if n as f64 >= per_market {
             continue;
         }
@@ -128,7 +131,9 @@ fn _local_to_seconds_fails(ts: f64) -> bool {
     use chrono::{Datelike, TimeZone};
     let local = |u: i64| -> Option<i64> {
         let d = chrono::Local.timestamp_opt(u, 0).earliest()?.naive_local();
-        (1..=9999).contains(&d.year()).then(|| d.and_utc().timestamp())
+        (1..=9999)
+            .contains(&d.year())
+            .then(|| d.and_utc().timestamp())
     };
     let Some(n) = chrono::Local.timestamp_opt(ts.floor() as i64, 0).earliest() else {
         return false;
@@ -191,7 +196,11 @@ fn _py_str(v: &Value) -> String {
 fn _py_repr(v: &Value) -> String {
     match v {
         Value::String(s) => {
-            let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+            let q = if s.contains('\'') && !s.contains('"') {
+                '"'
+            } else {
+                '\''
+            };
             let mut out = String::from(q);
             for c in s.chars() {
                 match c {
@@ -219,7 +228,10 @@ fn _py_repr(v: &Value) -> String {
             out.push(q);
             out
         }
-        Value::Array(a) => format!("[{}]", a.iter().map(_py_repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter().map(_py_repr).collect::<Vec<_>>().join(", ")
+        ),
         Value::Object(o) => format!(
             "{{{}}}",
             o.iter()
@@ -301,7 +313,11 @@ pub fn needs_you(apps: &[App], findings: &[Finding]) -> Shelf {
                 title: f.title.clone(),
                 detail: f.detail.clone(),
                 severity: f.severity.clone(),
-                action: if f.actionable() { f.fix_label.clone() } else { String::new() },
+                action: if f.actionable() {
+                    f.fix_label.clone()
+                } else {
+                    String::new()
+                },
                 kind: "finding".to_string(),
                 ..Default::default()
             });
@@ -347,7 +363,8 @@ fn _new_listings(plugins: &[Plugin], days: f64, days_text: &str, limit: f64) -> 
             _ts(&p.added) > cutoff
                 && p.installable
                 && !p.installed
-                && ["official", "first-party", "reviewed", "verified"].contains(&p.trust().key.as_str())
+                && ["official", "first-party", "reviewed", "verified"]
+                    .contains(&p.trust().key.as_str())
         })
         .cloned()
         .collect();
@@ -400,12 +417,19 @@ fn _trending(plugins: &[Plugin], days: f64, days_text: &str, limit: f64) -> Shel
     Shelf {
         key: "trending".to_string(),
         title: "Trending".to_string(),
-        subtitle: format!("Worked on in the last {days_text} days, by how many people have starred it."),
+        subtitle: format!(
+            "Worked on in the last {days_text} days, by how many people have starred it."
+        ),
         items: _diversify_n(&hot, limit, PER_MARKET as f64)
             .into_iter()
             .map(|p| Item {
                 title: p.name.clone(),
-                detail: format!("★ {} · updated {} · {}", p.stars, _head(&p.updated, 10), _blurb(&p)),
+                detail: format!(
+                    "★ {} · updated {} · {}",
+                    p.stars,
+                    _head(&p.updated, 10),
+                    _blurb(&p)
+                ),
                 plugin: Some(p),
                 action: "Install".to_string(),
                 kind: "plugin".to_string(),
@@ -460,7 +484,13 @@ fn _because_you_run(plugins: &[Plugin], limit: f64) -> Shelf {
             empty: "Nothing installed carries a tag to match on.".to_string(),
         };
     }
-    let w = |t: &str| weight.iter().find(|(k, _)| k == t).map(|(_, n)| *n).unwrap_or(0);
+    let w = |t: &str| {
+        weight
+            .iter()
+            .find(|(k, _)| k == t)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    };
 
     let mut ranked: Vec<&(String, i64)> = weight.iter().collect();
     ranked.sort_by_key(|(_, n)| -*n);
@@ -643,7 +673,6 @@ const NONPRINTABLE: &[(u32, u32)] = &[
     (0x1fbfa, 0x1ffff), (0x2a6e0, 0x2a6ff), (0x2b73a, 0x2b73f), (0x2b81e, 0x2b81f), (0x2cea2, 0x2ceaf), (0x2ebe1, 0x2ebef),
     (0x2ee5e, 0x2f7ff), (0x2fa1e, 0x2ffff), (0x3134b, 0x3134f), (0x323b0, 0xe00ff), (0xe01f0, 0x10ffff),
 ];
-
 
 #[cfg(test)]
 mod tests {

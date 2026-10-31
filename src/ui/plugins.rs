@@ -11,10 +11,13 @@ mod pyisms;
 mod removal;
 mod updates;
 
-pub use page::{plugin_matches, plugin_menu, plugin_state_key, plugin_state_pill, switch_name, PLUGIN_STATE_PILLS};
+pub use page::{
+    plugin_matches, plugin_menu, plugin_state_key, plugin_state_pill, switch_name,
+    PLUGIN_STATE_PILLS,
+};
 pub use removal::{plan_orphan_cleanup, plan_package_removal, split_orphans, RemovalPlan};
-pub(in crate::ui) use updates::{plugin_step, plugin_update_states};
 pub use updates::{plan_plugin_updates, UpdatePlan};
+pub(in crate::ui) use updates::{plugin_step, plugin_update_states};
 
 /// State only the Plugins section reads and writes.
 /// What `plugin_logo` shows beside a plugin (see `plugin_logo_choice`).
@@ -29,7 +32,6 @@ pub enum LogoChoice {
     Symbol { name: String },
 }
 
-
 #[derive(Default)]
 pub struct State {
     /// `self.plugins_body`: the page's column of sections.
@@ -38,14 +40,17 @@ pub struct State {
     /// (searched by `plugins_filter`, looked up by `plugin_action`).
     /// Each row's plugin is the one object its switch updates, as in the
     /// Python.
-    pub plugin_rows: Vec<(adw::ActionRow, std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>)>,
+    pub plugin_rows: Vec<(
+        adw::ActionRow,
+        std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
+    )>,
     // `self._plugin_updates` lives in `shell::Shared::plugin_updates`: the
     // header's primary action reads it too.
 }
 
 #[cfg(test)]
 mod tests {
-    
+
     use std::path::Path;
 
     /// This section's files: this one and every file under plugins/.
@@ -72,10 +77,13 @@ mod tests {
     #[test]
     fn every_icon_only_button_is_named() {
         let lines: Vec<&str> = src().lines().collect();
-        let made = regex::Regex::new(r"let (\w+) = gtk::(?:Menu|Toggle)?Button::builder\(\)").unwrap();
+        let made =
+            regex::Regex::new(r"let (\w+) = gtk::(?:Menu|Toggle)?Button::builder\(\)").unwrap();
         let mut unnamed = Vec::new();
         for (i, line) in lines.iter().enumerate() {
-            let Some(m) = made.captures(line) else { continue };
+            let Some(m) = made.captures(line) else {
+                continue;
+            };
             let var = &m[1];
             let window = lines[i..(i + 12).min(lines.len())].join("\n");
             if !window.contains(".icon_name(") {
@@ -116,7 +124,14 @@ mod tests {
     // VisualSystem.test_every_pill_class_is_defined_in_the_stylesheet
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
-        const PILLS: [&str; 6] = ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+        const PILLS: [&str; 6] = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ];
         let used: std::collections::BTreeSet<String> = regex::Regex::new(r#""(pill(?:-[a-z]+)?)""#)
             .unwrap()
             .captures_iter(src())
@@ -124,8 +139,14 @@ mod tests {
             .collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(css().contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(PILLS.contains(&name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                css().contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                PILLS.contains(&name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
     }
 
@@ -157,14 +178,20 @@ mod tests {
         }
         let mut have = std::collections::BTreeSet::new();
         walk(adwaita, &mut have);
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
-        let names: std::collections::BTreeSet<String> = regex::Regex::new(r#""([a-z0-9-]+-symbolic)""#)
-            .unwrap()
-            .captures_iter(src())
-            .map(|c| c[1].to_string())
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"),
+            &mut have,
+        );
+        let names: std::collections::BTreeSet<String> =
+            regex::Regex::new(r#""([a-z0-9-]+-symbolic)""#)
+                .unwrap()
+                .captures_iter(src())
+                .map(|c| c[1].to_string())
+                .collect();
+        let missing: Vec<&String> = names
+            .iter()
+            .filter(|n| !have.contains(*n) && !n.starts_with("adw-"))
             .collect();
-        let missing: Vec<&String> =
-            names.iter().filter(|n| !have.contains(*n) && !n.starts_with("adw-")).collect();
         assert_eq!(missing, Vec::<&String>::new());
     }
 }

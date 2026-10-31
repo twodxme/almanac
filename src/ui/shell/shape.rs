@@ -107,7 +107,11 @@ mod tests {
             assert!(scale.contains(&v), "{v} is off the scale");
         }
         let body = code().split("pub fn page_body").nth(1).unwrap_or("");
-        for side in [".margin_start(PAGE_MARGIN)", ".margin_end(PAGE_MARGIN)", ".margin_top(PAGE_MARGIN)"] {
+        for side in [
+            ".margin_start(PAGE_MARGIN)",
+            ".margin_end(PAGE_MARGIN)",
+            ".margin_top(PAGE_MARGIN)",
+        ] {
             assert!(body.contains(side), "page_body lost {side}");
         }
     }
@@ -117,12 +121,32 @@ mod tests {
     #[test]
     fn every_scrolling_page_uses_the_page_body() {
         let pages = [
-            ("today.rs", include_str!("../today.rs"), "pub fn build_featured"),
+            (
+                "today.rs",
+                include_str!("../today.rs"),
+                "pub fn build_featured",
+            ),
             ("ai.rs", include_str!("../ai.rs"), "pub fn build_ai"),
-            ("history.rs", include_str!("../history.rs"), "pub fn build_maintenance"),
-            ("history.rs", include_str!("../history.rs"), "pub fn build_history"),
-            ("plugins/page.rs", include_str!("../plugins/page.rs"), "pub fn build_plugins_page"),
-            ("switchboard.rs", include_str!("../switchboard.rs"), "pub fn build_switchboard"),
+            (
+                "history.rs",
+                include_str!("../history.rs"),
+                "pub fn build_maintenance",
+            ),
+            (
+                "history.rs",
+                include_str!("../history.rs"),
+                "pub fn build_history",
+            ),
+            (
+                "plugins/page.rs",
+                include_str!("../plugins/page.rs"),
+                "pub fn build_plugins_page",
+            ),
+            (
+                "switchboard.rs",
+                include_str!("../switchboard.rs"),
+                "pub fn build_switchboard",
+            ),
         ];
         for (file, src, builder) in pages {
             let body = src
@@ -130,8 +154,14 @@ mod tests {
                 .nth(1)
                 .and_then(|s| s.split("\n    }\n").next())
                 .unwrap_or_else(|| panic!("{file}: {builder} not found"));
-            assert!(body.contains("page_body()"), "{file}: {builder} builds its own frame");
-            assert!(!body.contains("ScrolledWindow"), "{file}: {builder} has a scroller of its own");
+            assert!(
+                body.contains("page_body()"),
+                "{file}: {builder} builds its own frame"
+            );
+            assert!(
+                !body.contains("ScrolledWindow"),
+                "{file}: {builder} has a scroller of its own"
+            );
         }
     }
 
@@ -142,7 +172,10 @@ mod tests {
         // plain rows' pills sat an arrow's width further right.
         let src = include_str!("../history.rs");
         let code = src.split("#[cfg(test)]").next().unwrap_or(src);
-        assert!(code.contains("arrow_space()"), "history.rs maint_row does not use arrow_space");
+        assert!(
+            code.contains("arrow_space()"),
+            "history.rs maint_row does not use arrow_space"
+        );
     }
 
     #[test]
@@ -153,11 +186,20 @@ mod tests {
             ("history.rs", include_str!("../history.rs")),
         ] {
             let code = src.split("#[cfg(test)]").next().unwrap_or(src);
-            assert!(code.contains("severity_pill("), "{file} does not use severity_pill");
+            assert!(
+                code.contains("severity_pill("),
+                "{file} does not use severity_pill"
+            );
             // How each page made its own: a label given the severity's class.
-            assert!(!code.contains(".add_css_class(css)"), "{file}: a severity pill made by hand");
+            assert!(
+                !code.contains(".add_css_class(css)"),
+                "{file}: a severity pill made by hand"
+            );
         }
         let css = include_str!("../../../data/style.css");
-        assert!(css.contains(".severity-pill"), "the severity pill is never styled");
+        assert!(
+            css.contains(".severity-pill"),
+            "the severity pill is never styled"
+        );
     }
 }

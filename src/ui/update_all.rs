@@ -88,7 +88,11 @@ pub fn route(app: &App) -> Route {
     if extra("self") {
         Route::Almanac
     } else if app.source == inventory::LOCAL {
-        if extra("plugin_id") { Route::Plugin } else { Route::Git }
+        if extra("plugin_id") {
+            Route::Plugin
+        } else {
+            Route::Git
+        }
     } else if app.source == inventory::APPIMAGE {
         Route::AppImage
     } else if extra("update_cmd") {
@@ -113,7 +117,9 @@ pub fn system_command(routes: &[Route], command: &str) -> Option<String> {
         (false, false) => None,
         (true, false) => Some(command.to_string()),
         (false, true) => Some(format!("{FLATPAK} update -y")),
-        (true, true) => Some(format!("{command}; rc=$?; {FLATPAK} update -y || exit; exit $rc")),
+        (true, true) => Some(format!(
+            "{command}; rc=$?; {FLATPAK} update -y || exit; exit $rc"
+        )),
     }
 }
 
@@ -142,10 +148,21 @@ pub fn plan_agent(app: &App, batch: &mut Batch) -> Result<(), String> {
     if cmd.is_empty() {
         batch.hold(&app.name, "has no self-update command");
     } else if agents::major_jump(&app.version, &app.update) {
-        batch.hold(&app.name, &format!("{} is a major release; update it on its own", app.update));
+        batch.hold(
+            &app.name,
+            &format!("{} is a major release; update it on its own", app.update),
+        );
     } else {
-        batch.lines.push(format!("{:22} {} → {}   $ {}", app.name, app.version, app.update, cmd.join(" ")));
-        batch.steps.push(Step::argv(format!("Updating {}", app.name), cmd));
+        batch.lines.push(format!(
+            "{:22} {} → {}   $ {}",
+            app.name,
+            app.version,
+            app.update,
+            cmd.join(" ")
+        ));
+        batch
+            .steps
+            .push(Step::argv(format!("Updating {}", app.name), cmd));
         batch.apps.push(app.clone());
     }
     Ok(())
@@ -163,13 +180,22 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
             return Err(e);
         }
         for s in &plan.ready {
-            batch.lines.push(format!("{:22} omarchy plugin update", s.id));
-            batch.steps.push(Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone(), plan.pins.get(&s.id).cloned())));
-            let row = by(Route::Plugin).find(|a| crate::ui::shell::as_text(a.extra.get("plugin_id")) == s.id);
+            batch
+                .lines
+                .push(format!("{:22} omarchy plugin update", s.id));
+            batch.steps.push(Step::call(
+                format!("Updating {}", s.id),
+                plugin_step(s.id.clone(), plan.pins.get(&s.id).cloned()),
+            ));
+            let row = by(Route::Plugin)
+                .find(|a| crate::ui::shell::as_text(a.extra.get("plugin_id")) == s.id);
             batch.apps.extend(row.cloned());
         }
         for (s, why) in plan.held.iter().zip(&plan.held_why) {
-            batch.hold(&s.id, &format!("outside the plugin update scope set in Preferences ({why})"));
+            batch.hold(
+                &s.id,
+                &format!("outside the plugin update scope set in Preferences ({why})"),
+            );
         }
         // Rows counted as updates that are not clean fast-forwards now.
         for a in by(Route::Plugin) {
@@ -177,7 +203,14 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
             let known = plan.ready.iter().chain(&plan.held).any(|s| s.id == pid);
             if !known {
                 let detail = crate::ui::shell::as_text(a.extra.get("plugin_detail"));
-                batch.hold(&a.name, if detail.is_empty() { "cannot be updated as it is" } else { &detail });
+                batch.hold(
+                    &a.name,
+                    if detail.is_empty() {
+                        "cannot be updated as it is"
+                    } else {
+                        &detail
+                    },
+                );
             }
         }
     }
@@ -189,11 +222,18 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
         };
         let state = patches::try_analyze(repo, None)?;
         if state.kind == patches::CLEAN || state.kind == patches::UNKNOWN {
-            batch.lines.push(format!("{:22} git pull in {repo}", a.name));
-            batch.steps.extend(patches::steps(repo, &state, &a.name, None));
+            batch
+                .lines
+                .push(format!("{:22} git pull in {repo}", a.name));
+            batch
+                .steps
+                .extend(patches::steps(repo, &state, &a.name, None));
             batch.apps.push(a.clone());
         } else {
-            batch.hold(&a.name, "has local edits; update it on its own to see what happens to them");
+            batch.hold(
+                &a.name,
+                "has local edits; update it on its own to see what happens to them",
+            );
         }
     }
 
@@ -202,7 +242,10 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
             batch.hold(&a.name, "no download URL");
             continue;
         }
-        batch.lines.push(format!("{:22} {} → {}   download", a.name, a.version, a.update));
+        batch.lines.push(format!(
+            "{:22} {} → {}   download",
+            a.name, a.version, a.update
+        ));
         let app = a.clone();
         batch.steps.push(Step::call(
             format!("Downloading {} {}", a.name, a.update),
@@ -218,13 +261,22 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
     if let Some(a) = by(Route::Almanac).next() {
         let info = selfupdate::try_check(true)?;
         if info.can_update {
-            batch.lines.push(format!("{:22} git pull --ff-only", a.name));
+            batch
+                .lines
+                .push(format!("{:22} git pull --ff-only", a.name));
             for (label, argv) in selfupdate::update_steps() {
                 batch.steps.push(Step::argv(label, argv));
             }
             batch.apps.push(a.clone());
         } else {
-            batch.hold(&a.name, if info.note.is_empty() { "cannot update itself here" } else { &info.note });
+            batch.hold(
+                &a.name,
+                if info.note.is_empty() {
+                    "cannot update itself here"
+                } else {
+                    &info.note
+                },
+            );
         }
     }
     Ok(batch)
@@ -284,7 +336,9 @@ impl Win {
             win.preflight(
                 issues,
                 busy,
-                Rc::new(move |win: &Win, busy: Busy| win.start_update_all(command.clone(), pacman, rest.clone(), busy)),
+                Rc::new(move |win: &Win, busy: Busy| {
+                    win.start_update_all(command.clone(), pacman, rest.clone(), busy)
+                }),
             );
         });
     }
@@ -296,9 +350,17 @@ impl Win {
             return go(self, busy);
         }
         let blocked = issues.iter().any(|i| i.level == Level::Block);
-        let fix = if blocked { None } else { issues.iter().find_map(|i| i.fix.clone()) };
+        let fix = if blocked {
+            None
+        } else {
+            issues.iter().find_map(|i| i.fix.clone())
+        };
         let dialog = adw::AlertDialog::builder()
-            .heading(if blocked { tr("The update cannot start yet") } else { tr("Before updating") })
+            .heading(if blocked {
+                tr("The update cannot start yet")
+            } else {
+                tr("Before updating")
+            })
             .body(if blocked {
                 tr("Starting now would fail part-way.")
             } else {
@@ -307,7 +369,11 @@ impl Win {
             .build();
         let list = Win::note_list();
         for i in &issues {
-            let icon = if i.level == Level::Block { "dialog-error-symbolic" } else { "dialog-warning-symbolic" };
+            let icon = if i.level == Level::Block {
+                "dialog-error-symbolic"
+            } else {
+                "dialog-warning-symbolic"
+            };
             list.append(&Win::note_row(icon, &i.title, &i.detail));
         }
         dialog.set_extra_child(Some(&list));
@@ -325,7 +391,9 @@ impl Win {
         // Cancel lets the run go, and with it `Busy`.
         let busy = RefCell::new(Some(busy));
         dialog.connect_response(None, move |_d, resp| {
-            let (Some(win), Some(busy)) = (w.upgrade(), busy.borrow_mut().take()) else { return };
+            let (Some(win), Some(busy)) = (w.upgrade(), busy.borrow_mut().take()) else {
+                return;
+            };
             match (resp, &fix) {
                 ("continue", _) => go(&win, busy),
                 ("fix", Some(f)) => {
@@ -340,7 +408,12 @@ impl Win {
                             if ok {
                                 go(&win, busy);
                             } else {
-                                win.say(&tr("The lock file is still there, so the update did not start"), 8);
+                                win.say(
+                                    &tr(
+                                        "The lock file is still there, so the update did not start",
+                                    ),
+                                    8,
+                                );
                             }
                         })),
                     );
@@ -366,16 +439,21 @@ impl Win {
     fn run_system_update(&self, command: &str, pacman: bool, rest: Vec<App>, run: SharedRun) {
         // Where the script reports back. Without it the update still runs;
         // how it ended is then not known.
-        let (files, files_error) = match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
-            Ok(f) => (Some(f), None),
-            Err(e) => {
-                eprintln!("almanac: {e}");
-                (None, Some(e))
-            }
-        };
+        let (files, files_error) =
+            match postupdate::run_dir().and_then(|d| postupdate::new_run_files_in(&d)) {
+                Ok(f) => (Some(f), None),
+                Err(e) => {
+                    eprintln!("almanac: {e}");
+                    (None, Some(e))
+                }
+            };
         let recorder = Path::new("/usr/bin/script");
         let unrecorded = postupdate::unrecorded_why(files_error.as_deref(), recorder.exists());
-        let script = postupdate::terminal_script(command, files.as_ref(), recorder.exists().then_some(recorder));
+        let script = postupdate::terminal_script(
+            command,
+            files.as_ref(),
+            recorder.exists().then_some(recorder),
+        );
         let Some(argv) = xdg::terminal_argv(&["bash", "-lc", script.as_str()]) else {
             self.say(&tr("No terminal found to run the update in"), 5);
             return;
@@ -390,7 +468,9 @@ impl Win {
             // How things were, asked before the update starts: asked while
             // it runs, what it breaks would count as how things were, and
             // the checks after it would pass.
-            let before = gio::spawn_blocking(move || postupdate::probe_before(pacman)).await.unwrap_or_default();
+            let before = gio::spawn_blocking(move || postupdate::probe_before(pacman))
+                .await
+                .unwrap_or_default();
             let Some(win) = w.upgrade() else {
                 if let Some(f) = &files {
                     f.remove();
@@ -417,7 +497,10 @@ impl Win {
                 r.files = files.clone();
                 r.before = before.clone();
             }
-            win.say(&tr("Update running in a terminal — it is checked when it finishes"), 5);
+            win.say(
+                &tr("Update running in a terminal — it is checked when it finishes"),
+                5,
+            );
             drop(win);
 
             // The `wait` thread, as a main-loop future: a GSubprocess is
@@ -434,10 +517,17 @@ impl Win {
                 glib::timeout_future(Duration::from_secs(1)).await;
                 let exited_at = exited.get();
                 let st = match status_file.clone() {
-                    Some(p) => gio::spawn_blocking(move || postupdate::read_status(&p)).await.unwrap_or_default(),
+                    Some(p) => gio::spawn_blocking(move || postupdate::read_status(&p))
+                        .await
+                        .unwrap_or_default(),
                     None => postupdate::RunStatus::default(),
                 };
-                match postupdate::wait_step(started.elapsed(), exited_at, &st, status_file.is_some()) {
+                match postupdate::wait_step(
+                    started.elapsed(),
+                    exited_at,
+                    &st,
+                    status_file.is_some(),
+                ) {
                     Wait::Keep => continue,
                     Wait::Done => break st,
                     Wait::GiveUp(msg) => {
@@ -445,7 +535,11 @@ impl Win {
                             win.say(&tr(msg), 10);
                             win.after_pacman(true);
                             let argv = run.borrow().command.clone();
-                            run.borrow_mut().record.commands.push(CommandRun { argv, exit: None, secs: None });
+                            run.borrow_mut().record.commands.push(CommandRun {
+                                argv,
+                                exit: None,
+                                secs: None,
+                            });
                             win.finish_update(run);
                         }
                         return;
@@ -460,7 +554,8 @@ impl Win {
             let exit = status.exit;
             let checked = gio::spawn_blocking(move || {
                 let after = postupdate::probe_after(pacman);
-                let section = offset.and_then(|o| postupdate::read_log_since(Path::new(postupdate::PACMAN_LOG), o));
+                let section = offset
+                    .and_then(|o| postupdate::read_log_since(Path::new(postupdate::PACMAN_LOG), o));
                 let output = files
                     .as_ref()
                     .and_then(|f| std::fs::read(&f.output).ok())
@@ -471,21 +566,37 @@ impl Win {
                     postupdate::scan_output(&output, &mut scan);
                     scan
                 });
-                let inputs = Inputs { system: pacman, exit, log, before: before.clone(), after: after.clone() };
+                let inputs = Inputs {
+                    system: pacman,
+                    exit,
+                    log,
+                    before: before.clone(),
+                    after: after.clone(),
+                };
                 let mut report = postupdate::build_report(&inputs);
-                report.log = postupdate::log_text(section.as_deref(), &output, unrecorded.as_deref());
+                report.log =
+                    postupdate::log_text(section.as_deref(), &output, unrecorded.as_deref());
                 // The snapshot is looked for over the whole run, the
                 // password prompt included.
-                let snapshot =
-                    if pacman { postupdate::snapshot_since(started_wall, crate::util::now()) } else { None };
+                let snapshot = if pacman {
+                    postupdate::snapshot_since(started_wall, crate::util::now())
+                } else {
+                    None
+                };
                 (before, after, report, snapshot)
             });
-            let Ok((before, after, report, snapshot)) = checked.await else { return };
+            let Ok((before, after, report, snapshot)) = checked.await else {
+                return;
+            };
             let Some(win) = w.upgrade() else { return };
             {
                 let mut r = run.borrow_mut();
                 let argv = r.command.clone();
-                r.record.commands.push(CommandRun { argv, exit, secs: status.secs() });
+                r.record.commands.push(CommandRun {
+                    argv,
+                    exit,
+                    secs: status.secs(),
+                });
                 r.record.snapshot = snapshot;
                 r.before = before.clone();
                 r.report = report;
@@ -526,14 +637,22 @@ impl Win {
     fn confirm_batch(&self, batch: Batch, then: BatchDone) {
         let held = batch.held.clone();
         if batch.steps.is_empty() {
-            return then(self, BatchResult { held, ..Default::default() });
+            return then(
+                self,
+                BatchResult {
+                    held,
+                    ..Default::default()
+                },
+            );
         }
         let mut detail = batch.lines.join("\n");
         if !held.is_empty() {
             detail += &format!("\n\nHeld back\n{}", held.join("\n"));
         }
         let n = batch.lines.len();
-        let Batch { steps, lines, apps, .. } = batch;
+        let Batch {
+            steps, lines, apps, ..
+        } = batch;
         let then = RefCell::new(Some(then));
         let w = self.downgrade();
         tasks::confirm_then(
@@ -545,11 +664,25 @@ impl Win {
             &tr("Update"),
             false,
             move |yes| {
-                let (Some(win), Some(then)) = (w.upgrade(), then.borrow_mut().take()) else { return };
+                let (Some(win), Some(then)) = (w.upgrade(), then.borrow_mut().take()) else {
+                    return;
+                };
                 if yes {
-                    win.run_batch(apps.clone(), steps.clone(), lines.clone(), held.clone(), then);
+                    win.run_batch(
+                        apps.clone(),
+                        steps.clone(),
+                        lines.clone(),
+                        held.clone(),
+                        then,
+                    );
                 } else {
-                    then(&win, BatchResult { held: held.clone(), ..Default::default() });
+                    then(
+                        &win,
+                        BatchResult {
+                            held: held.clone(),
+                            ..Default::default()
+                        },
+                    );
                 }
             },
         );
@@ -566,7 +699,10 @@ impl Win {
     ) {
         let probes: Vec<Option<verify::TryProbe>> = apps.iter().map(verify::for_app_try).collect();
         let ask = |probes: &[Option<verify::TryProbe>]| -> Vec<Option<ProbeValue>> {
-            probes.iter().map(|p| p.as_ref().and_then(|p| p().ok().flatten())).collect()
+            probes
+                .iter()
+                .map(|p| p.as_ref().and_then(|p| p().ok().flatten()))
+                .collect()
         };
         let first = probes.clone();
         let w = self.downgrade();
@@ -599,7 +735,16 @@ impl Win {
                             },
                             move |outcomes| {
                                 if let Some(win) = w.upgrade() {
-                                    then(&win, BatchResult { outcomes, held, lines, ran: true, ok });
+                                    then(
+                                        &win,
+                                        BatchResult {
+                                            outcomes,
+                                            held,
+                                            lines,
+                                            ran: true,
+                                            ok,
+                                        },
+                                    );
                                 }
                             },
                         );
@@ -619,21 +764,37 @@ impl Win {
             }
             return;
         }
-        let verified: Vec<String> =
-            res.outcomes.iter().filter(|(_, o)| o.changed == Some(true)).map(|(a, _)| a.name.clone()).collect();
+        let verified: Vec<String> = res
+            .outcomes
+            .iter()
+            .filter(|(_, o)| o.changed == Some(true))
+            .map(|(a, _)| a.name.clone())
+            .collect();
         {
             let mut r = run.borrow_mut();
-            let named: Vec<(String, Outcome)> = res.outcomes.iter().map(|(a, o)| (a.name.clone(), o.clone())).collect();
+            let named: Vec<(String, Outcome)> = res
+                .outcomes
+                .iter()
+                .map(|(a, o)| (a.name.clone(), o.clone()))
+                .collect();
             r.report.add_items(&named, &res.held);
             for line in &res.lines {
                 // Per item, a batch only knows whether all of it went fine;
                 // each item's own verdict is its check.
                 let argv = line.split_whitespace().collect::<Vec<_>>().join(" ");
-                r.record.commands.push(CommandRun { argv, exit: (res.ok).then_some(0), secs: None });
+                r.record.commands.push(CommandRun {
+                    argv,
+                    exit: (res.ok).then_some(0),
+                    secs: None,
+                });
             }
             for (a, o) in &res.outcomes {
                 if o.changed == Some(true) {
-                    r.record.changes.push(crate::history::Change { name: a.name.clone(), from: a.version.clone(), to: a.update.clone() });
+                    r.record.changes.push(crate::history::Change {
+                        name: a.name.clone(),
+                        from: a.version.clone(),
+                        to: a.update.clone(),
+                    });
                 }
             }
         }
@@ -667,11 +828,23 @@ mod tests {
         assert_eq!(route(&app(inventory::AUR, json!({}))), Route::System);
         assert_eq!(route(&app(inventory::TOOL, json!({}))), Route::System);
         assert_eq!(route(&app(inventory::FLATPAK, json!({}))), Route::Flatpak);
-        assert_eq!(route(&app(inventory::LOCAL, json!({"plugin_id": "p"}))), Route::Plugin);
-        assert_eq!(route(&app(inventory::LOCAL, json!({"repo": "/r"}))), Route::Git);
+        assert_eq!(
+            route(&app(inventory::LOCAL, json!({"plugin_id": "p"}))),
+            Route::Plugin
+        );
+        assert_eq!(
+            route(&app(inventory::LOCAL, json!({"repo": "/r"}))),
+            Route::Git
+        );
         assert_eq!(route(&app(inventory::APPIMAGE, json!({}))), Route::AppImage);
-        assert_eq!(route(&app(inventory::AGENT, json!({"update_cmd": ["a", "up"]}))), Route::Agent);
-        assert_eq!(route(&app(inventory::LOCAL, json!({"self": true}))), Route::Almanac);
+        assert_eq!(
+            route(&app(inventory::AGENT, json!({"update_cmd": ["a", "up"]}))),
+            Route::Agent
+        );
+        assert_eq!(
+            route(&app(inventory::LOCAL, json!({"self": true}))),
+            Route::Almanac
+        );
     }
 
     /// Only plugins waiting: no terminal, so no password prompt.
@@ -679,8 +852,14 @@ mod tests {
     fn the_terminal_runs_only_for_what_it_covers() {
         let c = "omarchy update";
         assert_eq!(system_command(&[Route::Plugin, Route::AppImage], c), None);
-        assert_eq!(system_command(&[Route::System, Route::Plugin], c).as_deref(), Some(c));
-        assert_eq!(system_command(&[Route::Flatpak], c).as_deref(), Some("/usr/bin/flatpak update -y"));
+        assert_eq!(
+            system_command(&[Route::System, Route::Plugin], c).as_deref(),
+            Some(c)
+        );
+        assert_eq!(
+            system_command(&[Route::Flatpak], c).as_deref(),
+            Some("/usr/bin/flatpak update -y")
+        );
         assert_eq!(
             system_command(&[Route::Flatpak, Route::System], c).as_deref(),
             Some("omarchy update; rc=$?; /usr/bin/flatpak update -y || exit; exit $rc")
@@ -694,10 +873,17 @@ mod tests {
     #[test]
     fn the_combined_command_keeps_the_first_failure() {
         let status = |cmd: &str| {
-            std::process::Command::new("/usr/bin/bash").arg("-c").arg(cmd).status().unwrap().code()
+            std::process::Command::new("/usr/bin/bash")
+                .arg("-c")
+                .arg(cmd)
+                .status()
+                .unwrap()
+                .code()
         };
         let both = |sys: &str, flat: &str| {
-            system_command(&[Route::System, Route::Flatpak], sys).unwrap().replace("/usr/bin/flatpak update -y", flat)
+            system_command(&[Route::System, Route::Flatpak], sys)
+                .unwrap()
+                .replace("/usr/bin/flatpak update -y", flat)
         };
         assert_eq!(status(&both("false", "true")), Some(1));
         assert_eq!(status(&both("true", "exit 3")), Some(3));
@@ -710,10 +896,23 @@ mod tests {
     #[test]
     fn an_update_attempt_always_reads_the_list_again() {
         let code = include_str!("actions/link.rs");
-        let body = code.split("pub fn after_pacman(").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or("");
-        assert!(body.contains("self.reload()"), "the split found after_pacman");
-        assert!(!body.contains("if ok"), "a failed item must not keep the others listed");
-        assert!(body.contains("forget_pending()"), "and the pending updates are asked again");
+        let body = code
+            .split("pub fn after_pacman(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }").next())
+            .unwrap_or("");
+        assert!(
+            body.contains("self.reload()"),
+            "the split found after_pacman"
+        );
+        assert!(
+            !body.contains("if ok"),
+            "a failed item must not keep the others listed"
+        );
+        assert!(
+            body.contains("forget_pending()"),
+            "and the pending updates are asked again"
+        );
     }
 
     /// The "before" picture was taken after the terminal had started, so a
@@ -722,11 +921,20 @@ mod tests {
     #[test]
     fn how_things_were_is_asked_before_the_update_starts() {
         let code = include_str!("update_all.rs");
-        let body = code.split("fn run_system_update(").nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("");
-        let before = body.find("probe_before(").expect("the split found run_system_update");
+        let body = code
+            .split("fn run_system_update(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .unwrap_or("");
+        let before = body
+            .find("probe_before(")
+            .expect("the split found run_system_update");
         let start = body.find("popen_new_session(").unwrap();
         assert!(before < start);
-        assert!(body[before..start].contains(".await"), "and it has answered before the start");
+        assert!(
+            body[before..start].contains(".await"),
+            "and it has answered before the start"
+        );
     }
 
     /// One Update all at a time: a second start is refused until the first
@@ -747,21 +955,35 @@ mod tests {
     #[test]
     fn demo_mode_updates_nothing() {
         let code = include_str!("update_all.rs");
-        let body = code.split("pub fn on_update_all(").nth(1).and_then(|s| s.split("\n    }\n").next()).unwrap_or("");
-        let demo = body.find("crate::demo::active()").expect("demo mode is checked");
-        assert!(body[demo..].find("return;").unwrap() < body[demo..].find("update_all_now").unwrap());
+        let body = code
+            .split("pub fn on_update_all(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .unwrap_or("");
+        let demo = body
+            .find("crate::demo::active()")
+            .expect("demo mode is checked");
+        assert!(
+            body[demo..].find("return;").unwrap() < body[demo..].find("update_all_now").unwrap()
+        );
     }
 
     #[test]
     fn a_major_agent_release_is_held_back() {
         let mut b = Batch::default();
-        let mut a = app(inventory::AGENT, json!({"update_cmd": ["claude", "update"]}));
+        let mut a = app(
+            inventory::AGENT,
+            json!({"update_cmd": ["claude", "update"]}),
+        );
         plan_agent(&a, &mut b).unwrap();
         assert_eq!(b.steps.len(), 1);
         a.update = "2.0".into();
         plan_agent(&a, &mut b).unwrap();
         assert_eq!(b.steps.len(), 1);
-        assert_eq!(b.held, vec!["x — 2.0 is a major release; update it on its own"]);
+        assert_eq!(
+            b.held,
+            vec!["x — 2.0 is a major release; update it on its own"]
+        );
         plan_agent(&app(inventory::AGENT, json!({})), &mut b).unwrap();
         assert_eq!(b.held[1], "x — has no self-update command");
     }

@@ -6,16 +6,19 @@ use gtk::{gio, glib};
 
 use crate::i18n::tr;
 use crate::inventory;
-use crate::ui::shell::{AppItem, Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, AppItem, Win};
 
-use super::decisions::{SORT_KEYS, discover_total, group_state, match_item, sort_cmp};
+use super::decisions::{discover_total, group_state, match_item, sort_cmp, SORT_KEYS};
 use super::extra::py_strip;
 
 impl Win {
     pub fn rebuild_sort_menu<K: AsRef<str>, L: AsRef<str>>(&self, options: &[(K, L)]) {
         let menu = gio::Menu::new();
         for (key, label) in options {
-            menu.append(Some(label.as_ref()), Some(&format!("win.sort::{}", key.as_ref())));
+            menu.append(
+                Some(label.as_ref()),
+                Some(&format!("win.sort::{}", key.as_ref())),
+            );
         }
         self.sort_btn.set_menu_model(Some(&menu));
     }
@@ -37,10 +40,11 @@ impl Win {
             if !SORT_KEYS.contains(&key.as_str()) {
                 return;
             }
-            let sorter = gtk::CustomSorter::new(move |a, b| match (AppItem::of(a), AppItem::of(b)) {
-                (Some(a), Some(b)) => sort_cmp(&key, &a, &b).into(),
-                _ => gtk::Ordering::Equal,
-            });
+            let sorter =
+                gtk::CustomSorter::new(move |a, b| match (AppItem::of(a), AppItem::of(b)) {
+                    (Some(a), Some(b)) => sort_cmp(&key, &a, &b).into(),
+                    _ => gtk::Ordering::Equal,
+                });
             self.shared.borrow_mut().manual_sorter = Some(sorter.upcast());
         }
         self.rebuild_sorter();
@@ -49,7 +53,9 @@ impl Win {
     pub fn rebuild_sorter(&self) {
         let combined = gtk::MultiSorter::new();
         // combined.append(None) raised TypeError, leaving the sorter as it was.
-        let Some(view_sorter) = self.view.sorter() else { return };
+        let Some(view_sorter) = self.view.sorter() else {
+            return;
+        };
         combined.append(view_sorter); // a clicked header wins
         let (manual, sorted) = {
             let sh = self.shared.borrow();
@@ -126,7 +132,9 @@ impl Win {
                 // The summary's total, counted here and not on the main
                 // thread: reading the registry is 8 MB of JSON, and a fetch
                 // when the cache is a day old.
-                let total = q.is_empty().then(|| discover_total(&inventory::plugin_registry_shared(false)));
+                let total = q
+                    .is_empty()
+                    .then(|| discover_total(&inventory::plugin_registry_shared(false)));
                 Ok((plugins, total))
             } else {
                 let mut plugins = inventory::try_search_plugins(&q, 25)?;
@@ -151,7 +159,12 @@ impl Win {
 
     /// `total`: how many plugins the registry lists, counted by the worker
     /// (`discover_total`) when the query is empty.
-    pub fn show_discover(&self, query: &str, results: Vec<inventory::App>, total: Option<Result<usize, String>>) {
+    pub fn show_discover(
+        &self,
+        query: &str,
+        results: Vec<inventory::App>,
+        total: Option<Result<usize, String>>,
+    ) {
         let discovering = self.shared.borrow().discovering;
         if !discovering {
             return; // user navigated away mid-search
@@ -247,9 +260,11 @@ impl Win {
     pub fn on_sidebar_activated(&self, _list: &gtk::ListBox, row: &gtk::ListBoxRow) {
         let group = {
             let sh = self.shared.borrow();
-            sh.group_rows
-                .iter()
-                .find_map(|(_k, h)| h.as_ref().filter(|h| h.row == *row).map(|h| h.group.clone()))
+            sh.group_rows.iter().find_map(|(_k, h)| {
+                h.as_ref()
+                    .filter(|h| h.row == *row)
+                    .map(|h| h.group.clone())
+            })
         };
         let Some(group) = group else { return };
         self.toggle_group(&group);
@@ -271,9 +286,14 @@ impl Win {
     pub fn apply_group_state(&self, gkey: &str) {
         let plan = {
             let sh = self.shared.borrow();
-            group_state(&sh.group_rows, &sh.group_members, &sh.collapsed, &sh.filter_key, gkey, |r| {
-                r.key.as_str()
-            })
+            group_state(
+                &sh.group_rows,
+                &sh.group_members,
+                &sh.collapsed,
+                &sh.filter_key,
+                gkey,
+                |r| r.key.as_str(),
+            )
         };
         let Some(plan) = plan else {
             return; // ungrouped primaries never fold
@@ -285,8 +305,13 @@ impl Win {
     }
 
     pub fn apply_all_group_states(&self) {
-        let keys: Vec<String> =
-            self.shared.borrow().group_rows.iter().map(|(k, _)| k.clone()).collect();
+        let keys: Vec<String> = self
+            .shared
+            .borrow()
+            .group_rows
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect();
         for gkey in keys {
             self.apply_group_state(&gkey);
         }

@@ -10,7 +10,9 @@ use gtk::{gio, glib};
 use crate::i18n::tr;
 use crate::inventory;
 
-use super::helpers::{INSTALL_ICON, age, as_text, fmt_size, lower_cmp, name, source_label, truthy, version_text};
+use super::helpers::{
+    age, as_text, fmt_size, lower_cmp, name, source_label, truthy, version_text, INSTALL_ICON,
+};
 use super::items::AppItem;
 use super::window::Win;
 
@@ -86,8 +88,14 @@ impl Win {
 
         // --- Name: icon + name + description ---
         let setup_name = |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
-            let row = gtk::Box::builder().spacing(8).margin_top(4).margin_bottom(4).build();
+            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let row = gtk::Box::builder()
+                .spacing(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build();
             let img = gtk::Image::new();
             img.set_pixel_size(32);
             img.set_valign(gtk::Align::Center);
@@ -100,7 +108,11 @@ impl Win {
             // Name is the column that gives when the window is narrow, but
             // never down to "…": a name stays this readable, and Version is
             // what gives below it.
-            let name_lbl = gtk::Label::builder().xalign(0.0).hexpand(true).width_chars(NAME_MIN_CHARS).build();
+            let name_lbl = gtk::Label::builder()
+                .xalign(0.0)
+                .hexpand(true)
+                .width_chars(NAME_MIN_CHARS)
+                .build();
             name_lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
             let pill = gtk::Label::builder().hexpand(false).build();
             pill.set_halign(gtk::Align::Start);
@@ -109,7 +121,10 @@ impl Win {
             pill.set_visible(false);
             title_row.append(&name_lbl);
             title_row.append(&pill);
-            let desc = gtk::Label::builder().xalign(0.0).width_chars(NAME_MIN_CHARS).build();
+            let desc = gtk::Label::builder()
+                .xalign(0.0)
+                .width_chars(NAME_MIN_CHARS)
+                .build();
             desc.add_css_class("dim-label");
             desc.add_css_class("caption");
             desc.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -122,21 +137,31 @@ impl Win {
 
         let w = self.downgrade();
         let bind_name = move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+            let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
             let Some(it) = item.item().and_then(|o| AppItem::of(&o).map(|i| i.clone())) else {
                 return;
             };
             let Some(row) = item.child() else { return };
-            let Some(img) = row.first_child().and_downcast::<gtk::Image>() else { return };
-            let Some(text) = img.next_sibling() else { return };
-            let Some(title_row) = text.first_child() else { return };
+            let Some(img) = row.first_child().and_downcast::<gtk::Image>() else {
+                return;
+            };
+            let Some(text) = img.next_sibling() else {
+                return;
+            };
+            let Some(title_row) = text.first_child() else {
+                return;
+            };
             let Some(desc_lbl) = title_row.next_sibling().and_downcast::<gtk::Label>() else {
                 return;
             };
             let Some(name_lbl) = title_row.first_child().and_downcast::<gtk::Label>() else {
                 return;
             };
-            let Some(pill) = name_lbl.next_sibling().and_downcast::<gtk::Label>() else { return };
+            let Some(pill) = name_lbl.next_sibling().and_downcast::<gtk::Label>() else {
+                return;
+            };
 
             name_lbl.set_text(&it.name);
             let installed = if it.installed_ts != 0.0 {
@@ -244,7 +269,15 @@ impl Win {
         // "151.0.7620.9-1 → 152.0.77…" short and let an AppImage row's three
         // buttons spill off the card); Name takes the rest and is the one
         // that gives.
-        self.column("Name", setup_name, bind_name, Some(str_sorter(|i| &i.name)), true, 0, true);
+        self.column(
+            "Name",
+            setup_name,
+            bind_name,
+            Some(str_sorter(|i| &i.name)),
+            true,
+            0,
+            true,
+        );
 
         // --- plain text columns ---
         fn make_text(
@@ -258,15 +291,21 @@ impl Win {
             impl Fn(&gtk::SignalListItemFactory, &glib::Object) + 'static,
         ) {
             let setup = move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
                 let lbl = gtk::Label::builder().xalign(align).build();
                 lbl.set_ellipsize(ellipsize);
                 lbl.add_css_class("caption");
                 item.set_child(Some(&lbl));
             };
             let bind = move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
-                let Some(lbl) = item.child().and_downcast::<gtk::Label>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
+                let Some(lbl) = item.child().and_downcast::<gtk::Label>() else {
+                    return;
+                };
                 let Some((text, has_update)) = item
                     .item()
                     .and_then(|o| AppItem::of(&o).map(|it| (getter(&it), it.has_update)))
@@ -290,8 +329,22 @@ impl Win {
         // Cut from the front when it must be: "… → 152.0.7727.24-1 ·1 maj"
         // still says what the update brings, where "151.0.7620.9-1 → 15…"
         // said only what is already here.
-        let (s, b) = make_text(version_text, true, 1.0, true, gtk::pango::EllipsizeMode::Start);
-        self.column("Version", s, b, Some(num_sorter(|i| i.behind)), false, 0, true);
+        let (s, b) = make_text(
+            version_text,
+            true,
+            1.0,
+            true,
+            gtk::pango::EllipsizeMode::Start,
+        );
+        self.column(
+            "Version",
+            s,
+            b,
+            Some(num_sorter(|i| i.behind)),
+            false,
+            0,
+            true,
+        );
 
         // Rows are recycled as the list scrolls, so a stale handler would
         // fire for whichever item later lands in this widget. Python
@@ -302,7 +355,9 @@ impl Win {
         let setup_source = {
             let slots = slots.clone();
             move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
                 // A LinkButton would underline permanently and steal the row's
                 // styling; a flat button reads as a label until hovered.
                 let btn = gtk::Button::new();
@@ -319,8 +374,12 @@ impl Win {
         let bind_source = {
             let slots = slots.clone();
             move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
-                let Some(btn) = item.child().and_downcast::<gtk::Button>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
+                let Some(btn) = item.child().and_downcast::<gtk::Button>() else {
+                    return;
+                };
                 let Some((source, url)) = item.item().and_then(|o| {
                     AppItem::of(&o).map(|it| (it.source.clone(), as_text(it.app.extra.get("url"))))
                 }) else {
@@ -351,13 +410,23 @@ impl Win {
         };
 
         // Hidden on a phone-narrow window (`SOURCE_HIDES_BELOW`, build.rs).
-        self.column("Source", setup_source, bind_source, Some(str_sorter(|i| &i.source)), false, 0, true);
+        self.column(
+            "Source",
+            setup_source,
+            bind_source,
+            Some(str_sorter(|i| &i.source)),
+            false,
+            0,
+            true,
+        );
 
         // --- launch button ---
         let setup_act = {
             let slots = slots.clone();
             move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
                 let row = gtk::Box::builder()
                     .spacing(2)
                     .halign(gtk::Align::End)
@@ -368,7 +437,9 @@ impl Win {
                 upd.add_css_class("circular");
                 let play = gtk::Button::from_icon_name("media-playback-start-symbolic");
                 play.add_css_class("flat");
-                let menu = gtk::MenuButton::builder().icon_name("view-more-symbolic").build();
+                let menu = gtk::MenuButton::builder()
+                    .icon_name("view-more-symbolic")
+                    .build();
                 menu.add_css_class("flat");
                 slots.attach(&upd);
                 slots.attach(&play);
@@ -383,13 +454,19 @@ impl Win {
         let bind_act = {
             let slots = slots.clone();
             move |_f: &gtk::SignalListItemFactory, obj: &glib::Object| {
-                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else { return };
+                let Some(item) = obj.downcast_ref::<gtk::ListItem>() else {
+                    return;
+                };
                 let Some(it) = item.item().and_then(|o| AppItem::of(&o).map(|i| i.clone())) else {
                     return;
                 };
                 let Some(row) = item.child() else { return };
-                let Some(upd) = row.first_child().and_downcast::<gtk::Button>() else { return };
-                let Some(play) = upd.next_sibling().and_downcast::<gtk::Button>() else { return };
+                let Some(upd) = row.first_child().and_downcast::<gtk::Button>() else {
+                    return;
+                };
+                let Some(play) = upd.next_sibling().and_downcast::<gtk::Button>() else {
+                    return;
+                };
                 let Some(menu) = play.next_sibling().and_downcast::<gtk::MenuButton>() else {
                     return;
                 };
@@ -429,17 +506,28 @@ impl Win {
                     }
                     if truthy(extra.get("url")) {
                         let m = gio::Menu::new();
-                        m.append(Some("Open repository"), Some(&format!("row.visit::{}", it.name)));
+                        m.append(
+                            Some("Open repository"),
+                            Some(&format!("row.visit::{}", it.name)),
+                        );
                         menu.set_menu_model(Some(&m));
-                        win.shared.borrow_mut().row_actions.insert(it.name.clone(), it.app.clone());
+                        win.shared
+                            .borrow_mut()
+                            .row_actions
+                            .insert(it.name.clone(), it.app.clone());
                     }
                     return;
                 }
 
                 upd.set_icon_name("software-update-available-symbolic");
                 let mut can_update = it.has_update
-                    && [inventory::REPO, inventory::AUR, inventory::APPIMAGE, inventory::TOOL]
-                        .contains(&it.source.as_str());
+                    && [
+                        inventory::REPO,
+                        inventory::AUR,
+                        inventory::APPIMAGE,
+                        inventory::TOOL,
+                    ]
+                    .contains(&it.source.as_str());
                 if it.source == inventory::SYSTEM {
                     // Almanac is a SYSTEM entry but is the one thing here that
                     // can genuinely update itself.
@@ -462,7 +550,11 @@ impl Win {
                     // worth a red glyph, routine ones stay quiet.
                     upd.remove_css_class("error");
                     upd.remove_css_class("accent");
-                    upd.add_css_class(if it.critical == "security" { "error" } else { "accent" });
+                    upd.add_css_class(if it.critical == "security" {
+                        "error"
+                    } else {
+                        "accent"
+                    });
                     let (w, app) = (w.clone(), it.app.clone());
                     let handler: Rc<dyn Fn(&gtk::Button)> = if truthy(extra.get("self")) {
                         name(
@@ -518,7 +610,10 @@ impl Win {
                 }
 
                 // extra.get("present", True)
-                let present = extra.get("present").map(|v| truthy(Some(v))).unwrap_or(true);
+                let present = extra
+                    .get("present")
+                    .map(|v| truthy(Some(v)))
+                    .unwrap_or(true);
                 let missing = it.source == inventory::APPIMAGE && !present;
                 let launchable = !it.app.exec_path.is_empty()
                     && (it.source == inventory::APPIMAGE || it.source == inventory::LOCAL);
@@ -549,8 +644,13 @@ impl Win {
                 } else if it.source == inventory::AUR {
                     model.append(Some("View on the AUR"), Some(&format!("row.aur::{n}")));
                 }
-                if [inventory::REPO, inventory::AUR, inventory::APPIMAGE, inventory::FLATPAK]
-                    .contains(&it.source.as_str())
+                if [
+                    inventory::REPO,
+                    inventory::AUR,
+                    inventory::APPIMAGE,
+                    inventory::FLATPAK,
+                ]
+                .contains(&it.source.as_str())
                 {
                     model.append(Some("Remove…"), Some(&format!("row.remove::{n}")));
                 }
@@ -564,15 +664,19 @@ impl Win {
                     let enabled = extra.get("enabled").filter(|v| !v.is_null());
                     if pid && enabled.is_some() {
                         model.append(
-                            Some(&if truthy(enabled) { tr("Turn off") } else { tr("Turn on") }),
+                            Some(&if truthy(enabled) {
+                                tr("Turn off")
+                            } else {
+                                tr("Turn on")
+                            }),
                             Some(&format!("row.toggle::{n}")),
                         );
                         // What has_panel raises ends this bind: the row
                         // keeps whatever menu it had.
                         let panel = crate::shortcuts::available()
-                            && match crate::shortcuts::try_has_panel(std::path::Path::new(&as_text(
-                                extra.get("repo"),
-                            ))) {
+                            && match crate::shortcuts::try_has_panel(std::path::Path::new(
+                                &as_text(extra.get("repo")),
+                            )) {
                                 Ok(panel) => panel,
                                 Err(e) => {
                                     eprintln!("almanac: {e}");
@@ -586,9 +690,15 @@ impl Win {
                             );
                         }
                     }
-                    model.append(Some("Open repository folder"), Some(&format!("row.folder::{n}")));
+                    model.append(
+                        Some("Open repository folder"),
+                        Some(&format!("row.folder::{n}")),
+                    );
                     if it.git_dirty {
-                        model.append(Some("Show local changes…"), Some(&format!("row.changes::{n}")));
+                        model.append(
+                            Some("Show local changes…"),
+                            Some(&format!("row.changes::{n}")),
+                        );
                         if it.git_behind != 0 {
                             model.append(
                                 Some("Stash changes and update…"),
@@ -596,7 +706,11 @@ impl Win {
                             );
                         }
                     } else if it.git_behind != 0 {
-                        let label = if pid { tr("Update") } else { "Update (git pull)".to_string() };
+                        let label = if pid {
+                            tr("Update")
+                        } else {
+                            "Update (git pull)".to_string()
+                        };
                         model.append(Some(&label), Some(&format!("row.pull::{n}")));
                     }
                 }
@@ -604,7 +718,10 @@ impl Win {
                 let has_items = model.n_items() > 0;
                 menu.set_menu_model(if has_items { Some(&model) } else { None });
                 menu.set_visible(has_items);
-                win.shared.borrow_mut().row_actions.insert(it.name.clone(), it.app.clone());
+                win.shared
+                    .borrow_mut()
+                    .row_actions
+                    .insert(it.name.clone(), it.app.clone());
             }
         };
 

@@ -2,16 +2,16 @@
 //! install, and offered back.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use adw::prelude::*;
 
-use crate::{history, mimeguard};
 use crate::i18n::tr;
 use crate::ui::shell::Win;
+use crate::{history, mimeguard};
 
-use super::{DefaultsWatch, MainGuard, idle, raised, start_thread};
+use super::{idle, raised, start_thread, DefaultsWatch, MainGuard};
 
 impl Win {
     /// Read every file type's default app now, before an install.
@@ -72,8 +72,9 @@ impl Win {
         let w = self.downgrade();
         // What raises here ends `_offer_defaults_back` before the dialog
         // is shown.
-        let recorded = mimeguard::try_summary(&moved)
-            .and_then(|items| history::record_checked(history::ALMANAC, "File types changed hands", "", "", &items));
+        let recorded = mimeguard::try_summary(&moved).and_then(|items| {
+            history::record_checked(history::ALMANAC, "File types changed hands", "", "", &items)
+        });
         if let Err(e) = recorded {
             return raised(&e);
         }
@@ -87,7 +88,13 @@ impl Win {
                     win.say(&format!("{n} file type(s) handed back"), 5);
                 }
                 let recorded = mimeguard::try_summary(&returnable).and_then(|items| {
-                    history::record_checked(history::ALMANAC, &format!("{n} file type(s) handed back"), "", "", &items)
+                    history::record_checked(
+                        history::ALMANAC,
+                        &format!("{n} file type(s) handed back"),
+                        "",
+                        "",
+                        &items,
+                    )
                 });
                 if let Err(e) = recorded {
                     raised(&e);

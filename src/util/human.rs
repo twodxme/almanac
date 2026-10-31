@@ -31,7 +31,10 @@ static CLASS: LazyLock<Regex> =
 /// holds a single one).
 static ERRNO: LazyLock<Regex> = LazyLock::new(|| {
     let path = r#"'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*""#;
-    Regex::new(&format!(r"^\[Errno (-?\d+|None)\] ([^:]*?)(?:: ({path})(?: -> ({path}))?)?$")).unwrap()
+    Regex::new(&format!(
+        r"^\[Errno (-?\d+|None)\] ([^:]*?)(?:: ({path})(?: -> ({path}))?)?$"
+    ))
+    .unwrap()
 });
 
 static URLOPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^<urlopen error (.*)>$").unwrap());
@@ -71,15 +74,20 @@ static SHAPE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static DEEP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:maximum recursion depth exceeded.*|Stack overflow \(used \d+ kB\) while .*)$").unwrap()
+    Regex::new(r"^(?:maximum recursion depth exceeded.*|Stack overflow \(used \d+ kB\) while .*)$")
+        .unwrap()
 });
 
-static DECODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^'([^']+)' codec can't decode .*$").unwrap());
-static ENCODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^'[^']+' codec can't encode .*$").unwrap());
-static JSON: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:Expecting .*|Extra data|Unterminated string .*|Invalid .*): line \d+ column \d+ \(char \d+\)$").unwrap());
-static NUL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:\w+: )?embedded null (?:byte|character)(?: in path)?$").unwrap());
+static DECODE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^'([^']+)' codec can't decode .*$").unwrap());
+static ENCODE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^'[^']+' codec can't encode .*$").unwrap());
+static JSON: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:Expecting .*|Extra data|Unterminated string .*|Invalid .*): line \d+ column \d+ \(char \d+\)$").unwrap()
+});
+static NUL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:\w+: )?embedded null (?:byte|character)(?: in path)?$").unwrap()
+});
 
 fn tr(text: &str) -> String {
     crate::i18n::try_tr(text).unwrap_or_else(|_| text.to_string())
@@ -156,7 +164,13 @@ fn known(text: &str) -> Option<String> {
     if let Some(c) = ERRNO.captures(text) {
         let n = c[1].parse().unwrap_or(0);
         let after = &text[c.get(2).map_or(text.len(), |m| m.start())..];
-        return Some(errno_text(n, &c[2], c.get(3).map(|m| m.as_str()), c.get(4).map(|m| m.as_str()), after));
+        return Some(errno_text(
+            n,
+            &c[2],
+            c.get(3).map(|m| m.as_str()),
+            c.get(4).map(|m| m.as_str()),
+            after,
+        ));
     }
     if let Some(c) = URLOPEN.captures(text) {
         return Some(human_line(&c[1]));
@@ -196,11 +210,17 @@ fn known(text: &str) -> Option<String> {
         "HTTPException" => tr("Unexpected answer from the server"),
         "TimeoutError" | "timeout" => tr("The connection timed out"),
         "LookupError" if detail.starts_with("unknown encoding: ") => {
-            format!("{}: {}", tr("Unknown text encoding"), &detail["unknown encoding: ".len()..])
+            format!(
+                "{}: {}",
+                tr("Unknown text encoding"),
+                &detail["unknown encoding: ".len()..]
+            )
         }
         // What follows these is Python's own wording (a key's repr, "'x'
         // object is not ..."): it says nothing to a user.
-        "IndexError" | "KeyError" | "TypeError" | "AttributeError" | "LookupError" => tr("Unexpected data"),
+        "IndexError" | "KeyError" | "TypeError" | "AttributeError" | "LookupError" => {
+            tr("Unexpected data")
+        }
         // Python raises these bare; a message is the code's own sentence
         // (`assert ok, "x: no loader"`) and stays, as ValueError's does.
         "StopIteration" | "AssertionError" if detail.is_empty() => tr("Unexpected data"),
@@ -306,7 +326,16 @@ pub fn human_error(text: &str) -> String {
     // reword -- and reading one nested thousands of brackets deep would recurse
     // that deep.
     let pass = |t: &str| {
-        t.split('\n').map(|l| if l.len() > LONGEST_ERROR_LINE { l.to_string() } else { human_line(l) }).collect::<Vec<_>>().join("\n")
+        t.split('\n')
+            .map(|l| {
+                if l.len() > LONGEST_ERROR_LINE {
+                    l.to_string()
+                } else {
+                    human_line(l)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     // A display point may pass a text through here twice (a toast of a task
     // log line), and the second pass must change nothing. One pass reads
@@ -337,56 +366,122 @@ mod tests {
     #[test]
     fn nested_quoted_and_trailing_paths() {
         // An error inside a kept sentence is reworded in the first pass.
-        assert_eq!(h("a: ValueError: one (two: KeyError: 'z') three"), "a: one (two: Unexpected data) three");
+        assert_eq!(
+            h("a: ValueError: one (two: KeyError: 'z') three"),
+            "a: one (two: Unexpected data) three"
+        );
         // A key holding Almanac's own separator is one unit.
-        assert_eq!(h("x: KeyError: ' — ' — skipped"), "x: Unexpected data — skipped");
+        assert_eq!(
+            h("x: KeyError: ' — ' — skipped"),
+            "x: Unexpected data — skipped"
+        );
         assert_eq!(h("a (KeyError: ')') b"), "a (Unexpected data) b");
-        assert_eq!(h("x: [Errno 2] No such file or directory: 'a — b' — skipped"), "x: No such file: a — b — skipped");
+        assert_eq!(
+            h("x: [Errno 2] No such file or directory: 'a — b' — skipped"),
+            "x: No such file: a — b — skipped"
+        );
         // A path is the OS's only right after its words.
-        assert_eq!(h("[Errno 2] No such file or directory; extra: 'p'"), "No such file; extra: 'p'");
-        assert_eq!(h("[Errno 13] Permission denied; then: 'q'"), "Permission denied; then: 'q'");
-        assert_eq!(h("[Errno 2] No such file or directory: 'p'"), "No such file: p");
+        assert_eq!(
+            h("[Errno 2] No such file or directory; extra: 'p'"),
+            "No such file; extra: 'p'"
+        );
+        assert_eq!(
+            h("[Errno 13] Permission denied; then: 'q'"),
+            "Permission denied; then: 'q'"
+        );
+        assert_eq!(
+            h("[Errno 2] No such file or directory: 'p'"),
+            "No such file: p"
+        );
         // An errno's own wording is read for errors too.
         assert_eq!(h("[Errno 5] x (TypeError) y"), "x (Unexpected data) y");
     }
 
     #[test]
     fn errno_with_a_path() {
-        assert_eq!(h("[Errno 2] No such file or directory: '/tmp/x'"), "No such file: /tmp/x");
-        assert_eq!(h("FileNotFoundError: [Errno 2] No such file or directory: '/a b'"), "No such file: /a b");
-        assert_eq!(h("[Errno 13] Permission denied: '/etc/shadow'"), "Permission denied: /etc/shadow");
-        assert_eq!(h("PermissionError: [Errno 13] Permission denied: \"it's\""), "Permission denied: it's");
+        assert_eq!(
+            h("[Errno 2] No such file or directory: '/tmp/x'"),
+            "No such file: /tmp/x"
+        );
+        assert_eq!(
+            h("FileNotFoundError: [Errno 2] No such file or directory: '/a b'"),
+            "No such file: /a b"
+        );
+        assert_eq!(
+            h("[Errno 13] Permission denied: '/etc/shadow'"),
+            "Permission denied: /etc/shadow"
+        );
+        assert_eq!(
+            h("PermissionError: [Errno 13] Permission denied: \"it's\""),
+            "Permission denied: it's"
+        );
         assert_eq!(h("[Errno 2] No such file or directory"), "No such file");
-        assert_eq!(h("OSError: [Errno 18] Invalid cross-device link: 'a' -> 'b'"), "Invalid cross-device link: a → b");
-        assert_eq!(h("OSError: [Errno 75] Value too large for defined data type"), "Value too large for defined data type");
+        assert_eq!(
+            h("OSError: [Errno 18] Invalid cross-device link: 'a' -> 'b'"),
+            "Invalid cross-device link: a → b"
+        );
+        assert_eq!(
+            h("OSError: [Errno 75] Value too large for defined data type"),
+            "Value too large for defined data type"
+        );
         assert_eq!(h("[Errno None] None: 'x'"), "The system refused: x");
         // Inside the app's own sentence, which stays.
         assert_eq!(
             h("Could not start the update: [Errno 2] No such file or directory: 'kitty'"),
             "Could not start the update: No such file: kitty"
         );
-        assert_eq!(h("could not start: [Errno 13] Permission denied: 'yay'"), "could not start: Permission denied: yay");
+        assert_eq!(
+            h("could not start: [Errno 13] Permission denied: 'yay'"),
+            "could not start: Permission denied: yay"
+        );
     }
 
     #[test]
     fn data_of_the_wrong_shape() {
         assert_eq!(h("IndexError: list index out of range"), "Unexpected data");
         assert_eq!(h("list index out of range"), "Unexpected data");
-        assert_eq!(h("TypeError: 'int' object is not subscriptable"), "Unexpected data");
-        assert_eq!(h("TypeError: '<' not supported between instances of 'int' and 'NoneType'"), "Unexpected data");
-        assert_eq!(h("AttributeError: 'str' object has no attribute 'get'"), "Unexpected data");
+        assert_eq!(
+            h("TypeError: 'int' object is not subscriptable"),
+            "Unexpected data"
+        );
+        assert_eq!(
+            h("TypeError: '<' not supported between instances of 'int' and 'NoneType'"),
+            "Unexpected data"
+        );
+        assert_eq!(
+            h("AttributeError: 'str' object has no attribute 'get'"),
+            "Unexpected data"
+        );
         assert_eq!(h("KeyError: 'unit_file'"), "Unexpected data");
         assert_eq!(h("TypeError"), "Unexpected data");
-        assert_eq!(h("ValueError: invalid literal for int() with base 10: '1.5'"), "Unexpected data");
-        assert_eq!(h("ValueError: not enough values to unpack (expected 2, got 1)"), "Unexpected data");
-        assert_eq!(h("GridCraft was not installed: TypeError: unhashable type: 'list'"), "GridCraft was not installed: Unexpected data");
-        assert_eq!(h("OverflowError: cannot convert float infinity to integer"), "Unexpected data");
-        assert_eq!(h("OverflowError: timestamp out of range for platform time_t"), "A number in the data is out of range");
+        assert_eq!(
+            h("ValueError: invalid literal for int() with base 10: '1.5'"),
+            "Unexpected data"
+        );
+        assert_eq!(
+            h("ValueError: not enough values to unpack (expected 2, got 1)"),
+            "Unexpected data"
+        );
+        assert_eq!(
+            h("GridCraft was not installed: TypeError: unhashable type: 'list'"),
+            "GridCraft was not installed: Unexpected data"
+        );
+        assert_eq!(
+            h("OverflowError: cannot convert float infinity to integer"),
+            "Unexpected data"
+        );
+        assert_eq!(
+            h("OverflowError: timestamp out of range for platform time_t"),
+            "A number in the data is out of range"
+        );
     }
 
     #[test]
     fn nesting_text_and_json() {
-        assert_eq!(h("RecursionError: maximum recursion depth exceeded"), "The data is nested too deeply to read");
+        assert_eq!(
+            h("RecursionError: maximum recursion depth exceeded"),
+            "The data is nested too deeply to read"
+        );
         assert_eq!(
             h("Check failed: RecursionError: Stack overflow (used 8156 kB) while decoding a JSON array from a unicode string"),
             "Check failed: The data is nested too deeply to read"
@@ -396,33 +491,78 @@ mod tests {
             h("UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"),
             "The file is not valid UTF-8"
         );
-        assert_eq!(h("'utf-8' codec can't decode bytes in position 2-3: unexpected end of data"), "The file is not valid UTF-8");
+        assert_eq!(
+            h("'utf-8' codec can't decode bytes in position 2-3: unexpected end of data"),
+            "The file is not valid UTF-8"
+        );
         // A message of its own is kept.
-        assert_eq!(h("UnicodeDecodeError: theme.name is not UTF-8"), "theme.name is not UTF-8");
+        assert_eq!(
+            h("UnicodeDecodeError: theme.name is not UTF-8"),
+            "theme.name is not UTF-8"
+        );
         assert_eq!(
             h("UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff' in position 1: surrogates not allowed"),
             "The text has characters that cannot be written out"
         );
-        assert_eq!(h("JSONDecodeError: Expecting value: line 1 column 1 (char 0)"), "The data is not valid JSON");
-        assert_eq!(h("Expecting ',' delimiter: line 3 column 5 (char 20)"), "The data is not valid JSON");
-        assert_eq!(h("LookupError: unknown encoding: klingon"), "Unknown text encoding: klingon");
+        assert_eq!(
+            h("JSONDecodeError: Expecting value: line 1 column 1 (char 0)"),
+            "The data is not valid JSON"
+        );
+        assert_eq!(
+            h("Expecting ',' delimiter: line 3 column 5 (char 20)"),
+            "The data is not valid JSON"
+        );
+        assert_eq!(
+            h("LookupError: unknown encoding: klingon"),
+            "Unknown text encoding: klingon"
+        );
     }
 
     #[test]
     fn network_and_the_rest() {
-        assert_eq!(h("URLError: <urlopen error timed out>"), "The connection timed out");
-        assert_eq!(h("URLError: <urlopen error [Errno -2] Name or service not known>"), "Name or service not known");
-        assert_eq!(h("URLError: <urlopen error no host given>"), "no host given");
-        assert_eq!(h("HTTPError: HTTP Error 404: Not Found"), "HTTP Error 404: Not Found");
-        assert_eq!(h("HTTPException: got more than 100 headers"), "Unexpected answer from the server");
+        assert_eq!(
+            h("URLError: <urlopen error timed out>"),
+            "The connection timed out"
+        );
+        assert_eq!(
+            h("URLError: <urlopen error [Errno -2] Name or service not known>"),
+            "Name or service not known"
+        );
+        assert_eq!(
+            h("URLError: <urlopen error no host given>"),
+            "no host given"
+        );
+        assert_eq!(
+            h("HTTPError: HTTP Error 404: Not Found"),
+            "HTTP Error 404: Not Found"
+        );
+        assert_eq!(
+            h("HTTPException: got more than 100 headers"),
+            "Unexpected answer from the server"
+        );
         assert_eq!(h("TimeoutError: timed out"), "The connection timed out");
-        assert_eq!(h("socket.gaierror: failed to lookup address information"), "failed to lookup address information");
-        assert_eq!(h("ValueError: embedded null byte"), "A name contains a NUL character");
-        assert_eq!(h("ValueError: stat: embedded null character in path"), "A name contains a NUL character");
+        assert_eq!(
+            h("socket.gaierror: failed to lookup address information"),
+            "failed to lookup address information"
+        );
+        assert_eq!(
+            h("ValueError: embedded null byte"),
+            "A name contains a NUL character"
+        );
+        assert_eq!(
+            h("ValueError: stat: embedded null character in path"),
+            "A name contains a NUL character"
+        );
         assert_eq!(h("ValueError: Invalid IPv6 URL"), "Invalid IPv6 URL");
-        assert_eq!(h("RuntimeError: can't start new thread"), "can't start new thread");
+        assert_eq!(
+            h("RuntimeError: can't start new thread"),
+            "can't start new thread"
+        );
         assert_eq!(h("OSError"), "Something went wrong");
-        assert_eq!(h("pkg: skipped — KeyError: 'x'"), "pkg: skipped — Unexpected data");
+        assert_eq!(
+            h("pkg: skipped — KeyError: 'x'"),
+            "pkg: skipped — Unexpected data"
+        );
     }
 
     #[test]
@@ -438,11 +578,20 @@ mod tests {
         );
         let timed_out = "no snapshot was taken (Command '['pkexec', 'snapper']' timed out after 120 seconds); continuing without one";
         assert_eq!(h(timed_out), timed_out);
-        assert_eq!(h("pkg 'x' (TypeError: bad) — skipped"), "pkg 'x' (Unexpected data) — skipped");
+        assert_eq!(
+            h("pkg 'x' (TypeError: bad) — skipped"),
+            "pkg 'x' (Unexpected data) — skipped"
+        );
         assert_eq!(h("x (ValueError: f(1) failed) y"), "x (f(1) failed) y");
-        assert_eq!(h("x: KeyError: 'a' — skipped"), "x: Unexpected data — skipped");
+        assert_eq!(
+            h("x: KeyError: 'a' — skipped"),
+            "x: Unexpected data — skipped"
+        );
         // Unbracketed, only the OS's words go.
-        assert_eq!(h("[Errno 13] Permission denied; retrying"), "Permission denied; retrying");
+        assert_eq!(
+            h("[Errno 13] Permission denied; retrying"),
+            "Permission denied; retrying"
+        );
         // Two errors on one line.
         assert_eq!(
             h("a (KeyError: 'k') then b: IndexError: list index out of range"),
@@ -452,13 +601,22 @@ mod tests {
 
     #[test]
     fn a_message_of_the_codes_own_is_kept() {
-        assert_eq!(h("AssertionError: gridcraft: no mapper or loader"), "gridcraft: no mapper or loader");
+        assert_eq!(
+            h("AssertionError: gridcraft: no mapper or loader"),
+            "gridcraft: no mapper or loader"
+        );
         assert_eq!(h("StopIteration: the list ran out"), "the list ran out");
         assert_eq!(h("AssertionError"), "Unexpected data");
         assert_eq!(h("StopIteration"), "Unexpected data");
-        assert_eq!(h("failed: AssertionError: x is not ready"), "failed: x is not ready");
+        assert_eq!(
+            h("failed: AssertionError: x is not ready"),
+            "failed: x is not ready"
+        );
         // Python's own wording still goes, whichever class carries it.
-        assert_eq!(h("AssertionError: list index out of range"), "Unexpected data");
+        assert_eq!(
+            h("AssertionError: list index out of range"),
+            "Unexpected data"
+        );
         assert_eq!(h("KeyError: 'k'"), "Unexpected data");
     }
 
@@ -472,7 +630,10 @@ mod tests {
             h("UnicodeDecodeError: 'latin-1' codec can't decode byte 0x81 in position 0: x"),
             "The text could not be decoded"
         );
-        assert_eq!(h("'UTF8' codec can't decode byte 0xff in position 0: invalid start byte"), "The file is not valid UTF-8");
+        assert_eq!(
+            h("'UTF8' codec can't decode byte 0xff in position 0: invalid start byte"),
+            "The file is not valid UTF-8"
+        );
     }
 
     #[test]
@@ -509,13 +670,21 @@ mod tests {
             assert_eq!(h(s), s);
         }
         // Each line on its own.
-        assert_eq!(h("Updated 2\nfailed: IndexError: list index out of range"), "Updated 2\nfailed: Unexpected data");
+        assert_eq!(
+            h("Updated 2\nfailed: IndexError: list index out of range"),
+            "Updated 2\nfailed: Unexpected data"
+        );
     }
 
     #[test]
     fn a_line_longer_than_any_error_is_left_alone() {
         let deep = format!("TypeError: {}{}", "(".repeat(20_000), ")".repeat(20_000));
-        let out = std::thread::Builder::new().stack_size(2 << 20).spawn(move || super::human_error(&deep)).unwrap().join().unwrap();
+        let out = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || super::human_error(&deep))
+            .unwrap()
+            .join()
+            .unwrap();
         assert!(out.starts_with("TypeError: ((("));
     }
 }
