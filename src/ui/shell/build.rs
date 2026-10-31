@@ -739,14 +739,7 @@ mod tests {
     /// Install-from-the-search-box is on only where the page shows the box.
     #[test]
     fn install_follows_the_search_bar() {
-        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
-        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
-            return;
-        }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
-            || gtk::gdk::Display::default().is_none()
-        {
+        if !crate::test_gtk() {
             return;
         }
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);

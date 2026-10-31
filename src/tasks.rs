@@ -1759,21 +1759,9 @@ mod tests {
         assert!(decode_chunk_as("EUC-JP", &mut p, b"\xa4", true).is_err());
     }
 
-    /// GTK for a widget test, or None to skip: a package build's check()
-    /// has no display, and GTK belongs to whichever test thread took it
-    /// first (as in `ui::packages`' widget test).
+    /// GTK for a widget test, or None to skip (see `crate::test_gtk`).
     fn gtk_here() -> Option<()> {
-        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
-        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
-            return None;
-        }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
-            || gtk::gdk::Display::default().is_none()
-        {
-            return None;
-        }
-        Some(())
+        crate::test_gtk().then_some(())
     }
 
     /// Spin the main loop until `done` says so, for at most `secs`.
