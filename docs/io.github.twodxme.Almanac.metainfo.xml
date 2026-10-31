@@ -96,6 +96,12 @@
   </requires>
 
   <releases>
+    <release version="2.2.3" date="2026-10-31">
+      <description>
+        <p>A new Almanac release now shows on the Updates page within
+        minutes of being published, instead of up to six hours later.</p>
+      </description>
+    </release>
     <release version="2.2.2" date="2026-10-31">
       <description>
         <p>Choose when the scheduled update runs, and let it update Almanac.</p>

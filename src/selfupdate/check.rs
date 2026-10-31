@@ -18,6 +18,12 @@ pub fn try_check(fetch: bool) -> Result<Info, String> {
 pub const RELEASES_URL: &str = "https://github.com/twodxme/almanac/releases/latest";
 pub(super) const RELEASE_REPO: &str = "twodxme/almanac";
 
+/// How long GitHub's answer about Almanac's own newest release is kept:
+/// minutes, not the hours other repositories get, so a release shows on
+/// the Updates page soon after it is published. One request per quarter
+/// hour is well inside the API budget.
+pub(super) const RELEASE_TTL: u64 = 15 * 60;
+
 /// Where pacman's copy of Almanac came from, as far as can be told without
 /// guessing. It decides what the note promises: only a package something
 /// keeps updating may be said to update with the rest of the system.
@@ -192,7 +198,7 @@ pub(super) fn note_release(info: &mut Info, fetch: bool) {
         return;
     }
     let tag = if fetch {
-        let tag = crate::ghcache::try_latest_release(RELEASE_REPO, crate::ghcache::DEFAULT_TTL)
+        let tag = crate::ghcache::try_latest_release(RELEASE_REPO, RELEASE_TTL)
             .ok()
             .flatten()
             .and_then(|r| r.get("tag_name")?.as_str().map(String::from));
@@ -586,6 +592,16 @@ mod tests {
         };
         note_release(&mut git, false);
         assert_eq!(git.note, "");
+    }
+
+    /// A release published just after a check is seen within minutes:
+    /// 2.2.2 stayed hidden for six hours behind the general GitHub cache.
+    #[test]
+    fn a_new_release_is_not_hidden_behind_the_general_cache() {
+        const { assert!(RELEASE_TTL <= 15 * 60 && RELEASE_TTL < crate::ghcache::DEFAULT_TTL) };
+        let src = include_str!("check.rs");
+        let call = src.find("try_latest_release(RELEASE_REPO,").unwrap();
+        assert!(src[call..call + 60].contains("RELEASE_TTL"));
     }
 
     // The "Open the release" toast: only where the note says nothing updates
