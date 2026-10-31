@@ -3,7 +3,7 @@
 # Rust app; it replaced the Python release package of the same name, so the
 # two are never installed together.
 pkgname=almanac
-pkgver=2.2.3
+pkgver=2.2.4
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('x86_64' 'aarch64')
@@ -35,7 +35,7 @@ checkdepends=('git')
 options=('!lto')
 conflicts=('almanac-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('ade06ae6531807ea7ee5fe33796d320c07f07001d2d8349da905eebb86916bfd')
+sha256sums=('50842e92db61643ec01ccd698efad0386e37d001761ca2023f9392400efe23dd')
 
 prepare() {
   cd "$srcdir/$pkgname-$pkgver"
