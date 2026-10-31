@@ -42,6 +42,7 @@ use crate::util;
 mod check;
 mod checkout;
 mod notes;
+pub mod package;
 mod process;
 mod pystr;
 mod restart;
@@ -168,9 +169,10 @@ pub fn fetched_within(root: &Path, secs: u64) -> bool {
         .is_some_and(|age| age.as_secs() < secs)
 }
 
-/// `as_app` for a compiled build: the same row, from `compiled_check_in`. It
-/// never carries an update (can_update is never set), so it stays out of the
-/// Updates list: pacman lists the package; a checkout says to rebuild.
+/// `as_app` for a compiled build: the same row, from `compiled_check_in`.
+/// It carries an update only for the package downloaded from GitHub, which
+/// nothing else updates; pacman lists a repository package, and a checkout
+/// says to rebuild.
 pub fn compiled_as_app_in(
     root: &Path,
     exe: &Path,
@@ -192,6 +194,9 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
     let mut update = String::new();
     if info.can_update {
         update = format!("{} commit(s)", info.behind);
+    } else if offers_download(&info) {
+        // The GitHub package: nothing else updates it, Almanac does.
+        update = info.latest.clone();
     }
     let url = if info.remote.starts_with("http") {
         info.remote.replace(".git", "")
@@ -255,6 +260,31 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_github_package_with_a_newer_release_is_listed_as_an_update() {
+        // Nothing else updates it: without the row, Update all skipped it.
+        let info = Info {
+            kind: PACKAGE.into(),
+            version: "2.2.0".into(),
+            latest: "2.2.1".into(),
+            origin: Some(PackageOrigin::Foreign { aur: Some(false) }),
+            ..Default::default()
+        };
+        let app = app_from(Path::new("/x"), info.clone(), String::new());
+        assert_eq!(app.update, "2.2.1");
+        // A package the AUR or a repository updates is left to them.
+        let aur = Info {
+            origin: Some(PackageOrigin::Foreign { aur: Some(true) }),
+            ..info.clone()
+        };
+        assert_eq!(app_from(Path::new("/x"), aur, String::new()).update, "");
+        let current = Info {
+            latest: String::new(),
+            ..info
+        };
+        assert_eq!(app_from(Path::new("/x"), current, String::new()).update, "");
+    }
 
     #[test]
     fn root_is_the_resolved_checkout_of_the_running_binary() {

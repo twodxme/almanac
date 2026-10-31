@@ -260,13 +260,9 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
 
     if let Some(a) = by(Route::Almanac).next() {
         let info = selfupdate::try_check(true)?;
-        if info.can_update {
-            batch
-                .lines
-                .push(format!("{:22} git pull --ff-only", a.name));
-            for (label, argv) in selfupdate::update_steps() {
-                batch.steps.push(Step::argv(label, argv));
-            }
+        if let Some((line, steps)) = almanac_update(&info) {
+            batch.lines.push(format!("{:22} {line}", a.name));
+            batch.steps.extend(steps);
             batch.apps.push(a.clone());
         } else {
             batch.hold(
@@ -280,6 +276,30 @@ fn plan(apps: Vec<App>, have: Vec<crate::store::Plugin>) -> Result<Batch, String
         }
     }
     Ok(batch)
+}
+
+/// How Almanac updates itself, as a line for the plan and its steps: a
+/// checkout pulls, the package downloaded from GitHub installs the newer
+/// release. None when neither can.
+pub fn almanac_update(info: &selfupdate::Info) -> Option<(String, Vec<Step>)> {
+    if info.can_update {
+        let steps = selfupdate::update_steps()
+            .into_iter()
+            .map(|(label, argv)| Step::argv(label, argv))
+            .collect();
+        return Some(("git pull --ff-only".into(), steps));
+    }
+    if selfupdate::offers_download(info) {
+        let steps = selfupdate::package::update_steps(&info.latest);
+        if !steps.is_empty() {
+            let line = format!(
+                "{} → {}   download, check, pacman -U",
+                info.version, info.latest
+            );
+            return Some((line, steps));
+        }
+    }
+    None
 }
 
 impl Win {
@@ -810,6 +830,25 @@ impl Win {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn update_all_installs_a_newer_github_release_of_almanac() {
+        let info = selfupdate::Info {
+            kind: selfupdate::PACKAGE.into(),
+            version: "2.2.0".into(),
+            latest: "2.2.1".into(),
+            origin: Some(selfupdate::PackageOrigin::Foreign { aur: None }),
+            ..Default::default()
+        };
+        let (line, steps) = almanac_update(&info).expect("not planned");
+        assert!(line.contains("2.2.0 → 2.2.1"), "{line}");
+        assert_eq!(steps.len(), 2, "download and check, then install");
+        let current = selfupdate::Info {
+            latest: String::new(),
+            ..info
+        };
+        assert!(almanac_update(&current).is_none());
+    }
 
     fn app(source: &str, extra: Value) -> App {
         App {
