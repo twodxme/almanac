@@ -102,21 +102,48 @@ impl Win {
 
     fn offer_self_update(&self, info: selfupdate::Info) {
         if selfupdate::offers_download(&info) {
-            // A newer release than a package nothing updates: pacman
-            // installs it, not Almanac, but the download is one click away.
-            let toast = adw::Toast::builder()
-                .title(info.note.as_str())
-                .use_markup(false)
-                .timeout(0)
-                .build();
-            toast.set_button_label(Some(&tr("Open the release")));
+            // A newer release of the package downloaded from GitHub: nothing
+            // else updates it, so Almanac downloads, checks and installs it.
+            let steps = selfupdate::package::update_steps(&info.latest);
+            if steps.is_empty() {
+                self.say(&info.note, 8);
+                return;
+            }
             let w = self.downgrade();
-            toast.connect_button_clicked(move |_| {
-                if let Some(w) = w.upgrade() {
-                    w.open_url(selfupdate::RELEASES_URL);
-                }
-            });
-            self.toasts.add_toast(toast);
+            let steps = std::cell::RefCell::new(Some(steps));
+            tasks::confirm(
+                &self.window,
+                &format!("Update Almanac to {}?", info.latest),
+                &format!(
+                    "This is {}. The package is downloaded from the v{} release, checked \
+                     against the SHA256SUMS published with it, and installed with \
+                     pacman -U, which asks for your password.",
+                    info.version, info.latest
+                ),
+                &format!(
+                    "{}\n{}\n\n$ pkexec pacman -U {}",
+                    selfupdate::package::asset_url(&info.latest, selfupdate::package::ASSET),
+                    selfupdate::package::asset_url(&info.latest, selfupdate::package::SUMS),
+                    selfupdate::package::package_path(&info.latest).display()
+                ),
+                &tr("Update"),
+                false,
+                move || {
+                    let (Some(win), Some(steps)) = (w.upgrade(), steps.borrow_mut().take()) else {
+                        return;
+                    };
+                    let w2 = win.downgrade();
+                    win.run_task(
+                        "Updating Almanac",
+                        steps,
+                        Some(Box::new(move |ok| {
+                            if let Some(win) = w2.upgrade() {
+                                win.after_self_update(ok);
+                            }
+                        })),
+                    );
+                },
+            );
             return;
         }
         if !info.can_update {
