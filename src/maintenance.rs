@@ -1018,9 +1018,13 @@ fn _pacman_cache_with(du: (f64, i64), run: RunFn<'_>) -> Result<Finding, String>
     // cache is still gigabytes -- two versions of every installed package --
     // and rating it by size kept it critical after a trim that had nothing
     // left to remove.
-    let (Some(old), Some(gone)) = (
+    // The fix is two runs, -rk2 then -ruk0. An uninstalled package's
+    // versions past the newest two go in the first, so the second frees
+    // -uk0 less -uk2; adding the two dry runs counted those twice.
+    let (Some(old), Some(gone), Some(both)) = (
         _paccache_reclaimable_with(&["-k2"], run)?,
         _paccache_reclaimable_with(&["-uk0"], run)?,
+        _paccache_reclaimable_with(&["-uk2"], run)?,
     ) else {
         return Ok(Finding {
             size_mb: 0.0,
@@ -1037,7 +1041,7 @@ fn _pacman_cache_with(du: (f64, i64), run: RunFn<'_>) -> Result<Finding, String>
             )
         });
     };
-    let free = old + gone;
+    let free = old + (gone - both).max(0.0);
     if free < 256.0 {
         return Ok(Finding {
             id: "pacman-cache".into(),
@@ -2777,13 +2781,16 @@ pub fn recheck_by_id(finding_id: &str) -> Option<Finding> {
 
 /// Every check. Read-only; safe to run on a timer.
 pub fn run_all() -> Vec<Finding> {
-    if crate::demo::active() {
+    let generation = LAST_RUN_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+    // Demo mode is kept like a real run, so its pages say "checked … ago"
+    // as a real machine's do.
+    let found = if crate::demo::active() {
         let mut found = crate::demo::findings();
         _sort_findings(&mut found);
-        return found;
-    }
-    let generation = LAST_RUN_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
-    let found = _run_checks(CHECKS);
+        found
+    } else {
+        _run_checks(CHECKS)
+    };
     let mut kept = LAST_RUN.lock().unwrap_or_else(|e| e.into_inner());
     // A run that began before `forget_last_run` describes the system before
     // whatever changed it: it is still returned to its caller, not kept.
@@ -3274,8 +3281,8 @@ mod tests {
         let dry = "==> finished dry run: 26 candidates (disk space saved: 1.23 GiB)";
         let run = |_c: &[&str], _t: u64| Ok(Ran::ok(dry));
         let f = _pacman_cache_with((4500.0, 522), &run).unwrap();
-        // Two dry runs (-k2 and -uk0), each 1.23 GiB here.
-        assert!((f.size_mb - 2.0 * 1.23 * 1024.0).abs() < 0.5);
+        // Three dry runs, each 1.23 GiB here: -k2, then -uk0 less -uk2.
+        assert!((f.size_mb - 1.23 * 1024.0).abs() < 0.5);
         assert_eq!(f.severity, WARN);
         assert!(f.actionable());
         // Given together, paccache's later -k0 and -u override -k2 and only
@@ -3287,6 +3294,44 @@ mod tests {
                 vec!["paccache".to_string(), "-ruk0".into()]
             ]
         );
+    }
+
+    #[test]
+    fn demo_mode_remembers_its_run_like_a_real_one() {
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let r = std::panic::catch_unwind(|| {
+            forget_last_run();
+            let found = run_all();
+            last_run().map(|(_, kept)| kept == found)
+        });
+        forget_last_run();
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let kept = r.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert_eq!(kept, Some(true), "the demo run was not kept");
+    }
+
+    #[test]
+    fn what_a_trim_frees_counts_no_package_twice() {
+        // The fix runs -rk2, then -ruk0. An uninstalled package's versions
+        // past the newest two go in the first run, so the second frees only
+        // what is left: -uk0 less -uk2. Adding the two dry runs counted
+        // those versions twice and overstated "Reclaim".
+        let run = |c: &[&str], _t: u64| {
+            let saved = match c.last().copied() {
+                Some("-k2") => "1000.00 MiB",
+                Some("-uk0") => "500.00 MiB",
+                Some("-uk2") => "300.00 MiB",
+                other => panic!("unexpected paccache {other:?}"),
+            };
+            Ok(Ran::ok(&format!(
+                "==> finished dry run: 9 candidates (disk space saved: {saved})"
+            )))
+        };
+        let f = _pacman_cache_with((4500.0, 522), &run).unwrap();
+        assert!((f.size_mb - 1200.0).abs() < 0.5, "{}", f.size_mb);
     }
 
     /// After Update all only what was just built goes: the rest of the
