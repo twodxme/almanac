@@ -59,7 +59,11 @@ pub(super) fn py_repr(v: &Value) -> String {
 /// `repr(str)`: single quotes unless the text has one and no double quote;
 /// control and non-space separator characters escaped.
 pub(super) fn py_repr_str(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let q = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::from(q);
     for c in s.chars() {
         match c {
@@ -118,7 +122,10 @@ pub(super) struct PyInt {
 
 impl PyInt {
     pub(super) fn negated(&self) -> PyInt {
-        PyInt { neg: !self.neg && self.mag != "0", mag: self.mag.clone() }
+        PyInt {
+            neg: !self.neg && self.mag != "0",
+            mag: self.mag.clone(),
+        }
     }
 }
 
@@ -182,7 +189,9 @@ pub(super) fn py_int(text: &str) -> Option<PyInt> {
     for (i, &c) in chars.iter().enumerate() {
         if c == '_' {
             let before = i > 0 && chars[i - 1] != '_';
-            let after = chars.get(i + 1).is_some_and(|&n| n != '_' && decimal_value(n).is_some());
+            let after = chars
+                .get(i + 1)
+                .is_some_and(|&n| n != '_' && decimal_value(n).is_some());
             if !before || !after {
                 return None;
             }
@@ -191,16 +200,25 @@ pub(super) fn py_int(text: &str) -> Option<PyInt> {
         digits.push(char::from_digit(decimal_value(c)?, 10)?);
     }
     let mag = digits.trim_start_matches('0');
-    let mag = if mag.is_empty() { "0".to_string() } else { mag.to_string() };
+    let mag = if mag.is_empty() {
+        "0".to_string()
+    } else {
+        mag.to_string()
+    };
     let zero = mag == "0";
-    Some(PyInt { neg: neg && !zero, mag })
+    Some(PyInt {
+        neg: neg && !zero,
+        mag,
+    })
 }
 
 /// `float(x)` where Python's datetime.fromtimestamp takes it: an int, a
 /// bool or a float. Anything else is the TypeError it raises.
 pub(super) fn timestamp_of(v: Option<&Value>) -> Result<f64, String> {
     match v {
-        Some(Value::Number(n)) => n.as_f64().ok_or_else(|| "timestamp out of range".to_string()),
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .ok_or_else(|| "timestamp out of range".to_string()),
         Some(Value::Bool(b)) => Ok(f64::from(u8::from(*b))),
         Some(other) => Err(format!("TypeError: not a timestamp: {}", py_repr(other))),
         None => Err("KeyError: 'built_ts'".to_string()),
@@ -251,7 +269,10 @@ pub(super) fn py_format_thousands(v: &Value) -> Result<String, String> {
             Ok(format!("{sign}{}.{frac}", group_digits(int)))
         }
         Value::String(_) => Err("ValueError: Cannot specify ',' with 's'.".to_string()),
-        other => Err(format!("TypeError: unsupported format string passed to {}", py_repr(other))),
+        other => Err(format!(
+            "TypeError: unsupported format string passed to {}",
+            py_repr(other)
+        )),
     }
 }
 
@@ -261,7 +282,10 @@ pub(super) fn py_format_thousands(v: &Value) -> Result<String, String> {
 /// year outside 1-9999.
 pub(super) fn local_time(ts: f64, fmt: &str) -> Result<String, String> {
     if !ts.is_finite() {
-        return Err(format!("ValueError: Invalid value {} for timestamp", crate::util::py_float_repr(ts)));
+        return Err(format!(
+            "ValueError: Invalid value {} for timestamp",
+            crate::util::py_float_repr(ts)
+        ));
     }
     // fromtimestamp rounds to the microsecond, half to even.
     let micros = (ts * 1e6).round_ties_even();
@@ -337,14 +361,32 @@ mod tests {
     #[test]
     fn values_print_as_python_str_and_format() {
         assert_eq!(py_str(&serde_json::json!(["GPL", "MIT"])), "['GPL', 'MIT']");
-        assert_eq!(py_str(&serde_json::json!({"a": 1, "b": [true, null]})), "{'a': 1, 'b': [True, None]}");
+        assert_eq!(
+            py_str(&serde_json::json!({"a": 1, "b": [true, null]})),
+            "{'a': 1, 'b': [True, None]}"
+        );
         assert_eq!(py_str(&serde_json::json!(["it's"])), "[\"it's\"]");
         assert_eq!(py_str(&serde_json::json!(1.5)), "1.5");
-        assert_eq!(py_format_thousands(&serde_json::json!(1234)).as_deref(), Ok("1,234"));
-        assert_eq!(py_format_thousands(&serde_json::json!(-1234567)).as_deref(), Ok("-1,234,567"));
-        assert_eq!(py_format_thousands(&serde_json::json!(1234.0)).as_deref(), Ok("1,234.0"));
-        assert_eq!(py_format_thousands(&serde_json::json!(1e16)).as_deref(), Ok("1e+16"));
-        assert_eq!(py_format_thousands(&serde_json::json!(true)).as_deref(), Ok("1"));
+        assert_eq!(
+            py_format_thousands(&serde_json::json!(1234)).as_deref(),
+            Ok("1,234")
+        );
+        assert_eq!(
+            py_format_thousands(&serde_json::json!(-1234567)).as_deref(),
+            Ok("-1,234,567")
+        );
+        assert_eq!(
+            py_format_thousands(&serde_json::json!(1234.0)).as_deref(),
+            Ok("1,234.0")
+        );
+        assert_eq!(
+            py_format_thousands(&serde_json::json!(1e16)).as_deref(),
+            Ok("1e+16")
+        );
+        assert_eq!(
+            py_format_thousands(&serde_json::json!(true)).as_deref(),
+            Ok("1")
+        );
         assert!(py_format_thousands(&serde_json::json!("12")).is_err());
         assert!(timestamp_of(Some(&serde_json::json!("1700000000"))).is_err());
         assert_eq!(timestamp_of(Some(&serde_json::json!(5))), Ok(5.0));
@@ -353,7 +395,10 @@ mod tests {
         assert_eq!(Value::Null.detail_text(), None);
         assert_eq!(serde_json::json!("").detail_text(), None);
         assert_eq!(serde_json::json!(0).detail_text().as_deref(), Some("0"));
-        assert_eq!(serde_json::json!(false).detail_text().as_deref(), Some("False"));
+        assert_eq!(
+            serde_json::json!(false).detail_text().as_deref(),
+            Some("False")
+        );
         assert_eq!("".detail_text(), None);
     }
 
@@ -374,8 +419,14 @@ mod tests {
         assert!(py_int(&big) > py_int("1"));
         assert!(py_int(&big).map(|n| n.negated()) < py_int("-1"));
         assert_eq!(py_strip("\u{1c} ab \u{1f}\n"), "ab");
-        let mut a = AppItem { added: "2024_01_02".into(), ..Default::default() };
-        let b = AppItem { added: "2024-03-01".into(), ..Default::default() };
+        let mut a = AppItem {
+            added: "2024_01_02".into(),
+            ..Default::default()
+        };
+        let b = AppItem {
+            added: "2024-03-01".into(),
+            ..Default::default()
+        };
         assert_eq!(sort_cmp("trending", &a, &b), Ordering::Greater);
         a.added = "\u{0662}\u{0660}\u{0662}\u{0665}\u{0660}\u{0661}\u{0660}\u{0661}".into(); // 20250101
         assert_eq!(sort_cmp("trending", &a, &b), Ordering::Less);

@@ -23,9 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::util::human_error;
 use adw::prelude::*;
 use gtk::glib;
-use crate::util::human_error;
 
 /// A step that is work done in this process rather than a command --
 /// downloading and registering an AppImage, say. It takes the log function
@@ -83,7 +83,14 @@ pub fn fix_steps(label: &str, fix: Option<crate::maintenance::Fix>) -> Vec<Step>
     actions
         .into_iter()
         .enumerate()
-        .map(|(i, action)| Step { label: if n > 1 { format!("{label} ({}/{n})", i + 1) } else { label.to_string() }, action })
+        .map(|(i, action)| Step {
+            label: if n > 1 {
+                format!("{label} ({}/{n})", i + 1)
+            } else {
+                label.to_string()
+            },
+            action,
+        })
         .collect()
 }
 
@@ -97,12 +104,18 @@ pub struct Step {
 impl Step {
     /// `(label, [argv...])`.
     pub fn argv(label: impl Into<String>, argv: Vec<String>) -> Self {
-        Step { label: label.into(), action: StepAction::Argv(argv) }
+        Step {
+            label: label.into(),
+            action: StepAction::Argv(argv),
+        }
     }
 
     /// `(label, callable)`.
     pub fn call(label: impl Into<String>, f: StepFn) -> Self {
-        Step { label: label.into(), action: StepAction::Call(f) }
+        Step {
+            label: label.into(),
+            action: StepAction::Call(f),
+        }
     }
 }
 
@@ -127,13 +140,23 @@ pub fn needs_root(argv: &[String]) -> bool {
 pub const PKEXEC: &str = "/usr/bin/pkexec";
 
 /// The `yay -S` argv that installs `names` without a terminal: yay builds as
-/// this user and only its final pacman runs as root, through pkexec, both
-/// named by path.
+/// this user and only its final pacman runs as root, through pkexec. All
+/// three are named by path: yay found through PATH could be one planted in
+/// a user-writable folder ahead of /usr/bin.
 pub fn yay_install<S: AsRef<str>>(names: &[S]) -> Vec<String> {
-    let mut argv: Vec<String> = ["yay", "-S", "--needed", "--noconfirm", "--sudo", PKEXEC, "--pacman", "/usr/bin/pacman"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut argv: Vec<String> = [
+        crate::inventory::YAY,
+        "-S",
+        "--needed",
+        "--noconfirm",
+        "--sudo",
+        PKEXEC,
+        "--pacman",
+        "/usr/bin/pacman",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     argv.extend(names.iter().map(|n| n.as_ref().to_string()));
     argv
 }
@@ -145,7 +168,11 @@ pub fn yay_install<S: AsRef<str>>(names: &[S]) -> Vec<String> {
 /// changes what a relative path means mid-task.
 pub fn elevate(argv: &[String]) -> Vec<String> {
     if needs_root(argv) {
-        let mut out = vec![PKEXEC.to_string(), "--keep-cwd".to_string(), format!("/usr/bin/{}", argv[0])];
+        let mut out = vec![
+            PKEXEC.to_string(),
+            "--keep-cwd".to_string(),
+            format!("/usr/bin/{}", argv[0]),
+        ];
         out.extend(argv[1..].iter().cloned());
         out
     } else {
@@ -359,6 +386,14 @@ impl TaskDialog {
             });
         }
 
+        // Callers drop what `run` returns, and the worker lets go when it
+        // finishes, so the open dialog holds itself until it is closed (by
+        // Close or Escape); the handlers above would find nothing otherwise.
+        let keep = RefCell::new(Some(this.clone()));
+        this.dialog.connect_closed(move |_d| {
+            keep.borrow_mut().take();
+        });
+
         let t = this.downgrade();
         let id = glib::timeout_add_local(Duration::from_millis(90), move || match t.upgrade() {
             Some(t) => t.tick(),
@@ -430,7 +465,8 @@ impl TaskDialog {
                 use nix::sys::signal::{killpg, Signal};
                 // The child may itself have children (git, makepkg); signal the
                 // whole group so cancelling actually stops the work.
-                match nix::unistd::getpgid(Some(proc.pid)).and_then(|g| killpg(g, Signal::SIGTERM)) {
+                match nix::unistd::getpgid(Some(proc.pid)).and_then(|g| killpg(g, Signal::SIGTERM))
+                {
                     Ok(()) => {}
                     Err(Errno::ESRCH | Errno::EPERM) => {
                         if let Err(exc) = proc.terminate() {
@@ -458,7 +494,9 @@ impl TaskDialog {
         let mut end = self.buffer.end_iter();
         self.buffer.insert(&mut end, c_str(line));
         // Follow the tail, the way a terminal would.
-        let mark = self.buffer.create_mark(None, &self.buffer.end_iter(), false);
+        let mark = self
+            .buffer
+            .create_mark(None, &self.buffer.end_iter(), false);
         self.text.scroll_mark_onscreen(&mark);
         self.buffer.delete_mark(&mark);
     }
@@ -516,7 +554,9 @@ fn shlex_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
     }
-    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    let safe = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
     if safe {
         return s.to_string();
     }
@@ -530,9 +570,8 @@ fn py_isprintable(c: char) -> bool {
         return (' '..='~').contains(&c);
     }
     static NONPRINT: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
-    let re = NONPRINT.get_or_init(|| {
-        regex::Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").ok()
-    });
+    let re = NONPRINT
+        .get_or_init(|| regex::Regex::new(r"^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]$").ok());
     match re {
         Some(re) => !re.is_match(c.encode_utf8(&mut [0u8; 4])),
         None => true,
@@ -541,7 +580,11 @@ fn py_isprintable(c: char) -> bool {
 
 /// Python's `repr()` of a str, as it shows up inside an OSError message.
 fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -585,7 +628,9 @@ fn py_strip(s: &str) -> &str {
 /// `os.strerror(n)`: io::Error prints "<strerror> (os error N)".
 fn py_strerror(n: i32) -> String {
     let msg = std::io::Error::from_raw_os_error(n).to_string();
-    msg.strip_suffix(&format!(" (os error {n})")).unwrap_or(&msg).to_string()
+    msg.strip_suffix(&format!(" (os error {n})"))
+        .unwrap_or(&msg)
+        .to_string()
 }
 
 /// `str(OSError(n, strerror))`: `[Errno 2] No such file or directory`.
@@ -633,11 +678,16 @@ fn py_popen(
     use std::os::unix::ffi::OsStrExt;
 
     let Some(program) = cmd.first() else {
-        return Err(SpawnError::Other("IndexError: list index out of range".into()));
+        return Err(SpawnError::Other(
+            "IndexError: list index out of range".into(),
+        ));
     };
     let nul = || SpawnError::Other("ValueError: embedded null byte".into());
-    let argv: Vec<CString> =
-        cmd.iter().map(|a| CString::new(a.as_bytes())).collect::<Result<_, _>>().map_err(|_| nul())?;
+    let argv: Vec<CString> = cmd
+        .iter()
+        .map(|a| CString::new(a.as_bytes()))
+        .collect::<Result<_, _>>()
+        .map_err(|_| nul())?;
     let envp: Vec<CString> = std::env::vars_os()
         .filter_map(|(k, v)| {
             let mut kv = k.as_bytes().to_vec();
@@ -698,7 +748,9 @@ fn py_popen(
     let mut saved: Option<nix::Error> = None;
     let mut last = nix::Error::ENOENT;
     for cand in &candidates {
-        let Ok(path) = CString::new(cand.clone()) else { return Err(nul()) };
+        let Ok(path) = CString::new(cand.clone()) else {
+            return Err(nul());
+        };
         match posix_spawn(path.as_c_str(), &actions, &attr, &argv, &envp) {
             Ok(pid) => return Ok(pid),
             Err(e) => {
@@ -711,7 +763,11 @@ fn py_popen(
     }
     // Report the first exec error, not the last.
     let e = saved.unwrap_or(last);
-    Err(SpawnError::Os(format!("{}: {}", py_errno_str(e as i32), py_str_repr(program))))
+    Err(SpawnError::Os(format!(
+        "{}: {}",
+        py_errno_str(e as i32),
+        py_str_repr(program)
+    )))
 }
 
 /// The descriptors open in this process, as `_posixsubprocess` finds them
@@ -811,13 +867,28 @@ fn spawn(cmd: &[String]) -> Result<Proc, SpawnError> {
         .read(true)
         .write(true)
         .open("/dev/null")
-        .map_err(|e| SpawnError::Os(format!("{}: '/dev/null'", py_errno_str(e.raw_os_error().unwrap_or(0)))))?;
+        .map_err(|e| {
+            SpawnError::Os(format!(
+                "{}: '/dev/null'",
+                py_errno_str(e.raw_os_error().unwrap_or(0))
+            ))
+        })?;
     let (reader, writer) = std::io::pipe().map_err(io_err)?;
-    let pid = py_popen(cmd, Some(devnull.as_fd()), writer.as_fd(), writer.as_fd(), true)?;
+    let pid = py_popen(
+        cmd,
+        Some(devnull.as_fd()),
+        writer.as_fd(),
+        writer.as_fd(),
+        true,
+    )?;
     // Our copy of the write end closes here, so the read end sees EOF once
     // the child and its children are done.
     drop(writer);
-    Ok(Proc { pid, returncode: Mutex::new(None), stdout: reader })
+    Ok(Proc {
+        pid,
+        returncode: Mutex::new(None),
+        stdout: reader,
+    })
 }
 
 /// The codeset Python's `text=True` decodes with:
@@ -843,20 +914,28 @@ fn preferred_encoding() -> &'static str {
         if utf8_mode.as_deref() == Some("1") {
             return "UTF-8".to_string();
         }
-        let name = var("LC_ALL").or_else(|| var("LC_CTYPE")).or_else(|| var("LANG"))
+        let name = var("LC_ALL")
+            .or_else(|| var("LC_CTYPE"))
+            .or_else(|| var("LANG"))
             .unwrap_or_else(|| "C".to_string());
-        if (name == "C" || name == "POSIX")
-            && utf8_mode.as_deref() != Some("0") {
-                return "UTF-8".to_string();
-            }
-        let out = crate::util::run_with(&["locale", "charmap"], &crate::util::RunOpts {
-            timeout: Some(Duration::from_secs(5)),
-            env: vec![("LC_ALL".into(), name.clone().into())],
-            ..Default::default()
-        });
+        if (name == "C" || name == "POSIX") && utf8_mode.as_deref() != Some("0") {
+            return "UTF-8".to_string();
+        }
+        let out = crate::util::run_with(
+            &["locale", "charmap"],
+            &crate::util::RunOpts {
+                timeout: Some(Duration::from_secs(5)),
+                env: vec![("LC_ALL".into(), name.clone().into())],
+                ..Default::default()
+            },
+        );
         let charmap = out.stdout.trim().to_string();
-        let is_c = name == "C" || name == "POSIX" || !out.ok() || !out.stderr.trim().is_empty()
-            || charmap.is_empty() || charmap == "ANSI_X3.4-1968";
+        let is_c = name == "C"
+            || name == "POSIX"
+            || !out.ok()
+            || !out.stderr.trim().is_empty()
+            || charmap.is_empty()
+            || charmap == "ANSI_X3.4-1968";
         if !is_c {
             return charmap;
         }
@@ -882,7 +961,12 @@ fn decode_chunk(pending: &mut Vec<u8>, chunk: &[u8], final_: bool) -> Result<Vec
     decode_chunk_as(preferred_encoding(), pending, chunk, final_)
 }
 
-fn decode_chunk_as(enc: &str, pending: &mut Vec<u8>, chunk: &[u8], final_: bool) -> Result<Vec<u8>, String> {
+fn decode_chunk_as(
+    enc: &str,
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+    final_: bool,
+) -> Result<Vec<u8>, String> {
     let mut data = std::mem::take(pending);
     data.extend_from_slice(chunk);
     if !is_utf8_codeset(enc) {
@@ -938,11 +1022,21 @@ fn decode_legacy(
         }
         return Ok(data);
     }
-    if matches!(lower.as_str(), "iso-8859-1" | "iso8859-1" | "latin1" | "latin-1") {
-        return Ok(data.iter().map(|&b| b as char).collect::<String>().into_bytes());
+    if matches!(
+        lower.as_str(),
+        "iso-8859-1" | "iso8859-1" | "latin1" | "latin-1"
+    ) {
+        return Ok(data
+            .iter()
+            .map(|&b| b as char)
+            .collect::<String>()
+            .into_bytes());
     }
-    let single_byte = lower.starts_with("iso-8859") || lower.starts_with("iso8859")
-        || lower.starts_with("koi8") || lower.starts_with("cp") || lower.starts_with("windows-");
+    let single_byte = lower.starts_with("iso-8859")
+        || lower.starts_with("iso8859")
+        || lower.starts_with("koi8")
+        || lower.starts_with("cp")
+        || lower.starts_with("windows-");
     let bad = |at: usize| {
         let b = data.get(at).copied().unwrap_or(0);
         if single_byte {
@@ -967,7 +1061,9 @@ fn decode_legacy(
         }
         Ok((out, _)) => Ok(out.to_vec()),
         Err(glib::CvtError::IllegalSequence { offset, .. }) => Err((Some(offset), bad(offset))),
-        Err(glib::CvtError::Convert(_)) => Err((None, format!("LookupError: unknown encoding: {enc}"))),
+        Err(glib::CvtError::Convert(_)) => {
+            Err((None, format!("LookupError: unknown encoding: {enc}")))
+        }
     }
 }
 
@@ -991,7 +1087,8 @@ fn decode_chunk_lossy(enc: &str, pending: &mut Vec<u8>, chunk: &[u8], final_: bo
                 }
                 Err((Some(at), _)) if at < data.len() => {
                     // What comes before the bad byte decodes on its own.
-                    if let Ok(text) = decode_legacy(enc, &mut Vec::new(), data[..at].to_vec(), true) {
+                    if let Ok(text) = decode_legacy(enc, &mut Vec::new(), data[..at].to_vec(), true)
+                    {
                         out.extend(text);
                     }
                     out.extend_from_slice(REPLACEMENT);
@@ -1054,7 +1151,12 @@ fn for_each_line(mut reader: impl std::io::Read, mut f: impl FnMut(&str)) -> Res
         let n = match reader.read(&mut buf) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("OSError: {}", py_errno_str(e.raw_os_error().unwrap_or(0)))),
+            Err(e) => {
+                return Err(format!(
+                    "OSError: {}",
+                    py_errno_str(e.raw_os_error().unwrap_or(0))
+                ))
+            }
         };
         let data = decode_chunk_lossy(preferred_encoding(), &mut pending, &buf[..n], n == 0);
         for &b in &data {
@@ -1206,6 +1308,33 @@ pub fn confirm(
     destructive: bool,
     on_yes: impl Fn() + 'static,
 ) {
+    confirm_then(
+        parent,
+        heading,
+        body,
+        detail,
+        action,
+        destructive,
+        move |yes| {
+            if yes {
+                on_yes();
+            }
+        },
+    );
+}
+
+/// [`confirm`], also told when the answer is no (Cancel, Escape, closing
+/// it): for a caller with more to do either way.
+#[allow(clippy::too_many_arguments)]
+pub fn confirm_then(
+    parent: &impl gtk::glib::object::IsA<gtk::Widget>,
+    heading: &str,
+    body: &str,
+    detail: &str,
+    action: &str,
+    destructive: bool,
+    on_answer: impl Fn(bool) + 'static,
+) {
     let body = crate::util::human_error(body);
     let dialog = adw::AlertDialog::new(Some(c_str(heading)), Some(c_str(&body)));
     if !detail.is_empty() {
@@ -1243,11 +1372,7 @@ pub fn confirm(
     );
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
-    dialog.connect_response(None, move |_d, resp| {
-        if resp == "go" {
-            on_yes();
-        }
-    });
+    dialog.connect_response(None, move |_d, resp| on_answer(resp == "go"));
     dialog.present(Some(parent));
 }
 
@@ -1266,8 +1391,10 @@ pub fn preview_removal(names: &[String]) -> (bool, String) {
 
 /// `preview_removal`, with what the Python raises to its caller as `Err`.
 pub fn preview_removal_checked(names: &[String]) -> Result<(bool, String), String> {
-    let mut argv: Vec<String> =
-        ["pacman", "-Rs", "--print", "--print-format", "%n %v"].iter().map(|s| s.to_string()).collect();
+    let mut argv: Vec<String> = ["pacman", "-Rs", "--print", "--print-format", "%n %v"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     argv.extend(names.iter().cloned());
     // subprocess.run(argv, capture_output=True, text=True, timeout=60):
     // stdin is the app's own.
@@ -1280,7 +1407,10 @@ pub fn preview_removal_checked(names: &[String]) -> Result<(bool, String), Strin
     let Some((code, stdout, stderr)) = out else {
         // subprocess.TimeoutExpired
         let list: Vec<String> = argv.iter().map(|a| py_str_repr(a)).collect();
-        return Ok((false, format!("Command '[{}]' timed out after 60 seconds", list.join(", "))));
+        return Ok((
+            false,
+            format!("Command '[{}]' timed out after 60 seconds", list.join(", ")),
+        ));
     };
     let stdout = py_text(stdout)?;
     let stderr = py_text(stderr)?;
@@ -1309,7 +1439,10 @@ fn py_text(bytes: Vec<u8>) -> Result<String, String> {
 /// std's fork path makes through execvp; close_fds; the first PATH error
 /// that is not ENOENT, named).
 #[allow(clippy::type_complexity)]
-fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec<u8>, Vec<u8>)>, SpawnError> {
+fn py_run_capture(
+    argv: &[String],
+    timeout: Duration,
+) -> Result<Option<(i32, Vec<u8>, Vec<u8>)>, SpawnError> {
     use std::io::Read;
     use std::os::fd::AsFd;
     use std::sync::mpsc;
@@ -1319,14 +1452,20 @@ fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec
     let pid = py_popen(argv, None, out_w.as_fd(), err_w.as_fd(), false)?;
     drop(out_w);
     drop(err_w);
-    let proc = Proc { pid, returncode: Mutex::new(None), stdout: out_r };
+    let proc = Proc {
+        pid,
+        returncode: Mutex::new(None),
+        stdout: out_r,
+    };
     let start = std::time::Instant::now();
 
     // communicate(timeout=...): both pipes to EOF, then the exit status, all
     // within the timeout.
     let (tx, rx) = mpsc::channel::<(usize, std::io::Result<Vec<u8>>)>();
-    let readers: Vec<Box<dyn Read + Send>> =
-        vec![Box::new(proc.stdout.try_clone().map_err(io_err)?), Box::new(err_r)];
+    let readers: Vec<Box<dyn Read + Send>> = vec![
+        Box::new(proc.stdout.try_clone().map_err(io_err)?),
+        Box::new(err_r),
+    ];
     for (i, mut r) in readers.into_iter().enumerate() {
         let tx = tx.clone();
         std::thread::spawn(move || {
@@ -1358,7 +1497,11 @@ fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec
     loop {
         if let Some(code) = proc.poll() {
             let [out, err] = got;
-            return Ok(Some((code, out.unwrap_or_default(), err.unwrap_or_default())));
+            return Ok(Some((
+                code,
+                out.unwrap_or_default(),
+                err.unwrap_or_default(),
+            )));
         }
         if start.elapsed() >= timeout {
             timed_out(&proc);
@@ -1368,13 +1511,19 @@ fn py_run_capture(argv: &[String], timeout: Duration) -> Result<Option<(i32, Vec
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// PATH puts user-writable npm and mise bins first: yay is named by
+    /// path, as pkexec and pacman already were.
+    #[test]
+    fn yay_is_run_by_path() {
+        assert_eq!(yay_install(&["p"])[..2], v(&["/usr/bin/yay", "-S"]));
     }
 
     /// A batch of unrelated updates runs every step; the first failure
@@ -1384,21 +1533,38 @@ mod tests {
         let ran = Arc::new(Mutex::new(Vec::new()));
         let step = |name: &'static str, ok: bool| {
             let ran = ran.clone();
-            Step::call(name, Arc::new(move |_log: LogFn<'_>| {
-                ran.lock().unwrap().push(name);
-                if ok { Ok(()) } else { Err(format!("{name} broke")) }
-            }))
+            Step::call(
+                name,
+                Arc::new(move |_log: LogFn<'_>| {
+                    ran.lock().unwrap().push(name);
+                    if ok {
+                        Ok(())
+                    } else {
+                        Err(format!("{name} broke"))
+                    }
+                }),
+            )
         };
         let steps = vec![step("a", true), step("b", false), step("c", true)];
         let lines = Mutex::new(Vec::new());
         let log = |l: &str| lines.lock().unwrap().push(l.to_string());
         let run = |keep_going| {
             ran.lock().unwrap().clear();
-            work(&steps, &AtomicBool::new(false), &Mutex::new(None), &|_| {}, &log, keep_going)
+            work(
+                &steps,
+                &AtomicBool::new(false),
+                &Mutex::new(None),
+                &|_| {},
+                &log,
+                keep_going,
+            )
         };
         assert_eq!(run(true), Ok(false));
         assert_eq!(*ran.lock().unwrap(), vec!["a", "b", "c"]);
-        assert!(lines.lock().unwrap().contains(&"failed: b broke".to_string()));
+        assert!(lines
+            .lock()
+            .unwrap()
+            .contains(&"failed: b broke".to_string()));
         assert_eq!(run(false), Ok(false));
         assert_eq!(*ran.lock().unwrap(), vec!["a", "b"]);
     }
@@ -1407,15 +1573,28 @@ mod tests {
     /// from a command it ran is shown as printed.
     #[test]
     fn a_steps_own_lines_are_humanized_a_commands_are_not() {
-        let steps = vec![Step::call("x", Arc::new(|log: LogFn<'_>| {
-            log("x: skipped — KeyError: 'k'");
-            log(&output("TypeError: bad (from the plugin's own script)"));
-            log(&output("[Errno 2] No such file or directory: 'hook'"));
-            Ok(())
-        }))];
+        let steps = vec![Step::call(
+            "x",
+            Arc::new(|log: LogFn<'_>| {
+                log("x: skipped — KeyError: 'k'");
+                log(&output("TypeError: bad (from the plugin's own script)"));
+                log(&output("[Errno 2] No such file or directory: 'hook'"));
+                Ok(())
+            }),
+        )];
         let lines = Mutex::new(Vec::new());
         let log = |l: &str| lines.lock().unwrap().push(l.to_string());
-        assert_eq!(work(&steps, &AtomicBool::new(false), &Mutex::new(None), &|_| {}, &log, false), Ok(true));
+        assert_eq!(
+            work(
+                &steps,
+                &AtomicBool::new(false),
+                &Mutex::new(None),
+                &|_| {},
+                &log,
+                false
+            ),
+            Ok(true)
+        );
         assert_eq!(
             *lines.lock().unwrap(),
             [
@@ -1432,9 +1611,17 @@ mod tests {
         // As the user it deletes nothing, prints "freed 0B" and exits 0.
         assert_eq!(
             elevate(&v(&["journalctl", "--vacuum-size=500M"])),
-            v(&["/usr/bin/pkexec", "--keep-cwd", "/usr/bin/journalctl", "--vacuum-size=500M"])
+            v(&[
+                "/usr/bin/pkexec",
+                "--keep-cwd",
+                "/usr/bin/journalctl",
+                "--vacuum-size=500M"
+            ])
         );
-        assert_eq!(elevate(&v(&["pacman", "-Sc"]))[..3], v(&["/usr/bin/pkexec", "--keep-cwd", "/usr/bin/pacman"]));
+        assert_eq!(
+            elevate(&v(&["pacman", "-Sc"]))[..3],
+            v(&["/usr/bin/pkexec", "--keep-cwd", "/usr/bin/pacman"])
+        );
         assert!(!needs_root(&v(&["journalctl", "--disk-usage"])));
     }
 
@@ -1478,20 +1665,34 @@ mod tests {
         struct OneByte<'a>(&'a [u8]);
         impl std::io::Read for OneByte<'_> {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                let Some((&b, rest)) = self.0.split_first() else { return Ok(0) };
+                let Some((&b, rest)) = self.0.split_first() else {
+                    return Ok(0);
+                };
                 buf[0] = b;
                 self.0 = rest;
                 Ok(1)
             }
         }
         let mut got = Vec::new();
-        for_each_line(OneByte("é日本\n".as_bytes()), |l| got.push(l.to_string())).unwrap();
+        for_each_line(OneByte("é日本\n".as_bytes()), |l| {
+            got.push(l.to_string())
+        })
+        .unwrap();
         assert_eq!(got, ["é日本"]);
         let mut p = Vec::new();
-        assert_eq!(decode_chunk_lossy("ISO-8859-1", &mut p, b"\xe9", true), "é".as_bytes());
-        assert_eq!(decode_chunk_lossy("ANSI_X3.4-1968", &mut p, b"a\xe9b", true), "a\u{FFFD}b".as_bytes());
+        assert_eq!(
+            decode_chunk_lossy("ISO-8859-1", &mut p, b"\xe9", true),
+            "é".as_bytes()
+        );
+        assert_eq!(
+            decode_chunk_lossy("ANSI_X3.4-1968", &mut p, b"a\xe9b", true),
+            "a\u{FFFD}b".as_bytes()
+        );
         assert_eq!(decode_chunk_lossy("EUC-JP", &mut p, b"a\xa4", false), b"a");
-        assert_eq!(decode_chunk_lossy("EUC-JP", &mut p, b"\xa2\xff", true), "あ\u{FFFD}".as_bytes());
+        assert_eq!(
+            decode_chunk_lossy("EUC-JP", &mut p, b"\xa2\xff", true),
+            "あ\u{FFFD}".as_bytes()
+        );
     }
 
     /// A command that prints bytes that are not UTF-8 runs to its end: its
@@ -1506,11 +1707,17 @@ mod tests {
         let lines = Mutex::new(Vec::new());
         let log = |l: &str| lines.lock().unwrap().push(l.to_string());
         let slot = Mutex::new(None);
-        assert_eq!(work(&steps, &AtomicBool::new(false), &slot, &|_| {}, &log, true), Ok(false));
+        assert_eq!(
+            work(&steps, &AtomicBool::new(false), &slot, &|_| {}, &log, true),
+            Ok(false)
+        );
         let lines = lines.into_inner().unwrap();
         assert!(lines.contains(&"a\u{FFFD}b".to_string()), "{lines:?}");
         assert!(lines.contains(&"— exited 3 —".to_string()), "{lines:?}");
-        assert!(lines.contains(&"$ true".to_string()), "the next step still ran: {lines:?}");
+        assert!(
+            lines.contains(&"$ true".to_string()),
+            "the next step still ran: {lines:?}"
+        );
         assert!(slot.lock().unwrap().is_none());
     }
 
@@ -1524,14 +1731,31 @@ mod tests {
     #[test]
     fn legacy_codesets() {
         let mut p = Vec::new();
-        assert_eq!(decode_chunk_as("ISO-8859-1", &mut p, b"\xe9\xff", true).unwrap(), "\u{e9}\u{ff}".as_bytes());
-        assert!(decode_chunk_as("ANSI_X3.4-1968", &mut p, b"ok\xe9", true).unwrap_err().contains("'ascii' codec"));
-        assert_eq!(decode_chunk_as("ISO-8859-15", &mut p, b"\xa4", true).unwrap(), "\u{20ac}".as_bytes());
+        assert_eq!(
+            decode_chunk_as("ISO-8859-1", &mut p, b"\xe9\xff", true).unwrap(),
+            "\u{e9}\u{ff}".as_bytes()
+        );
+        assert!(decode_chunk_as("ANSI_X3.4-1968", &mut p, b"ok\xe9", true)
+            .unwrap_err()
+            .contains("'ascii' codec"));
+        assert_eq!(
+            decode_chunk_as("ISO-8859-15", &mut p, b"\xa4", true).unwrap(),
+            "\u{20ac}".as_bytes()
+        );
         // Multi-byte UTF-8 is not Latin-1 text: it decodes byte by byte.
-        assert_eq!(decode_chunk_as("ISO-8859-1", &mut p, "é".as_bytes(), true).unwrap(), "Ã©".as_bytes());
+        assert_eq!(
+            decode_chunk_as("ISO-8859-1", &mut p, "é".as_bytes(), true).unwrap(),
+            "Ã©".as_bytes()
+        );
         // An incomplete sequence waits for the next chunk.
-        assert_eq!(decode_chunk_as("EUC-JP", &mut p, b"a\xa4", false).unwrap(), b"a");
-        assert_eq!(decode_chunk_as("EUC-JP", &mut p, b"\xa2", true).unwrap(), "あ".as_bytes());
+        assert_eq!(
+            decode_chunk_as("EUC-JP", &mut p, b"a\xa4", false).unwrap(),
+            b"a"
+        );
+        assert_eq!(
+            decode_chunk_as("EUC-JP", &mut p, b"\xa2", true).unwrap(),
+            "あ".as_bytes()
+        );
         assert!(decode_chunk_as("EUC-JP", &mut p, b"\xa4", true).is_err());
     }
 
@@ -1544,7 +1768,9 @@ mod tests {
         if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
             return None;
         }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gtk::gdk::Display::default().is_none() {
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
+            || gtk::gdk::Display::default().is_none()
+        {
             return None;
         }
         Some(())
@@ -1583,26 +1809,83 @@ mod tests {
         parent.present();
         // An argv with a NUL byte: the worker ends in an error.
         for steps in [
-            vec![Step::call("ok", Arc::new(|log: LogFn<'_>| {
-                log("working");
-                Ok(())
-            }))],
+            vec![Step::call(
+                "ok",
+                Arc::new(|log: LogFn<'_>| {
+                    log("working");
+                    Ok(())
+                }),
+            )],
             vec![Step::argv("nul", v(&["true", "a\0b"]))],
         ] {
             let result = Rc::new(std::cell::Cell::new(None));
             let r = result.clone();
-            let t = run(&parent, "Test", steps, Some(Box::new(move |ok| r.set(Some(ok)))));
-            assert!(spin(10, || result.get().is_some()), "the task never finished");
-            let (dialog, on_done, pulse) = (t.dialog.downgrade(), Rc::downgrade(&t.on_done), Rc::downgrade(&t.pulse));
+            let t = run(
+                &parent,
+                "Test",
+                steps,
+                Some(Box::new(move |ok| r.set(Some(ok)))),
+            );
+            assert!(
+                spin(10, || result.get().is_some()),
+                "the task never finished"
+            );
+            let (dialog, on_done, pulse) = (
+                t.dialog.downgrade(),
+                Rc::downgrade(&t.on_done),
+                Rc::downgrade(&t.pulse),
+            );
             assert!(t.close_btn.is_visible());
             t.close_btn.emit_clicked();
             drop(t);
-            let closed = || dialog.upgrade().is_none_or(|d| !d.is_mapped() && d.parent().is_none());
+            let closed = || {
+                dialog
+                    .upgrade()
+                    .is_none_or(|d| !d.is_mapped() && d.parent().is_none())
+            };
             assert!(
-                spin(10, || closed() && on_done.upgrade().is_none() && pulse.upgrade().is_none()),
+                spin(10, || closed()
+                    && on_done.upgrade().is_none()
+                    && pulse.upgrade().is_none()),
                 "the closed dialog is still alive"
             );
         }
+        parent.destroy();
+    }
+
+    /// Callers drop what `run` returns (`let _ = tasks::run(..)`): the
+    /// finished dialog's Close button must still close it.
+    #[test]
+    fn close_works_after_the_caller_drops_the_dialog() {
+        if gtk_here().is_none() {
+            return;
+        }
+        let parent = adw::Window::new();
+        parent.present();
+        let result = Rc::new(std::cell::Cell::new(None));
+        let r = result.clone();
+        let t = run(
+            &parent,
+            "Test",
+            vec![Step::call("ok", Arc::new(|_log: LogFn<'_>| Ok(())))],
+            Some(Box::new(move |ok| r.set(Some(ok)))),
+        );
+        let (dialog, close_btn) = (t.dialog.downgrade(), t.close_btn.downgrade());
+        drop(t);
+        assert!(
+            spin(10, || result.get().is_some()),
+            "the task never finished"
+        );
+        close_btn
+            .upgrade()
+            .expect("the button is still shown")
+            .emit_clicked();
+        let closed = || {
+            dialog
+                .upgrade()
+                .is_none_or(|d| !d.is_mapped() && d.parent().is_none())
+        };
+        assert!(spin(10, closed), "Close did nothing");
         parent.destroy();
     }
 

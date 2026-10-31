@@ -43,10 +43,16 @@ impl Element {
     }
     /// `find("a/b")`: the first `b` under any `a` child.
     pub fn find2(&self, a: &str, b: &str) -> Option<&Element> {
-        self.children.iter().filter(|c| c.tag == a).find_map(|c| c.find(b))
+        self.children
+            .iter()
+            .filter(|c| c.tag == a)
+            .find_map(|c| c.find(b))
     }
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.attrib.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.attrib
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -111,7 +117,9 @@ fn at(s: &[char], i: usize) -> R<char> {
 }
 
 fn starts(s: &[char], i: usize, lit: &str) -> bool {
-    lit.chars().enumerate().all(|(k, c)| s.get(i + k) == Some(&c))
+    lit.chars()
+        .enumerate()
+        .all(|(k, c)| s.get(i + k) == Some(&c))
 }
 
 fn eq_ci(a: &str, b: &str) -> bool {
@@ -133,7 +141,14 @@ struct Text {
     l1: bool,
 }
 
-const BUILTIN: [&str; 6] = ["ISO-8859-1", "US-ASCII", "UTF-8", "UTF-16", "UTF-16BE", "UTF-16LE"];
+const BUILTIN: [&str; 6] = [
+    "ISO-8859-1",
+    "US-ASCII",
+    "UTF-8",
+    "UTF-16",
+    "UTF-16BE",
+    "UTF-16LE",
+];
 
 fn raise<T>(e: &str) -> R<T> {
     Err(Error::Raise(e.to_string()))
@@ -155,7 +170,13 @@ fn decode(b: &[u8]) -> R<Text> {
     };
     if let Some((le, skip)) = utf16 {
         let body = &b[skip..];
-        let units = body.as_chunks::<2>().0.iter().map(|&p| if le { u16::from_le_bytes(p) } else { u16::from_be_bytes(p) });
+        let units = body.as_chunks::<2>().0.iter().map(|&p| {
+            if le {
+                u16::from_le_bytes(p)
+            } else {
+                u16::from_be_bytes(p)
+            }
+        });
         let mut chars = Vec::new();
         let mut broken = body.len() % 2 == 1;
         for r in char::decode_utf16(units) {
@@ -193,20 +214,25 @@ fn decode(b: &[u8]) -> R<Text> {
         }
         return finish(chars, decl, true);
     }
-    let skip = if b.starts_with(&[0xEF, 0xBB, 0xBF]) { 3 } else { 0 };
+    let skip = if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else {
+        0
+    };
     let body = &b[skip..];
-    let decl_chars: Vec<char> =
-        if body.starts_with(b"<?xml") && matches!(body.get(5), Some(b' ' | b'\t' | b'\n' | b'\r' | b'?')) {
-            let Some(end) = body[5..].windows(2).position(|w| w == b"?>").map(|i| i + 7) else {
-                return bad();
-            };
-            if body[..end].iter().any(|&c| c >= 0x80) {
-                return bad();
-            }
-            body[..end].iter().map(|&c| char::from(c)).collect()
-        } else {
-            Vec::new()
+    let decl_chars: Vec<char> = if body.starts_with(b"<?xml")
+        && matches!(body.get(5), Some(b' ' | b'\t' | b'\n' | b'\r' | b'?'))
+    {
+        let Some(end) = body[5..].windows(2).position(|w| w == b"?>").map(|i| i + 7) else {
+            return bad();
         };
+        if body[..end].iter().any(|&c| c >= 0x80) {
+            return bad();
+        }
+        body[..end].iter().map(|&c| char::from(c)).collect()
+    } else {
+        Vec::new()
+    };
     let decl = xml_decl(&decl_chars)?;
     let name = decl.as_ref().and_then(|d| d.encoding.clone());
     let mut l1 = false;
@@ -245,7 +271,10 @@ fn decode(b: &[u8]) -> R<Text> {
 }
 
 fn utf8(b: &[u8]) -> R<Vec<char>> {
-    Ok(std::str::from_utf8(b).map_err(|_| Error::Parse)?.chars().collect())
+    Ok(std::str::from_utf8(b)
+        .map_err(|_| Error::Parse)?
+        .chars()
+        .collect())
 }
 
 /// Every character must be one XML allows; then XML end-of-line handling.
@@ -266,11 +295,18 @@ fn finish(chars: Vec<char>, decl: Option<Decl>, l1: bool) -> R<Text> {
         }
     }
     let start = match &decl {
-        Some(_) => (5..out.len()).find(|&i| out[i] == '?' && out.get(i + 1) == Some(&'>')).map_or(0, |i| i + 2),
+        Some(_) => (5..out.len())
+            .find(|&i| out[i] == '?' && out.get(i + 1) == Some(&'>'))
+            .map_or(0, |i| i + 2),
         None => 0,
     };
     let standalone = decl.as_ref().is_some_and(|d| d.standalone);
-    Ok(Text { chars: out, start, standalone, l1 })
+    Ok(Text {
+        chars: out,
+        start,
+        standalone,
+        l1,
+    })
 }
 
 /// The XML declaration at the very start, if there is one (expat's
@@ -287,12 +323,19 @@ fn xml_decl(s: &[char]) -> R<Option<Decl>> {
     }
     let body = &s[5..end];
     let mut p = 0;
-    let Some((name, _)) = pseudo_attr(body, &mut p)? else { return bad() };
+    let Some((name, _)) = pseudo_attr(body, &mut p)? else {
+        return bad();
+    };
     if name != "version" {
         return bad();
     }
-    let mut decl = Decl { encoding: None, standalone: false };
-    let Some((mut name, mut val)) = pseudo_attr(body, &mut p)? else { return Ok(Some(decl)) };
+    let mut decl = Decl {
+        encoding: None,
+        standalone: false,
+    };
+    let Some((mut name, mut val)) = pseudo_attr(body, &mut p)? else {
+        return Ok(Some(decl));
+    };
     if name == "encoding" {
         if !val.starts_with(|c: char| c.is_ascii_alphabetic()) {
             return bad();
@@ -485,11 +528,10 @@ fn prolog_tok(s: &[char], i: &mut usize, l1: bool) -> R<Option<Tok>> {
         ',' => one(i, Tok::Comma),
         '[' => one(i, Tok::OpenBracket),
         ']' => {
-            if s.get(*i + 1) == Some(&']')
-                && at(s, *i + 2)? == '>' {
-                    *i += 3;
-                    return Ok(Some(Tok::CondClose));
-                }
+            if s.get(*i + 1) == Some(&']') && at(s, *i + 2)? == '>' {
+                *i += 3;
+                return Ok(Some(Tok::CondClose));
+            }
             one(i, Tok::CloseBracket)
         }
         '(' => one(i, Tok::OpenParen),
@@ -676,7 +718,13 @@ fn scan_ref(s: &[char], i: usize, l1: bool) -> R<(Ref, usize)> {
         if hex {
             k += 1;
         }
-        let digit = |c: char| if hex { c.is_ascii_hexdigit() } else { c.is_ascii_digit() };
+        let digit = |c: char| {
+            if hex {
+                c.is_ascii_hexdigit()
+            } else {
+                c.is_ascii_digit()
+            }
+        };
         if !digit(at(s, k)?) {
             return bad();
         }
@@ -694,7 +742,9 @@ fn scan_ref(s: &[char], i: usize, l1: bool) -> R<(Ref, usize)> {
                 return bad();
             }
         }
-        let c = char::from_u32(n).filter(|&c| valid_char(c)).ok_or(Error::Parse)?;
+        let c = char::from_u32(n)
+            .filter(|&c| valid_char(c))
+            .ok_or(Error::Parse)?;
         return Ok((Ref::Char(c), k + 1));
     }
     if !nmstrt(at(s, k)?, l1) {
@@ -874,7 +924,8 @@ enum St {
 }
 
 fn pubid_ok(s: &[char]) -> bool {
-    s.iter().all(|&c| c.is_ascii_alphanumeric() || " \r\n-'()+,./:=?;!*#@$_%".contains(c))
+    s.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || " \r\n-'()+,./:=?;!*#@$_%".contains(c))
 }
 
 impl Parser {
@@ -960,7 +1011,11 @@ impl Parser {
                     if !pubid_ok(&s[r]) {
                         return bad();
                     }
-                    if st == St::Entity3 { St::Entity4 } else { St::Entity9 }
+                    if st == St::Entity3 {
+                        St::Entity4
+                    } else {
+                        St::Entity9
+                    }
                 }
                 (St::Entity4, Tok::Literal(_)) => St::Entity5,
                 (St::Entity5 | St::Entity10, Tok::DeclClose) => St::Subset,
@@ -1006,13 +1061,17 @@ impl Parser {
                         att_id = true;
                         St::Attlist8
                     }
-                    "IDREF" | "IDREFS" | "ENTITY" | "ENTITIES" | "NMTOKEN" | "NMTOKENS" => St::Attlist8,
+                    "IDREF" | "IDREFS" | "ENTITY" | "ENTITIES" | "NMTOKEN" | "NMTOKENS" => {
+                        St::Attlist8
+                    }
                     "NOTATION" => St::Attlist5,
                     _ => return bad(),
                 },
                 (St::Attlist2, Tok::OpenParen) => St::Attlist3,
                 (St::Attlist3, Tok::Name(_, _)) => St::Attlist4,
-                (St::Attlist4, Tok::CloseParen(None)) | (St::Attlist7, Tok::CloseParen(None)) => St::Attlist8,
+                (St::Attlist4, Tok::CloseParen(None)) | (St::Attlist7, Tok::CloseParen(None)) => {
+                    St::Attlist8
+                }
                 (St::Attlist4, Tok::Or) => St::Attlist3,
                 (St::Attlist5, Tok::OpenParen) => St::Attlist6,
                 (St::Attlist6, Tok::Name(Name, _)) => St::Attlist7,
@@ -1046,19 +1105,27 @@ impl Parser {
                     groups.push(None);
                     St::Element6
                 }
-                (St::Element2 | St::Element6, Tok::Name(Name | Prefixed, _) | Tok::NameRep) => St::Element7,
+                (St::Element2 | St::Element6, Tok::Name(Name | Prefixed, _) | Tok::NameRep) => {
+                    St::Element7
+                }
                 (St::Element3, Tok::CloseParen(None | Some('*'))) => St::DeclClose,
                 (St::Element3 | St::Element5, Tok::Or) => St::Element4,
                 (St::Element4, Tok::Name(Name | Prefixed, _)) => St::Element5,
                 (St::Element5, Tok::CloseParen(Some('*'))) => St::DeclClose,
                 (St::Element7, Tok::CloseParen(_)) => {
                     groups.pop();
-                    if groups.is_empty() { St::DeclClose } else { St::Element7 }
+                    if groups.is_empty() {
+                        St::DeclClose
+                    } else {
+                        St::Element7
+                    }
                 }
                 (St::Element7, t @ (Tok::Comma | Tok::Or)) => {
                     // One group may not mix ',' and '|'.
                     let conn = if matches!(t, Tok::Comma) { ',' } else { '|' };
-                    let Some(level) = groups.last_mut() else { return bad() };
+                    let Some(level) = groups.last_mut() else {
+                        return bad();
+                    };
                     if level.is_some_and(|c| c != conn) {
                         return bad();
                     }
@@ -1078,7 +1145,11 @@ impl Parser {
         if (value.is_some() || id) && list.iter().any(|d| d.name == name) {
             return;
         }
-        list.push(DefAtt { name: name.to_string(), value, cdata });
+        list.push(DefAtt {
+            name: name.to_string(),
+            value,
+            cdata,
+        });
     }
 
     /// An entity value as declared: character references replaced, entity
@@ -1110,7 +1181,9 @@ impl Parser {
     /// Count expanded entity text against expat's amplification limit.
     fn account(&mut self, n: usize) -> R<()> {
         self.expanded += n;
-        if self.expanded >= AMPLIFICATION_START && (self.direct + self.expanded) / self.direct > AMPLIFICATION_MAX {
+        if self.expanded >= AMPLIFICATION_START
+            && (self.direct + self.expanded) / self.direct > AMPLIFICATION_MAX
+        {
             return bad();
         }
         Ok(())
@@ -1189,12 +1262,23 @@ impl Parser {
     /// The root element and everything in it, with entity references in
     /// content read in place; returns the root and where the document goes on.
     fn content(&mut self, start: usize) -> R<(Element, usize)> {
-        let mut srcs = vec![Src { text: self.s.clone(), pos: start, l1: self.l1, entity: None, depth: 0 }];
+        let mut srcs = vec![Src {
+            text: self.s.clone(),
+            pos: start,
+            l1: self.l1,
+            entity: None,
+            depth: 0,
+        }];
         let mut stack: Vec<Open> = Vec::new();
         let mut binds: Bindings = Vec::new();
         loop {
             let top = srcs.len() - 1;
-            let (t, mut p, l1, depth) = (srcs[top].text.clone(), srcs[top].pos, srcs[top].l1, srcs[top].depth);
+            let (t, mut p, l1, depth) = (
+                srcs[top].text.clone(),
+                srcs[top].pos,
+                srcs[top].l1,
+                srcs[top].depth,
+            );
             if p >= t.len() {
                 if let Some(name) = srcs[top].entity.take() {
                     if stack.len() != depth {
@@ -1227,7 +1311,9 @@ impl Parser {
                         if stack.len() <= depth {
                             return bad(); // closes what the entity did not open
                         }
-                        let Some(open) = stack.pop() else { return bad() };
+                        let Some(open) = stack.pop() else {
+                            return bad();
+                        };
                         if open.raw != raw {
                             return bad(); // mismatched tag
                         }
@@ -1264,7 +1350,9 @@ impl Parser {
                     }
                     _ => {
                         p += 1;
-                        if let Some(root) = self.start_tag(&t, &mut p, l1, &mut stack, &mut binds)? {
+                        if let Some(root) =
+                            self.start_tag(&t, &mut p, l1, &mut stack, &mut binds)?
+                        {
                             return Ok((root, p));
                         }
                     }
@@ -1279,7 +1367,9 @@ impl Parser {
                             None => {
                                 // Undeclared, external or unparsed: an error
                                 // from expat or from ET's default handler.
-                                let Some(Ent::Text(repl)) = self.entities.get(&name) else { return bad() };
+                                let Some(Ent::Text(repl)) = self.entities.get(&name) else {
+                                    return bad();
+                                };
                                 let repl = repl.clone();
                                 if self.open.contains(&name) {
                                     return bad(); // recursive entity reference
@@ -1287,7 +1377,13 @@ impl Parser {
                                 self.account(repl.len())?;
                                 srcs[top].pos = p;
                                 self.open.insert(name.clone());
-                                srcs.push(Src { text: repl, pos: 0, l1: false, entity: Some(name), depth: stack.len() });
+                                srcs.push(Src {
+                                    text: repl,
+                                    pos: 0,
+                                    l1: false,
+                                    entity: Some(name),
+                                    depth: stack.len(),
+                                });
                                 continue;
                             }
                         },
@@ -1376,7 +1472,10 @@ impl Parser {
         let mark = binds.len();
         let mut attrs: Vec<(String, String)> = Vec::new();
         for (name, range) in &specified {
-            let cdata = decls.iter().find(|d| &d.name == name).is_none_or(|d| d.cdata);
+            let cdata = decls
+                .iter()
+                .find(|d| &d.name == name)
+                .is_none_or(|d| d.cdata);
             let value = self.attr_value(&t[range.clone()], l1, cdata)?;
             attribute(name, value, binds, &mut attrs)?;
         }
@@ -1408,7 +1507,11 @@ impl Parser {
             el.attrib.push((key, value));
         }
         if !empty {
-            stack.push(Open { el, raw, bindings: mark });
+            stack.push(Open {
+                el,
+                raw,
+                bindings: mark,
+            });
             return Ok(None);
         }
         binds.truncate(mark);
@@ -1434,7 +1537,12 @@ impl Parser {
 }
 
 /// A specified or defaulted attribute: a namespace declaration, or kept.
-fn attribute(name: &str, value: String, binds: &mut Bindings, attrs: &mut Vec<(String, String)>) -> R<()> {
+fn attribute(
+    name: &str,
+    value: String,
+    binds: &mut Bindings,
+    attrs: &mut Vec<(String, String)>,
+) -> R<()> {
     if name == "xmlns" {
         add_binding(binds, None, value)
     } else if let Some(prefix) = name.strip_prefix("xmlns:") {
@@ -1464,7 +1572,11 @@ fn add_binding(binds: &mut Bindings, prefix: Option<&str>, uri: String) -> R<()>
 }
 
 fn lookup(binds: &Bindings, prefix: &str) -> R<String> {
-    match binds.iter().rev().find(|(p, _)| p.as_deref() == Some(prefix)) {
+    match binds
+        .iter()
+        .rev()
+        .find(|(p, _)| p.as_deref() == Some(prefix))
+    {
         Some((_, uri)) => Ok(uri.clone()),
         None if prefix == "xml" => Ok(XML_NS.to_string()),
         None => bad(), // unbound prefix
@@ -1482,7 +1594,9 @@ fn push_text(el: &mut Element, t: &[char]) {
 // ---- ET.tostring ----
 
 fn escape_cdata(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn escape_attrib(s: &str) -> String {
@@ -1513,19 +1627,29 @@ struct Ns {
 
 impl Ns {
     fn add(&mut self, qname: &str) {
-        let Some(rest) = qname.strip_prefix('{') else { return };
-        let Some((uri, _)) = rest.rsplit_once('}') else { return };
+        let Some(rest) = qname.strip_prefix('{') else {
+            return;
+        };
+        let Some((uri, _)) = rest.rsplit_once('}') else {
+            return;
+        };
         if self.map.iter().any(|(u, _)| u == uri) {
             return;
         }
-        let prefix = known_prefix(uri).map(String::from).unwrap_or_else(|| format!("ns{}", self.map.len()));
+        let prefix = known_prefix(uri)
+            .map(String::from)
+            .unwrap_or_else(|| format!("ns{}", self.map.len()));
         if prefix != "xml" {
             self.map.push((uri.to_string(), prefix));
         }
     }
     fn qname(&self, q: &str) -> String {
-        let Some(rest) = q.strip_prefix('{') else { return q.to_string() };
-        let Some((uri, local)) = rest.rsplit_once('}') else { return q.to_string() };
+        let Some(rest) = q.strip_prefix('{') else {
+            return q.to_string();
+        };
+        let Some((uri, local)) = rest.rsplit_once('}') else {
+            return q.to_string();
+        };
         let prefix = self
             .map
             .iter()
@@ -1533,7 +1657,11 @@ impl Ns {
             .map(|(_, p)| p.as_str())
             .or_else(|| known_prefix(uri))
             .unwrap_or("");
-        if prefix.is_empty() { local.to_string() } else { format!("{prefix}:{local}") }
+        if prefix.is_empty() {
+            local.to_string()
+        } else {
+            format!("{prefix}:{local}")
+        }
     }
     /// In document order, as `elem.iter()` walks it.
     fn collect(&mut self, root: &Element) {
@@ -1600,11 +1728,18 @@ mod tests {
             br#"<a xmlns:x="u" xml:lang="de"><x:b x:k="1" z="2">t<c/></x:b>tail<d xmlns="v"><e/></d></a>"#,
         )
         .unwrap();
-        let got: Vec<String> = doc.children.iter().map(|c| et::tostring(c).unwrap()).collect();
-        assert_eq!(got, vec![
-            r#"<ns0:b xmlns:ns0="u" ns0:k="1" z="2">t<c /></ns0:b>tail"#.to_string(),
-            r#"<ns0:d xmlns:ns0="v"><ns0:e /></ns0:d>"#.to_string(),
-        ]);
+        let got: Vec<String> = doc
+            .children
+            .iter()
+            .map(|c| et::tostring(c).unwrap())
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                r#"<ns0:b xmlns:ns0="u" ns0:k="1" z="2">t<c /></ns0:b>tail"#.to_string(),
+                r#"<ns0:d xmlns:ns0="v"><ns0:e /></ns0:d>"#.to_string(),
+            ]
+        );
         assert!(et::parse(b"<a><b></a>").is_err());
         assert!(et::parse(b"<a>&nbsp;</a>").is_err());
         assert!(et::parse(b"<a/><b/>").is_err());
@@ -1612,12 +1747,38 @@ mod tests {
 
     #[test]
     fn expat_dtd_and_encodings() {
-        let text = |b: &[u8]| et::parse(b).ok().map(|d| (d.text.clone(), d.attrib.clone()));
-        assert_eq!(text(b"<!DOCTYPE a [<!ENTITY w \"World\">]><a>Hi &w;</a>").unwrap().0, "Hi World");
-        let (_, attrs) = text(b"<!DOCTYPE a [<!ATTLIST a v CDATA \"4.2\" n NMTOKENS #IMPLIED>]><a n=\" x  y \"/>").unwrap();
-        assert_eq!(attrs, vec![("n".to_string(), "x y".to_string()), ("v".to_string(), "4.2".to_string())]);
-        assert_eq!(text(b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>caf\xe9</a>").unwrap().0, "café");
-        assert!(matches!(et::parse(b"<?xml version=\"1.0\" encoding=\"bogus\"?><a/>"), Err(et::Error::Raise(_))));
+        let text = |b: &[u8]| {
+            et::parse(b)
+                .ok()
+                .map(|d| (d.text.clone(), d.attrib.clone()))
+        };
+        assert_eq!(
+            text(b"<!DOCTYPE a [<!ENTITY w \"World\">]><a>Hi &w;</a>")
+                .unwrap()
+                .0,
+            "Hi World"
+        );
+        let (_, attrs) = text(
+            b"<!DOCTYPE a [<!ATTLIST a v CDATA \"4.2\" n NMTOKENS #IMPLIED>]><a n=\" x  y \"/>",
+        )
+        .unwrap();
+        assert_eq!(
+            attrs,
+            vec![
+                ("n".to_string(), "x y".to_string()),
+                ("v".to_string(), "4.2".to_string())
+            ]
+        );
+        assert_eq!(
+            text(b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><a>caf\xe9</a>")
+                .unwrap()
+                .0,
+            "café"
+        );
+        assert!(matches!(
+            et::parse(b"<?xml version=\"1.0\" encoding=\"bogus\"?><a/>"),
+            Err(et::Error::Raise(_))
+        ));
         assert!(et::parse(b"<?xml?><a/>").is_err());
         assert!(et::parse(b"<a xmlns:xml=\"urn:x\"/>").is_err());
         assert_eq!(text(b"<a>&#x00000000000000041;</a>").unwrap().0, "A");

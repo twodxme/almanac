@@ -28,10 +28,12 @@ mod release;
 mod urllib;
 
 pub use desktop::{install_desktop_entry, remove_desktop_entry};
-pub use download::{download, download_verified, Downloaded};
-pub use release::{check, latest_github, parse_update_info, read_update_info, sha256_of_digest, version_of, vkey};
 #[cfg(test)]
 pub(crate) use download::test_elf;
+pub use download::{download, download_verified, Downloaded};
+pub use release::{
+    check, latest_github, parse_update_info, read_update_info, sha256_of_digest, version_of, vkey,
+};
 
 /// HTTP header sent with every request (`UA = {"User-Agent": "almanac"}`).
 pub const UA: (&str, &str) = ("User-Agent", "almanac");
@@ -100,7 +102,15 @@ pub struct LatestRelease {
 }
 
 /// The keys of the Python dict, in its order (`spec` comes last).
-const RELEASE_KEYS: [&str; 7] = ["version", "tag", "url", "asset", "published", "page", "sha256"];
+const RELEASE_KEYS: [&str; 7] = [
+    "version",
+    "tag",
+    "url",
+    "asset",
+    "published",
+    "page",
+    "sha256",
+];
 
 impl LatestRelease {
     fn field_mut(&mut self, key: &str) -> Option<&mut String> {
@@ -136,7 +146,10 @@ impl LatestRelease {
         }
         match key {
             "spec" => self.spec.clone().unwrap_or(Value::Null),
-            _ => self.field(key).map(|s| Value::String(s.clone())).unwrap_or(Value::Null),
+            _ => self
+                .field(key)
+                .map(|s| Value::String(s.clone()))
+                .unwrap_or(Value::Null),
         }
     }
 
@@ -147,7 +160,9 @@ impl LatestRelease {
                 keys.push(key.to_string());
             }
         }
-        let Some(field) = self.field_mut(key) else { return };
+        let Some(field) = self.field_mut(key) else {
+            return;
+        };
         match v {
             Value::String(s) => {
                 *field = s;
@@ -183,7 +198,10 @@ impl Serialize for LatestRelease {
                 }
             }
         }
-        let spec_listed = self.keys.as_ref().is_some_and(|ks| ks.iter().any(|k| k == "spec"));
+        let spec_listed = self
+            .keys
+            .as_ref()
+            .is_some_and(|ks| ks.iter().any(|k| k == "spec"));
         if let (Some(spec), false) = (&self.spec, spec_listed) {
             m.serialize_entry("spec", spec)?;
         }
@@ -195,7 +213,10 @@ impl<'de> Deserialize<'de> for LatestRelease {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let m = serde_json::Map::<String, Value>::deserialize(de)?;
         // The dict as stored: every key, in its order, `"spec": null` too.
-        let mut out = LatestRelease { keys: Some(m.keys().cloned().collect()), ..Default::default() };
+        let mut out = LatestRelease {
+            keys: Some(m.keys().cloned().collect()),
+            ..Default::default()
+        };
         for (k, v) in m {
             if RELEASE_KEYS.contains(&k.as_str()) {
                 out.set(&k, v);

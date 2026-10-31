@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::inventory;
-use crate::ui::shell::{AppItem, lower_cmp, reverse_text};
+use crate::ui::shell::{lower_cmp, reverse_text, AppItem};
 
-use super::extra::{PyInt, py_int, py_space, py_type_name, truthy};
+use super::extra::{py_int, py_space, py_type_name, truthy, PyInt};
 
 /// The body of `_match` for one row, given the window's filter and query.
 pub fn match_item(filter_key: &str, query: &str, item: &AppItem) -> bool {
@@ -64,7 +64,10 @@ pub fn group_state<H: Clone, M: Clone>(
     key_of: impl Fn(&M) -> &str,
 ) -> Option<GroupState<H, M>> {
     // self.group_rows.get(gkey) is None: ungrouped primaries never fold.
-    let header = group_rows.iter().find(|(k, _)| k == gkey).and_then(|(_, h)| h.clone())?;
+    let header = group_rows
+        .iter()
+        .find(|(k, _)| k == gkey)
+        .and_then(|(_, h)| h.clone())?;
     let folded = collapsed.contains(gkey);
     let members = group_members
         .get(gkey)
@@ -79,7 +82,11 @@ pub fn group_state<H: Clone, M: Clone>(
         .unwrap_or_default();
     Some(GroupState {
         header,
-        icon: if folded { "pan-end-symbolic" } else { "pan-down-symbolic" },
+        icon: if folded {
+            "pan-end-symbolic"
+        } else {
+            "pan-down-symbolic"
+        },
         members,
     })
 }
@@ -110,10 +117,18 @@ pub fn detail_badges_for(item: &AppItem) -> Vec<(String, &'static str)> {
 /// behind the installed one is.
 pub fn available_label(item: &AppItem) -> String {
     let mut label = item.app.update.clone();
-    if item.behind != 0 && matches!(item.behind_kind.as_str(), "major" | "minor" | "patch" | "point")
+    if item.behind != 0
+        && matches!(
+            item.behind_kind.as_str(),
+            "major" | "minor" | "patch" | "point"
+        )
     {
         label += &format!("  ({} {}", item.behind, item.behind_kind);
-        label += if item.behind > 1 { "s behind)" } else { " behind)" };
+        label += if item.behind > 1 {
+            "s behind)"
+        } else {
+            " behind)"
+        };
     } else if item.behind_kind == "rel" {
         label += "  (rebuild only)";
     }
@@ -122,7 +137,14 @@ pub fn available_label(item: &AppItem) -> String {
 
 /// Keys `_on_sort` has a getter for.
 pub const SORT_KEYS: &[&str] = &[
-    "name", "name_desc", "size", "installed", "category", "behind", "popular", "trending",
+    "name",
+    "name_desc",
+    "size",
+    "installed",
+    "category",
+    "behind",
+    "popular",
+    "trending",
     "newest",
 ];
 
@@ -140,7 +162,10 @@ fn added_key(added: &str) -> Option<Added> {
     }
     let digits = added.replace('-', "");
     if digits.is_empty() {
-        return Some(Added::Neg(PyInt { neg: false, mag: "0".into() }));
+        return Some(Added::Neg(PyInt {
+            neg: false,
+            mag: "0".into(),
+        }));
     }
     py_int(&digits).map(|n| Added::Neg(n.negated()))
 }
@@ -226,7 +251,10 @@ pub(super) fn discover_total(registry: &Value) -> Result<usize, String> {
         Some(Value::Object(o)) => o.len(),
         Some(Value::String(s)) => s.chars().count(),
         Some(other) => {
-            return Err(format!("TypeError: object of type '{}' has no len()", py_type_name(other)));
+            return Err(format!(
+                "TypeError: object of type '{}' has no len()",
+                py_type_name(other)
+            ));
         }
     })
 }
@@ -252,9 +280,12 @@ mod tests {
         plugin.haystack = String::new();
         let mut build = item("b", inventory::LOCAL, serde_json::json!({}));
         build.haystack = String::new();
-        for (key, want) in
-            [("apps", false), (inventory::LOCAL, false), ("all", true), ("updates", true)]
-        {
+        for (key, want) in [
+            ("apps", false),
+            (inventory::LOCAL, false),
+            ("all", true),
+            ("updates", true),
+        ] {
             assert_eq!(match_item(key, "", &plugin), want, "{key}");
         }
         assert!(match_item(inventory::LOCAL, "", &build));
@@ -275,9 +306,13 @@ mod tests {
 
     #[test]
     fn detail_badges_and_versions() {
-        let mut it = item("x", inventory::ORPHAN, serde_json::json!({"critical": "security",
+        let mut it = item(
+            "x",
+            inventory::ORPHAN,
+            serde_json::json!({"critical": "security",
                                                                        "stale": "flagged",
-                                                                       "advice": "keep"}));
+                                                                       "advice": "keep"}),
+        );
         it.git_dirty = true;
         let got: Vec<(String, &str)> = detail_badges_for(&it);
         assert_eq!(
@@ -312,8 +347,14 @@ mod tests {
 
     #[test]
     fn sort_getters_order_like_the_python() {
-        let mut a = AppItem { name: "Alpha".into(), ..Default::default() };
-        let mut b = AppItem { name: "beta".into(), ..Default::default() };
+        let mut a = AppItem {
+            name: "Alpha".into(),
+            ..Default::default()
+        };
+        let mut b = AppItem {
+            name: "beta".into(),
+            ..Default::default()
+        };
         assert_eq!(sort_cmp("name", &a, &b), Ordering::Less);
         assert_eq!(sort_cmp("name_desc", &a, &b), Ordering::Greater);
         a.size_mb = 10.0;
@@ -337,8 +378,14 @@ mod tests {
     /// Review fixes: NaN popularity, unbounded negation, Python whitespace.
     #[test]
     fn sort_and_text_edge_cases_follow_python() {
-        let mut a = AppItem { name: "a".into(), ..Default::default() };
-        let b = AppItem { name: "b".into(), ..Default::default() };
+        let mut a = AppItem {
+            name: "a".into(),
+            ..Default::default()
+        };
+        let b = AppItem {
+            name: "b".into(),
+            ..Default::default()
+        };
         a.popularity = f64::NAN;
         assert_eq!(sort_cmp("trending", &a, &b), Ordering::Equal);
         assert_eq!(sort_cmp("trending", &b, &a), Ordering::Equal);

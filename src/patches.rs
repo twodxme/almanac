@@ -88,16 +88,25 @@ fn preferred_encoding() -> &'static str {
         if utf8_mode.as_deref() == Some("1") {
             return "UTF-8".to_string();
         }
-        let name = var("LC_ALL").or_else(|| var("LC_CTYPE")).or_else(|| var("LANG"))
+        let name = var("LC_ALL")
+            .or_else(|| var("LC_CTYPE"))
+            .or_else(|| var("LANG"))
             .unwrap_or_else(|| "C".to_string());
-        let out = crate::util::run_with(&["locale", "charmap"], &crate::util::RunOpts {
-            timeout: Some(std::time::Duration::from_secs(5)),
-            env: vec![("LC_ALL".into(), name.clone().into())],
-            ..Default::default()
-        });
+        let out = crate::util::run_with(
+            &["locale", "charmap"],
+            &crate::util::RunOpts {
+                timeout: Some(std::time::Duration::from_secs(5)),
+                env: vec![("LC_ALL".into(), name.clone().into())],
+                ..Default::default()
+            },
+        );
         let charmap = out.stdout.trim().to_string();
-        let is_c = name == "C" || name == "POSIX" || !out.ok() || !out.stderr.trim().is_empty()
-            || charmap.is_empty() || charmap == "ANSI_X3.4-1968";
+        let is_c = name == "C"
+            || name == "POSIX"
+            || !out.ok()
+            || !out.stderr.trim().is_empty()
+            || charmap.is_empty()
+            || charmap == "ANSI_X3.4-1968";
         if !is_c {
             return charmap;
         }
@@ -120,8 +129,9 @@ fn decode_utf8(raw: &[u8]) -> Result<String, String> {
             let byte = raw[pos];
             let (len, reason) = match e.error_len() {
                 None => (raw.len() - pos, "unexpected end of data"),
-                Some(n) if n == 1 && ((0x80..0xc2).contains(&byte) || byte >= 0xf5) =>
-                    (1, "invalid start byte"),
+                Some(n) if n == 1 && ((0x80..0xc2).contains(&byte) || byte >= 0xf5) => {
+                    (1, "invalid start byte")
+                }
                 Some(n) => (n, "invalid continuation byte"),
             };
             let at = if len == 1 {
@@ -129,7 +139,9 @@ fn decode_utf8(raw: &[u8]) -> Result<String, String> {
             } else {
                 format!("bytes in position {pos}-{}", pos + len - 1)
             };
-            Err(format!("UnicodeDecodeError: 'utf-8' codec can't decode {at}: {reason}"))
+            Err(format!(
+                "UnicodeDecodeError: 'utf-8' codec can't decode {at}: {reason}"
+            ))
         }
     }
 }
@@ -140,18 +152,26 @@ fn decode(raw: &[u8], encoding: &str) -> Result<String, String> {
         "UTF-8" | "UTF8" => decode_utf8(raw),
         "ANSI_X3.4-1968" | "ASCII" | "US-ASCII" => match raw.iter().position(|b| *b >= 0x80) {
             None => Ok(raw.iter().map(|b| *b as char).collect()),
-            Some(pos) => Err(format!("UnicodeDecodeError: 'ascii' codec can't decode byte \
+            Some(pos) => Err(format!(
+                "UnicodeDecodeError: 'ascii' codec can't decode byte \
                                       {:#04x} in position {pos}: ordinal not in range(128)",
-                                     raw[pos])),
+                raw[pos]
+            )),
         },
         // Latin-1 maps every byte, so it never raises. (encoding_rs would read
         // this label as windows-1252, which is a different codec.)
         "ISO-8859-1" | "ISO8859-1" | "LATIN1" => Ok(raw.iter().map(|b| *b as char).collect()),
         _ => match encoding_rs::Encoding::for_label(encoding.as_bytes()) {
-            Some(enc) => enc.decode_without_bom_handling_and_without_replacement(raw)
+            Some(enc) => enc
+                .decode_without_bom_handling_and_without_replacement(raw)
                 .map(|s| s.into_owned())
-                .ok_or_else(|| format!("UnicodeDecodeError: '{}' codec can't decode the \
-                                        output", encoding.to_ascii_lowercase())),
+                .ok_or_else(|| {
+                    format!(
+                        "UnicodeDecodeError: '{}' codec can't decode the \
+                                        output",
+                        encoding.to_ascii_lowercase()
+                    )
+                }),
             None => decode_utf8(raw),
         },
     }
@@ -175,20 +195,30 @@ fn text_mode(raw: &[u8]) -> Result<String, String> {
 fn gettempdir() -> Option<&'static std::path::Path> {
     static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let mut dirs: Vec<std::path::PathBuf> = ["TMPDIR", "TEMP", "TMP"].iter()
+        let mut dirs: Vec<std::path::PathBuf> = ["TMPDIR", "TEMP", "TMP"]
+            .iter()
             .filter_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
             .map(std::path::PathBuf::from)
             .collect();
-        dirs.extend(["/tmp", "/var/tmp", "/usr/tmp"].iter().map(std::path::PathBuf::from));
+        dirs.extend(
+            ["/tmp", "/var/tmp", "/usr/tmp"]
+                .iter()
+                .map(std::path::PathBuf::from),
+        );
         dirs.push(std::env::current_dir().unwrap_or_else(|_| ".".into()));
         dirs.into_iter().find_map(|d| {
-            let d = if d.as_os_str() == "." { d } else { std::path::absolute(&d).ok()? };
+            let d = if d.as_os_str() == "." {
+                d
+            } else {
+                std::path::absolute(&d).ok()?
+            };
             let mut f = tempfile::Builder::new().tempfile_in(&d).ok()?;
             std::io::Write::write_all(&mut f, b"blat").ok()?;
             f.close().ok()?;
             Some(d)
         })
-    }).as_deref()
+    })
+    .as_deref()
 }
 
 /// `git -C repo <args>` with an optional environment and stdin, as `_git`.
@@ -197,24 +227,34 @@ fn gettempdir() -> Option<&'static std::path::Path> {
 /// text mode has to be reproduced exactly (see `text_mode`), and like
 /// `subprocess.run(input=None)` the child inherits our stdin when there is
 /// no input.
-fn git(repo: &str, args: &[&str], env: &[(String, String)], input_text: Option<&str>,
-       timeout: u64) -> Result<GitOutput, GitError> {
+fn git(
+    repo: &str,
+    args: &[&str],
+    env: &[(String, String)],
+    input_text: Option<&str>,
+    timeout: u64,
+) -> Result<GitOutput, GitError> {
     // subprocess refuses an argument with a NUL in it before starting
     // anything: ValueError, which `analyze` does not catch.
     if repo.contains('\0') || args.iter().any(|a| a.contains('\0')) {
-        return Err(GitError::Raised("ValueError: embedded null byte".to_string()));
+        return Err(GitError::Raised(
+            "ValueError: embedded null byte".to_string(),
+        ));
     }
     let mut argv = vec!["git", "-C", repo];
     argv.extend_from_slice(args);
-    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
-        timeout: Some(std::time::Duration::from_secs(timeout)),
-        stdin: match input_text {
-            Some(text) => crate::util::Stdin::Input(text.as_bytes()),
-            None => crate::util::Stdin::Inherit,
+    let out = crate::util::run_bytes(
+        &argv,
+        &crate::util::RunOpts {
+            timeout: Some(std::time::Duration::from_secs(timeout)),
+            stdin: match input_text {
+                Some(text) => crate::util::Stdin::Input(text.as_bytes()),
+                None => crate::util::Stdin::Inherit,
+            },
+            env: env.iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            ..Default::default()
         },
-        env: env.iter().map(|(k, v)| (k.into(), v.into())).collect(),
-        ..Default::default()
-    });
+    );
     // OSError, or TimeoutExpired (a SubprocessError).
     if out.failed_to_start || out.timed_out {
         return Err(GitError::Caught);
@@ -222,7 +262,10 @@ fn git(repo: &str, args: &[&str], env: &[(String, String)], input_text: Option<&
     // communicate() decodes stdout, then stderr; either can raise.
     let stdout = text_mode(&out.stdout).map_err(GitError::Raised)?;
     text_mode(&out.stderr).map_err(GitError::Raised)?;
-    Ok(GitOutput { code: out.code, stdout })
+    Ok(GitOutput {
+        code: out.code,
+        stdout,
+    })
 }
 
 /// Python's `str.splitlines()`: every line boundary it knows, not just `\n`.
@@ -251,12 +294,24 @@ fn splitlines(s: &str) -> Vec<String> {
 
 /// `[l for l in out.splitlines() if l]`
 fn nonempty_lines(s: &str) -> Vec<String> {
-    splitlines(s).into_iter().filter(|l| !l.is_empty()).collect()
+    splitlines(s)
+        .into_iter()
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
-fn state(kind: &str, files: Vec<String>, upstream_commits: Vec<String>, untracked: Vec<String>)
-         -> PatchState {
-    PatchState { kind: kind.to_string(), files, upstream_commits, untracked }
+fn state(
+    kind: &str,
+    files: Vec<String>,
+    upstream_commits: Vec<String>,
+    untracked: Vec<String>,
+) -> PatchState {
+    PatchState {
+        kind: kind.to_string(),
+        files,
+        upstream_commits,
+        untracked,
+    }
 }
 
 /// `upstream` None means the Python default, `"@{upstream}"`.
@@ -287,7 +342,15 @@ fn analyze_inner(repo: &str, upstream: &str) -> Result<PatchState, GitError> {
         return Ok(state(UNKNOWN, vec![], vec![], vec![]));
     }
     let untracked = nonempty_lines(
-        &git(repo, &["ls-files", "--others", "--exclude-standard"], &[], None, 30)?.stdout);
+        &git(
+            repo,
+            &["ls-files", "--others", "--exclude-standard"],
+            &[],
+            None,
+            30,
+        )?
+        .stdout,
+    );
     if diff.stdout.trim().is_empty() {
         return Ok(state(CLEAN, vec![], vec![], untracked));
     }
@@ -302,8 +365,10 @@ fn analyze_inner(repo: &str, upstream: &str) -> Result<PatchState, GitError> {
     let tmp = gettempdir()
         .and_then(|d| tempfile::Builder::new().prefix("tmp").tempdir_in(d).ok())
         .ok_or(GitError::Caught)?;
-    let env = vec![("GIT_INDEX_FILE".to_string(),
-                    tmp.path().join("index").to_string_lossy().into_owned())];
+    let env = vec![(
+        "GIT_INDEX_FILE".to_string(),
+        tmp.path().join("index").to_string_lossy().into_owned(),
+    )];
     if !git(repo, &["read-tree", upstream], &env, None, 30)?.ok() {
         return Ok(state(UNKNOWN, files, commits, untracked));
     }
@@ -328,61 +393,104 @@ fn analyze_inner(repo: &str, upstream: &str) -> Result<PatchState, GitError> {
 /// command that fetches the update -- `git pull --ff-only` by default; an
 /// Omarchy plugin passes `omarchy plugin update`, which also validates.
 /// (None or an empty list means the default, as Python's `pull or [...]`.)
-pub fn steps(repo: &str, state: &PatchState, label: &str, pull: Option<&[String]>)
-             -> Vec<crate::tasks::Step> {
+pub fn steps(
+    repo: &str,
+    state: &PatchState,
+    label: &str,
+    pull: Option<&[String]>,
+) -> Vec<crate::tasks::Step> {
     use crate::tasks::Step;
     let sv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
-    let stash = sv(&["git", "-C", repo, "stash", "push", "-m",
-                     &format!("almanac: local change before updating {label}")]);
+    let stash = sv(&[
+        "git",
+        "-C",
+        repo,
+        "stash",
+        "push",
+        "-m",
+        &format!("almanac: local change before updating {label}"),
+    ]);
     let pull: Vec<String> = match pull {
         Some(p) if !p.is_empty() => p.to_vec(),
         _ => sv(&["git", "-C", repo, "pull", "--ff-only"]),
     };
     if state.kind == APPLIES {
-        return vec![Step::argv("Setting your change aside", stash),
-                    Step::argv("Pulling the update", pull),
-                    Step::argv("Putting your change back", sv(&["git", "-C", repo, "stash", "pop"]))];
+        return vec![
+            Step::argv("Setting your change aside", stash),
+            Step::argv("Pulling the update", pull),
+            Step::argv(
+                "Putting your change back",
+                sv(&["git", "-C", repo, "stash", "pop"]),
+            ),
+        ];
     }
     if state.kind == ABSORBED || state.kind == CONFLICTS {
         // Kept as a stash either way: "absorbed" is exact, but a stash costs
         // nothing and a lost afternoon of work costs a great deal.
-        return vec![Step::argv("Setting your change aside", stash),
-                    Step::argv("Pulling the update", pull)];
+        return vec![
+            Step::argv("Setting your change aside", stash),
+            Step::argv("Pulling the update", pull),
+        ];
     }
     vec![Step::argv("Pulling the update", pull)]
 }
 
 /// (heading, body, action label) for the confirmation dialog.
 pub fn explain(state: &PatchState, name: &str) -> (String, String, String) {
-    let files = state.files.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+    let files = state
+        .files
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ")
         + if state.files.len() > 3 { "…" } else { "" };
     if state.kind == ABSORBED {
-        return ("The update already includes your change".to_string(),
-                format!("Your edit to {files} is in the new version, line for line. \
+        return (
+            "The update already includes your change".to_string(),
+            format!(
+                "Your edit to {files} is in the new version, line for line. \
                          Updating replaces your copy with it; your copy is kept as a \
-                         git stash in case you want it back."),
-                "Update".to_string());
+                         git stash in case you want it back."
+            ),
+            "Update".to_string(),
+        );
     }
     if state.kind == APPLIES {
-        return (format!("Update {name} and keep your change?"),
-                format!("Your edit to {files} still applies on top of the update. \
+        return (
+            format!("Update {name} and keep your change?"),
+            format!(
+                "Your edit to {files} still applies on top of the update. \
                          It is set aside, the update is pulled, and your edit is put \
-                         back."),
-                "Update and keep it".to_string());
+                         back."
+            ),
+            "Update and keep it".to_string(),
+        );
     }
     if state.kind == CONFLICTS {
         let n = state.upstream_commits.len();
-        let n = if n == 0 { "Some".to_string() } else { n.to_string() };
-        return ("The update changes what you edited".to_string(),
-                format!("{n} upstream commit(s) touch {files}, so your edit \
+        let n = if n == 0 {
+            "Some".to_string()
+        } else {
+            n.to_string()
+        };
+        return (
+            "The update changes what you edited".to_string(),
+            format!(
+                "{n} upstream commit(s) touch {files}, so your edit \
                          cannot be carried forward automatically. Updating sets it \
                          aside as a git stash — nothing is lost — and installs the \
-                         new version. It may already do what your edit did."),
-                "Update and set mine aside".to_string());
+                         new version. It may already do what your edit did."
+            ),
+            "Update and set mine aside".to_string(),
+        );
     }
-    (format!("Update {name}?"), String::new(), "Update".to_string())
+    (
+        format!("Update {name}?"),
+        String::new(),
+        "Update".to_string(),
+    )
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -410,15 +518,21 @@ mod tests {
         git(&["add", "."], &up);
         git(&["commit", "-q", "-m", "first"], &up);
         let clone = d.join("up-clone");
-        git(&["clone", "-q", up.to_str().unwrap(), clone.to_str().unwrap()], d);
+        git(
+            &["clone", "-q", up.to_str().unwrap(), clone.to_str().unwrap()],
+            d,
+        );
         (up, clone)
     }
 
     fn argvs(steps: &[crate::tasks::Step]) -> Vec<String> {
-        steps.iter().map(|s| match &s.action {
-            crate::tasks::StepAction::Argv(a) => a.join(" "),
-            crate::tasks::StepAction::Call(_) => String::new(),
-        }).collect()
+        steps
+            .iter()
+            .map(|s| match &s.action {
+                crate::tasks::StepAction::Argv(a) => a.join(" "),
+                crate::tasks::StepAction::Call(_) => String::new(),
+            })
+            .collect()
     }
 
     #[test]
@@ -443,10 +557,15 @@ mod tests {
         let c = clone.to_str().unwrap();
         let state = analyze(c, None);
         assert_eq!(state.kind, APPLIES);
-        let labels: Vec<String> = steps(c, &state, "x", None).into_iter().map(|s| s.label).collect();
+        let labels: Vec<String> = steps(c, &state, "x", None)
+            .into_iter()
+            .map(|s| s.label)
+            .collect();
         assert_eq!(labels.last().unwrap(), "Putting your change back");
         // Analysing must not have touched the working tree.
-        assert!(std::fs::read_to_string(clone.join("f.txt")).unwrap().contains("SIX"));
+        assert!(std::fs::read_to_string(clone.join("f.txt"))
+            .unwrap()
+            .contains("SIX"));
     }
 
     #[test]
@@ -464,7 +583,9 @@ mod tests {
         // Set aside, never discarded.
         let cmds = argvs(&steps(c, &state, "x", None));
         assert!(cmds.iter().any(|c| c.contains("stash push")));
-        assert!(!cmds.iter().any(|c| c.contains("checkout") || c.contains("reset")));
+        assert!(!cmds
+            .iter()
+            .any(|c| c.contains("checkout") || c.contains("reset")));
     }
 
     #[test]
@@ -481,32 +602,63 @@ mod tests {
     #[test]
     fn decode_errors_read_as_python_writes_them() {
         let cases: &[(&[u8], &str)] = &[
-            (b"ab\xe2\x82A", "bytes in position 2-3: invalid continuation byte"),
-            (b"ab\xe2\x82", "bytes in position 2-3: unexpected end of data"),
-            (b"ab\xf0\x9f\x98", "bytes in position 2-4: unexpected end of data"),
-            (b"\xe0\x80x", "byte 0xe0 in position 0: invalid continuation byte"),
+            (
+                b"ab\xe2\x82A",
+                "bytes in position 2-3: invalid continuation byte",
+            ),
+            (
+                b"ab\xe2\x82",
+                "bytes in position 2-3: unexpected end of data",
+            ),
+            (
+                b"ab\xf0\x9f\x98",
+                "bytes in position 2-4: unexpected end of data",
+            ),
+            (
+                b"\xe0\x80x",
+                "byte 0xe0 in position 0: invalid continuation byte",
+            ),
             (b"\xc0", "byte 0xc0 in position 0: invalid start byte"),
             (b"\x80", "byte 0x80 in position 0: invalid start byte"),
             (b"\xff", "byte 0xff in position 0: invalid start byte"),
-            (b"\xe2A", "byte 0xe2 in position 0: invalid continuation byte"),
-            (b"\xf4\x90\x80\x80", "byte 0xf4 in position 0: invalid continuation byte"),
-            (b"\xed\xa0\x80", "byte 0xed in position 0: invalid continuation byte"),
-            (b"a\xe2\x82b", "bytes in position 1-2: invalid continuation byte"),
+            (
+                b"\xe2A",
+                "byte 0xe2 in position 0: invalid continuation byte",
+            ),
+            (
+                b"\xf4\x90\x80\x80",
+                "byte 0xf4 in position 0: invalid continuation byte",
+            ),
+            (
+                b"\xed\xa0\x80",
+                "byte 0xed in position 0: invalid continuation byte",
+            ),
+            (
+                b"a\xe2\x82b",
+                "bytes in position 1-2: invalid continuation byte",
+            ),
             (b"\xf0\x9f", "bytes in position 0-1: unexpected end of data"),
             (b"\xe2", "byte 0xe2 in position 0: unexpected end of data"),
         ];
         for (raw, want) in cases {
-            assert_eq!(decode(raw, "UTF-8").unwrap_err(),
-                       format!("UnicodeDecodeError: 'utf-8' codec can't decode {want}"));
+            assert_eq!(
+                decode(raw, "UTF-8").unwrap_err(),
+                format!("UnicodeDecodeError: 'utf-8' codec can't decode {want}")
+            );
         }
-        assert_eq!(decode(b"caf\xe9", "ANSI_X3.4-1968").unwrap_err(),
-                   "UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: \
-                    ordinal not in range(128)");
+        assert_eq!(
+            decode(b"caf\xe9", "ANSI_X3.4-1968").unwrap_err(),
+            "UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: \
+                    ordinal not in range(128)"
+        );
         assert_eq!(decode(b"caf\xe9", "ISO-8859-1").unwrap(), "caf\u{e9}");
     }
 
     #[test]
     fn a_nul_byte_in_an_argument_raises() {
-        assert_eq!(try_analyze("/tmp/a\0b", None).unwrap_err(), "ValueError: embedded null byte");
+        assert_eq!(
+            try_analyze("/tmp/a\0b", None).unwrap_err(),
+            "ValueError: embedded null byte"
+        );
     }
 }

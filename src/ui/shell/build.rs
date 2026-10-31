@@ -10,10 +10,18 @@ use gtk::{gio, glib};
 
 use crate::i18n::tr;
 
-use super::helpers::{CSS, lower_cmp, name, spawn_bg, thumb_bg};
+use super::helpers::{lower_cmp, name, spawn_bg, thumb_bg, CSS};
 use super::items::AppItem;
-use super::tables::{COLLAPSED_BY_DEFAULT, GROUPS, GroupItem, sorts_installed};
-use super::window::{GroupHeader, Inner, Shared, WeakWin, Win, sidebar_entry};
+use super::shape::PAGE_MARGIN;
+use super::tables::{sorts_installed, GroupItem, COLLAPSED_BY_DEFAULT, GROUPS};
+use super::window::{sidebar_entry, GroupHeader, Inner, Shared, WeakWin, Win};
+
+/// Keep `action` enabled exactly while `widget` is shown.
+pub(super) fn enabled_while_visible(action: &gio::SimpleAction, widget: &impl IsA<gtk::Widget>) {
+    action.set_enabled(widget.is_visible());
+    let action = action.clone();
+    widget.connect_visible_notify(move |w| action.set_enabled(w.is_visible()));
+}
 
 impl Win {
     /// `AlmanacWindow.__init__`: build the window, its sidebar, header,
@@ -34,7 +42,9 @@ impl Win {
 
         // The widgets every section reaches for, made here so `Inner` can
         // hold them; `init` configures and places them in __init__'s order.
-        let sort_btn = gtk::MenuButton::builder().icon_name("view-sort-descending-symbolic").build();
+        let sort_btn = gtk::MenuButton::builder()
+            .icon_name("view-sort-descending-symbolic")
+            .build();
         let busy = gtk::Spinner::builder().valign(gtk::Align::Center).build();
         let stats = gtk::Grid::builder()
             .column_spacing(12)
@@ -45,11 +55,13 @@ impl Win {
             .margin_top(6)
             .margin_bottom(8)
             .build();
+        // On the page margins, like everything under the header: the page
+        // below it starts its own PAGE_MARGIN down, so a page with a search
+        // bar and one without start their content at the same rhythm.
         let search_bar = gtk::Box::builder()
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(6)
-            .margin_bottom(2)
+            .margin_start(PAGE_MARGIN)
+            .margin_end(PAGE_MARGIN)
+            .margin_top(PAGE_MARGIN)
             .build();
         // Gtk.Button(label=..., icon_name=...): properties are applied in
         // that order, as PyGObject does, so the result is the same button.
@@ -68,7 +80,9 @@ impl Win {
         let inner = Inner {
             window,
             theme_provider: gtk::CssProvider::new(),
-            sidebar_toggle: gtk::ToggleButton::builder().icon_name("sidebar-show-symbolic").build(),
+            sidebar_toggle: gtk::ToggleButton::builder()
+                .icon_name("sidebar-show-symbolic")
+                .build(),
             stats,
             title: adw::WindowTitle::new(&tr("Almanac"), ""),
             busy,
@@ -83,9 +97,11 @@ impl Win {
             view: gtk::ColumnView::new(Some(selection)),
             priority_sorter: gtk::CustomSorter::new(|a, b| {
                 match (AppItem::of(a), AppItem::of(b)) {
-                    (Some(a), Some(b)) => {
-                        a.priority.cmp(&b.priority).then_with(|| lower_cmp(&a.name, &b.name)).into()
-                    }
+                    (Some(a), Some(b)) => a
+                        .priority
+                        .cmp(&b.priority)
+                        .then_with(|| lower_cmp(&a.name, &b.name))
+                        .into(),
                     _ => gtk::Ordering::Equal,
                 }
             }),
@@ -175,7 +191,9 @@ impl Win {
         // Ten filter chips and five header buttons was most of the window's
         // chrome. A sidebar holds the same navigation with the counts visible
         // at rest, which is the question being asked ("what needs me?").
-        let sidebar_list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::Single).build();
+        let sidebar_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .build();
         sidebar_list.add_css_class("navigation-sidebar");
         sidebar_list.add_css_class("almanac-sidebar");
         let w = self.downgrade();
@@ -202,7 +220,10 @@ impl Win {
                 continue;
             };
 
-            let header = gtk::ListBoxRow::builder().selectable(false).activatable(true).build();
+            let header = gtk::ListBoxRow::builder()
+                .selectable(false)
+                .activatable(true)
+                .build();
             let hb = gtk::Box::builder()
                 .spacing(6)
                 .margin_start(6)
@@ -228,7 +249,11 @@ impl Win {
             sidebar_list.append(&header);
             group_rows.push((
                 (*gkey).to_string(),
-                Some(GroupHeader { group: (*gkey).to_string(), row: header, chevron }),
+                Some(GroupHeader {
+                    group: (*gkey).to_string(),
+                    row: header,
+                    chevron,
+                }),
             ));
 
             let mut members = Vec::new();
@@ -253,8 +278,10 @@ impl Win {
                 w.on_sidebar_activated(list, row);
             }
         });
-        self.shared.borrow_mut().collapsed =
-            COLLAPSED_BY_DEFAULT.iter().map(|s| (*s).to_string()).collect();
+        self.shared.borrow_mut().collapsed = COLLAPSED_BY_DEFAULT
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
 
         let sidebar_scroll = gtk::ScrolledWindow::builder().vexpand(true).build();
         sidebar_scroll.set_child(Some(&sidebar_list));
@@ -273,7 +300,10 @@ impl Win {
         // The app's own mark, where someone actually looks at it. It was
         // registered with the desktop file and the window manager and so
         // appeared only in a launcher and an alt-tab switcher.
-        let brand = gtk::Box::builder().spacing(8).halign(gtk::Align::Center).build();
+        let brand = gtk::Box::builder()
+            .spacing(8)
+            .halign(gtk::Align::Center)
+            .build();
         let mark = gtk::Image::builder()
             .icon_name("io.github.twodxme.Almanac")
             .pixel_size(18)
@@ -323,7 +353,10 @@ impl Win {
         // entry was the title widget, so no page had a name and the four
         // status labels were the only thing describing what you were looking
         // at -- each in a different place on the page.
-        let title_box = gtk::Box::builder().spacing(8).halign(gtk::Align::Center).build();
+        let title_box = gtk::Box::builder()
+            .spacing(8)
+            .halign(gtk::Align::Center)
+            .build();
         self.busy.set_visible(false);
         title_box.append(&self.busy);
         title_box.append(&self.title);
@@ -353,7 +386,10 @@ impl Win {
 
         let menu = gio::Menu::new();
         let actions = gio::Menu::new();
-        actions.append(Some(&tr("Install what’s in the search box…")), Some("win.install"));
+        actions.append(
+            Some(&tr("Install what’s in the search box…")),
+            Some("win.install"),
+        );
         actions.append(Some(&tr("Install from a link…")), Some("win.fromlink"));
         actions.append(Some(&tr("Track an AppImage file…")), Some("win.track"));
         menu.append_section(None, &actions);
@@ -396,7 +432,9 @@ impl Win {
         });
         self.window.add_action(&sort_action);
 
-        let menu_btn = gtk::MenuButton::builder().icon_name("open-menu-symbolic").build();
+        let menu_btn = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .build();
         menu_btn.set_menu_model(Some(&menu));
         name(&menu_btn, &tr("More actions"));
         header.pack_end(&menu_btn);
@@ -425,6 +463,18 @@ impl Win {
             });
             self.window.add_action(&act);
         }
+        // "Install what's in the search box…" means the box on this page:
+        // where there is none (Today, Health check, History, AI) the entry
+        // is hidden, and installing from it would take whatever another page
+        // left in it. The action follows the search bar's visibility, which
+        // the page chrome sets.
+        if let Some(install) = self
+            .window
+            .lookup_action("install")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            enabled_while_visible(&install, &self.search_bar);
+        }
 
         toolbar.add_top_bar(&header);
 
@@ -434,13 +484,16 @@ impl Win {
         self.search_bar.append(&self.search);
         toolbar.add_top_bar(&self.search_bar);
 
+        // The table's page, on the same top margin as every page_body.
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.set_margin_top(PAGE_MARGIN);
 
         // The way back from the repo/AUR search, which the sidebar cannot
         // offer: App Store is still the selected row, so re-selecting it
         // emits nothing.
         self.store_back.add_css_class("flat");
-        self.store_back.set_tooltip_text(Some(&tr("Return to the plugin marketplace")));
+        self.store_back
+            .set_tooltip_text(Some(&tr("Return to the plugin marketplace")));
         self.store_back.set_visible(false);
         let w = self.downgrade();
         self.store_back.connect_clicked(move |_| {
@@ -503,15 +556,22 @@ impl Win {
 
         self.content_stack.set_hhomogeneous(false);
         self.content_stack.set_vhomogeneous(false);
-        self.content_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        self.content_stack
+            .set_transition_type(gtk::StackTransitionType::Crossfade);
         self.content_stack.add_named(&content, Some("list"));
-        self.content_stack.add_named(&self.build_store(), Some("store"));
-        self.content_stack.add_named(&self.build_maintenance(), Some("maintenance"));
-        self.content_stack.add_named(&self.build_history(), Some("history"));
-        self.content_stack.add_named(&self.build_plugins_page(), Some("plugins"));
-        self.content_stack.add_named(&self.build_switchboard(), Some("switchboard"));
+        self.content_stack
+            .add_named(&self.build_store(), Some("store"));
+        self.content_stack
+            .add_named(&self.build_maintenance(), Some("maintenance"));
+        self.content_stack
+            .add_named(&self.build_history(), Some("history"));
+        self.content_stack
+            .add_named(&self.build_plugins_page(), Some("plugins"));
+        self.content_stack
+            .add_named(&self.build_switchboard(), Some("switchboard"));
         self.content_stack.add_named(&self.build_ai(), Some("ai"));
-        self.content_stack.add_named(&self.build_featured(), Some("featured"));
+        self.content_stack
+            .add_named(&self.build_featured(), Some("featured"));
         self.content_stack.set_visible_child_name("list");
 
         // Results and failures appear as toasts. They used to go to whichever
@@ -530,9 +590,28 @@ impl Win {
         // Below ~760px the sidebar costs more than it gives: 205 of 480 pixels
         // is most of a half-screen tile. It folds into an overlay instead, and
         // the toggle in the header becomes the way back to it.
-        if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 760px") {
+        //
+        // A window applies one breakpoint at a time (the last that matches),
+        // so the phone-narrow one repeats the folding and adds its own: the
+        // table's Source column goes, and Name keeps the room.
+        let source_col = (0..self.view.columns().n_items())
+            .filter_map(|i| {
+                self.view
+                    .columns()
+                    .item(i)
+                    .and_downcast::<gtk::ColumnViewColumn>()
+            })
+            .find(|c| c.title().is_some_and(|t| t == "Source"));
+        for (width, phone) in [(760, false), (super::columns::SOURCE_HIDES_BELOW, true)] {
+            let Ok(condition) = adw::BreakpointCondition::parse(&format!("max-width: {width}px"))
+            else {
+                continue;
+            };
             let breakpoint = adw::Breakpoint::new(condition);
             breakpoint.add_setter(&self.split, "collapsed", Some(&true.to_value()));
+            if let (true, Some(col)) = (phone, &source_col) {
+                breakpoint.add_setter(col, "visible", Some(&false.to_value()));
+            }
             let w = self.downgrade();
             breakpoint.connect_apply(move |_| {
                 if let Some(w) = w.upgrade() {
@@ -570,7 +649,9 @@ impl Win {
             let a = gio::SimpleAction::new(act_name, Some(glib::VariantTy::STRING));
             let w = self.downgrade();
             a.connect_activate(move |_, param| {
-                let arg = param.and_then(|p| p.str().map(str::to_string)).unwrap_or_default();
+                let arg = param
+                    .and_then(|p| p.str().map(str::to_string))
+                    .unwrap_or_default();
                 if let Some(w) = w.upgrade() {
                     handler(&w, &arg);
                 }
@@ -583,7 +664,9 @@ impl Win {
             let a = gio::SimpleAction::new(act_name, Some(glib::VariantTy::STRING));
             let w = self.downgrade();
             a.connect_activate(move |_, param| {
-                let arg = param.and_then(|p| p.str().map(str::to_string)).unwrap_or_default();
+                let arg = param
+                    .and_then(|p| p.str().map(str::to_string))
+                    .unwrap_or_default();
                 if let Some(w) = w.upgrade() {
                     w.plugin_action(act_name, &arg);
                 }
@@ -603,9 +686,22 @@ impl Win {
             (rows, sh.filter_key.clone())
         };
         if !rows.is_empty() && !rows.iter().any(|r| r.is_selected()) {
-            let key = if filter_key == "all" { "featured".to_string() } else { filter_key };
+            let key = if filter_key == "all" {
+                "featured".to_string()
+            } else {
+                filter_key
+            };
             self.select_category(&key);
         }
+        // Work that panics off the main thread cannot hand its page a
+        // result; the page is told it failed instead of spinning forever.
+        let w = self.downgrade();
+        super::helpers::on_bg_failure(move |msg| {
+            if let Some(w) = w.upgrade() {
+                w.busy(false);
+                w.say(&format!("{}: {msg}", tr("Something went wrong")), 8);
+            }
+        });
         self.watch_pacman();
         self.watch_configs();
         self.reload();
@@ -617,7 +713,10 @@ impl Win {
 
     /// `CATEGORIES`: every sidebar destination, in order. Labels are msgids.
     pub fn categories(&self) -> Vec<GroupItem> {
-        GROUPS.iter().flat_map(|(_k, _l, items)| items.iter().copied()).collect()
+        GROUPS
+            .iter()
+            .flat_map(|(_k, _l, items)| items.iter().copied())
+            .collect()
     }
 
     /// `self._thumb_pool.submit(...)`: see `thumb_bg`.
@@ -630,5 +729,44 @@ impl Win {
             Some(pool) => thumb_bg(pool, work, done),
             None => spawn_bg(work, done),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Install-from-the-search-box is on only where the page shows the box.
+    #[test]
+    fn install_follows_the_search_bar() {
+        let set = |var| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+        let broadway = std::env::var("GDK_BACKEND").is_ok_and(|b| b.contains("broadway"));
+        if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
+            return;
+        }
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
+            || gtk::gdk::Display::default().is_none()
+        {
+            return;
+        }
+        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        bar.set_visible(false);
+        let install = gio::SimpleAction::new("install", None);
+        enabled_while_visible(&install, &bar);
+        assert!(!install.is_enabled(), "a page without a search box");
+        bar.set_visible(true);
+        assert!(install.is_enabled(), "a page with one");
+        bar.set_visible(false);
+        assert!(!install.is_enabled());
+        // And the window wires it to the search bar, not to something else.
+        let src = include_str!("build.rs");
+        assert!(src.contains("enabled_while_visible(&install, &self.search_bar)"));
+        let guard = include_str!("../plugins/removal.rs");
+        let on_install = guard.split("pub fn on_install(").nth(1).unwrap_or("");
+        let head: String = on_install.chars().take(400).collect();
+        assert!(
+            head.contains("if !self.search_bar.is_visible()"),
+            "on_install reads a hidden box"
+        );
     }
 }

@@ -43,12 +43,22 @@ pub struct State {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum IconChoice {
-    Theme { name: String },
-    File { path: String },
-    Vendor { key: String, domain: String, url: String, glyph: String },
-    Glyph { name: String },
+    Theme {
+        name: String,
+    },
+    File {
+        path: String,
+    },
+    Vendor {
+        key: String,
+        domain: String,
+        url: String,
+        glyph: String,
+    },
+    Glyph {
+        name: String,
+    },
 }
-
 
 #[derive(Clone)]
 pub struct Section {
@@ -87,17 +97,7 @@ impl Win {
     /// stopped authenticating, a hook whose script was deleted, a marketplace
     /// three weeks stale -- and this is where that shows.
     pub fn build_ai(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-        let ai_page = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        ai_page.set_margin_start(12);
-        ai_page.set_margin_end(12);
-        ai_page.set_margin_bottom(16);
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_vexpand(true);
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&ai_page));
-        page.append(&scroller);
+        let (page, ai_page) = shell::page_body();
         self.ai.borrow_mut().ai_page = Some(ai_page);
         page.upcast()
     }
@@ -183,16 +183,22 @@ impl Win {
             bx.append(&head);
         }
         if !description.is_empty() {
-            // What the section is, a hover away rather than a line per section:
-            // on a full page those lines were a fifth of the height.
-            head.set_tooltip_text(Some(description));
+            // What the section is, said under its heading. It used to be a
+            // tooltip on the heading, which hid it twice over: nobody hovers
+            // a heading, and Health check's section has no heading at all, so
+            // its explanation could not be reached.
+            bx.append(&shell::section_note(description));
             head.update_property(&[gtk::accessible::Property::Description(description)]);
         }
         let rows = gtk::ListBox::new();
         rows.set_selection_mode(gtk::SelectionMode::None);
         rows.add_css_class("boxed-list");
         bx.append(&rows);
-        Section { root: bx, head, rows }
+        Section {
+            root: bx,
+            head,
+            rows,
+        }
     }
 
     /// Render each group as it arrives rather than waiting for all six.
@@ -252,7 +258,13 @@ impl Win {
         }
     }
 
-    pub fn ai_group_done(&self, generation: u64, index: usize, _title: &str, entries: Vec<Entry>) -> glib::ControlFlow {
+    pub fn ai_group_done(
+        &self,
+        generation: u64,
+        index: usize,
+        _title: &str,
+        entries: Vec<Entry>,
+    ) -> glib::ControlFlow {
         if self.ai.borrow().ai_generation != generation {
             return glib::ControlFlow::Break; // a newer reload owns the page
         }
@@ -285,7 +297,13 @@ impl Win {
         // place: a rebuild per group that landed redrew the whole page six
         // times on the way in, and once more on every visit.
         let titles: Vec<&String> = groups.iter().map(|(t, _d, _es)| t).collect();
-        let built = self.ai.borrow().ai_sections.iter().map(|(t, _h, _r)| t).eq(titles.iter().copied());
+        let built = self
+            .ai
+            .borrow()
+            .ai_sections
+            .iter()
+            .map(|(t, _h, _r)| t)
+            .eq(titles.iter().copied());
         if !built {
             let ai_page = self.ai.borrow().ai_page.clone();
             if let Some(ai_page) = &ai_page {
@@ -311,7 +329,10 @@ impl Win {
             let pending = loading && entries.is_empty();
             let (head, rows) = {
                 let st = self.ai.borrow();
-                if st.ai_shown[i].as_ref().is_some_and(|(p, es)| *p == pending && es == entries) {
+                if st.ai_shown[i]
+                    .as_ref()
+                    .is_some_and(|(p, es)| *p == pending && es == entries)
+                {
                     continue;
                 }
                 (st.ai_sections[i].1.clone(), st.ai_sections[i].2.clone())
@@ -359,7 +380,10 @@ impl Win {
         } else {
             self.summarize(
                 &if attention > 0 {
-                    format!("{total} items across {} kinds · {attention} need attention", groups.len())
+                    format!(
+                        "{total} items across {} kinds · {attention} need attention",
+                        groups.len()
+                    )
                 } else {
                     format!("{total} items across {} kinds · all healthy", groups.len())
                 },
@@ -439,12 +463,6 @@ impl Win {
             .find(|(k, _)| *k == e.severity)
             .map(|(_, v)| *v)
             .unwrap_or(("", ""));
-        if !label.is_empty() {
-            let pill = gtk::Label::new(Some(label));
-            pill.set_valign(gtk::Align::Center);
-            pill.add_css_class(css);
-            row.add_prefix(&pill);
-        }
 
         if !e.status.is_empty() {
             // A status can be a whole server error ("Failed to connect — HTTP
@@ -478,11 +496,11 @@ impl Win {
         }
 
         if !e.action_label.is_empty() && e.action.is_some() {
+            // A neutral row button, as on every other page: blue is the
+            // header's, for the page's one primary action ("Update 2 agent
+            // CLIs"), and a blue button on every row competed with it.
             let btn = gtk::Button::with_label(&e.action_label);
             btn.set_valign(gtk::Align::Center);
-            if e.severity == "warn" {
-                btn.add_css_class("suggested-action");
-            }
             let e = e.clone();
             btn.connect_clicked(move |_b| ai_act(&e));
             row.add_suffix(&btn);
@@ -494,6 +512,10 @@ impl Win {
             hint.add_css_class("caption");
             hint.set_tooltip_text(Some(&e.action_note));
             row.add_suffix(&hint);
+        }
+        // Last, nearest the edge, as on every page (see `severity_pill`).
+        if !label.is_empty() {
+            row.add_suffix(&shell::severity_pill(&tr(label), css));
         }
         row
     }
@@ -519,7 +541,12 @@ impl Win {
                 image.set_from_file(Some(&path));
                 true
             }
-            IconChoice::Vendor { key, domain, url, glyph } => {
+            IconChoice::Vendor {
+                key,
+                domain,
+                url,
+                glyph,
+            } => {
                 // `icons.cached` raising ends `_app_icon` with the image as it
                 // was; `icons.fetch` raising on the pool is kept by its future,
                 // unseen, and the glyph stays.
@@ -569,10 +596,17 @@ impl Win {
         if !icon.is_empty() && Path::new(&icon).is_file() {
             return IconChoice::File { path: icon };
         }
-        let glyph = shell::fallback_icon(&app.source).unwrap_or("package-x-generic").to_string();
+        let glyph = shell::fallback_icon(&app.source)
+            .unwrap_or("package-x-generic")
+            .to_string();
         let (key, domain, url) = Win::icon_source(app);
         if !key.is_empty() {
-            return IconChoice::Vendor { key, domain, url, glyph };
+            return IconChoice::Vendor {
+                key,
+                domain,
+                url,
+                glyph,
+            };
         }
         IconChoice::Glyph { name: glyph }
     }
@@ -583,7 +617,11 @@ impl Win {
         let mut st = self.ai.borrow_mut();
         st.icon_claim_seq += 1;
         let seq = st.icon_claim_seq;
-        if let Some(slot) = st.icon_claims.iter_mut().find(|(w, _)| w.upgrade().as_ref() == Some(image)) {
+        if let Some(slot) = st
+            .icon_claims
+            .iter_mut()
+            .find(|(w, _)| w.upgrade().as_ref() == Some(image))
+        {
             slot.1 = seq;
         } else {
             if st.icon_claims.len() >= 256 {
@@ -653,7 +691,12 @@ impl Win {
         (crate::icons::registrable(&host), host, String::new())
     }
 
-    pub fn icon_arrived(&self, image: &gtk::Image, size: i32, path: Option<PathBuf>) -> glib::ControlFlow {
+    pub fn icon_arrived(
+        &self,
+        image: &gtk::Image,
+        size: i32,
+        path: Option<PathBuf>,
+    ) -> glib::ControlFlow {
         if let Some(path) = path {
             self.set_icon(image, &path, size);
         }
@@ -685,8 +728,15 @@ impl Win {
                 w.set_icon(&image, &path, SET_ICON_SIZE);
             }
         };
-        let (key, url, domain) = (e.icon_key.clone(), e.icon_url.clone(), e.icon_domain.clone());
-        self.thumb_submit(move || crate::icons::fetch_checked(&key, &url, &domain), done);
+        let (key, url, domain) = (
+            e.icon_key.clone(),
+            e.icon_url.clone(),
+            e.icon_domain.clone(),
+        );
+        self.thumb_submit(
+            move || crate::icons::fetch_checked(&key, &url, &domain),
+            done,
+        );
     }
 
     /// Show the image at `path` in `image`, decoded at `size`.
@@ -719,10 +769,18 @@ impl Win {
 
     /// The claim `image` carries now, if it was ever claimed.
     fn icon_claim_of(&self, image: &gtk::Image) -> Option<u64> {
-        self.ai.borrow().icon_claims.iter().find(|(w, _)| w.upgrade().as_ref() == Some(image)).map(|(_, seq)| *seq)
+        self.ai
+            .borrow()
+            .icon_claims
+            .iter()
+            .find(|(w, _)| w.upgrade().as_ref() == Some(image))
+            .map(|(_, seq)| *seq)
     }
 
     pub fn ai_act(&self, e: &Entry) {
+        if self.demo_refuses() {
+            return;
+        }
         let cmd = e.action.clone();
         if let Some(cmd) = cmd.as_ref().filter(|_| {
             e.kind == ai::HARNESS
@@ -738,7 +796,8 @@ impl Win {
                 update: e.update.clone(),
                 ..Default::default()
             };
-            app.extra.insert("update_cmd".into(), serde_json::json!(cmd));
+            app.extra
+                .insert("update_cmd".into(), serde_json::json!(cmd));
             app.extra.insert("manager".into(), serde_json::json!(""));
             app.extra.insert(
                 "repo".into(),
@@ -748,8 +807,13 @@ impl Win {
                 "binary".into(),
                 serde_json::json!(spec.map(|s| s.id.clone()).unwrap_or_default()),
             );
-            let manager = if cmd.first().map(String::as_str) == Some("mise") { "mise" } else { "self" };
-            app.extra.insert("manager".into(), serde_json::json!(manager));
+            let manager = if cmd.first().map(String::as_str) == Some("mise") {
+                "mise"
+            } else {
+                "self"
+            };
+            app.extra
+                .insert("manager".into(), serde_json::json!(manager));
             if manager == "mise" {
                 if let Some(spec) = spec {
                     app.extra.insert("key".into(), serde_json::json!(spec.id));
@@ -775,8 +839,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
+                win.run_task(
                     &label,
                     vec![tasks::Step::argv(label.clone(), cmd.clone())],
                     Some(Box::new(move |ok| {
@@ -872,7 +935,10 @@ impl Win {
         let steps: Vec<tasks::Step> = upd
             .iter()
             .map(|e| {
-                tasks::Step::argv(format!("Updating {}", e.name), e.action.clone().unwrap_or_default())
+                tasks::Step::argv(
+                    format!("Updating {}", e.name),
+                    e.action.clone().unwrap_or_default(),
+                )
             })
             .collect();
         let detail = upd
@@ -899,9 +965,7 @@ impl Win {
             move || {
                 let Some(win) = w.upgrade() else { return };
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
-                    "Updating agent CLIs",
+                win.run_task("Updating agent CLIs",
                     steps.clone(),
                     Some(Box::new(move |ok| {
                         if let Some(w) = w2.upgrade() {
@@ -946,8 +1010,13 @@ mod tests {
         let src = code();
         let mut found = Vec::new();
         for needle in [
-            "set_margin_start(", "set_margin_end(", "set_margin_top(", "set_margin_bottom(",
-            "set_spacing(", "Orientation::Vertical, ", "Orientation::Horizontal, ",
+            "set_margin_start(",
+            "set_margin_end(",
+            "set_margin_top(",
+            "set_margin_bottom(",
+            "set_spacing(",
+            "Orientation::Vertical, ",
+            "Orientation::Horizontal, ",
         ] {
             found.extend(ints_after(src, needle));
         }
@@ -960,16 +1029,32 @@ mod tests {
     /// test_badges_use_one_pill_system, for the severities shown here.
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
-        let pills: BTreeSet<&str> =
-            ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"].into();
+        let pills: BTreeSet<&str> = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ]
+        .into();
         for (_sev, (_label, css)) in AI_SEVERITY {
             if css.is_empty() {
                 continue;
             }
             assert!(pills.contains(css), "unknown pill variant {css}");
-            assert!(CSS.contains(&format!(".{css}")), "{css} is applied but never styled");
+            assert!(
+                CSS.contains(&format!(".{css}")),
+                "{css} is applied but never styled"
+            );
         }
-        for retired in ["crit-pill", "stale-pill", "store-chip", "trust-ok", "trust-warn"] {
+        for retired in [
+            "crit-pill",
+            "stale-pill",
+            "store-chip",
+            "trust-ok",
+            "trust-warn",
+        ] {
             assert!(!code().contains(&format!("\"{retired}\"")));
         }
     }
@@ -982,7 +1067,9 @@ mod tests {
             return; // Adwaita icon theme not installed
         }
         fn walk(dir: &Path, have: &mut BTreeSet<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for ent in rd.flatten() {
                 let p = ent.path();
                 if p.is_dir() {
@@ -994,12 +1081,17 @@ mod tests {
         }
         let mut have = BTreeSet::new();
         walk(adwaita, &mut have);
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"),
+            &mut have,
+        );
         let src = code();
         let mut missing = Vec::new();
         for part in src.split('"').skip(1).step_by(2) {
             let is_name = part.ends_with("-symbolic")
-                && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
             // adw-* icons ship inside libadwaita itself.
             if is_name && !part.starts_with("adw-") && !have.contains(part) {
                 missing.push(part.to_string());
@@ -1014,7 +1106,9 @@ mod tests {
         let lines: Vec<&str> = code().lines().collect();
         let mut unnamed = Vec::new();
         for (i, line) in lines.iter().enumerate() {
-            let Some(pos) = line.find("= gtk::Button::from_icon_name(") else { continue };
+            let Some(pos) = line.find("= gtk::Button::from_icon_name(") else {
+                continue;
+            };
             let var = line[..pos].trim().trim_start_matches("let ").trim();
             let window = lines[i..(i + 12).min(lines.len())].join("\n");
             if !window.contains(&format!("shell::name(&{var}"))
@@ -1033,8 +1127,10 @@ mod tests {
         // A package build runs check() as another user, with no display
         // to reach; building a widget there crashes rather than fails.
         // (GTK also refuses a second initialising thread; skip then too.)
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) {
-            return; // no display
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
+            || gtk::gdk::Display::default().is_none()
+        {
+            return; // no display, or GTK already belongs to another test thread
         }
         let e = Entry {
             kind: ai::MCP.into(),
@@ -1055,12 +1151,20 @@ mod tests {
     #[test]
     fn icon_source_prefers_domain_then_reverse_appid() {
         let mut app = App::new("x", "1", "pacman");
-        app.extra.insert("appid".into(), serde_json::json!("org.gnome.Foo"));
-        assert_eq!(Win::icon_source(&app), ("gnome.org".into(), "gnome.org".into(), String::new()));
-        app.extra.insert("domain".into(), serde_json::json!("example.com"));
+        app.extra
+            .insert("appid".into(), serde_json::json!("org.gnome.Foo"));
+        assert_eq!(
+            Win::icon_source(&app),
+            ("gnome.org".into(), "gnome.org".into(), String::new())
+        );
+        app.extra
+            .insert("domain".into(), serde_json::json!("example.com"));
         assert_eq!(Win::icon_source(&app).0, "example.com");
         let empty = App::new("y", "1", "pacman");
-        assert_eq!(Win::icon_source(&empty), (String::new(), String::new(), String::new()));
+        assert_eq!(
+            Win::icon_source(&empty),
+            (String::new(), String::new(), String::new())
+        );
     }
 
     #[test]
@@ -1069,9 +1173,14 @@ mod tests {
         let mut app = App::new("radar", "0.1", inventory::LOCAL);
         assert_eq!(
             Win::app_icon_choice(&app, &none),
-            IconChoice::Glyph { name: "applications-engineering".into() }
+            IconChoice::Glyph {
+                name: "applications-engineering".into()
+            }
         );
-        app.extra.insert("url".into(), serde_json::json!("https://github.com/wesleygrimes/omastorm"));
+        app.extra.insert(
+            "url".into(),
+            serde_json::json!("https://github.com/wesleygrimes/omastorm"),
+        );
         assert_eq!(
             Win::app_icon_choice(&app, &none),
             IconChoice::Vendor {
@@ -1081,22 +1190,37 @@ mod tests {
                 glyph: "applications-engineering".into(),
             }
         );
-        app.extra.insert("icon".into(), serde_json::json!("/nonexistent/icon.png"));
-        assert!(matches!(Win::app_icon_choice(&app, &none), IconChoice::Vendor { .. }));
-        let file = std::env::temp_dir().join(format!("almanac-icon-choice-{}.png", std::process::id()));
+        app.extra
+            .insert("icon".into(), serde_json::json!("/nonexistent/icon.png"));
+        assert!(matches!(
+            Win::app_icon_choice(&app, &none),
+            IconChoice::Vendor { .. }
+        ));
+        let file =
+            std::env::temp_dir().join(format!("almanac-icon-choice-{}.png", std::process::id()));
         std::fs::write(&file, b"x").unwrap();
-        app.extra.insert("icon".into(), serde_json::json!(file.to_string_lossy()));
+        app.extra
+            .insert("icon".into(), serde_json::json!(file.to_string_lossy()));
         assert_eq!(
             Win::app_icon_choice(&app, &none),
-            IconChoice::File { path: file.to_string_lossy().into_owned() }
+            IconChoice::File {
+                path: file.to_string_lossy().into_owned()
+            }
         );
         let _ = std::fs::remove_file(&file);
         app.extra.insert("icon".into(), serde_json::json!("radar"));
         assert_eq!(
             Win::app_icon_choice(&app, &|n| n == "radar"),
-            IconChoice::Theme { name: "radar".into() }
+            IconChoice::Theme {
+                name: "radar".into()
+            }
         );
         let odd = App::new("x", "1", "no-such-source");
-        assert_eq!(Win::app_icon_choice(&odd, &none), IconChoice::Glyph { name: "package-x-generic".into() });
+        assert_eq!(
+            Win::app_icon_choice(&odd, &none),
+            IconChoice::Glyph {
+                name: "package-x-generic".into()
+            }
+        );
     }
 }

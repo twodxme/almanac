@@ -32,7 +32,9 @@ pub fn autostart_path() -> PathBuf {
 }
 
 fn reported_path() -> PathBuf {
-    crate::xdg::state_home().join("almanac").join("guard-reported.json")
+    crate::xdg::state_home()
+        .join("almanac")
+        .join("guard-reported.json")
 }
 
 /// The command Almanac is installed as.
@@ -120,7 +122,10 @@ fn popen_detached(argv: &[OsString], quiet: bool) -> Result<(), String> {
         let _ = rustix::process::setsid();
     });
     let args: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
-    launcher.spawn(&args).map(|_| ()).map_err(|e| format!("OSError: {e}"))
+    launcher
+        .spawn(&args)
+        .map(|_| ())
+        .map_err(|e| format!("OSError: {e}"))
 }
 
 /// Writes the autostart entry and, with `start_now`, starts a guard unless
@@ -164,7 +169,9 @@ fn enable_with(start_now: bool, launcher: &[OsString]) -> Result<(), String> {
          X-GNOME-Autostart-enabled=true\n",
     ));
     match pystr_to_string(&text) {
-        Some(text) => crate::util::atomic_write(&path, text).map_err(|e| format!("OSError: {e}"))?,
+        Some(text) => {
+            crate::util::atomic_write(&path, text).map_err(|e| format!("OSError: {e}"))?
+        }
         None => {
             // write_text opens (and so truncates) the file, then fails to
             // encode a surrogate: the entry is left empty.
@@ -214,7 +221,10 @@ pub fn disable() -> Result<(), String> {
 /// (`_quote` in the Python.)
 pub fn quote(arg: &str) -> String {
     // A str of chars has no surrogates, so the result is one too.
-    quote_py(&pystr(arg)).into_iter().filter_map(char::from_u32).collect()
+    quote_py(&pystr(arg))
+        .into_iter()
+        .filter_map(char::from_u32)
+        .collect()
 }
 
 /// `_quote` on a Python str, lone surrogates included.
@@ -255,7 +265,10 @@ fn py_path(s: &OsStr) -> PathBuf {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = b.split(|&c| c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = b
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend(parts.join(&b'/'));
     PathBuf::from(OsString::from_vec(out))
@@ -325,8 +338,21 @@ fn py_int(text: &str) -> Option<BigInt> {
 /// A pid that does not fit a C int is the OverflowError of `os.kill`, which
 /// the Python does not catch: an `Err`.
 pub fn running() -> Result<i32, String> {
+    running_in(&pid_path(), &guard_alive)
+}
+
+/// Whether `pid` is a live `--guard`.
+fn guard_alive(pid: i32) -> bool {
+    match std::fs::read(format!("/proc/{pid}/cmdline")) {
+        Ok(cmdline) => cmdline.windows(7).any(|w| w == b"--guard"),
+        Err(_) => false,
+    }
+}
+
+/// [`running`] with the pid file and the liveness check passed in.
+fn running_in(path: &Path, alive: &dyn Fn(i32) -> bool) -> Result<i32, String> {
     // read_text(): an unreadable or non-UTF-8 file is OSError/ValueError.
-    let Ok(text) = std::fs::read_to_string(pid_path()) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(0);
     };
     let Some(pid) = py_int(py_strip(&text)) else {
@@ -343,10 +369,29 @@ pub fn running() -> Result<i32, String> {
     if pid <= 0 || rustix::process::test_kill_process(p).is_err() {
         return Ok(0);
     }
-    Ok(match std::fs::read(format!("/proc/{pid}/cmdline")) {
-        Ok(cmdline) if cmdline.windows(7).any(|w| w == b"--guard") => pid,
-        _ => 0,
-    })
+    Ok(if alive(pid) { pid } else { 0 })
+}
+
+/// Become the session's one guard: Ok(true) when no other is running, and
+/// this one's pid is now in the pid file. The check and the write are one
+/// step under a lock beside the pid file: two guards started together
+/// (autostart and a login script) both read "none running" otherwise, and
+/// both ran.
+fn claim(path: &Path, me: i32, alive: &dyn Fn(i32) -> bool) -> Result<bool, String> {
+    let mut lock_name = path.as_os_str().to_owned();
+    lock_name.push(".lock");
+    // Without the lock (a read-only runtime dir), as before: one guard
+    // still wins nearly always.
+    let _lock = crate::util::lock_file(Path::new(&lock_name)).ok();
+    if running_in(path, alive)? != 0 {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_ok() {
+            let _ = std::fs::write(path, me.to_string());
+        }
+    }
+    Ok(true)
 }
 
 /// A Python `str`, as code points: it may hold lone surrogates (from a
@@ -389,7 +434,11 @@ fn pystr_json(s: &PyStr) -> String {
             0x20..=0x7E => out.push(char::from(c as u8)),
             0x10000.. => {
                 let v = c - 0x10000;
-                out.push_str(&format!("\\u{:04x}\\u{:04x}", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)));
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xD800 + (v >> 10),
+                    0xDC00 + (v & 0x3FF)
+                ));
             }
             _ => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -445,7 +494,11 @@ fn num_cmp(a: &Num, b: &Num) -> Option<Ordering> {
             return None;
         }
         if f.is_infinite() {
-            return Some(if f > 0.0 { Ordering::Less } else { Ordering::Greater });
+            return Some(if f > 0.0 {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
         }
         let fl = f.floor();
         let fb: BigInt = format!("{fl:.0}").parse().ok()?;
@@ -476,7 +529,6 @@ pub struct Seen {
 }
 
 impl Seen {
-
     pub fn len(&self) -> usize {
         self.strs.len() + self.nums.len() + usize::from(self.none)
     }
@@ -495,7 +547,8 @@ impl Seen {
                 // NaN equals nothing, but json's decoder gives every `NaN`
                 // literal as one shared float object (json.decoder.NaN), and
                 // a set finds a member by identity first: one NaN at most.
-                let dup = |m: &Num| num_cmp(m, &n) == Some(Ordering::Equal) || (m.is_nan() && n.is_nan());
+                let dup =
+                    |m: &Num| num_cmp(m, &n) == Some(Ordering::Equal) || (m.is_nan() && n.is_nan());
                 if !self.nums.iter().any(dup) {
                     self.nums.push(n);
                 }
@@ -525,7 +578,8 @@ impl Seen {
             ));
         }
         let mut out: Vec<Item> = self.strs.iter().cloned().map(Item::Str).collect();
-        let (mut ordered, nans): (Vec<Num>, Vec<Num>) = self.nums.iter().cloned().partition(|n| !n.is_nan());
+        let (mut ordered, nans): (Vec<Num>, Vec<Num>) =
+            self.nums.iter().cloned().partition(|n| !n.is_nan());
         ordered.sort_by(|a, b| num_cmp(a, b).unwrap_or(Ordering::Equal));
         out.extend(ordered.into_iter().chain(nans).map(Item::Num));
         if self.none {
@@ -547,7 +601,6 @@ impl Seen {
             .collect();
         Ok(format!("[{}]", items.join(", ")))
     }
-
 }
 
 /// One hashable value from `json.loads`.
@@ -610,7 +663,11 @@ struct JsonParser {
 
 impl JsonParser {
     fn loads(text: &str, max_depth: usize) -> Result<Top, JsonErr> {
-        let mut p = JsonParser { s: text.chars().collect(), i: 0, max_depth };
+        let mut p = JsonParser {
+            s: text.chars().collect(),
+            i: 0,
+            max_depth,
+        };
         p.ws();
         let top = match p.peek() {
             Some('[') => {
@@ -819,12 +876,17 @@ impl JsonParser {
         }
         let text: String = self.s[start..self.i].iter().collect();
         if is_float {
-            return text.parse::<f64>().map(Num::Float).map_err(|_| JsonErr::Value);
+            return text
+                .parse::<f64>()
+                .map(Num::Float)
+                .map_err(|_| JsonErr::Value);
         }
         if text.trim_start_matches('-').len() > INT_MAX_STR_DIGITS {
             return Err(JsonErr::Value);
         }
-        text.parse::<BigInt>().map(Num::Int).map_err(|_| JsonErr::Value)
+        text.parse::<BigInt>()
+            .map(Num::Int)
+            .map_err(|_| JsonErr::Value)
     }
 
     fn hex4(&self, at: usize) -> Option<u32> {
@@ -892,13 +954,15 @@ fn json_set(path: &Path, thread: bool) -> Result<Seen, String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(Seen::default()); // OSError, or not UTF-8 (ValueError)
     };
-    let top = match JsonParser::loads(&text, json_max_depth(thread)) {
-        Ok(top) => top,
-        Err(JsonErr::Value) => return Ok(Seen::default()),
-        Err(JsonErr::Recursion) => {
-            return Err("RecursionError: maximum recursion depth exceeded while decoding a JSON document".into())
-        }
-    };
+    let top =
+        match JsonParser::loads(&text, json_max_depth(thread)) {
+            Ok(top) => top,
+            Err(JsonErr::Value) => return Ok(Seen::default()),
+            Err(JsonErr::Recursion) => return Err(
+                "RecursionError: maximum recursion depth exceeded while decoding a JSON document"
+                    .into(),
+            ),
+        };
     let mut seen = Seen::default();
     match top {
         Top::List(items) => {
@@ -921,7 +985,10 @@ fn load_reported() -> Result<Seen, String> {
 
 /// `json.dumps(sorted(seen))` of strs.
 fn dumps_set(seen: &BTreeSet<PyStr>) -> String {
-    format!("[{}]", seen.iter().map(pystr_json).collect::<Vec<_>>().join(", "))
+    format!(
+        "[{}]",
+        seen.iter().map(pystr_json).collect::<Vec<_>>().join(", ")
+    )
 }
 
 /// An OSError is ignored, as in the Python; the TypeError of sorting a set
@@ -941,14 +1008,20 @@ fn save_reported(seen: &Seen) -> Result<(), String> {
 /// Notify about resets not already reported. Returns the updated set.
 pub fn announce(found: &[crate::guard::Reset], seen: &Seen) -> Seen {
     let new: Vec<&crate::guard::Reset> = if crate::settings::get_bool("notify_resets") {
-        found.iter().filter(|r| !seen.strs.contains(&pystr_of_path(&r.backup))).collect()
+        found
+            .iter()
+            .filter(|r| !seen.strs.contains(&pystr_of_path(&r.backup)))
+            .collect()
     } else {
         Vec::new()
     };
     for r in new {
         let n = r.lost.len();
         let lost = if n > 0 {
-            format!(" {n} of your entries {} removed.", if n == 1 { "was" } else { "were" })
+            format!(
+                " {n} of your entries {} removed.",
+                if n == 1 { "was" } else { "were" }
+            )
         } else {
             String::new()
         };
@@ -960,7 +1033,8 @@ pub fn announce(found: &[crate::guard::Reset], seen: &Seen) -> Seen {
         notify("Your settings were reset", &body, "health", "critical");
     }
     let mut out = seen.clone();
-    out.strs.extend(found.iter().map(|r| pystr_of_path(&r.backup)));
+    out.strs
+        .extend(found.iter().map(|r| pystr_of_path(&r.backup)));
     out
 }
 
@@ -969,7 +1043,9 @@ pub fn announce(found: &[crate::guard::Reset], seen: &Seen) -> Seen {
 pub const PLUGIN_CHECK_EVERY: u64 = 6 * 3600;
 
 fn plugins_seen_path() -> PathBuf {
-    crate::xdg::state_home().join("almanac").join("plugin-updates-notified.json")
+    crate::xdg::state_home()
+        .join("almanac")
+        .join("plugin-updates-notified.json")
 }
 
 /// Plugins with a clean update waiting, fetched as Omarchy fetches.
@@ -991,7 +1067,11 @@ pub fn plugin_updates() -> Vec<PyStr> {
     dirs.sort_by_cached_key(|d| pystr_of_path(d));
     for d in dirs {
         if d.join("manifest.json").is_file() && updatable(&d) {
-            out.push(d.file_name().map(|n| pystr_of_path(Path::new(n))).unwrap_or_default());
+            out.push(
+                d.file_name()
+                    .map(|n| pystr_of_path(Path::new(n)))
+                    .unwrap_or_default(),
+            );
         }
     }
     out
@@ -1014,10 +1094,24 @@ pub fn announce_plugin_updates(waiting: &[PyStr], last: &BTreeSet<PyStr>) -> BTr
         sorted.sort();
         // An argv carries a surrogate as its byte; notify's text is a
         // Rust str, so it is shown as U+FFFD.
-        let lossy = |s: &PyStr| s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect::<String>();
-        let names = sorted.iter().take(4).map(lossy).collect::<Vec<_>>().join(", ")
+        let lossy = |s: &PyStr| {
+            s.iter()
+                .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+                .collect::<String>()
+        };
+        let names = sorted
+            .iter()
+            .take(4)
+            .map(lossy)
+            .collect::<Vec<_>>()
+            .join(", ")
             + if waiting.len() > 4 { "…" } else { "" };
-        notify(&format!("{} plugin update(s) available", waiting.len()), &names, "plugins", "normal");
+        notify(
+            &format!("{} plugin update(s) available", waiting.len()),
+            &names,
+            "plugins",
+            "normal",
+        );
     }
     all
 }
@@ -1046,12 +1140,25 @@ fn notify(title: &str, body: &str, page: &str, urgency: &str) {
     };
     let tool = tool.to_string_lossy().into_owned();
     // What the user reads: a failed check's Python error in plain words.
-    let (title, body) = (crate::util::human_error(title), crate::util::human_error(body));
+    let (title, body) = (
+        crate::util::human_error(title),
+        crate::util::human_error(body),
+    );
     let (page, urgency) = (page.to_owned(), urgency.to_owned());
     std::thread::spawn(move || {
         let res = crate::util::run(
-            &[&tool, "-u", &urgency, "-i", "io.github.twodxme.Almanac",
-              "-A", "open=Open Almanac", "--wait", &title, &body],
+            &[
+                &tool,
+                "-u",
+                &urgency,
+                "-i",
+                "io.github.twodxme.Almanac",
+                "-A",
+                "open=Open Almanac",
+                "--wait",
+                &title,
+                &body,
+            ],
             3600,
         );
         if res.failed_to_start || res.timed_out {
@@ -1082,16 +1189,11 @@ pub fn main() -> i32 {
         eprintln!("almanac --guard: {e}");
         1
     };
-    match running() {
-        Ok(0) => {}
-        Ok(_) => return 0, // one per session
+    let me = i32::try_from(std::process::id()).unwrap_or(i32::MAX);
+    match claim(&pid_path(), me, &guard_alive) {
+        Ok(true) => {}
+        Ok(false) => return 0, // one per session
         Err(e) => return uncaught(e),
-    }
-    let pp = pid_path();
-    if let Some(parent) = pp.parent() {
-        if std::fs::create_dir_all(parent).is_ok() {
-            let _ = std::fs::write(&pp, std::process::id().to_string());
-        }
     }
 
     let found = match crate::guard::try_resets_at(None, crate::guard::PyStack::WATCHER) {
@@ -1115,7 +1217,10 @@ pub fn main() -> i32 {
         seen: Seen,
         pending: Option<glib::SourceId>,
     }
-    let state = Rc::new(RefCell::new(St { seen, pending: None }));
+    let state = Rc::new(RefCell::new(St {
+        seen,
+        pending: None,
+    }));
 
     fn check(state: &Rc<RefCell<St>>) -> glib::ControlFlow {
         // The source is dispatching now; returning Break removes it.
@@ -1125,7 +1230,10 @@ pub fn main() -> i32 {
             st.seen.clone()
         };
         // `check` runs from the loop: one Python frame more than `main`.
-        let at = crate::guard::PyStack { frames: crate::guard::PyStack::WATCHER.frames + 1, thread: false };
+        let at = crate::guard::PyStack {
+            frames: crate::guard::PyStack::WATCHER.frames + 1,
+            thread: false,
+        };
         let found = match crate::guard::try_resets_at(None, at) {
             Ok(found) => found,
             Err(e) => {
@@ -1156,12 +1264,16 @@ pub fn main() -> i32 {
     };
     subs.sort();
     for sub in subs {
-        let Some(name) = sub.file_name() else { continue };
+        let Some(name) = sub.file_name() else {
+            continue;
+        };
         let target = crate::guard::config_home().join(name);
         if !target.is_dir() {
             continue;
         }
-        let mon = match gio::File::for_path(&target).monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+        let mon = match gio::File::for_path(&target)
+            .monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -1170,7 +1282,10 @@ pub fn main() -> i32 {
             if event != gio::FileMonitorEvent::Created {
                 return;
             }
-            let base = gfile.basename().map(|b| b.to_string_lossy().into_owned()).unwrap_or_default();
+            let base = gfile
+                .basename()
+                .map(|b| b.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if !crate::guard::BAK.is_match(&base) {
                 return;
             }
@@ -1233,11 +1348,10 @@ pub fn main() -> i32 {
     0
 }
 
-
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
     use super::*;
+    use serde_json::Value;
 
     // Tests share the process environment; one at a time.
 
@@ -1276,7 +1390,9 @@ mod tests {
 
     #[test]
     fn test_enabling_writes_a_standard_autostart_entry() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let entry;
         {
@@ -1297,12 +1413,17 @@ mod tests {
     #[test]
     fn test_exec_arguments_are_quoted_per_the_spec() {
         assert_eq!(quote("/usr/bin/almanac"), "/usr/bin/almanac");
-        assert_eq!(quote("/path with space/app.py"), "\"/path with space/app.py\"");
+        assert_eq!(
+            quote("/path with space/app.py"),
+            "\"/path with space/app.py\""
+        );
     }
 
     #[test]
     fn test_a_reset_is_announced_once() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let r = crate::guard::Reset::new(
             PathBuf::from("/c/shell.json"),
             PathBuf::from("/c/shell.json.bak.1"),
@@ -1321,7 +1442,9 @@ mod tests {
 
     #[test]
     fn test_only_something_new_is_announced() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let v = |xs: &[&str]| xs.iter().map(|s| pystr(s)).collect::<Vec<_>>();
         let calls = with_notify_mock(|| {
             let seen = announce_plugin_updates(&v(&["a", "b"]), &BTreeSet::new());
@@ -1335,7 +1458,9 @@ mod tests {
 
     #[test]
     fn test_switched_off_in_preferences() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let _e = EnvVar::set("XDG_STATE_HOME", d.path());
         let calls = with_notify_mock(|| {
@@ -1365,13 +1490,65 @@ mod tests {
         assert_eq!(int("\u{1c}12\u{1f}").as_deref(), Some("12"));
         assert_eq!(int("\u{3000}12\u{85}").as_deref(), Some("12"));
         assert_eq!(int("\u{b2}"), None); // superscript two: a digit, not decimal
-        assert_eq!(int("99999999999999999999").as_deref(), Some("99999999999999999999"));
+        assert_eq!(
+            int("99999999999999999999").as_deref(),
+            Some("99999999999999999999")
+        );
         assert_eq!(int(&"1".repeat(4301)), None);
+    }
+
+    /// Two guards started together: one runs. The pid file is read and
+    /// written under a lock, so the second sees the first.
+    #[test]
+    fn two_guards_started_together_run_once() {
+        let d = tempfile::tempdir().unwrap();
+        let pid = d.path().join("almanac-guard.pid");
+        // A stale pid that is alive as a process (this one) but not a guard;
+        // checking it takes a while, as /proc can.
+        std::fs::write(&pid, std::process::id().to_string()).unwrap();
+        let guards = std::sync::Arc::new(std::sync::Mutex::new(Vec::<i32>::new()));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        // Two live processes stand in for the two guards' pids.
+        let mut kids: Vec<std::process::Child> = (0..2)
+            .map(|_| {
+                std::process::Command::new("sleep")
+                    .arg("30")
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        let pids: Vec<i32> = kids.iter().map(|k| k.id() as i32).collect();
+        let handles: Vec<_> = pids
+            .into_iter()
+            .map(|me| {
+                let (pid, guards, barrier) = (pid.clone(), guards.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let alive = |p: i32| {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        guards.lock().unwrap().contains(&p)
+                    };
+                    barrier.wait();
+                    let won = claim(&pid, me, &alive).unwrap();
+                    if won {
+                        guards.lock().unwrap().push(me);
+                    }
+                    won
+                })
+            })
+            .collect();
+        let won: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for k in &mut kids {
+            let _ = k.kill();
+            let _ = k.wait();
+        }
+        assert_eq!(won.iter().filter(|w| **w).count(), 1, "{won:?}");
     }
 
     #[test]
     fn running_overflow_is_an_error() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let _r = EnvVar::set("XDG_RUNTIME_DIR", d.path());
         let pid = d.path().join("almanac-guard.pid");
@@ -1400,21 +1577,49 @@ mod tests {
         assert_eq!(dumped("[1.0, true]").unwrap(), "[1.0]");
         assert_eq!(dumped("[null]").unwrap(), "[null]");
         assert_eq!(dumped("[2, 1.5, -0.0, 0]").unwrap(), "[-0.0, 1.5, 2]");
-        assert_eq!(dumped("[NaN, -Infinity, 1e400]").unwrap(), "[-Infinity, Infinity, NaN]");
+        assert_eq!(
+            dumped("[NaN, -Infinity, 1e400]").unwrap(),
+            "[-Infinity, Infinity, NaN]"
+        );
         assert!(dumped(r#"["a", 1]"#).is_err());
         assert!(dumped("[null, 1]").is_err());
         assert_eq!(dumped(r#"["\ud800"]"#).unwrap(), r#"["\ud800"]"#);
-        assert_eq!(dumped(r#"{"\ud83d\ude00": 1, "b": [1]}"#).unwrap(), r#"["b", "\ud83d\ude00"]"#); // code point order
+        assert_eq!(
+            dumped(r#"{"\ud83d\ude00": 1, "b": [1]}"#).unwrap(),
+            r#"["b", "\ud83d\ude00"]"#
+        ); // code point order
         assert_eq!(dumped(r#""a\ud800""#).unwrap(), r#"["a", "\ud800"]"#);
-        assert_eq!(dumped("[123456789012345678901234567890]").unwrap(), "[123456789012345678901234567890]");
-        for bad in ["[1,]", "[01]", "[1.]", "[1e]", "nan", "[\"\t\"]", "\u{feff}[]", "[\"\\x\"]", "{\"a\" 1}", "[[1]]", "1", "null"] {
+        assert_eq!(
+            dumped("[123456789012345678901234567890]").unwrap(),
+            "[123456789012345678901234567890]"
+        );
+        for bad in [
+            "[1,]",
+            "[01]",
+            "[1.]",
+            "[1e]",
+            "nan",
+            "[\"\t\"]",
+            "\u{feff}[]",
+            "[\"\\x\"]",
+            "{\"a\" 1}",
+            "[[1]]",
+            "1",
+            "null",
+        ] {
             assert!(set_of(bad).unwrap().is_empty(), "{bad}");
         }
-        assert!(set_of(&format!("[{}]", "1".repeat(4301))).unwrap().is_empty());
+        assert!(set_of(&format!("[{}]", "1".repeat(4301)))
+            .unwrap()
+            .is_empty());
         // How deep Python gets before its stack overflows depends on the
         // machine's stack size, so only "does not crash" is checked past it.
         let _ = set_of(&format!("[{}{}]", "[".repeat(60_000), "]".repeat(60_000)));
-        assert!(set_of(&format!("[{}{}]", "[".repeat(1000), "]".repeat(1000))).unwrap().is_empty());
+        assert!(
+            set_of(&format!("[{}{}]", "[".repeat(1000), "]".repeat(1000)))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1422,7 +1627,12 @@ mod tests {
         let dumped = |t: &str| set_of(t).and_then(|s| s.dumps()).unwrap();
         assert_eq!(dumped("[NaN, NaN]"), "[NaN]");
         assert_eq!(dumped("[NaN, 1, NaN]"), "[1, NaN]");
-        assert_eq!(set_of("[Infinity, Infinity, NaN, NaN, -Infinity]").unwrap().len(), 3);
+        assert_eq!(
+            set_of("[Infinity, Infinity, NaN, NaN, -Infinity]")
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -1451,7 +1661,9 @@ mod tests {
 
     #[test]
     fn pid_path_is_normalised_as_path_does() {
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for (rt, want) in [
             ("/run//x/", "/run/x/almanac-guard.pid"),
             (".", "almanac-guard.pid"),
@@ -1468,21 +1680,32 @@ mod tests {
     #[test]
     fn enable_with_a_non_utf8_launcher_fails_as_python_does() {
         use std::os::unix::fs::PermissionsExt;
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let bin = d.path().join(OsStr::from_bytes(b"b\xffin"));
         std::fs::create_dir(&bin).unwrap();
         std::fs::write(bin.join("almanac"), "").unwrap();
-        std::fs::set_permissions(bin.join("almanac"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(bin.join("almanac"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
         // As launcher() finds it on PATH, without swapping PATH for every
         // other test that spawns a program meanwhile.
         let found = which_in("almanac", Some(bin.clone().into_os_string())).unwrap();
         let _c = EnvVar::set("XDG_CONFIG_HOME", d.path());
         let e = enable_with(false, &[found.into_os_string()]).unwrap_err();
-        assert!(e.starts_with("UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff' in position "), "{e}");
+        assert!(
+            e.starts_with(
+                "UnicodeEncodeError: 'utf-8' codec can't encode character '\\udcff' in position "
+            ),
+            "{e}"
+        );
         // write_text truncated the file before failing
         assert_eq!(std::fs::read_to_string(autostart_path()).unwrap(), "");
-        assert_eq!(quote_py(&vec![0x61, 0xDCFF, 0x20]), vec![0x22, 0x61, 0xDCFF, 0x20, 0x22]);
+        assert_eq!(
+            quote_py(&vec![0x61, 0xDCFF, 0x20]),
+            vec![0x22, 0x61, 0xDCFF, 0x20, 0x22]
+        );
     }
 
     #[test]
@@ -1494,7 +1717,9 @@ mod tests {
         if nix::unistd::geteuid().is_root() {
             return;
         }
-        let _l = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().unwrap();
         let (a, b) = (d.path().join("a"), d.path().join("b"));
         std::fs::create_dir(&a).unwrap();

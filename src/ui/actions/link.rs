@@ -7,11 +7,11 @@ use std::sync::Arc;
 use adw::prelude::*;
 
 use crate::i18n::tr;
-use crate::{sources, tasks, verify};
 use crate::sources::{Option as SourceOption, Resolution};
 use crate::tasks::{LogFn, OnDone, Step};
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
 use crate::verify::Outcome;
+use crate::{sources, tasks, verify};
 
 use super::pyisms::{probe_text, probe_truthy, py_strip, thousands};
 use super::raised;
@@ -20,6 +20,9 @@ use super::update::yay_argv;
 impl Win {
     /// Paste a GitHub link; see every way it ships before choosing one.
     pub fn on_install_link(&self, link: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let entry = gtk::Entry::builder()
             .placeholder_text("https://github.com/owner/project")
             .activates_default(true)
@@ -72,12 +75,18 @@ impl Win {
 
     pub fn show_link_options(&self, res: Resolution) {
         if res.options.is_empty() {
-            let msg = if res.error.is_empty() { "Nothing installable found".to_string() } else { res.error.clone() };
+            let msg = if res.error.is_empty() {
+                "Nothing installable found".to_string()
+            } else {
+                res.error.clone()
+            };
             self.say(&msg, 8);
             return;
         }
         let chosen: Rc<RefCell<Option<SourceOption>>> = Rc::new(RefCell::new(res.best().cloned()));
-        let rows = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        let rows = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .build();
         rows.add_css_class("boxed-list");
         let mut group: Option<gtk::CheckButton> = None;
         for (i, o) in res.options.iter().enumerate() {
@@ -93,7 +102,9 @@ impl Win {
             };
             let row: adw::ActionRow = Win::plain(&title, &lines.join("\n"));
             row.set_subtitle_lines(0);
-            let check = gtk::CheckButton::builder().valign(gtk::Align::Center).build();
+            let check = gtk::CheckButton::builder()
+                .valign(gtk::Align::Center)
+                .build();
             match &group {
                 None => group = Some(check.clone()),
                 Some(g) => check.set_group(Some(g)),
@@ -186,8 +197,7 @@ impl Win {
             let call: tasks::StepFn = Arc::new(move |log: LogFn<'_>| {
                 sources::install_appimage(&res_c, &opt_c, log).map(|_| ())
             });
-            tasks::run(
-                &self.window,
+            self.run_task(
                 &format!("Installing {}", res.repo),
                 vec![Step::call(format!("Downloading {}", opt.name), call)],
                 Some(after),
@@ -197,8 +207,10 @@ impl Win {
         let argv = yay_argv(&opt.name);
         let name = opt.name.clone();
         let judge_name = name.clone();
-        let steps = match self.snapshot_first(vec![Step::argv(format!("Installing {name}"), argv)],
-                                              &format!("installing {name}")) {
+        let steps = match self.snapshot_first(
+            vec![Step::argv(format!("Installing {name}"), argv)],
+            &format!("installing {name}"),
+        ) {
             Ok(steps) => steps,
             Err(e) => return raised(&e),
         };
@@ -220,16 +232,21 @@ impl Win {
             raised,
             move |done| {
                 if let Some(win) = w.upgrade() {
-                    tasks::run(&win.window, &format!("Installing {name}"), steps, Some(done));
+                    win.run_task(&format!("Installing {name}"), steps, Some(done));
                 }
             },
         );
     }
 
     /// The app ran it, so it knows to re-read rather than guess.
-    pub fn after_pacman(&self, ok: bool) {
-        if ok {
-            self.reload();
-        }
+    ///
+    /// Whether or not it worked: a batch where one item failed still has
+    /// the others done, and they must leave the Updates list. The pending
+    /// updates are asked afresh, not taken from what the last scan kept.
+    pub fn after_pacman(&self, _ok: bool) {
+        crate::inventory::forget_pending();
+        crate::maintenance::forget_last_run();
+        self.shared.borrow().findings.set(Vec::new());
+        self.reload();
     }
 }

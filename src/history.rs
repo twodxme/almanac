@@ -10,8 +10,9 @@
 //!
 //! Almanac's own actions (an update that did not change anything, settings
 //! restored, file types handed back) are appended to a small JSON-lines file in
-//! the XDG state directory. Everything else is read from where it already is;
-//! nothing is collected that the system was not already keeping.
+//! the XDG state directory, kept for `DAYS` days and clearable from the page.
+//! Everything else is read from where it already is; nothing is collected that
+//! the system was not already keeping, and nothing of it is ever cleared here.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -29,7 +30,10 @@ use crate::util;
 
 /// recorded events kept; older ones drop off
 pub const KEEP: usize = 2000;
+/// How far back the page reads, and how long Almanac keeps its own log.
 pub const DAYS: i64 = 30;
+/// Past this size the log is cut to its last `KEEP` lines, dated or not.
+const MAX_BYTES: u64 = 512 * 1024;
 
 pub const PACKAGES: &str = "packages";
 pub const SNAPSHOT: &str = "snapshot";
@@ -55,6 +59,10 @@ pub struct Event {
     pub items: Vec<String>,
     /// "warn" for things that went wrong
     pub severity: String,
+    /// What the action did, where Almanac recorded it (`record_action`).
+    /// Not part of the event as Python had it, so not serialised with it.
+    #[serde(skip)]
+    pub action: Option<ActionLog>,
     #[serde(skip)]
     pub py: Option<Box<PyFields>>,
 }
@@ -82,7 +90,14 @@ pub struct Day {
 
 impl Event {
     /// `Event(ts, kind, title, detail="", items=[], severity="")`.
-    pub fn new(ts: f64, kind: &str, title: &str, detail: &str, items: Vec<String>, severity: &str) -> Self {
+    pub fn new(
+        ts: f64,
+        kind: &str,
+        title: &str,
+        detail: &str,
+        items: Vec<String>,
+        severity: &str,
+    ) -> Self {
         Event {
             ts,
             kind: kind.to_string(),
@@ -90,6 +105,7 @@ impl Event {
             detail: detail.to_string(),
             items,
             severity: severity.to_string(),
+            action: None,
             py: None,
         }
     }
@@ -117,10 +133,13 @@ impl Event {
             _ => String::new(),
         };
         let items = match &f.items {
-            PyVal::List(xs) => xs.iter().filter_map(|x| match x {
-                PyVal::Str(s) => Some(lossy(s)),
-                _ => None,
-            }).collect(),
+            PyVal::List(xs) => xs
+                .iter()
+                .filter_map(|x| match x {
+                    PyVal::Str(s) => Some(lossy(s)),
+                    _ => None,
+                })
+                .collect(),
             // Iterating a str gives its characters.
             PyVal::Str(s) => s.iter().map(|&c| lossy(&[c])).collect(),
             _ => Vec::new(),
@@ -132,6 +151,7 @@ impl Event {
             detail: text(&f.detail),
             items,
             severity: text(&f.severity),
+            action: None,
             py: Some(Box::new(f)),
         }
     }
@@ -153,7 +173,13 @@ impl Event {
                 m.insert("kind".into(), Value::String(self.kind.clone()));
                 m.insert("title".into(), Value::String(self.title.clone()));
                 m.insert("detail".into(), Value::String(self.detail.clone()));
-                m.insert("items".into(), self.items.iter().map(|s| Value::String(s.clone())).collect());
+                m.insert(
+                    "items".into(),
+                    self.items
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect(),
+                );
                 m.insert("severity".into(), Value::String(self.severity.clone()));
             }
         }
@@ -182,7 +208,11 @@ impl Day {
         // Python's `strftime("%A %d %B")` follows LC_TIME, which the app sets
         // from the environment at start (i18n's setlocale; gtk::init here).
         // GLib's formatter reads the same C locale; chrono only knows English.
-        let (y, m, d) = (self.day.year(), self.day.month() as i32, self.day.day() as i32);
+        let (y, m, d) = (
+            self.day.year(),
+            self.day.month() as i32,
+            self.day.day() as i32,
+        );
         gtk::glib::DateTime::from_utc(y, m, d, 12, 0, 0.0)
             .and_then(|t| t.format("%A %d %B"))
             .map(|s| s.to_string())
@@ -206,8 +236,19 @@ mod iso_date {
 }
 
 fn _log_path() -> PathBuf {
-    crate::xdg::state_home().join("almanac").join("history.jsonl")
+    #[cfg(test)]
+    if let Some(p) = TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return p;
+    }
+    crate::xdg::state_home()
+        .join("almanac")
+        .join("history.jsonl")
 }
+
+/// Where tests put the log, instead of setting XDG_STATE_HOME (see
+/// `demo::TEST_DEMO` for why tests leave the environment alone).
+#[cfg(test)]
+static TEST_LOG: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 /// Python's `str.splitlines()`: every Unicode line boundary, and no empty
 /// last line after a trailing terminator.
@@ -218,7 +259,15 @@ fn splitlines(text: &str) -> Vec<&str> {
     while let Some((i, c)) = chars.next() {
         let is_break = matches!(
             c,
-            '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
         );
         if !is_break {
             continue;
@@ -293,7 +342,9 @@ impl Drop for PyVal {
         fn children(v: &mut PyVal, out: &mut Vec<PyVal>) {
             match v {
                 PyVal::List(items) => out.append(items),
-                PyVal::Dict(entries) => out.extend(std::mem::take(entries).into_iter().map(|(_, x)| x)),
+                PyVal::Dict(entries) => {
+                    out.extend(std::mem::take(entries).into_iter().map(|(_, x)| x))
+                }
                 _ => {}
             }
         }
@@ -335,7 +386,9 @@ impl PyVal {
 
     /// `d.get(key)` on a dict.
     fn get(&self, key: &str) -> Option<&PyVal> {
-        let PyVal::Dict(entries) = self else { return None };
+        let PyVal::Dict(entries) = self else {
+            return None;
+        };
         let key = py_str(key);
         entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
     }
@@ -353,16 +406,21 @@ impl PyVal {
             |n| match n {
                 PyVal::None => Value::Null,
                 PyVal::Bool(b) => Value::Bool(*b),
-                PyVal::Int(i) => i64::try_from(i).map(Value::from)
+                PyVal::Int(i) => i64::try_from(i)
+                    .map(Value::from)
                     .or_else(|_| u64::try_from(i).map(Value::from))
                     .unwrap_or_else(|_| float_value(int_f64(i), wire)),
                 PyVal::Float(f) => float_value(*f, wire),
                 PyVal::Str(s) => str_value(s, wire),
-                PyVal::List(_) | PyVal::Dict(_) => unreachable!("containers are built from their children"),
+                PyVal::List(_) | PyVal::Dict(_) => {
+                    unreachable!("containers are built from their children")
+                }
             },
             |_, kids| Value::Array(kids),
             |n, kids| match n {
-                PyVal::Dict(entries) => Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect()),
+                PyVal::Dict(entries) => {
+                    Value::Object(entries.iter().map(|(k, _)| lossy(k)).zip(kids).collect())
+                }
                 _ => unreachable!("only a dict is built as one"),
             },
         )
@@ -374,175 +432,752 @@ fn py_str(s: &str) -> PyStr {
 }
 
 fn lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// Code points Python 3.14's `str.isprintable` (Unicode 16) rejects, as
 /// inclusive ranges: categories Cc Cf Cs Co Cn Zl Zp and Zs except space.
 /// Generated from CPython itself.
 const PY_NOT_PRINTABLE: &[(u32, u32)] = &[
-    (0x0, 0x1F), (0x7F, 0xA0), (0xAD, 0xAD), (0x378, 0x379), (0x380, 0x383), (0x38B, 0x38B),
-    (0x38D, 0x38D), (0x3A2, 0x3A2), (0x530, 0x530), (0x557, 0x558), (0x58B, 0x58C), (0x590, 0x590),
-    (0x5C8, 0x5CF), (0x5EB, 0x5EE), (0x5F5, 0x605), (0x61C, 0x61C), (0x6DD, 0x6DD), (0x70E, 0x70F),
-    (0x74B, 0x74C), (0x7B2, 0x7BF), (0x7FB, 0x7FC), (0x82E, 0x82F), (0x83F, 0x83F), (0x85C, 0x85D),
-    (0x85F, 0x85F), (0x86B, 0x86F), (0x88F, 0x896), (0x8E2, 0x8E2), (0x984, 0x984), (0x98D, 0x98E),
-    (0x991, 0x992), (0x9A9, 0x9A9), (0x9B1, 0x9B1), (0x9B3, 0x9B5), (0x9BA, 0x9BB), (0x9C5, 0x9C6),
-    (0x9C9, 0x9CA), (0x9CF, 0x9D6), (0x9D8, 0x9DB), (0x9DE, 0x9DE), (0x9E4, 0x9E5), (0x9FF, 0xA00),
-    (0xA04, 0xA04), (0xA0B, 0xA0E), (0xA11, 0xA12), (0xA29, 0xA29), (0xA31, 0xA31), (0xA34, 0xA34),
-    (0xA37, 0xA37), (0xA3A, 0xA3B), (0xA3D, 0xA3D), (0xA43, 0xA46), (0xA49, 0xA4A), (0xA4E, 0xA50),
-    (0xA52, 0xA58), (0xA5D, 0xA5D), (0xA5F, 0xA65), (0xA77, 0xA80), (0xA84, 0xA84), (0xA8E, 0xA8E),
-    (0xA92, 0xA92), (0xAA9, 0xAA9), (0xAB1, 0xAB1), (0xAB4, 0xAB4), (0xABA, 0xABB), (0xAC6, 0xAC6),
-    (0xACA, 0xACA), (0xACE, 0xACF), (0xAD1, 0xADF), (0xAE4, 0xAE5), (0xAF2, 0xAF8), (0xB00, 0xB00),
-    (0xB04, 0xB04), (0xB0D, 0xB0E), (0xB11, 0xB12), (0xB29, 0xB29), (0xB31, 0xB31), (0xB34, 0xB34),
-    (0xB3A, 0xB3B), (0xB45, 0xB46), (0xB49, 0xB4A), (0xB4E, 0xB54), (0xB58, 0xB5B), (0xB5E, 0xB5E),
-    (0xB64, 0xB65), (0xB78, 0xB81), (0xB84, 0xB84), (0xB8B, 0xB8D), (0xB91, 0xB91), (0xB96, 0xB98),
-    (0xB9B, 0xB9B), (0xB9D, 0xB9D), (0xBA0, 0xBA2), (0xBA5, 0xBA7), (0xBAB, 0xBAD), (0xBBA, 0xBBD),
-    (0xBC3, 0xBC5), (0xBC9, 0xBC9), (0xBCE, 0xBCF), (0xBD1, 0xBD6), (0xBD8, 0xBE5), (0xBFB, 0xBFF),
-    (0xC0D, 0xC0D), (0xC11, 0xC11), (0xC29, 0xC29), (0xC3A, 0xC3B), (0xC45, 0xC45), (0xC49, 0xC49),
-    (0xC4E, 0xC54), (0xC57, 0xC57), (0xC5B, 0xC5C), (0xC5E, 0xC5F), (0xC64, 0xC65), (0xC70, 0xC76),
-    (0xC8D, 0xC8D), (0xC91, 0xC91), (0xCA9, 0xCA9), (0xCB4, 0xCB4), (0xCBA, 0xCBB), (0xCC5, 0xCC5),
-    (0xCC9, 0xCC9), (0xCCE, 0xCD4), (0xCD7, 0xCDC), (0xCDF, 0xCDF), (0xCE4, 0xCE5), (0xCF0, 0xCF0),
-    (0xCF4, 0xCFF), (0xD0D, 0xD0D), (0xD11, 0xD11), (0xD45, 0xD45), (0xD49, 0xD49), (0xD50, 0xD53),
-    (0xD64, 0xD65), (0xD80, 0xD80), (0xD84, 0xD84), (0xD97, 0xD99), (0xDB2, 0xDB2), (0xDBC, 0xDBC),
-    (0xDBE, 0xDBF), (0xDC7, 0xDC9), (0xDCB, 0xDCE), (0xDD5, 0xDD5), (0xDD7, 0xDD7), (0xDE0, 0xDE5),
-    (0xDF0, 0xDF1), (0xDF5, 0xE00), (0xE3B, 0xE3E), (0xE5C, 0xE80), (0xE83, 0xE83), (0xE85, 0xE85),
-    (0xE8B, 0xE8B), (0xEA4, 0xEA4), (0xEA6, 0xEA6), (0xEBE, 0xEBF), (0xEC5, 0xEC5), (0xEC7, 0xEC7),
-    (0xECF, 0xECF), (0xEDA, 0xEDB), (0xEE0, 0xEFF), (0xF48, 0xF48), (0xF6D, 0xF70), (0xF98, 0xF98),
-    (0xFBD, 0xFBD), (0xFCD, 0xFCD), (0xFDB, 0xFFF), (0x10C6, 0x10C6), (0x10C8, 0x10CC),
-    (0x10CE, 0x10CF), (0x1249, 0x1249), (0x124E, 0x124F), (0x1257, 0x1257), (0x1259, 0x1259),
-    (0x125E, 0x125F), (0x1289, 0x1289), (0x128E, 0x128F), (0x12B1, 0x12B1), (0x12B6, 0x12B7),
-    (0x12BF, 0x12BF), (0x12C1, 0x12C1), (0x12C6, 0x12C7), (0x12D7, 0x12D7), (0x1311, 0x1311),
-    (0x1316, 0x1317), (0x135B, 0x135C), (0x137D, 0x137F), (0x139A, 0x139F), (0x13F6, 0x13F7),
-    (0x13FE, 0x13FF), (0x1680, 0x1680), (0x169D, 0x169F), (0x16F9, 0x16FF), (0x1716, 0x171E),
-    (0x1737, 0x173F), (0x1754, 0x175F), (0x176D, 0x176D), (0x1771, 0x1771), (0x1774, 0x177F),
-    (0x17DE, 0x17DF), (0x17EA, 0x17EF), (0x17FA, 0x17FF), (0x180E, 0x180E), (0x181A, 0x181F),
-    (0x1879, 0x187F), (0x18AB, 0x18AF), (0x18F6, 0x18FF), (0x191F, 0x191F), (0x192C, 0x192F),
-    (0x193C, 0x193F), (0x1941, 0x1943), (0x196E, 0x196F), (0x1975, 0x197F), (0x19AC, 0x19AF),
-    (0x19CA, 0x19CF), (0x19DB, 0x19DD), (0x1A1C, 0x1A1D), (0x1A5F, 0x1A5F), (0x1A7D, 0x1A7E),
-    (0x1A8A, 0x1A8F), (0x1A9A, 0x1A9F), (0x1AAE, 0x1AAF), (0x1ACF, 0x1AFF), (0x1B4D, 0x1B4D),
-    (0x1BF4, 0x1BFB), (0x1C38, 0x1C3A), (0x1C4A, 0x1C4C), (0x1C8B, 0x1C8F), (0x1CBB, 0x1CBC),
-    (0x1CC8, 0x1CCF), (0x1CFB, 0x1CFF), (0x1F16, 0x1F17), (0x1F1E, 0x1F1F), (0x1F46, 0x1F47),
-    (0x1F4E, 0x1F4F), (0x1F58, 0x1F58), (0x1F5A, 0x1F5A), (0x1F5C, 0x1F5C), (0x1F5E, 0x1F5E),
-    (0x1F7E, 0x1F7F), (0x1FB5, 0x1FB5), (0x1FC5, 0x1FC5), (0x1FD4, 0x1FD5), (0x1FDC, 0x1FDC),
-    (0x1FF0, 0x1FF1), (0x1FF5, 0x1FF5), (0x1FFF, 0x200F), (0x2028, 0x202F), (0x205F, 0x206F),
-    (0x2072, 0x2073), (0x208F, 0x208F), (0x209D, 0x209F), (0x20C1, 0x20CF), (0x20F1, 0x20FF),
-    (0x218C, 0x218F), (0x242A, 0x243F), (0x244B, 0x245F), (0x2B74, 0x2B75), (0x2B96, 0x2B96),
-    (0x2CF4, 0x2CF8), (0x2D26, 0x2D26), (0x2D28, 0x2D2C), (0x2D2E, 0x2D2F), (0x2D68, 0x2D6E),
-    (0x2D71, 0x2D7E), (0x2D97, 0x2D9F), (0x2DA7, 0x2DA7), (0x2DAF, 0x2DAF), (0x2DB7, 0x2DB7),
-    (0x2DBF, 0x2DBF), (0x2DC7, 0x2DC7), (0x2DCF, 0x2DCF), (0x2DD7, 0x2DD7), (0x2DDF, 0x2DDF),
-    (0x2E5E, 0x2E7F), (0x2E9A, 0x2E9A), (0x2EF4, 0x2EFF), (0x2FD6, 0x2FEF), (0x3000, 0x3000),
-    (0x3040, 0x3040), (0x3097, 0x3098), (0x3100, 0x3104), (0x3130, 0x3130), (0x318F, 0x318F),
-    (0x31E6, 0x31EE), (0x321F, 0x321F), (0xA48D, 0xA48F), (0xA4C7, 0xA4CF), (0xA62C, 0xA63F),
-    (0xA6F8, 0xA6FF), (0xA7CE, 0xA7CF), (0xA7D2, 0xA7D2), (0xA7D4, 0xA7D4), (0xA7DD, 0xA7F1),
-    (0xA82D, 0xA82F), (0xA83A, 0xA83F), (0xA878, 0xA87F), (0xA8C6, 0xA8CD), (0xA8DA, 0xA8DF),
-    (0xA954, 0xA95E), (0xA97D, 0xA97F), (0xA9CE, 0xA9CE), (0xA9DA, 0xA9DD), (0xA9FF, 0xA9FF),
-    (0xAA37, 0xAA3F), (0xAA4E, 0xAA4F), (0xAA5A, 0xAA5B), (0xAAC3, 0xAADA), (0xAAF7, 0xAB00),
-    (0xAB07, 0xAB08), (0xAB0F, 0xAB10), (0xAB17, 0xAB1F), (0xAB27, 0xAB27), (0xAB2F, 0xAB2F),
-    (0xAB6C, 0xAB6F), (0xABEE, 0xABEF), (0xABFA, 0xABFF), (0xD7A4, 0xD7AF), (0xD7C7, 0xD7CA),
-    (0xD7FC, 0xF8FF), (0xFA6E, 0xFA6F), (0xFADA, 0xFAFF), (0xFB07, 0xFB12), (0xFB18, 0xFB1C),
-    (0xFB37, 0xFB37), (0xFB3D, 0xFB3D), (0xFB3F, 0xFB3F), (0xFB42, 0xFB42), (0xFB45, 0xFB45),
-    (0xFBC3, 0xFBD2), (0xFD90, 0xFD91), (0xFDC8, 0xFDCE), (0xFDD0, 0xFDEF), (0xFE1A, 0xFE1F),
-    (0xFE53, 0xFE53), (0xFE67, 0xFE67), (0xFE6C, 0xFE6F), (0xFE75, 0xFE75), (0xFEFD, 0xFF00),
-    (0xFFBF, 0xFFC1), (0xFFC8, 0xFFC9), (0xFFD0, 0xFFD1), (0xFFD8, 0xFFD9), (0xFFDD, 0xFFDF),
-    (0xFFE7, 0xFFE7), (0xFFEF, 0xFFFB), (0xFFFE, 0xFFFF), (0x1000C, 0x1000C), (0x10027, 0x10027),
-    (0x1003B, 0x1003B), (0x1003E, 0x1003E), (0x1004E, 0x1004F), (0x1005E, 0x1007F),
-    (0x100FB, 0x100FF), (0x10103, 0x10106), (0x10134, 0x10136), (0x1018F, 0x1018F),
-    (0x1019D, 0x1019F), (0x101A1, 0x101CF), (0x101FE, 0x1027F), (0x1029D, 0x1029F),
-    (0x102D1, 0x102DF), (0x102FC, 0x102FF), (0x10324, 0x1032C), (0x1034B, 0x1034F),
-    (0x1037B, 0x1037F), (0x1039E, 0x1039E), (0x103C4, 0x103C7), (0x103D6, 0x103FF),
-    (0x1049E, 0x1049F), (0x104AA, 0x104AF), (0x104D4, 0x104D7), (0x104FC, 0x104FF),
-    (0x10528, 0x1052F), (0x10564, 0x1056E), (0x1057B, 0x1057B), (0x1058B, 0x1058B),
-    (0x10593, 0x10593), (0x10596, 0x10596), (0x105A2, 0x105A2), (0x105B2, 0x105B2),
-    (0x105BA, 0x105BA), (0x105BD, 0x105BF), (0x105F4, 0x105FF), (0x10737, 0x1073F),
-    (0x10756, 0x1075F), (0x10768, 0x1077F), (0x10786, 0x10786), (0x107B1, 0x107B1),
-    (0x107BB, 0x107FF), (0x10806, 0x10807), (0x10809, 0x10809), (0x10836, 0x10836),
-    (0x10839, 0x1083B), (0x1083D, 0x1083E), (0x10856, 0x10856), (0x1089F, 0x108A6),
-    (0x108B0, 0x108DF), (0x108F3, 0x108F3), (0x108F6, 0x108FA), (0x1091C, 0x1091E),
-    (0x1093A, 0x1093E), (0x10940, 0x1097F), (0x109B8, 0x109BB), (0x109D0, 0x109D1),
-    (0x10A04, 0x10A04), (0x10A07, 0x10A0B), (0x10A14, 0x10A14), (0x10A18, 0x10A18),
-    (0x10A36, 0x10A37), (0x10A3B, 0x10A3E), (0x10A49, 0x10A4F), (0x10A59, 0x10A5F),
-    (0x10AA0, 0x10ABF), (0x10AE7, 0x10AEA), (0x10AF7, 0x10AFF), (0x10B36, 0x10B38),
-    (0x10B56, 0x10B57), (0x10B73, 0x10B77), (0x10B92, 0x10B98), (0x10B9D, 0x10BA8),
-    (0x10BB0, 0x10BFF), (0x10C49, 0x10C7F), (0x10CB3, 0x10CBF), (0x10CF3, 0x10CF9),
-    (0x10D28, 0x10D2F), (0x10D3A, 0x10D3F), (0x10D66, 0x10D68), (0x10D86, 0x10D8D),
-    (0x10D90, 0x10E5F), (0x10E7F, 0x10E7F), (0x10EAA, 0x10EAA), (0x10EAE, 0x10EAF),
-    (0x10EB2, 0x10EC1), (0x10EC5, 0x10EFB), (0x10F28, 0x10F2F), (0x10F5A, 0x10F6F),
-    (0x10F8A, 0x10FAF), (0x10FCC, 0x10FDF), (0x10FF7, 0x10FFF), (0x1104E, 0x11051),
-    (0x11076, 0x1107E), (0x110BD, 0x110BD), (0x110C3, 0x110CF), (0x110E9, 0x110EF),
-    (0x110FA, 0x110FF), (0x11135, 0x11135), (0x11148, 0x1114F), (0x11177, 0x1117F),
-    (0x111E0, 0x111E0), (0x111F5, 0x111FF), (0x11212, 0x11212), (0x11242, 0x1127F),
-    (0x11287, 0x11287), (0x11289, 0x11289), (0x1128E, 0x1128E), (0x1129E, 0x1129E),
-    (0x112AA, 0x112AF), (0x112EB, 0x112EF), (0x112FA, 0x112FF), (0x11304, 0x11304),
-    (0x1130D, 0x1130E), (0x11311, 0x11312), (0x11329, 0x11329), (0x11331, 0x11331),
-    (0x11334, 0x11334), (0x1133A, 0x1133A), (0x11345, 0x11346), (0x11349, 0x1134A),
-    (0x1134E, 0x1134F), (0x11351, 0x11356), (0x11358, 0x1135C), (0x11364, 0x11365),
-    (0x1136D, 0x1136F), (0x11375, 0x1137F), (0x1138A, 0x1138A), (0x1138C, 0x1138D),
-    (0x1138F, 0x1138F), (0x113B6, 0x113B6), (0x113C1, 0x113C1), (0x113C3, 0x113C4),
-    (0x113C6, 0x113C6), (0x113CB, 0x113CB), (0x113D6, 0x113D6), (0x113D9, 0x113E0),
-    (0x113E3, 0x113FF), (0x1145C, 0x1145C), (0x11462, 0x1147F), (0x114C8, 0x114CF),
-    (0x114DA, 0x1157F), (0x115B6, 0x115B7), (0x115DE, 0x115FF), (0x11645, 0x1164F),
-    (0x1165A, 0x1165F), (0x1166D, 0x1167F), (0x116BA, 0x116BF), (0x116CA, 0x116CF),
-    (0x116E4, 0x116FF), (0x1171B, 0x1171C), (0x1172C, 0x1172F), (0x11747, 0x117FF),
-    (0x1183C, 0x1189F), (0x118F3, 0x118FE), (0x11907, 0x11908), (0x1190A, 0x1190B),
-    (0x11914, 0x11914), (0x11917, 0x11917), (0x11936, 0x11936), (0x11939, 0x1193A),
-    (0x11947, 0x1194F), (0x1195A, 0x1199F), (0x119A8, 0x119A9), (0x119D8, 0x119D9),
-    (0x119E5, 0x119FF), (0x11A48, 0x11A4F), (0x11AA3, 0x11AAF), (0x11AF9, 0x11AFF),
-    (0x11B0A, 0x11BBF), (0x11BE2, 0x11BEF), (0x11BFA, 0x11BFF), (0x11C09, 0x11C09),
-    (0x11C37, 0x11C37), (0x11C46, 0x11C4F), (0x11C6D, 0x11C6F), (0x11C90, 0x11C91),
-    (0x11CA8, 0x11CA8), (0x11CB7, 0x11CFF), (0x11D07, 0x11D07), (0x11D0A, 0x11D0A),
-    (0x11D37, 0x11D39), (0x11D3B, 0x11D3B), (0x11D3E, 0x11D3E), (0x11D48, 0x11D4F),
-    (0x11D5A, 0x11D5F), (0x11D66, 0x11D66), (0x11D69, 0x11D69), (0x11D8F, 0x11D8F),
-    (0x11D92, 0x11D92), (0x11D99, 0x11D9F), (0x11DAA, 0x11EDF), (0x11EF9, 0x11EFF),
-    (0x11F11, 0x11F11), (0x11F3B, 0x11F3D), (0x11F5B, 0x11FAF), (0x11FB1, 0x11FBF),
-    (0x11FF2, 0x11FFE), (0x1239A, 0x123FF), (0x1246F, 0x1246F), (0x12475, 0x1247F),
-    (0x12544, 0x12F8F), (0x12FF3, 0x12FFF), (0x13430, 0x1343F), (0x13456, 0x1345F),
-    (0x143FB, 0x143FF), (0x14647, 0x160FF), (0x1613A, 0x167FF), (0x16A39, 0x16A3F),
-    (0x16A5F, 0x16A5F), (0x16A6A, 0x16A6D), (0x16ABF, 0x16ABF), (0x16ACA, 0x16ACF),
-    (0x16AEE, 0x16AEF), (0x16AF6, 0x16AFF), (0x16B46, 0x16B4F), (0x16B5A, 0x16B5A),
-    (0x16B62, 0x16B62), (0x16B78, 0x16B7C), (0x16B90, 0x16D3F), (0x16D7A, 0x16E3F),
-    (0x16E9B, 0x16EFF), (0x16F4B, 0x16F4E), (0x16F88, 0x16F8E), (0x16FA0, 0x16FDF),
-    (0x16FE5, 0x16FEF), (0x16FF2, 0x16FFF), (0x187F8, 0x187FF), (0x18CD6, 0x18CFE),
-    (0x18D09, 0x1AFEF), (0x1AFF4, 0x1AFF4), (0x1AFFC, 0x1AFFC), (0x1AFFF, 0x1AFFF),
-    (0x1B123, 0x1B131), (0x1B133, 0x1B14F), (0x1B153, 0x1B154), (0x1B156, 0x1B163),
-    (0x1B168, 0x1B16F), (0x1B2FC, 0x1BBFF), (0x1BC6B, 0x1BC6F), (0x1BC7D, 0x1BC7F),
-    (0x1BC89, 0x1BC8F), (0x1BC9A, 0x1BC9B), (0x1BCA0, 0x1CBFF), (0x1CCFA, 0x1CCFF),
-    (0x1CEB4, 0x1CEFF), (0x1CF2E, 0x1CF2F), (0x1CF47, 0x1CF4F), (0x1CFC4, 0x1CFFF),
-    (0x1D0F6, 0x1D0FF), (0x1D127, 0x1D128), (0x1D173, 0x1D17A), (0x1D1EB, 0x1D1FF),
-    (0x1D246, 0x1D2BF), (0x1D2D4, 0x1D2DF), (0x1D2F4, 0x1D2FF), (0x1D357, 0x1D35F),
-    (0x1D379, 0x1D3FF), (0x1D455, 0x1D455), (0x1D49D, 0x1D49D), (0x1D4A0, 0x1D4A1),
-    (0x1D4A3, 0x1D4A4), (0x1D4A7, 0x1D4A8), (0x1D4AD, 0x1D4AD), (0x1D4BA, 0x1D4BA),
-    (0x1D4BC, 0x1D4BC), (0x1D4C4, 0x1D4C4), (0x1D506, 0x1D506), (0x1D50B, 0x1D50C),
-    (0x1D515, 0x1D515), (0x1D51D, 0x1D51D), (0x1D53A, 0x1D53A), (0x1D53F, 0x1D53F),
-    (0x1D545, 0x1D545), (0x1D547, 0x1D549), (0x1D551, 0x1D551), (0x1D6A6, 0x1D6A7),
-    (0x1D7CC, 0x1D7CD), (0x1DA8C, 0x1DA9A), (0x1DAA0, 0x1DAA0), (0x1DAB0, 0x1DEFF),
-    (0x1DF1F, 0x1DF24), (0x1DF2B, 0x1DFFF), (0x1E007, 0x1E007), (0x1E019, 0x1E01A),
-    (0x1E022, 0x1E022), (0x1E025, 0x1E025), (0x1E02B, 0x1E02F), (0x1E06E, 0x1E08E),
-    (0x1E090, 0x1E0FF), (0x1E12D, 0x1E12F), (0x1E13E, 0x1E13F), (0x1E14A, 0x1E14D),
-    (0x1E150, 0x1E28F), (0x1E2AF, 0x1E2BF), (0x1E2FA, 0x1E2FE), (0x1E300, 0x1E4CF),
-    (0x1E4FA, 0x1E5CF), (0x1E5FB, 0x1E5FE), (0x1E600, 0x1E7DF), (0x1E7E7, 0x1E7E7),
-    (0x1E7EC, 0x1E7EC), (0x1E7EF, 0x1E7EF), (0x1E7FF, 0x1E7FF), (0x1E8C5, 0x1E8C6),
-    (0x1E8D7, 0x1E8FF), (0x1E94C, 0x1E94F), (0x1E95A, 0x1E95D), (0x1E960, 0x1EC70),
-    (0x1ECB5, 0x1ED00), (0x1ED3E, 0x1EDFF), (0x1EE04, 0x1EE04), (0x1EE20, 0x1EE20),
-    (0x1EE23, 0x1EE23), (0x1EE25, 0x1EE26), (0x1EE28, 0x1EE28), (0x1EE33, 0x1EE33),
-    (0x1EE38, 0x1EE38), (0x1EE3A, 0x1EE3A), (0x1EE3C, 0x1EE41), (0x1EE43, 0x1EE46),
-    (0x1EE48, 0x1EE48), (0x1EE4A, 0x1EE4A), (0x1EE4C, 0x1EE4C), (0x1EE50, 0x1EE50),
-    (0x1EE53, 0x1EE53), (0x1EE55, 0x1EE56), (0x1EE58, 0x1EE58), (0x1EE5A, 0x1EE5A),
-    (0x1EE5C, 0x1EE5C), (0x1EE5E, 0x1EE5E), (0x1EE60, 0x1EE60), (0x1EE63, 0x1EE63),
-    (0x1EE65, 0x1EE66), (0x1EE6B, 0x1EE6B), (0x1EE73, 0x1EE73), (0x1EE78, 0x1EE78),
-    (0x1EE7D, 0x1EE7D), (0x1EE7F, 0x1EE7F), (0x1EE8A, 0x1EE8A), (0x1EE9C, 0x1EEA0),
-    (0x1EEA4, 0x1EEA4), (0x1EEAA, 0x1EEAA), (0x1EEBC, 0x1EEEF), (0x1EEF2, 0x1EFFF),
-    (0x1F02C, 0x1F02F), (0x1F094, 0x1F09F), (0x1F0AF, 0x1F0B0), (0x1F0C0, 0x1F0C0),
-    (0x1F0D0, 0x1F0D0), (0x1F0F6, 0x1F0FF), (0x1F1AE, 0x1F1E5), (0x1F203, 0x1F20F),
-    (0x1F23C, 0x1F23F), (0x1F249, 0x1F24F), (0x1F252, 0x1F25F), (0x1F266, 0x1F2FF),
-    (0x1F6D8, 0x1F6DB), (0x1F6ED, 0x1F6EF), (0x1F6FD, 0x1F6FF), (0x1F777, 0x1F77A),
-    (0x1F7DA, 0x1F7DF), (0x1F7EC, 0x1F7EF), (0x1F7F1, 0x1F7FF), (0x1F80C, 0x1F80F),
-    (0x1F848, 0x1F84F), (0x1F85A, 0x1F85F), (0x1F888, 0x1F88F), (0x1F8AE, 0x1F8AF),
-    (0x1F8BC, 0x1F8BF), (0x1F8C2, 0x1F8FF), (0x1FA54, 0x1FA5F), (0x1FA6E, 0x1FA6F),
-    (0x1FA7D, 0x1FA7F), (0x1FA8A, 0x1FA8E), (0x1FAC7, 0x1FACD), (0x1FADD, 0x1FADE),
-    (0x1FAEA, 0x1FAEF), (0x1FAF9, 0x1FAFF), (0x1FB93, 0x1FB93), (0x1FBFA, 0x1FFFF),
-    (0x2A6E0, 0x2A6FF), (0x2B73A, 0x2B73F), (0x2B81E, 0x2B81F), (0x2CEA2, 0x2CEAF),
-    (0x2EBE1, 0x2EBEF), (0x2EE5E, 0x2F7FF), (0x2FA1E, 0x2FFFF), (0x3134B, 0x3134F),
-    (0x323B0, 0xE00FF), (0xE01F0, 0x10FFFF),
+    (0x0, 0x1F),
+    (0x7F, 0xA0),
+    (0xAD, 0xAD),
+    (0x378, 0x379),
+    (0x380, 0x383),
+    (0x38B, 0x38B),
+    (0x38D, 0x38D),
+    (0x3A2, 0x3A2),
+    (0x530, 0x530),
+    (0x557, 0x558),
+    (0x58B, 0x58C),
+    (0x590, 0x590),
+    (0x5C8, 0x5CF),
+    (0x5EB, 0x5EE),
+    (0x5F5, 0x605),
+    (0x61C, 0x61C),
+    (0x6DD, 0x6DD),
+    (0x70E, 0x70F),
+    (0x74B, 0x74C),
+    (0x7B2, 0x7BF),
+    (0x7FB, 0x7FC),
+    (0x82E, 0x82F),
+    (0x83F, 0x83F),
+    (0x85C, 0x85D),
+    (0x85F, 0x85F),
+    (0x86B, 0x86F),
+    (0x88F, 0x896),
+    (0x8E2, 0x8E2),
+    (0x984, 0x984),
+    (0x98D, 0x98E),
+    (0x991, 0x992),
+    (0x9A9, 0x9A9),
+    (0x9B1, 0x9B1),
+    (0x9B3, 0x9B5),
+    (0x9BA, 0x9BB),
+    (0x9C5, 0x9C6),
+    (0x9C9, 0x9CA),
+    (0x9CF, 0x9D6),
+    (0x9D8, 0x9DB),
+    (0x9DE, 0x9DE),
+    (0x9E4, 0x9E5),
+    (0x9FF, 0xA00),
+    (0xA04, 0xA04),
+    (0xA0B, 0xA0E),
+    (0xA11, 0xA12),
+    (0xA29, 0xA29),
+    (0xA31, 0xA31),
+    (0xA34, 0xA34),
+    (0xA37, 0xA37),
+    (0xA3A, 0xA3B),
+    (0xA3D, 0xA3D),
+    (0xA43, 0xA46),
+    (0xA49, 0xA4A),
+    (0xA4E, 0xA50),
+    (0xA52, 0xA58),
+    (0xA5D, 0xA5D),
+    (0xA5F, 0xA65),
+    (0xA77, 0xA80),
+    (0xA84, 0xA84),
+    (0xA8E, 0xA8E),
+    (0xA92, 0xA92),
+    (0xAA9, 0xAA9),
+    (0xAB1, 0xAB1),
+    (0xAB4, 0xAB4),
+    (0xABA, 0xABB),
+    (0xAC6, 0xAC6),
+    (0xACA, 0xACA),
+    (0xACE, 0xACF),
+    (0xAD1, 0xADF),
+    (0xAE4, 0xAE5),
+    (0xAF2, 0xAF8),
+    (0xB00, 0xB00),
+    (0xB04, 0xB04),
+    (0xB0D, 0xB0E),
+    (0xB11, 0xB12),
+    (0xB29, 0xB29),
+    (0xB31, 0xB31),
+    (0xB34, 0xB34),
+    (0xB3A, 0xB3B),
+    (0xB45, 0xB46),
+    (0xB49, 0xB4A),
+    (0xB4E, 0xB54),
+    (0xB58, 0xB5B),
+    (0xB5E, 0xB5E),
+    (0xB64, 0xB65),
+    (0xB78, 0xB81),
+    (0xB84, 0xB84),
+    (0xB8B, 0xB8D),
+    (0xB91, 0xB91),
+    (0xB96, 0xB98),
+    (0xB9B, 0xB9B),
+    (0xB9D, 0xB9D),
+    (0xBA0, 0xBA2),
+    (0xBA5, 0xBA7),
+    (0xBAB, 0xBAD),
+    (0xBBA, 0xBBD),
+    (0xBC3, 0xBC5),
+    (0xBC9, 0xBC9),
+    (0xBCE, 0xBCF),
+    (0xBD1, 0xBD6),
+    (0xBD8, 0xBE5),
+    (0xBFB, 0xBFF),
+    (0xC0D, 0xC0D),
+    (0xC11, 0xC11),
+    (0xC29, 0xC29),
+    (0xC3A, 0xC3B),
+    (0xC45, 0xC45),
+    (0xC49, 0xC49),
+    (0xC4E, 0xC54),
+    (0xC57, 0xC57),
+    (0xC5B, 0xC5C),
+    (0xC5E, 0xC5F),
+    (0xC64, 0xC65),
+    (0xC70, 0xC76),
+    (0xC8D, 0xC8D),
+    (0xC91, 0xC91),
+    (0xCA9, 0xCA9),
+    (0xCB4, 0xCB4),
+    (0xCBA, 0xCBB),
+    (0xCC5, 0xCC5),
+    (0xCC9, 0xCC9),
+    (0xCCE, 0xCD4),
+    (0xCD7, 0xCDC),
+    (0xCDF, 0xCDF),
+    (0xCE4, 0xCE5),
+    (0xCF0, 0xCF0),
+    (0xCF4, 0xCFF),
+    (0xD0D, 0xD0D),
+    (0xD11, 0xD11),
+    (0xD45, 0xD45),
+    (0xD49, 0xD49),
+    (0xD50, 0xD53),
+    (0xD64, 0xD65),
+    (0xD80, 0xD80),
+    (0xD84, 0xD84),
+    (0xD97, 0xD99),
+    (0xDB2, 0xDB2),
+    (0xDBC, 0xDBC),
+    (0xDBE, 0xDBF),
+    (0xDC7, 0xDC9),
+    (0xDCB, 0xDCE),
+    (0xDD5, 0xDD5),
+    (0xDD7, 0xDD7),
+    (0xDE0, 0xDE5),
+    (0xDF0, 0xDF1),
+    (0xDF5, 0xE00),
+    (0xE3B, 0xE3E),
+    (0xE5C, 0xE80),
+    (0xE83, 0xE83),
+    (0xE85, 0xE85),
+    (0xE8B, 0xE8B),
+    (0xEA4, 0xEA4),
+    (0xEA6, 0xEA6),
+    (0xEBE, 0xEBF),
+    (0xEC5, 0xEC5),
+    (0xEC7, 0xEC7),
+    (0xECF, 0xECF),
+    (0xEDA, 0xEDB),
+    (0xEE0, 0xEFF),
+    (0xF48, 0xF48),
+    (0xF6D, 0xF70),
+    (0xF98, 0xF98),
+    (0xFBD, 0xFBD),
+    (0xFCD, 0xFCD),
+    (0xFDB, 0xFFF),
+    (0x10C6, 0x10C6),
+    (0x10C8, 0x10CC),
+    (0x10CE, 0x10CF),
+    (0x1249, 0x1249),
+    (0x124E, 0x124F),
+    (0x1257, 0x1257),
+    (0x1259, 0x1259),
+    (0x125E, 0x125F),
+    (0x1289, 0x1289),
+    (0x128E, 0x128F),
+    (0x12B1, 0x12B1),
+    (0x12B6, 0x12B7),
+    (0x12BF, 0x12BF),
+    (0x12C1, 0x12C1),
+    (0x12C6, 0x12C7),
+    (0x12D7, 0x12D7),
+    (0x1311, 0x1311),
+    (0x1316, 0x1317),
+    (0x135B, 0x135C),
+    (0x137D, 0x137F),
+    (0x139A, 0x139F),
+    (0x13F6, 0x13F7),
+    (0x13FE, 0x13FF),
+    (0x1680, 0x1680),
+    (0x169D, 0x169F),
+    (0x16F9, 0x16FF),
+    (0x1716, 0x171E),
+    (0x1737, 0x173F),
+    (0x1754, 0x175F),
+    (0x176D, 0x176D),
+    (0x1771, 0x1771),
+    (0x1774, 0x177F),
+    (0x17DE, 0x17DF),
+    (0x17EA, 0x17EF),
+    (0x17FA, 0x17FF),
+    (0x180E, 0x180E),
+    (0x181A, 0x181F),
+    (0x1879, 0x187F),
+    (0x18AB, 0x18AF),
+    (0x18F6, 0x18FF),
+    (0x191F, 0x191F),
+    (0x192C, 0x192F),
+    (0x193C, 0x193F),
+    (0x1941, 0x1943),
+    (0x196E, 0x196F),
+    (0x1975, 0x197F),
+    (0x19AC, 0x19AF),
+    (0x19CA, 0x19CF),
+    (0x19DB, 0x19DD),
+    (0x1A1C, 0x1A1D),
+    (0x1A5F, 0x1A5F),
+    (0x1A7D, 0x1A7E),
+    (0x1A8A, 0x1A8F),
+    (0x1A9A, 0x1A9F),
+    (0x1AAE, 0x1AAF),
+    (0x1ACF, 0x1AFF),
+    (0x1B4D, 0x1B4D),
+    (0x1BF4, 0x1BFB),
+    (0x1C38, 0x1C3A),
+    (0x1C4A, 0x1C4C),
+    (0x1C8B, 0x1C8F),
+    (0x1CBB, 0x1CBC),
+    (0x1CC8, 0x1CCF),
+    (0x1CFB, 0x1CFF),
+    (0x1F16, 0x1F17),
+    (0x1F1E, 0x1F1F),
+    (0x1F46, 0x1F47),
+    (0x1F4E, 0x1F4F),
+    (0x1F58, 0x1F58),
+    (0x1F5A, 0x1F5A),
+    (0x1F5C, 0x1F5C),
+    (0x1F5E, 0x1F5E),
+    (0x1F7E, 0x1F7F),
+    (0x1FB5, 0x1FB5),
+    (0x1FC5, 0x1FC5),
+    (0x1FD4, 0x1FD5),
+    (0x1FDC, 0x1FDC),
+    (0x1FF0, 0x1FF1),
+    (0x1FF5, 0x1FF5),
+    (0x1FFF, 0x200F),
+    (0x2028, 0x202F),
+    (0x205F, 0x206F),
+    (0x2072, 0x2073),
+    (0x208F, 0x208F),
+    (0x209D, 0x209F),
+    (0x20C1, 0x20CF),
+    (0x20F1, 0x20FF),
+    (0x218C, 0x218F),
+    (0x242A, 0x243F),
+    (0x244B, 0x245F),
+    (0x2B74, 0x2B75),
+    (0x2B96, 0x2B96),
+    (0x2CF4, 0x2CF8),
+    (0x2D26, 0x2D26),
+    (0x2D28, 0x2D2C),
+    (0x2D2E, 0x2D2F),
+    (0x2D68, 0x2D6E),
+    (0x2D71, 0x2D7E),
+    (0x2D97, 0x2D9F),
+    (0x2DA7, 0x2DA7),
+    (0x2DAF, 0x2DAF),
+    (0x2DB7, 0x2DB7),
+    (0x2DBF, 0x2DBF),
+    (0x2DC7, 0x2DC7),
+    (0x2DCF, 0x2DCF),
+    (0x2DD7, 0x2DD7),
+    (0x2DDF, 0x2DDF),
+    (0x2E5E, 0x2E7F),
+    (0x2E9A, 0x2E9A),
+    (0x2EF4, 0x2EFF),
+    (0x2FD6, 0x2FEF),
+    (0x3000, 0x3000),
+    (0x3040, 0x3040),
+    (0x3097, 0x3098),
+    (0x3100, 0x3104),
+    (0x3130, 0x3130),
+    (0x318F, 0x318F),
+    (0x31E6, 0x31EE),
+    (0x321F, 0x321F),
+    (0xA48D, 0xA48F),
+    (0xA4C7, 0xA4CF),
+    (0xA62C, 0xA63F),
+    (0xA6F8, 0xA6FF),
+    (0xA7CE, 0xA7CF),
+    (0xA7D2, 0xA7D2),
+    (0xA7D4, 0xA7D4),
+    (0xA7DD, 0xA7F1),
+    (0xA82D, 0xA82F),
+    (0xA83A, 0xA83F),
+    (0xA878, 0xA87F),
+    (0xA8C6, 0xA8CD),
+    (0xA8DA, 0xA8DF),
+    (0xA954, 0xA95E),
+    (0xA97D, 0xA97F),
+    (0xA9CE, 0xA9CE),
+    (0xA9DA, 0xA9DD),
+    (0xA9FF, 0xA9FF),
+    (0xAA37, 0xAA3F),
+    (0xAA4E, 0xAA4F),
+    (0xAA5A, 0xAA5B),
+    (0xAAC3, 0xAADA),
+    (0xAAF7, 0xAB00),
+    (0xAB07, 0xAB08),
+    (0xAB0F, 0xAB10),
+    (0xAB17, 0xAB1F),
+    (0xAB27, 0xAB27),
+    (0xAB2F, 0xAB2F),
+    (0xAB6C, 0xAB6F),
+    (0xABEE, 0xABEF),
+    (0xABFA, 0xABFF),
+    (0xD7A4, 0xD7AF),
+    (0xD7C7, 0xD7CA),
+    (0xD7FC, 0xF8FF),
+    (0xFA6E, 0xFA6F),
+    (0xFADA, 0xFAFF),
+    (0xFB07, 0xFB12),
+    (0xFB18, 0xFB1C),
+    (0xFB37, 0xFB37),
+    (0xFB3D, 0xFB3D),
+    (0xFB3F, 0xFB3F),
+    (0xFB42, 0xFB42),
+    (0xFB45, 0xFB45),
+    (0xFBC3, 0xFBD2),
+    (0xFD90, 0xFD91),
+    (0xFDC8, 0xFDCE),
+    (0xFDD0, 0xFDEF),
+    (0xFE1A, 0xFE1F),
+    (0xFE53, 0xFE53),
+    (0xFE67, 0xFE67),
+    (0xFE6C, 0xFE6F),
+    (0xFE75, 0xFE75),
+    (0xFEFD, 0xFF00),
+    (0xFFBF, 0xFFC1),
+    (0xFFC8, 0xFFC9),
+    (0xFFD0, 0xFFD1),
+    (0xFFD8, 0xFFD9),
+    (0xFFDD, 0xFFDF),
+    (0xFFE7, 0xFFE7),
+    (0xFFEF, 0xFFFB),
+    (0xFFFE, 0xFFFF),
+    (0x1000C, 0x1000C),
+    (0x10027, 0x10027),
+    (0x1003B, 0x1003B),
+    (0x1003E, 0x1003E),
+    (0x1004E, 0x1004F),
+    (0x1005E, 0x1007F),
+    (0x100FB, 0x100FF),
+    (0x10103, 0x10106),
+    (0x10134, 0x10136),
+    (0x1018F, 0x1018F),
+    (0x1019D, 0x1019F),
+    (0x101A1, 0x101CF),
+    (0x101FE, 0x1027F),
+    (0x1029D, 0x1029F),
+    (0x102D1, 0x102DF),
+    (0x102FC, 0x102FF),
+    (0x10324, 0x1032C),
+    (0x1034B, 0x1034F),
+    (0x1037B, 0x1037F),
+    (0x1039E, 0x1039E),
+    (0x103C4, 0x103C7),
+    (0x103D6, 0x103FF),
+    (0x1049E, 0x1049F),
+    (0x104AA, 0x104AF),
+    (0x104D4, 0x104D7),
+    (0x104FC, 0x104FF),
+    (0x10528, 0x1052F),
+    (0x10564, 0x1056E),
+    (0x1057B, 0x1057B),
+    (0x1058B, 0x1058B),
+    (0x10593, 0x10593),
+    (0x10596, 0x10596),
+    (0x105A2, 0x105A2),
+    (0x105B2, 0x105B2),
+    (0x105BA, 0x105BA),
+    (0x105BD, 0x105BF),
+    (0x105F4, 0x105FF),
+    (0x10737, 0x1073F),
+    (0x10756, 0x1075F),
+    (0x10768, 0x1077F),
+    (0x10786, 0x10786),
+    (0x107B1, 0x107B1),
+    (0x107BB, 0x107FF),
+    (0x10806, 0x10807),
+    (0x10809, 0x10809),
+    (0x10836, 0x10836),
+    (0x10839, 0x1083B),
+    (0x1083D, 0x1083E),
+    (0x10856, 0x10856),
+    (0x1089F, 0x108A6),
+    (0x108B0, 0x108DF),
+    (0x108F3, 0x108F3),
+    (0x108F6, 0x108FA),
+    (0x1091C, 0x1091E),
+    (0x1093A, 0x1093E),
+    (0x10940, 0x1097F),
+    (0x109B8, 0x109BB),
+    (0x109D0, 0x109D1),
+    (0x10A04, 0x10A04),
+    (0x10A07, 0x10A0B),
+    (0x10A14, 0x10A14),
+    (0x10A18, 0x10A18),
+    (0x10A36, 0x10A37),
+    (0x10A3B, 0x10A3E),
+    (0x10A49, 0x10A4F),
+    (0x10A59, 0x10A5F),
+    (0x10AA0, 0x10ABF),
+    (0x10AE7, 0x10AEA),
+    (0x10AF7, 0x10AFF),
+    (0x10B36, 0x10B38),
+    (0x10B56, 0x10B57),
+    (0x10B73, 0x10B77),
+    (0x10B92, 0x10B98),
+    (0x10B9D, 0x10BA8),
+    (0x10BB0, 0x10BFF),
+    (0x10C49, 0x10C7F),
+    (0x10CB3, 0x10CBF),
+    (0x10CF3, 0x10CF9),
+    (0x10D28, 0x10D2F),
+    (0x10D3A, 0x10D3F),
+    (0x10D66, 0x10D68),
+    (0x10D86, 0x10D8D),
+    (0x10D90, 0x10E5F),
+    (0x10E7F, 0x10E7F),
+    (0x10EAA, 0x10EAA),
+    (0x10EAE, 0x10EAF),
+    (0x10EB2, 0x10EC1),
+    (0x10EC5, 0x10EFB),
+    (0x10F28, 0x10F2F),
+    (0x10F5A, 0x10F6F),
+    (0x10F8A, 0x10FAF),
+    (0x10FCC, 0x10FDF),
+    (0x10FF7, 0x10FFF),
+    (0x1104E, 0x11051),
+    (0x11076, 0x1107E),
+    (0x110BD, 0x110BD),
+    (0x110C3, 0x110CF),
+    (0x110E9, 0x110EF),
+    (0x110FA, 0x110FF),
+    (0x11135, 0x11135),
+    (0x11148, 0x1114F),
+    (0x11177, 0x1117F),
+    (0x111E0, 0x111E0),
+    (0x111F5, 0x111FF),
+    (0x11212, 0x11212),
+    (0x11242, 0x1127F),
+    (0x11287, 0x11287),
+    (0x11289, 0x11289),
+    (0x1128E, 0x1128E),
+    (0x1129E, 0x1129E),
+    (0x112AA, 0x112AF),
+    (0x112EB, 0x112EF),
+    (0x112FA, 0x112FF),
+    (0x11304, 0x11304),
+    (0x1130D, 0x1130E),
+    (0x11311, 0x11312),
+    (0x11329, 0x11329),
+    (0x11331, 0x11331),
+    (0x11334, 0x11334),
+    (0x1133A, 0x1133A),
+    (0x11345, 0x11346),
+    (0x11349, 0x1134A),
+    (0x1134E, 0x1134F),
+    (0x11351, 0x11356),
+    (0x11358, 0x1135C),
+    (0x11364, 0x11365),
+    (0x1136D, 0x1136F),
+    (0x11375, 0x1137F),
+    (0x1138A, 0x1138A),
+    (0x1138C, 0x1138D),
+    (0x1138F, 0x1138F),
+    (0x113B6, 0x113B6),
+    (0x113C1, 0x113C1),
+    (0x113C3, 0x113C4),
+    (0x113C6, 0x113C6),
+    (0x113CB, 0x113CB),
+    (0x113D6, 0x113D6),
+    (0x113D9, 0x113E0),
+    (0x113E3, 0x113FF),
+    (0x1145C, 0x1145C),
+    (0x11462, 0x1147F),
+    (0x114C8, 0x114CF),
+    (0x114DA, 0x1157F),
+    (0x115B6, 0x115B7),
+    (0x115DE, 0x115FF),
+    (0x11645, 0x1164F),
+    (0x1165A, 0x1165F),
+    (0x1166D, 0x1167F),
+    (0x116BA, 0x116BF),
+    (0x116CA, 0x116CF),
+    (0x116E4, 0x116FF),
+    (0x1171B, 0x1171C),
+    (0x1172C, 0x1172F),
+    (0x11747, 0x117FF),
+    (0x1183C, 0x1189F),
+    (0x118F3, 0x118FE),
+    (0x11907, 0x11908),
+    (0x1190A, 0x1190B),
+    (0x11914, 0x11914),
+    (0x11917, 0x11917),
+    (0x11936, 0x11936),
+    (0x11939, 0x1193A),
+    (0x11947, 0x1194F),
+    (0x1195A, 0x1199F),
+    (0x119A8, 0x119A9),
+    (0x119D8, 0x119D9),
+    (0x119E5, 0x119FF),
+    (0x11A48, 0x11A4F),
+    (0x11AA3, 0x11AAF),
+    (0x11AF9, 0x11AFF),
+    (0x11B0A, 0x11BBF),
+    (0x11BE2, 0x11BEF),
+    (0x11BFA, 0x11BFF),
+    (0x11C09, 0x11C09),
+    (0x11C37, 0x11C37),
+    (0x11C46, 0x11C4F),
+    (0x11C6D, 0x11C6F),
+    (0x11C90, 0x11C91),
+    (0x11CA8, 0x11CA8),
+    (0x11CB7, 0x11CFF),
+    (0x11D07, 0x11D07),
+    (0x11D0A, 0x11D0A),
+    (0x11D37, 0x11D39),
+    (0x11D3B, 0x11D3B),
+    (0x11D3E, 0x11D3E),
+    (0x11D48, 0x11D4F),
+    (0x11D5A, 0x11D5F),
+    (0x11D66, 0x11D66),
+    (0x11D69, 0x11D69),
+    (0x11D8F, 0x11D8F),
+    (0x11D92, 0x11D92),
+    (0x11D99, 0x11D9F),
+    (0x11DAA, 0x11EDF),
+    (0x11EF9, 0x11EFF),
+    (0x11F11, 0x11F11),
+    (0x11F3B, 0x11F3D),
+    (0x11F5B, 0x11FAF),
+    (0x11FB1, 0x11FBF),
+    (0x11FF2, 0x11FFE),
+    (0x1239A, 0x123FF),
+    (0x1246F, 0x1246F),
+    (0x12475, 0x1247F),
+    (0x12544, 0x12F8F),
+    (0x12FF3, 0x12FFF),
+    (0x13430, 0x1343F),
+    (0x13456, 0x1345F),
+    (0x143FB, 0x143FF),
+    (0x14647, 0x160FF),
+    (0x1613A, 0x167FF),
+    (0x16A39, 0x16A3F),
+    (0x16A5F, 0x16A5F),
+    (0x16A6A, 0x16A6D),
+    (0x16ABF, 0x16ABF),
+    (0x16ACA, 0x16ACF),
+    (0x16AEE, 0x16AEF),
+    (0x16AF6, 0x16AFF),
+    (0x16B46, 0x16B4F),
+    (0x16B5A, 0x16B5A),
+    (0x16B62, 0x16B62),
+    (0x16B78, 0x16B7C),
+    (0x16B90, 0x16D3F),
+    (0x16D7A, 0x16E3F),
+    (0x16E9B, 0x16EFF),
+    (0x16F4B, 0x16F4E),
+    (0x16F88, 0x16F8E),
+    (0x16FA0, 0x16FDF),
+    (0x16FE5, 0x16FEF),
+    (0x16FF2, 0x16FFF),
+    (0x187F8, 0x187FF),
+    (0x18CD6, 0x18CFE),
+    (0x18D09, 0x1AFEF),
+    (0x1AFF4, 0x1AFF4),
+    (0x1AFFC, 0x1AFFC),
+    (0x1AFFF, 0x1AFFF),
+    (0x1B123, 0x1B131),
+    (0x1B133, 0x1B14F),
+    (0x1B153, 0x1B154),
+    (0x1B156, 0x1B163),
+    (0x1B168, 0x1B16F),
+    (0x1B2FC, 0x1BBFF),
+    (0x1BC6B, 0x1BC6F),
+    (0x1BC7D, 0x1BC7F),
+    (0x1BC89, 0x1BC8F),
+    (0x1BC9A, 0x1BC9B),
+    (0x1BCA0, 0x1CBFF),
+    (0x1CCFA, 0x1CCFF),
+    (0x1CEB4, 0x1CEFF),
+    (0x1CF2E, 0x1CF2F),
+    (0x1CF47, 0x1CF4F),
+    (0x1CFC4, 0x1CFFF),
+    (0x1D0F6, 0x1D0FF),
+    (0x1D127, 0x1D128),
+    (0x1D173, 0x1D17A),
+    (0x1D1EB, 0x1D1FF),
+    (0x1D246, 0x1D2BF),
+    (0x1D2D4, 0x1D2DF),
+    (0x1D2F4, 0x1D2FF),
+    (0x1D357, 0x1D35F),
+    (0x1D379, 0x1D3FF),
+    (0x1D455, 0x1D455),
+    (0x1D49D, 0x1D49D),
+    (0x1D4A0, 0x1D4A1),
+    (0x1D4A3, 0x1D4A4),
+    (0x1D4A7, 0x1D4A8),
+    (0x1D4AD, 0x1D4AD),
+    (0x1D4BA, 0x1D4BA),
+    (0x1D4BC, 0x1D4BC),
+    (0x1D4C4, 0x1D4C4),
+    (0x1D506, 0x1D506),
+    (0x1D50B, 0x1D50C),
+    (0x1D515, 0x1D515),
+    (0x1D51D, 0x1D51D),
+    (0x1D53A, 0x1D53A),
+    (0x1D53F, 0x1D53F),
+    (0x1D545, 0x1D545),
+    (0x1D547, 0x1D549),
+    (0x1D551, 0x1D551),
+    (0x1D6A6, 0x1D6A7),
+    (0x1D7CC, 0x1D7CD),
+    (0x1DA8C, 0x1DA9A),
+    (0x1DAA0, 0x1DAA0),
+    (0x1DAB0, 0x1DEFF),
+    (0x1DF1F, 0x1DF24),
+    (0x1DF2B, 0x1DFFF),
+    (0x1E007, 0x1E007),
+    (0x1E019, 0x1E01A),
+    (0x1E022, 0x1E022),
+    (0x1E025, 0x1E025),
+    (0x1E02B, 0x1E02F),
+    (0x1E06E, 0x1E08E),
+    (0x1E090, 0x1E0FF),
+    (0x1E12D, 0x1E12F),
+    (0x1E13E, 0x1E13F),
+    (0x1E14A, 0x1E14D),
+    (0x1E150, 0x1E28F),
+    (0x1E2AF, 0x1E2BF),
+    (0x1E2FA, 0x1E2FE),
+    (0x1E300, 0x1E4CF),
+    (0x1E4FA, 0x1E5CF),
+    (0x1E5FB, 0x1E5FE),
+    (0x1E600, 0x1E7DF),
+    (0x1E7E7, 0x1E7E7),
+    (0x1E7EC, 0x1E7EC),
+    (0x1E7EF, 0x1E7EF),
+    (0x1E7FF, 0x1E7FF),
+    (0x1E8C5, 0x1E8C6),
+    (0x1E8D7, 0x1E8FF),
+    (0x1E94C, 0x1E94F),
+    (0x1E95A, 0x1E95D),
+    (0x1E960, 0x1EC70),
+    (0x1ECB5, 0x1ED00),
+    (0x1ED3E, 0x1EDFF),
+    (0x1EE04, 0x1EE04),
+    (0x1EE20, 0x1EE20),
+    (0x1EE23, 0x1EE23),
+    (0x1EE25, 0x1EE26),
+    (0x1EE28, 0x1EE28),
+    (0x1EE33, 0x1EE33),
+    (0x1EE38, 0x1EE38),
+    (0x1EE3A, 0x1EE3A),
+    (0x1EE3C, 0x1EE41),
+    (0x1EE43, 0x1EE46),
+    (0x1EE48, 0x1EE48),
+    (0x1EE4A, 0x1EE4A),
+    (0x1EE4C, 0x1EE4C),
+    (0x1EE50, 0x1EE50),
+    (0x1EE53, 0x1EE53),
+    (0x1EE55, 0x1EE56),
+    (0x1EE58, 0x1EE58),
+    (0x1EE5A, 0x1EE5A),
+    (0x1EE5C, 0x1EE5C),
+    (0x1EE5E, 0x1EE5E),
+    (0x1EE60, 0x1EE60),
+    (0x1EE63, 0x1EE63),
+    (0x1EE65, 0x1EE66),
+    (0x1EE6B, 0x1EE6B),
+    (0x1EE73, 0x1EE73),
+    (0x1EE78, 0x1EE78),
+    (0x1EE7D, 0x1EE7D),
+    (0x1EE7F, 0x1EE7F),
+    (0x1EE8A, 0x1EE8A),
+    (0x1EE9C, 0x1EEA0),
+    (0x1EEA4, 0x1EEA4),
+    (0x1EEAA, 0x1EEAA),
+    (0x1EEBC, 0x1EEEF),
+    (0x1EEF2, 0x1EFFF),
+    (0x1F02C, 0x1F02F),
+    (0x1F094, 0x1F09F),
+    (0x1F0AF, 0x1F0B0),
+    (0x1F0C0, 0x1F0C0),
+    (0x1F0D0, 0x1F0D0),
+    (0x1F0F6, 0x1F0FF),
+    (0x1F1AE, 0x1F1E5),
+    (0x1F203, 0x1F20F),
+    (0x1F23C, 0x1F23F),
+    (0x1F249, 0x1F24F),
+    (0x1F252, 0x1F25F),
+    (0x1F266, 0x1F2FF),
+    (0x1F6D8, 0x1F6DB),
+    (0x1F6ED, 0x1F6EF),
+    (0x1F6FD, 0x1F6FF),
+    (0x1F777, 0x1F77A),
+    (0x1F7DA, 0x1F7DF),
+    (0x1F7EC, 0x1F7EF),
+    (0x1F7F1, 0x1F7FF),
+    (0x1F80C, 0x1F80F),
+    (0x1F848, 0x1F84F),
+    (0x1F85A, 0x1F85F),
+    (0x1F888, 0x1F88F),
+    (0x1F8AE, 0x1F8AF),
+    (0x1F8BC, 0x1F8BF),
+    (0x1F8C2, 0x1F8FF),
+    (0x1FA54, 0x1FA5F),
+    (0x1FA6E, 0x1FA6F),
+    (0x1FA7D, 0x1FA7F),
+    (0x1FA8A, 0x1FA8E),
+    (0x1FAC7, 0x1FACD),
+    (0x1FADD, 0x1FADE),
+    (0x1FAEA, 0x1FAEF),
+    (0x1FAF9, 0x1FAFF),
+    (0x1FB93, 0x1FB93),
+    (0x1FBFA, 0x1FFFF),
+    (0x2A6E0, 0x2A6FF),
+    (0x2B73A, 0x2B73F),
+    (0x2B81E, 0x2B81F),
+    (0x2CEA2, 0x2CEAF),
+    (0x2EBE1, 0x2EBEF),
+    (0x2EE5E, 0x2F7FF),
+    (0x2FA1E, 0x2FFFF),
+    (0x3134B, 0x3134F),
+    (0x323B0, 0xE00FF),
+    (0xE01F0, 0x10FFFF),
 ];
 
 /// `str.isprintable` for one code point, by Python's own tables.
@@ -596,7 +1231,13 @@ fn float_value(f: f64, wire: bool) -> Value {
     match serde_json::Number::from_f64(f) {
         Some(n) => Value::Number(n),
         None if wire => {
-            let name = if f.is_nan() { "nan" } else if f > 0.0 { "inf" } else { "-inf" };
+            let name = if f.is_nan() {
+                "nan"
+            } else if f > 0.0 {
+                "inf"
+            } else {
+                "-inf"
+            };
             serde_json::json!({ "__float__": name })
         }
         None => Value::Null,
@@ -680,7 +1321,10 @@ fn py_isword(c: u32) -> bool {
 /// `str.strip()` on a Python str.
 fn py_strip_cp(s: &[u32]) -> &[u32] {
     let start = s.iter().position(|&c| !py_isspace(c)).unwrap_or(s.len());
-    let end = s.iter().rposition(|&c| !py_isspace(c)).map_or(start, |e| e + 1);
+    let end = s
+        .iter()
+        .rposition(|&c| !py_isspace(c))
+        .map_or(start, |e| e + 1);
     &s[start..end.max(start)]
 }
 
@@ -690,7 +1334,12 @@ const INT_MAX_STR_DIGITS: usize = 4300;
 /// `int(s)` for a str: surrounding whitespace, a sign, decimal digits of any
 /// script, single underscores between digits.
 fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
-    let bad = || format!("ValueError: invalid literal for int() with base 10: {}", py_repr(s));
+    let bad = || {
+        format!(
+            "ValueError: invalid literal for int() with base 10: {}",
+            py_repr(s)
+        )
+    };
     // ASCII whitespace as C's isspace (no \x1c-\x1f); beyond ASCII, str.isspace.
     let space = |c: u32| matches!(c, 0x20 | 0x09..=0x0d) || (c >= 0x80 && py_isspace(c));
     let start = s.iter().position(|&c| !space(c)).unwrap_or(s.len());
@@ -715,7 +1364,9 @@ fn py_int_str(s: &[u32]) -> Result<BigInt, String> {
             prev_digit = false;
             continue;
         }
-        let Some(d) = char::from_u32(c).and_then(crate::util::decimal_value) else { return Err(bad()) };
+        let Some(d) = char::from_u32(c).and_then(crate::util::decimal_value) else {
+            return Err(bad());
+        };
         text.push(char::from_digit(d, 10).unwrap_or('0'));
         digits += 1;
         prev_digit = true;
@@ -787,7 +1438,9 @@ fn py_loads(text: &str) -> Result<PyVal, LoadErr> {
     use crate::util::pyjson;
     pyjson::loads(text, pyjson::Limit::containers(MAX_DEPTH)).map_err(|e| match e {
         pyjson::Error::Value(_) => LoadErr::Value,
-        pyjson::Error::Recursion(is_obj) => LoadErr::Recursion(if is_obj { "object" } else { "array" }),
+        pyjson::Error::Recursion(is_obj) => {
+            LoadErr::Recursion(if is_obj { "object" } else { "array" })
+        }
     })
 }
 
@@ -804,7 +1457,9 @@ impl crate::util::pyjson::Build for PyVal {
         match n {
             Num::Int(i) => PyVal::Int(BigInt::from(i)),
             Num::UInt(u) => PyVal::Int(BigInt::from(u)),
-            Num::Big(digits) => PyVal::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default()),
+            Num::Big(digits) => {
+                PyVal::Int(BigInt::parse_bytes(digits.as_bytes(), 10).unwrap_or_default())
+            }
             Num::Float(f) => PyVal::Float(f),
         }
     }
@@ -842,38 +1497,376 @@ fn loads_line(line: &str) -> Result<Option<PyVal>, String> {
 
 /// `record` with what escapes Python's `except OSError`: trimming a log
 /// that is not UTF-8 raises UnicodeDecodeError (after the line is written).
-pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, items: &[String]) -> Result<(), String> {
-    let path = _log_path();
+pub fn record_checked(
+    kind: &str,
+    title: &str,
+    detail: &str,
+    severity: &str,
+    items: &[String],
+) -> Result<(), String> {
+    submit(
+        serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+                              "detail": detail, "severity": severity,
+                              "items": items}),
+    )
+}
+
+/// What one action did, for the log: everything a person (or a later bug
+/// report) needs to tell what happened without re-running it. Every field
+/// is optional; record what is known.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActionLog {
+    /// each command as it ran, with its exit status
+    pub commands: Vec<CommandRun>,
+    /// what changed: a package, an AppImage, a plugin; `from`/`to` versions
+    pub changes: Vec<Change>,
+    /// checks made afterwards, and what they found
+    pub checks: Vec<CheckResult>,
+    /// repairs tried because a check failed, and whether they worked
+    pub repairs: Vec<CheckResult>,
+    /// disk space actually freed, in bytes (free space after minus before)
+    pub freed_bytes: Option<i64>,
+    /// the snapshot taken first, as snapper numbers it
+    pub snapshot: Option<String>,
+    pub duration_secs: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommandRun {
+    pub argv: String,
+    /// None: not known (it ran in a terminal that did not report back)
+    pub exit: Option<i32>,
+    pub secs: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Change {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CheckResult {
+    pub name: String,
+    /// None: the check could not tell
+    pub ok: Option<bool>,
+    pub detail: String,
+}
+
+/// `record_checked` with the full account of what the action did, kept
+/// under the event's "action" key. `detail` stays the one-line summary the
+/// timeline shows folded.
+pub fn record_action(
+    kind: &str,
+    title: &str,
+    detail: &str,
+    severity: &str,
+    action: &ActionLog,
+) -> Result<(), String> {
+    let items: Vec<String> = action.changes.iter().map(|c| c.name.clone()).collect();
+    submit(
+        serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
+                              "detail": detail, "severity": severity,
+                              "items": items, "action": action}),
+    )
+}
+
+// ---- the writer ------------------------------------------------------------
+//
+// Writing a line takes the log's lock, which the guard and the scheduled
+// run share, may read the whole log (512 KB) and may rewrite it: too slow
+// for a click handler, and a lock held elsewhere would freeze the window.
+// So every write goes to one writer thread, in the order made. The window's
+// thread does not wait for it; any other thread (a background task, the
+// command line, a test) does, and gets the write's own result.
+
+/// One job for the writer.
+enum Job {
+    /// A line for the log at `path`, and where to say how it went.
+    Write {
+        path: PathBuf,
+        event: Value,
+        done: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    },
+    /// Answered once everything sent before it is written.
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+/// The writer's queue; None when its thread could not be started (each
+/// write is then made where it is asked for).
+fn writer() -> Option<&'static std::sync::Mutex<std::sync::mpsc::Sender<Job>>> {
+    static WRITER: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<Job>>>> =
+        std::sync::OnceLock::new();
+    WRITER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            let spawned = std::thread::Builder::new()
+                .name("history-writer".into())
+                .spawn(move || {
+                    for job in rx {
+                        match job {
+                            Job::Write { path, event, done } => {
+                                let r = append(&path, &event);
+                                match done {
+                                    Some(done) => {
+                                        let _ = done.send(r);
+                                    }
+                                    None => {
+                                        if let Err(e) = r {
+                                            eprintln!("almanac: could not write History: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                            Job::Flush(done) => {
+                                let _ = done.send(());
+                            }
+                        }
+                    }
+                });
+            spawned.ok().map(|_| std::sync::Mutex::new(tx))
+        })
+        .as_ref()
+}
+
+/// Whether this is the window's thread (the one running the main loop),
+/// which must never wait on the log.
+fn on_ui_thread() -> bool {
+    gtk::glib::MainContext::default().is_owner()
+}
+
+/// Queue `event` for the log: waited for, with its result, unless this is
+/// the window's thread.
+fn submit(event: Value) -> Result<(), String> {
+    submit_to(_log_path(), event, !on_ui_thread())
+}
+
+fn submit_to(path: PathBuf, event: Value, wait: bool) -> Result<(), String> {
+    let Some(queue) = writer() else {
+        return append(&path, &event);
+    };
+    let (done, result) = if wait {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let sent = queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(Job::Write { path, event, done });
+    if let Err(std::sync::mpsc::SendError(Job::Write { path, event, .. })) = sent {
+        return append(&path, &event);
+    }
+    match result {
+        Some(rx) => rx.recv().unwrap_or(Ok(())),
+        None => Ok(()),
+    }
+}
+
+/// Wait until every line recorded so far is written: before the process
+/// exits, and before the log is read back or cleared.
+pub fn flush() {
+    let Some(queue) = writer() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    if queue
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(Job::Flush(tx))
+        .is_ok()
+    {
+        let _ = rx.recv();
+    }
+}
+
+fn append(path: &std::path::Path, event: &Value) -> Result<(), String> {
     let r = (|| -> std::io::Result<Result<(), String>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let line = util::dumps(
-            &serde_json::json!({"ts": util::now(), "kind": kind, "title": title,
-                                "detail": detail, "severity": severity,
-                                "items": items}),
-            None,
-            false,
-        );
+        let line = util::dumps(event, None, false);
         // The window, the guard and the scheduled run all append here: a
         // line appended between the trim's read and its write was lost.
         let _lock = util::lock_file(&path.with_extension("lock"))?;
-        let mut fh = std::fs::OpenOptions::new().append(true).create(true).open(&path)?;
+        // Expired lines go before the new one is written: the clock guard
+        // compares the clock with the lines already there, and a new line
+        // is always "now" (so a clock years ahead would read as right).
+        // A log that cannot be pruned is still a log; the size cap below
+        // still holds it.
+        let _ = expire_locked(path, util::now());
+        let mut fh = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)?;
         fh.write_all(format!("{line}\n").as_bytes())?;
         drop(fh);
         // Trim occasionally rather than on every write.
-        if std::fs::metadata(&path)?.len() > 512 * 1024 {
-            let text = match decode_strict(std::fs::read(&path)?) {
+        if std::fs::metadata(path)?.len() > MAX_BYTES {
+            let text = match decode_strict(std::fs::read(path)?) {
                 Ok(t) => t,
                 Err(e) => return Ok(Err(e)),
             };
             let lines = splitlines(&text);
             let lines = &lines[lines.len().saturating_sub(KEEP)..];
-            crate::util::atomic_write(&path, lines.join("\n") + "\n")?;
+            crate::util::atomic_write(path, lines.join("\n") + "\n")?;
         }
         Ok(Ok(()))
     })();
     r.unwrap_or(Ok(()))
+}
+
+/// The time a log line was written, if it says so plainly. A line that is
+/// not JSON, or has no numeric "ts", cannot be dated.
+fn line_ts(line: &[u8]) -> Option<f64> {
+    let v: Value = serde_json::from_slice(line).ok()?;
+    v.get("ts")?.as_f64().filter(|t| t.is_finite())
+}
+
+/// `raw` without the lines `expired` says go. A line that cannot be dated
+/// is kept: it may be something a newer Almanac wrote, and only the size
+/// cap may drop what this one does not understand.
+fn drop_expired(raw: &[u8], expired: impl Fn(f64) -> bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    for line in raw.split_inclusive(|&b| b == b'\n') {
+        let body = line.strip_suffix(b"\n").unwrap_or(line);
+        if line_ts(body).is_some_and(&expired) {
+            continue;
+        }
+        out.extend_from_slice(line);
+    }
+    out
+}
+
+/// A gap in the log's times this long is the clock jumping, not a quiet
+/// spell.
+const CLOCK_JUMP: f64 = 365.0 * 86400.0;
+
+/// For each time in `stamps`, the time its expiry counts back from. The
+/// times (and `now`) fall into runs with no gap over a year between
+/// neighbours; the run `now` is in counts from `now`, any other from its
+/// own newest line. So a clock that boots years ahead does not take the
+/// log with it -- neither on the first line written then, nor on the ones
+/// after, each "now" as far as that clock knows -- and once the clock is
+/// put back, the lines it wrote do not hold the rest up.
+fn expiry_bases(stamps: &[f64], now: f64) -> impl Fn(f64) -> f64 {
+    let mut all: Vec<f64> = stamps.iter().copied().chain([now]).collect();
+    all.sort_by(|a, b| b.total_cmp(a));
+    // (lowest time in the run, the time it counts back from), newest run first.
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut head = all[0];
+    let mut low = all[0];
+    let mut has_now = false;
+    for &t in &all {
+        if low - t > CLOCK_JUMP {
+            runs.push((low, if has_now { now } else { head }));
+            head = t;
+            has_now = false;
+        }
+        has_now |= t == now;
+        low = t;
+    }
+    runs.push((low, if has_now { now } else { head }));
+    move |ts: f64| {
+        runs.iter()
+            .find(|(low, _)| ts >= *low)
+            .map_or(now, |(_, base)| *base)
+    }
+}
+
+/// Drop what is older than `DAYS` from the log at `path`; the caller holds
+/// the lock. True when the file was rewritten.
+///
+/// The cutoff counts back from `now`, except across a jump of the clock by
+/// more than a year (see [`expiry_bases`]): a clock wrong by years at boot
+/// would otherwise empty the log in one go. Every line is looked at, not
+/// only the first: lines are in time order only while the clock is.
+fn expire_locked(path: &std::path::Path, now: f64) -> std::io::Result<bool> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let stamps: Vec<f64> = raw.split(|&b| b == b'\n').filter_map(line_ts).collect();
+    if stamps.is_empty() {
+        return Ok(false);
+    }
+    let base = expiry_bases(&stamps, now);
+    let expired = |ts: f64| ts < base(ts) - (DAYS * 86400) as f64;
+    if !stamps.iter().any(|&ts| expired(ts)) {
+        return Ok(false);
+    }
+    let kept = drop_expired(&raw, expired);
+    if kept.len() == raw.len() {
+        return Ok(false);
+    }
+    util::atomic_write(path, kept)?;
+    Ok(true)
+}
+
+/// Drop what is older than `DAYS` from Almanac's log. Run at startup, off
+/// the main thread; appending does the same as it goes. True when anything
+/// was dropped.
+pub fn expire() -> std::io::Result<bool> {
+    expire_at(util::now())
+}
+
+fn expire_at(now: f64) -> std::io::Result<bool> {
+    let path = _log_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = util::lock_file(&path.with_extension("lock"))?;
+    expire_locked(&path, now)
+}
+
+/// Title of the one line a cleared log keeps.
+pub const CLEARED: &str = "Almanac's log cleared";
+
+/// Whether `e` is that line: a note about the log, not something Almanac
+/// changed. Not counted as a change, and not something to clear again.
+pub fn is_cleared_marker(e: &Event) -> bool {
+    e.kind == ALMANAC && e.title == CLEARED
+}
+
+/// Empty Almanac's own log, leaving one line that says it was cleared.
+/// Only what Almanac recorded goes: package history (pacman's log), the
+/// snapshots and the settings resets are read from the system, not from
+/// here, and are untouched. Nothing is written in demo mode.
+pub fn clear() -> std::io::Result<()> {
+    if crate::demo::active() {
+        return Ok(());
+    }
+    // What was recorded before Clear goes with the rest, not after it.
+    flush();
+    let path = _log_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let line = util::dumps(
+        &serde_json::json!({"ts": util::now(), "kind": ALMANAC, "title": CLEARED,
+                            "detail": "", "severity": "", "items": []}),
+        None,
+        false,
+    );
+    let _lock = util::lock_file(&path.with_extension("lock"))?;
+    // In one write, so a reader sees the old log or the new one, never a
+    // log emptied and not yet marked.
+    util::atomic_write(&path, format!("{line}\n"))
+}
+
+/// The "action" of a log line, where it is one `ActionLog` can read; an
+/// absent, malformed or empty one is None.
+fn action_of(v: Option<&PyVal>) -> Option<ActionLog> {
+    let value = v?.to_value(false);
+    let action = ActionLog::deserialize(&value).ok();
+    // A value can be nested as deep as json.loads goes; drop it flat.
+    crate::util::tree::drop_value(value);
+    action.filter(|a| *a != ActionLog::default())
 }
 
 /// Almanac's own recorded actions since `since` (epoch seconds), values as
@@ -881,6 +1874,11 @@ pub fn record_checked(kind: &str, title: &str, detail: &str, severity: &str, ite
 /// line that is not an object, a "ts" that is missing (when 0 >= since) or
 /// cannot be compared.
 pub fn recorded(since: f64) -> Result<Vec<Event>, String> {
+    // What was just recorded shows too; the window's own thread does not
+    // wait (it reads in the background anyway).
+    if !on_ui_thread() {
+        flush();
+    }
     let Ok(raw) = std::fs::read(_log_path()) else {
         return Ok(Vec::new());
     };
@@ -889,27 +1887,218 @@ pub fn recorded(since: f64) -> Result<Vec<Event>, String> {
     for line in splitlines(&text) {
         let Some(d) = loads_line(line)? else { continue };
         if !matches!(d, PyVal::Dict(_)) {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", d.type_name()));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                d.type_name()
+            ));
         }
         let zero = PyVal::Int(BigInt::from(0));
         if !py_ge(d.get("ts").unwrap_or(&zero), since)? {
             continue;
         }
-        let Some(ts) = d.get("ts") else { return Err("KeyError: 'ts'".into()) };
+        let Some(ts) = d.get("ts") else {
+            return Err("KeyError: 'ts'".into());
+        };
         let text = |k: &str| d.get(k).cloned().unwrap_or(PyVal::Str(Vec::new()));
         let items = match d.get("items") {
             Some(v) if v.truthy() => v.clone(),
             _ => PyVal::List(Vec::new()),
         };
-        out.push(Event::from_py(ALMANAC, PyFields {
-            ts: ts.clone(),
-            title: text("title"),
-            detail: text("detail"),
-            items,
-            severity: text("severity"),
-        }));
+        // A scheduled run says so (autorun writes AUTOUPDATE); everything
+        // else in this log is Almanac's own.
+        let kind = match d.get("kind") {
+            Some(PyVal::Str(k)) if *k == py_str(AUTOUPDATE) => AUTOUPDATE,
+            _ => ALMANAC,
+        };
+        let mut event = Event::from_py(
+            kind,
+            PyFields {
+                ts: ts.clone(),
+                title: text("title"),
+                detail: text("detail"),
+                items,
+                severity: text("severity"),
+            },
+        );
+        event.action = action_of(d.get("action"));
+        out.push(event);
     }
     Ok(out)
+}
+
+// ---- what an action did, in words ----------------------------------------
+
+impl ActionLog {
+    /// Snapshot, space freed and time taken, as one line: "Snapshot 412
+    /// taken first · 1.2 GB freed · took 2 min 5 s". Empty when none is known.
+    pub fn facts(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(n) = self.snapshot.as_deref().filter(|n| !n.is_empty()) {
+            parts.push(format!("Snapshot {n} taken first"));
+        }
+        if let Some(b) = self.freed_bytes {
+            parts.push(freed_text(b));
+        }
+        if let Some(s) = self.duration_secs.filter(|s| s.is_finite() && *s >= 0.0) {
+            parts.push(format!("took {}", duration_text(s)));
+        }
+        let line = parts.join(" · ");
+        let mut chars = line.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// "1.2 GB freed"; "no space freed" for nothing or less (other programs
+/// write while a cleanup runs).
+pub fn freed_text(bytes: i64) -> String {
+    if bytes <= 0 {
+        return "no space freed".to_string();
+    }
+    format!(
+        "{} freed",
+        crate::maintenance::fmt_size(bytes as f64 / 1_048_576.0)
+    )
+}
+
+/// "0.4 s", "45 s", "2 min 5 s", "1 h 4 min".
+pub fn duration_text(secs: f64) -> String {
+    if secs < 9.95 {
+        let tenths = (secs * 10.0).round() / 10.0;
+        return if tenths.fract() == 0.0 {
+            format!("{tenths:.0} s")
+        } else {
+            format!("{tenths:.1} s")
+        };
+    }
+    let s = secs.round() as u64;
+    match (s / 3600, (s % 3600) / 60, s % 60) {
+        (0, 0, sec) => format!("{sec} s"),
+        (0, min, 0) => format!("{min} min"),
+        (0, min, sec) => format!("{min} min {sec} s"),
+        (h, 0, _) => format!("{h} h"),
+        (h, min, _) => format!("{h} h {min} min"),
+    }
+}
+
+/// How a command ended, in words: "exit 0", "exit 1", "exit status unknown".
+pub fn exit_text(exit: Option<i32>) -> String {
+    match exit {
+        Some(code) => format!("exit {code}"),
+        None => "exit status unknown".to_string(),
+    }
+}
+
+/// A command's exit status as a verdict: 0 passed, anything else failed,
+/// unknown could not tell.
+pub fn exit_ok(exit: Option<i32>) -> Option<bool> {
+    exit.map(|c| c == 0)
+}
+
+/// "passed", "failed", "could not tell".
+pub fn verdict_text(ok: Option<bool>) -> &'static str {
+    match ok {
+        Some(true) => "passed",
+        Some(false) => "failed",
+        None => "could not tell",
+    }
+}
+
+/// What a change went from and to: "1.0 → 1.1", or one side alone.
+pub fn change_text(c: &Change) -> String {
+    match (c.from.is_empty(), c.to.is_empty()) {
+        (false, false) => format!("{} → {}", c.from, c.to),
+        (true, false) => c.to.clone(),
+        (false, true) => format!("{} → removed", c.from),
+        (true, true) => String::new(),
+    }
+}
+
+/// A command line from its argv, quoted so it can be pasted into a shell.
+pub fn command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| crate::store::shlex_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The event as plain text, for a bug report: when, what, and everything
+/// the action recorded about itself.
+pub fn details_text(e: &Event) -> String {
+    let when = Some(e.ts)
+        .filter(|t| t.is_finite())
+        .and_then(|t| chrono::DateTime::from_timestamp(t.floor() as i64, 0))
+        .map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default();
+    let mut out = format!("{when}  {}", e.title).trim().to_string();
+    if !e.detail.is_empty() {
+        out += &format!("\n{}", e.detail);
+    }
+    let mark = |ok: Option<bool>| match ok {
+        Some(true) => "✓",
+        Some(false) => "✗",
+        None => "?",
+    };
+    let section = |out: &mut String, head: &str, lines: Vec<String>| {
+        if !lines.is_empty() {
+            *out += &format!("\n\n{head}");
+            for l in lines {
+                *out += &format!("\n  {l}");
+            }
+        }
+    };
+    let Some(a) = &e.action else {
+        section(&mut out, "Items", e.items.clone());
+        return out;
+    };
+    section(
+        &mut out,
+        "Commands",
+        a.commands
+            .iter()
+            .map(|c| {
+                let secs = c
+                    .secs
+                    .map(|s| format!(", {}", duration_text(s)))
+                    .unwrap_or_default();
+                format!(
+                    "{} {}  ({}{secs})",
+                    mark(exit_ok(c.exit)),
+                    c.argv,
+                    exit_text(c.exit)
+                )
+            })
+            .collect(),
+    );
+    section(
+        &mut out,
+        "Changes",
+        a.changes
+            .iter()
+            .map(|c| {
+                format!("{}  {}", c.name, change_text(c))
+                    .trim_end()
+                    .to_string()
+            })
+            .collect(),
+    );
+    let checked = |r: &CheckResult| {
+        let detail = if r.detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", r.detail)
+        };
+        format!("{} {} — {}{detail}", mark(r.ok), r.name, verdict_text(r.ok))
+    };
+    section(&mut out, "Checks", a.checks.iter().map(checked).collect());
+    section(&mut out, "Repairs", a.repairs.iter().map(checked).collect());
+    let facts = a.facts();
+    if !facts.is_empty() {
+        out += &format!("\n\n{facts}");
+    }
+    out
 }
 
 // ---- what the system recorded ------------------------------------------------
@@ -949,7 +2138,9 @@ pub fn package_events(since: f64, log_text: Option<&str>) -> Vec<Event> {
     let mut out: Vec<Event> = Vec::new();
     let mut current: Option<(f64, Vec<String>)> = None;
     for line in splitlines(log_text) {
-        let Some(m) = _LINE.captures(line) else { continue };
+        let Some(m) = _LINE.captures(line) else {
+            continue;
+        };
         let msg = &m["msg"];
         if msg == "transaction started" {
             current = Some((crate::snapshots::_ts(&m["ts"]), Vec::new()));
@@ -960,7 +2151,9 @@ pub fn package_events(since: f64, log_text: Option<&str>) -> Vec<Event> {
                 changes.push(msg.to_string());
             }
         } else if msg == "transaction completed" {
-            let Some((started, changes)) = current.take() else { continue };
+            let Some((started, changes)) = current.take() else {
+                continue;
+            };
             // `omarchy update` reinstalls archlinux-keyring every time: same
             // version, nothing changed. A transaction of nothing but those is
             // noise between the entries that matter.
@@ -968,7 +2161,14 @@ pub fn package_events(since: f64, log_text: Option<&str>) -> Vec<Event> {
                 continue;
             }
             if !changes.is_empty() && started >= since {
-                out.push(Event::new(started, PACKAGES, &_summarise(&changes), "", changes, ""));
+                out.push(Event::new(
+                    started,
+                    PACKAGES,
+                    &_summarise(&changes),
+                    "",
+                    changes,
+                    "",
+                ));
             }
         }
     }
@@ -980,16 +2180,33 @@ pub fn _summarise(changes: &[String]) -> String {
     let mut verbs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for c in changes {
         if let Some(m) = _CHANGE.captures(c) {
-            verbs.entry(m[1].to_string()).or_default().push(m[2].to_string());
+            verbs
+                .entry(m[1].to_string())
+                .or_default()
+                .push(m[2].to_string());
         }
     }
     let mut parts: Vec<String> = Vec::new();
-    for (verb, label) in [("upgraded", "Updated"), ("installed", "Installed"),
-                          ("removed", "Removed"), ("downgraded", "Downgraded"),
-                          ("reinstalled", "Reinstalled")] {
-        let Some(names) = verbs.get(verb).filter(|n| !n.is_empty()) else { continue };
-        let what = if names.len() == 1 { names[0].clone() } else { format!("{} packages", names.len()) };
-        let label = if parts.is_empty() { label.to_string() } else { label.to_lowercase() };
+    for (verb, label) in [
+        ("upgraded", "Updated"),
+        ("installed", "Installed"),
+        ("removed", "Removed"),
+        ("downgraded", "Downgraded"),
+        ("reinstalled", "Reinstalled"),
+    ] {
+        let Some(names) = verbs.get(verb).filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        let what = if names.len() == 1 {
+            names[0].clone()
+        } else {
+            format!("{} packages", names.len())
+        };
+        let label = if parts.is_empty() {
+            label.to_string()
+        } else {
+            label.to_lowercase()
+        };
         parts.push(format!("{label} {what}"));
     }
     if parts.is_empty() {
@@ -1021,11 +2238,17 @@ pub fn last_day(days: &[Day], now: f64) -> String {
             list.push(name.to_string());
         }
     };
-    for e in days.iter().flat_map(|d| &d.events).filter(|e| e.ts >= since && e.ts <= now) {
+    for e in days
+        .iter()
+        .flat_map(|d| &d.events)
+        .filter(|e| e.ts >= since && e.ts <= now)
+    {
         match e.kind.as_str() {
             PACKAGES => {
                 for c in &e.items {
-                    let Some(m) = _CHANGE.captures(c) else { continue };
+                    let Some(m) = _CHANGE.captures(c) else {
+                        continue;
+                    };
                     let verb = match &m[1] {
                         "upgraded" => "upgraded",
                         "installed" => "installed",
@@ -1037,36 +2260,62 @@ pub fn last_day(days: &[Day], now: f64) -> String {
                 }
             }
             AUTOUPDATE => {
+                // The items are names, and a name can have spaces in it
+                // ("GitHub Copilot CLI"); a line from before carrying its
+                // versions is read from the right.
                 for item in &e.items {
-                    push(&mut scheduled, item.split(' ').next().unwrap_or(item));
+                    let name = item.rsplit_once(" → ").map_or(item.as_str(), |(left, _)| {
+                        left.rsplit_once(' ').map_or(left, |(n, _)| n)
+                    });
+                    push(&mut scheduled, name);
                 }
             }
             SNAPSHOT => snapshots += 1,
             RESET => resets += 1,
+            _ if is_cleared_marker(e) => {}
             _ => other += 1,
         }
     }
-    let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let mut parts: Vec<String> = Vec::new();
-    for (verb, label) in [("upgraded", "updated"), ("installed", "installed"),
-                          ("removed", "removed"), ("downgraded", "downgraded")] {
+    for (verb, label) in [
+        ("upgraded", "updated"),
+        ("installed", "installed"),
+        ("removed", "removed"),
+        ("downgraded", "downgraded"),
+    ] {
         if let Some(names) = verbs.get(verb) {
             parts.push(format!("{label} {}", few(names, "packages")));
         }
     }
     if !scheduled.is_empty() {
-        parts.push(format!("the scheduled update updated {}", few(&scheduled, "items")));
+        parts.push(format!(
+            "the scheduled update updated {}",
+            few(&scheduled, "items")
+        ));
     }
     if snapshots > 0 {
-        parts.push(format!("{} taken", plural(snapshots, "snapshot", "snapshots")));
+        parts.push(format!(
+            "{} taken",
+            plural(snapshots, "snapshot", "snapshots")
+        ));
     }
     if resets > 0 {
-        parts.push(format!("{} reset to defaults", plural(resets, "settings file", "settings files")));
+        parts.push(format!(
+            "{} reset to defaults",
+            plural(resets, "settings file", "settings files")
+        ));
     }
     if other > 0 {
-        parts.push(format!("{} made in Almanac", plural(other, "other change", "other changes")));
+        parts.push(format!(
+            "{} made in Almanac",
+            plural(other, "other change", "other changes")
+        ));
     }
-    let Some(first) = parts.first_mut() else { return "Nothing changed.".to_string() };
+    let Some(first) = parts.first_mut() else {
+        return "Nothing changed.".to_string();
+    };
     let mut chars = first.chars();
     if let Some(c) = chars.next() {
         *first = c.to_uppercase().chain(chars).collect();
@@ -1167,8 +2416,18 @@ pub fn snapshot_events(since: f64, journal_text: Option<&str>) -> Result<Vec<Eve
             // Python decodes strictly (text=True); journalctl's JSON output is
             // UTF-8 by construction (a field that is not comes as a byte array).
             let r = util::run(
-                &["journalctl", "--no-pager", "-q", "-o", "json",
-                  "--since", &since_arg, "_COMM=sudo", "+", "_COMM=pkexec"],
+                &[
+                    "journalctl",
+                    "--no-pager",
+                    "-q",
+                    "-o",
+                    "json",
+                    "--since",
+                    &since_arg,
+                    "_COMM=sudo",
+                    "+",
+                    "_COMM=pkexec",
+                ],
                 30,
             );
             if r.failed_to_start || r.timed_out {
@@ -1180,12 +2439,19 @@ pub fn snapshot_events(since: f64, journal_text: Option<&str>) -> Result<Vec<Eve
     };
     let mut out = Vec::new();
     for line in splitlines(journal_text) {
-        let Some(rec) = loads_line(line)? else { continue };
+        let Some(rec) = loads_line(line)? else {
+            continue;
+        };
         if !matches!(rec, PyVal::Dict(_)) {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", rec.type_name()));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                rec.type_name()
+            ));
         }
         // `rec.get("MESSAGE") or ""`: binary messages come as byte arrays.
-        let Some(PyVal::Str(msg)) = rec.get("MESSAGE") else { continue };
+        let Some(PyVal::Str(msg)) = rec.get("MESSAGE") else {
+            continue;
+        };
         if !snapper_create(msg) {
             continue;
         }
@@ -1204,7 +2470,12 @@ pub fn snapshot_events(since: f64, journal_text: Option<&str>) -> Result<Vec<Eve
             }
             None => Vec::new(),
         };
-        out.push(Event::from_text(ts, SNAPSHOT, py_str("Snapshot taken"), detail));
+        out.push(Event::from_text(
+            ts,
+            SNAPSHOT,
+            py_str("Snapshot taken"),
+            detail,
+        ));
     }
     Ok(out)
 }
@@ -1229,9 +2500,14 @@ pub fn reset_events(since: f64) -> Result<Vec<Event>, String> {
     for f in guard::walk(&home, guard::MAX_DEPTH) {
         let Some(fname) = f.file_name() else { continue };
         let name = fname.to_string_lossy();
-        let Some(m) = guard::BAK.captures(&name) else { continue };
+        let Some(m) = guard::BAK.captures(&name) else {
+            continue;
+        };
         let Some(ts) = crate::util::py_digits_value(&m["ts"]) else {
-            return Err(format!("ValueError: could not convert string to float: {}", py_repr(&py_str(&m["ts"]))));
+            return Err(format!(
+                "ValueError: could not convert string to float: {}",
+                py_repr(&py_str(&m["ts"]))
+            ));
         };
         if ts < since {
             continue;
@@ -1268,7 +2544,9 @@ pub fn reset_events(since: f64) -> Result<Vec<Event>, String> {
 fn tz_unreadable() -> bool {
     match std::env::var_os("TZ") {
         None => false,
-        Some(v) => v.to_str().is_none_or(|tz| gtk::glib::TimeZone::new(Some(tz)).identifier() == "UTC"),
+        Some(v) => v
+            .to_str()
+            .is_none_or(|tz| gtk::glib::TimeZone::new(Some(tz)).identifier() == "UTC"),
     }
 }
 
@@ -1293,7 +2571,12 @@ fn local_offset(t: i64, utc: bool) -> i64 {
         t
     };
     match chrono::DateTime::from_timestamp(probe, 0) {
-        Some(dt) => i64::from(Local.offset_from_utc_datetime(&dt.naive_utc()).fix().local_minus_utc()),
+        Some(dt) => i64::from(
+            Local
+                .offset_from_utc_datetime(&dt.naive_utc())
+                .fix()
+                .local_minus_utc(),
+        ),
         None => 0,
     }
 }
@@ -1353,7 +2636,8 @@ fn local_date_in(ts: f64, utc: bool) -> Result<NaiveDate, String> {
     if !(1..=9999).contains(&year) {
         return Err(format!("ValueError: year must be in 1..9999, not {year}"));
     }
-    NaiveDate::from_ymd_opt(year as i32, month, day).ok_or_else(|| format!("ValueError: year must be in 1..9999, not {year}"))
+    NaiveDate::from_ymd_opt(year as i32, month, day)
+        .ok_or_else(|| format!("ValueError: year must be in 1..9999, not {year}"))
 }
 
 /// Every event of the last `days` days, newest first, grouped by day.
@@ -1402,7 +2686,11 @@ fn group(mut events: Vec<Event>) -> Result<Vec<Day>, String> {
         .rev()
         .map(|(d, evs)| {
             let snapshot = evs.iter().any(|e| e.kind == SNAPSHOT);
-            Day { day: d, events: evs, snapshot }
+            Day {
+                day: d,
+                events: evs,
+                snapshot,
+            }
         })
         .collect())
 }
@@ -1412,7 +2700,11 @@ mod tests {
     use super::*;
 
     fn day_of(events: Vec<Event>) -> Vec<Day> {
-        vec![Day { day: NaiveDate::from_ymd_opt(2026, 10, 18).unwrap(), events, snapshot: false }]
+        vec![Day {
+            day: NaiveDate::from_ymd_opt(2026, 10, 18).unwrap(),
+            events,
+            snapshot: false,
+        }]
     }
 
     fn changes(items: &[&str]) -> Vec<String> {
@@ -1424,12 +2716,30 @@ mod tests {
         let now = 1_792_400_000.0;
         // 2026-10-17: rust by hand at 18:18; 2026-10-18: the timer's AppImages.
         let days = day_of(vec![
-            Event::new(now - 3600.0, AUTOUPDATE, "Scheduled update: updated vectorcraft and wordcraft", "",
-                       changes(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"]), ""),
-            Event::new(now - 20.0 * 3600.0, PACKAGES, "Installed 2 packages", "",
-                       changes(&["installed lld (22.1.8-1)", "installed rust (1:1.98.1-1)"]), ""),
-            Event::new(now - 30.0 * 3600.0, PACKAGES, "Updated hermes-desktop", "",
-                       changes(&["upgraded hermes-desktop (1 -> 2)"]), ""),
+            Event::new(
+                now - 3600.0,
+                AUTOUPDATE,
+                "Scheduled update: updated vectorcraft and wordcraft",
+                "",
+                changes(&["vectorcraft 0.12.0 → 0.13.1", "wordcraft 0.7.0 → 0.8.0"]),
+                "",
+            ),
+            Event::new(
+                now - 20.0 * 3600.0,
+                PACKAGES,
+                "Installed 2 packages",
+                "",
+                changes(&["installed lld (22.1.8-1)", "installed rust (1:1.98.1-1)"]),
+                "",
+            ),
+            Event::new(
+                now - 30.0 * 3600.0,
+                PACKAGES,
+                "Updated hermes-desktop",
+                "",
+                changes(&["upgraded hermes-desktop (1 -> 2)"]),
+                "",
+            ),
         ]);
         assert_eq!(
             last_day(&days, now),
@@ -1437,14 +2747,55 @@ mod tests {
         );
     }
 
+    /// The line a cleared log keeps is not a change, and an agent whose
+    /// name has spaces is named whole.
+    #[test]
+    fn last_day_skips_the_cleared_marker_and_keeps_whole_names() {
+        let now = 1_792_400_000.0;
+        let day = |events| Day {
+            events,
+            ..Default::default()
+        };
+        let cleared = Event::new(now - 60.0, ALMANAC, CLEARED, "", vec![], "");
+        assert!(is_cleared_marker(&cleared));
+        assert_eq!(
+            last_day(&[day(vec![cleared.clone()])], now),
+            "Nothing changed."
+        );
+        let run = Event::new(
+            now - 30.0,
+            AUTOUPDATE,
+            "Scheduled update: updated GitHub Copilot CLI",
+            "",
+            vec!["GitHub Copilot CLI".into()],
+            "",
+        );
+        assert_eq!(
+            last_day(&[day(vec![run, cleared])], now),
+            "The scheduled update updated GitHub Copilot CLI"
+        );
+    }
+
     #[test]
     fn last_day_counts_past_three_and_skips_reinstalls() {
         let now = 1_792_400_000.0;
         let days = day_of(vec![
-            Event::new(now - 60.0, PACKAGES, "", "", changes(&[
-                "upgraded a (1 -> 2)", "upgraded b (1 -> 2)", "upgraded c (1 -> 2)", "upgraded d (1 -> 2)",
-                "upgraded a (2 -> 3)", "reinstalled archlinux-keyring (1)", "removed e (1)",
-            ]), ""),
+            Event::new(
+                now - 60.0,
+                PACKAGES,
+                "",
+                "",
+                changes(&[
+                    "upgraded a (1 -> 2)",
+                    "upgraded b (1 -> 2)",
+                    "upgraded c (1 -> 2)",
+                    "upgraded d (1 -> 2)",
+                    "upgraded a (2 -> 3)",
+                    "reinstalled archlinux-keyring (1)",
+                    "removed e (1)",
+                ]),
+                "",
+            ),
             Event::new(now - 120.0, SNAPSHOT, "Snapshot", "", vec![], ""),
             Event::new(now - 180.0, RESET, "x reset", "", vec![], ""),
             Event::new(now - 240.0, RESET, "y reset", "", vec![], ""),
@@ -1498,7 +2849,9 @@ mod tests {
 
     #[test]
     fn test_almanacs_own_actions_round_trip() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = std::env::temp_dir().join(format!("almanac-history-test-{}", std::process::id()));
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", &d);
@@ -1510,7 +2863,10 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(evs.len(), 1);
-        assert_eq!((evs[0].title.as_str(), evs[0].severity.as_str()), ("yaru did not change", "warn"));
+        assert_eq!(
+            (evs[0].title.as_str(), evs[0].severity.as_str()),
+            ("yaru did not change", "warn")
+        );
     }
 
     #[test]
@@ -1527,15 +2883,15 @@ mod tests {
     #[test]
     fn test_history_is_synthetic() {
         // Demo mode must never read the real log: timeline returns demo::history().
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let old = std::env::var_os("ALMANAC_DEMO");
-        std::env::set_var("ALMANAC_DEMO", "1");
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
         let r = std::panic::catch_unwind(|| timeline(DAYS));
-        match old {
-            Some(v) => std::env::set_var("ALMANAC_DEMO", v),
-            None => std::env::remove_var("ALMANAC_DEMO"),
-        }
-        assert!(!r.expect("timeline panicked (demo::history still a stub?)").is_empty());
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(!r
+            .expect("timeline panicked (demo::history still a stub?)")
+            .is_empty());
     }
 
     #[test]
@@ -1556,9 +2912,21 @@ mod tests {
         assert_eq!(v("-0"), Some(PyVal::Int(BigInt::from(0))));
         assert_eq!(v(r#""\ud800x""#), Some(PyVal::Str(vec![0xd800, 0x78])));
         assert_eq!(v(r#""\ud83d\ude00""#), Some(PyVal::Str(vec![0x1f600])));
-        assert_eq!(v(r#"{"a": 1, "a": 2, "b": [true, null]}"#).and_then(|d| d.get("a").cloned()),
-                   Some(PyVal::Int(BigInt::from(2))));
-        for bad in ["", "[1,]", "{\"a\":1,}", "01", "1.", "\u{feff}1", "\"\t\"", "nul", "[1] x"] {
+        assert_eq!(
+            v(r#"{"a": 1, "a": 2, "b": [true, null]}"#).and_then(|d| d.get("a").cloned()),
+            Some(PyVal::Int(BigInt::from(2)))
+        );
+        for bad in [
+            "",
+            "[1,]",
+            "{\"a\":1,}",
+            "01",
+            "1.",
+            "\u{feff}1",
+            "\"\t\"",
+            "nul",
+            "[1] x",
+        ] {
             assert!(v(bad).is_none(), "{bad:?}");
         }
         let deep = "[".repeat(MAX_DEPTH + 1);
@@ -1586,16 +2954,32 @@ mod tests {
         assert!(!m("COMMAND=/usr/bin/snapperx create"));
         assert!(!m("COMMAND=/usr/bin/ls ; snapper create"));
         assert!(!m("COMMAND=snapper list\ncreate"));
-        assert_eq!(desc_group(&py_str("x -d a b -c")).map(lossy), Some("a b".into()));
-        assert_eq!(desc_group(&py_str("x -d line\n")).map(lossy), Some("line".into()));
+        assert_eq!(
+            desc_group(&py_str("x -d a b -c")).map(lossy),
+            Some("a b".into())
+        );
+        assert_eq!(
+            desc_group(&py_str("x -d line\n")).map(lossy),
+            Some("line".into())
+        );
     }
 
     #[test]
     fn fromtimestamp_rounds_to_the_microsecond() {
         // 0.4 microseconds before a midnight lands on the next day, as in Python.
-        let midnight = Local.with_ymd_and_hms(2026, 10, 17, 0, 0, 0).earliest().unwrap().timestamp() as f64;
-        assert_eq!(local_date(midnight - 4e-7).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 17).unwrap());
-        assert_eq!(local_date(midnight - 6e-7).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 16).unwrap());
+        let midnight = Local
+            .with_ymd_and_hms(2026, 10, 17, 0, 0, 0)
+            .earliest()
+            .unwrap()
+            .timestamp() as f64;
+        assert_eq!(
+            local_date(midnight - 4e-7).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 17).unwrap()
+        );
+        assert_eq!(
+            local_date(midnight - 6e-7).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 16).unwrap()
+        );
         assert!(local_date(1e39).is_err());
         assert!(local_date(f64::NAN).is_err());
     }
@@ -1606,12 +2990,30 @@ mod tests {
         assert_eq!(d(b"ab\xc3x"), "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 2: invalid continuation byte");
         assert_eq!(d(b"\xe2\x82"), "UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data");
         assert_eq!(d(b"\xff"), "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte");
-        assert_eq!(py_int_str(&py_str("1.5")).unwrap_err(), "ValueError: invalid literal for int() with base 10: '1.5'");
-        assert_eq!(py_int_str(&[0x61, 0x27, 0xdcff]).unwrap_err(), "ValueError: invalid literal for int() with base 10: \"a'\\udcff\"");
-        assert_eq!(local_date(f64::INFINITY).unwrap_err(), "OverflowError: timestamp out of range for platform time_t");
-        assert_eq!(local_date_in(1e12, true).unwrap_err(), "ValueError: year must be in 1..9999, not 33658");
-        assert_eq!(local_date_in(1e17, true).unwrap_err(), "OSError: [Errno 75] Value too large for defined data type");
-        assert_eq!(local_date_in(1792465200.0, true).unwrap(), NaiveDate::from_ymd_opt(2026, 10, 20).unwrap());
+        assert_eq!(
+            py_int_str(&py_str("1.5")).unwrap_err(),
+            "ValueError: invalid literal for int() with base 10: '1.5'"
+        );
+        assert_eq!(
+            py_int_str(&[0x61, 0x27, 0xdcff]).unwrap_err(),
+            "ValueError: invalid literal for int() with base 10: \"a'\\udcff\""
+        );
+        assert_eq!(
+            local_date(f64::INFINITY).unwrap_err(),
+            "OverflowError: timestamp out of range for platform time_t"
+        );
+        assert_eq!(
+            local_date_in(1e12, true).unwrap_err(),
+            "ValueError: year must be in 1..9999, not 33658"
+        );
+        assert_eq!(
+            local_date_in(1e17, true).unwrap_err(),
+            "OSError: [Errno 75] Value too large for defined data type"
+        );
+        assert_eq!(
+            local_date_in(1792465200.0, true).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 20).unwrap()
+        );
         // CPython checks its stack entering every container, empty ones too.
         let n = MAX_DEPTH + 1;
         let empty = "[".repeat(n) + &"]".repeat(n);
@@ -1622,7 +3024,10 @@ mod tests {
 
     #[test]
     fn splitlines_matches_python() {
-        assert_eq!(splitlines("a\nb\r\nc\rd\x1ce\u{2028}f\n"), vec!["a", "b", "c", "d", "e", "f"]);
+        assert_eq!(
+            splitlines("a\nb\r\nc\rd\x1ce\u{2028}f\n"),
+            vec!["a", "b", "c", "d", "e", "f"]
+        );
         assert_eq!(splitlines(""), Vec::<&str>::new());
         assert_eq!(splitlines("\n\n"), vec!["", ""]);
     }
@@ -1632,11 +3037,17 @@ mod tests {
         // An item nested as deep as json.loads goes, on a default 2 MiB
         // thread: a derived Clone or PartialEq recursed once per level.
         let n = MAX_DEPTH - 2;
-        let text = format!("{{\"ts\": 1, \"items\": {}{}}}", "[".repeat(n), "]".repeat(n));
+        let text = format!(
+            "{{\"ts\": 1, \"items\": {}{}}}",
+            "[".repeat(n),
+            "]".repeat(n)
+        );
         std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(move || {
-                let Ok(v) = py_loads(&text) else { panic!("Python reads it") };
+                let Ok(v) = py_loads(&text) else {
+                    panic!("Python reads it")
+                };
                 let w = v.clone();
                 assert!(v == w);
                 crate::util::tree::drop_value(v.to_value(true));
@@ -1644,5 +3055,417 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// Runs `f` with Almanac's log in a fresh temporary state directory.
+    fn with_log<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().unwrap();
+        *TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(d.path().join("almanac").join("history.jsonl"));
+        crate::demo::TEST_DEMO.store(2, std::sync::atomic::Ordering::SeqCst);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&_log_path())));
+        *TEST_LOG.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        r.unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }
+
+    fn line(ts: f64, title: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"ts": ts, "kind": ALMANAC, "title": title})
+        )
+    }
+
+    fn titles(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<Value>(l)
+                    .ok()
+                    .and_then(|v| v.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                    .unwrap_or_else(|| l.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn appending_drops_what_is_older_than_thirty_days_and_keeps_what_cannot_be_dated() {
+        with_log(|path| {
+            let now = util::now();
+            let old = now - 31.0 * 86400.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = "not json at all\n".to_string()
+                + &line(old, "old")
+                + "{\"title\": \"no date\"}\n"
+                + &line(now - 29.0 * 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            record_checked(ALMANAC, "new", "", "", &[]).unwrap();
+            assert_eq!(
+                titles(path),
+                ["not json at all", "no date", "recent", "new"]
+            );
+        });
+    }
+
+    #[test]
+    fn a_log_with_nothing_expired_is_left_as_it_is() {
+        with_log(|path| {
+            let now = util::now();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(now - 86400.0, "yesterday");
+            std::fs::write(path, &text).unwrap();
+            assert!(!expire_at(now).unwrap());
+            assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+            // No log at all is nothing to do, not an error.
+            std::fs::remove_file(path).unwrap();
+            assert!(!expire_at(now).unwrap());
+            assert!(!path.exists());
+        });
+    }
+
+    #[test]
+    fn startup_expiry_reads_the_oldest_dated_line_past_undated_ones() {
+        with_log(|path| {
+            let now = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = "{\"ts\": \"a string\"}\n".to_string()
+                + &line(now - 40.0 * 86400.0, "old")
+                + &line(now - 30.0 * 86400.0 + 1.0, "just inside");
+            std::fs::write(path, text).unwrap();
+            assert!(expire_at(now).unwrap());
+            assert_eq!(titles(path), ["{\"ts\": \"a string\"}", "just inside"]);
+        });
+    }
+
+    #[test]
+    fn a_clock_years_ahead_does_not_empty_the_log() {
+        with_log(|path| {
+            let then = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(then - 40.0 * 86400.0, "old") + &line(then - 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            // Booted with the clock three years out: only what is old next to
+            // the newest line goes.
+            assert!(expire_at(then + 3.0 * 365.0 * 86400.0).unwrap());
+            assert_eq!(titles(path), ["recent"]);
+        });
+    }
+
+    /// Through `append`, as the window writes: the new line is "now" by the
+    /// same wrong clock, so the guard reads the lines already there. Each
+    /// later line is "now" too, and still takes nothing earlier with it.
+    #[test]
+    fn a_clock_years_ahead_does_not_empty_the_log_when_appending() {
+        with_log(|path| {
+            // The log as last written, three years before this clock.
+            let then = util::now() - 3.0 * 365.0 * 86400.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                line(then - 40.0 * 86400.0, "old") + &line(then - 86400.0, "recent"),
+            )
+            .unwrap();
+            record_checked(ALMANAC, "first", "", "", &[]).unwrap();
+            assert_eq!(titles(path), ["recent", "first"]);
+            record_checked(ALMANAC, "second", "", "", &[]).unwrap();
+            assert_eq!(titles(path), ["recent", "first", "second"]);
+        });
+    }
+
+    #[test]
+    fn expiry_counts_back_from_now_only_within_its_own_run_of_times() {
+        let now = 1_792_400_000.0;
+        let year = 365.0 * 86400.0;
+        let base = expiry_bases(
+            &[
+                now - 86400.0,
+                now + 86400.0,
+                now - 3.0 * year,
+                now - 3.0 * year - 5.0,
+            ],
+            now,
+        );
+        assert_eq!(base(now - 86400.0), now);
+        assert_eq!(base(now + 86400.0), now);
+        assert_eq!(base(now - 3.0 * year - 5.0), now - 3.0 * year);
+        // Lines a clock years ahead wrote, after it was put back.
+        let base = expiry_bases(
+            &[now - 86400.0, now + 2.0 * year, now + 2.0 * year - 100.0],
+            now,
+        );
+        assert_eq!(base(now + 2.0 * year - 100.0), now + 2.0 * year);
+        assert_eq!(base(now - 86400.0), now);
+    }
+
+    /// Recording from the window's thread queues the line and returns at
+    /// once, even while the log's lock is held elsewhere (the scheduled
+    /// run, the guard); lines are written in the order recorded, and
+    /// `flush` waits for them.
+    #[test]
+    fn recording_from_the_window_does_not_wait_for_the_log() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let lock = util::lock_file(&path.with_extension("lock")).unwrap();
+            let p = path.to_path_buf();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for title in ["a", "b", "c"] {
+                    submit_to(
+                        p.clone(),
+                        serde_json::json!({"ts": util::now(), "kind": ALMANAC, "title": title}),
+                        false,
+                    )
+                    .unwrap();
+                }
+                let _ = tx.send(());
+            });
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+                "recording waited on the lock"
+            );
+            assert!(!path.exists() || titles(path).is_empty());
+            drop(lock);
+            flush();
+            assert_eq!(titles(path), ["a", "b", "c"]);
+        });
+        // A thread that is not the window's waits: the line is there when
+        // the call returns.
+        assert!(!on_ui_thread());
+    }
+
+    #[test]
+    fn a_line_from_the_future_at_the_head_does_not_stop_expiry() {
+        with_log(|path| {
+            let now = 1_792_400_000.0;
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let text = line(now + 86400.0, "written with a clock ahead")
+                + &line(now - 40.0 * 86400.0, "old")
+                + &line(now - 86400.0, "recent");
+            std::fs::write(path, text).unwrap();
+            assert!(expire_at(now).unwrap());
+            assert_eq!(titles(path), ["written with a clock ahead", "recent"]);
+        });
+    }
+
+    #[test]
+    fn lines_that_cannot_be_dated_go_only_when_the_log_is_over_its_size_cap() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let filler = format!("{{\"title\": \"{}\"}}\n", "x".repeat(300));
+            std::fs::write(path, filler.repeat(2000)).unwrap();
+            assert!(std::fs::metadata(path).unwrap().len() > MAX_BYTES);
+            record_checked(ALMANAC, "new", "", "", &[]).unwrap();
+            let after = titles(path);
+            assert_eq!(after.len(), KEEP);
+            assert_eq!(after.last().map(String::as_str), Some("new"));
+        });
+    }
+
+    #[test]
+    fn clearing_leaves_one_line_that_says_so() {
+        with_log(|path| {
+            record_checked(ALMANAC, "one", "", "", &[]).unwrap();
+            record_action(
+                ALMANAC,
+                "two",
+                "",
+                "",
+                &ActionLog {
+                    duration_secs: Some(1.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            clear().unwrap();
+            assert_eq!(titles(path), [CLEARED]);
+            let evs = recorded(0.0).unwrap();
+            assert_eq!(evs.len(), 1);
+            assert_eq!(evs[0].title, CLEARED);
+            assert_eq!(evs[0].action, None);
+        });
+    }
+
+    #[test]
+    fn an_action_is_read_back_with_its_event() {
+        with_log(|_| {
+            let action = ActionLog {
+                commands: vec![CommandRun {
+                    argv: "/usr/bin/pkexec /usr/bin/paccache -rk2".into(),
+                    exit: Some(0),
+                    secs: Some(2.5),
+                }],
+                changes: vec![Change {
+                    name: "fd".into(),
+                    from: "10.3.0-1".into(),
+                    to: "10.4.0-1".into(),
+                }],
+                checks: vec![CheckResult {
+                    name: "fd".into(),
+                    ok: None,
+                    detail: "pacman did not answer".into(),
+                }],
+                freed_bytes: Some(3 * 1024 * 1024),
+                snapshot: Some("412".into()),
+                ..Default::default()
+            };
+            record_action(ALMANAC, "Updated fd", "", "", &action).unwrap();
+            let evs = recorded(0.0).unwrap();
+            assert_eq!(evs[0].action.as_ref(), Some(&action));
+            assert_eq!(evs[0].items, ["fd"]);
+            // What the event was before actions existed is unchanged.
+            assert!(evs[0].to_value(false).get("action").is_none());
+        });
+    }
+
+    #[test]
+    fn a_missing_malformed_or_empty_action_is_none() {
+        with_log(|path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let lines = [
+                r#"{"ts": 5, "title": "plain"}"#,
+                r#"{"ts": 5, "title": "a string", "action": "ran"}"#,
+                r#"{"ts": 5, "title": "wrong types", "action": {"commands": [{"argv": 1}]}}"#,
+                r#"{"ts": 5, "title": "empty", "action": {}}"#,
+                r#"{"ts": 5, "title": "deep", "action": {"commands": [[[[[[[[1]]]]]]]]}}"#,
+                r#"{"ts": 5, "title": "unknown keys", "action": {"later": true, "snapshot": "7"}}"#,
+            ];
+            std::fs::write(path, lines.join("\n") + "\n").unwrap();
+            let evs = recorded(0.0).unwrap();
+            let got: Vec<(&str, Option<&ActionLog>)> = evs
+                .iter()
+                .map(|e| (e.title.as_str(), e.action.as_ref()))
+                .collect();
+            let seven = ActionLog {
+                snapshot: Some("7".into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                got,
+                [
+                    ("plain", None),
+                    ("a string", None),
+                    ("wrong types", None),
+                    ("empty", None),
+                    ("deep", None),
+                    ("unknown keys", Some(&seven))
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn a_scheduled_run_keeps_its_kind_on_the_timeline() {
+        with_log(|_| {
+            record_checked(AUTOUPDATE, "Scheduled update: updated fd", "", "", &[]).unwrap();
+            record_checked("something else", "Shell restarted", "", "", &[]).unwrap();
+            let kinds: Vec<String> = recorded(0.0).unwrap().into_iter().map(|e| e.kind).collect();
+            assert_eq!(kinds, [AUTOUPDATE, ALMANAC]);
+        });
+    }
+
+    #[test]
+    fn details_read_as_plain_text_for_a_bug_report() {
+        let mut e = Event::new(
+            1_792_400_000.0,
+            ALMANAC,
+            "Package cache: resolved",
+            "Trim to 2 versions",
+            vec![],
+            "",
+        );
+        e.action = Some(ActionLog {
+            commands: vec![
+                CommandRun {
+                    argv: "/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2".into(),
+                    exit: Some(0),
+                    secs: Some(3.0),
+                },
+                CommandRun {
+                    argv: "yay -Sc".into(),
+                    exit: Some(1),
+                    secs: None,
+                },
+                CommandRun {
+                    argv: "omarchy update".into(),
+                    exit: None,
+                    secs: None,
+                },
+            ],
+            changes: vec![
+                Change {
+                    name: "fd".into(),
+                    from: "1".into(),
+                    to: "2".into(),
+                },
+                Change {
+                    name: "gone".into(),
+                    from: "3".into(),
+                    to: String::new(),
+                },
+            ],
+            checks: vec![CheckResult {
+                name: "Package cache".into(),
+                ok: Some(true),
+                detail: String::new(),
+            }],
+            repairs: vec![CheckResult {
+                name: "Keyring".into(),
+                ok: None,
+                detail: "no answer".into(),
+            }],
+            freed_bytes: Some(1_288_490_189),
+            snapshot: Some("412".into()),
+            duration_secs: Some(125.0),
+        });
+        let text = details_text(&e);
+        let expected_tail = "  Package cache: resolved\nTrim to 2 versions\n\n\
+            Commands\n  ✓ /usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2  (exit 0, 3 s)\n  \
+            ✗ yay -Sc  (exit 1)\n  ? omarchy update  (exit status unknown)\n\n\
+            Changes\n  fd  1 → 2\n  gone  3 → removed\n\n\
+            Checks\n  ✓ Package cache — passed\n\n\
+            Repairs\n  ? Keyring — could not tell: no answer\n\n\
+            Snapshot 412 taken first · 1.2 GB freed · took 2 min 5 s";
+        assert!(text.ends_with(expected_tail), "{text}");
+        // An event without an action lists its items.
+        let plain = Event::new(
+            1_792_400_000.0,
+            PACKAGES,
+            "Updated a",
+            "",
+            vec!["upgraded a (1 -> 2)".into()],
+            "",
+        );
+        assert!(details_text(&plain).ends_with("Updated a\n\nItems\n  upgraded a (1 -> 2)"));
+    }
+
+    #[test]
+    fn durations_and_sizes_read_plainly() {
+        assert_eq!(duration_text(0.42), "0.4 s");
+        assert_eq!(duration_text(3.0), "3 s");
+        assert_eq!(duration_text(45.4), "45 s");
+        assert_eq!(duration_text(120.0), "2 min");
+        assert_eq!(duration_text(125.0), "2 min 5 s");
+        assert_eq!(duration_text(3600.0), "1 h");
+        assert_eq!(duration_text(3840.0), "1 h 4 min");
+        assert_eq!(freed_text(0), "no space freed");
+        assert_eq!(freed_text(-5), "no space freed");
+        assert_eq!(freed_text(3 * 1024 * 1024), "3 MB freed");
+        assert_eq!(
+            ActionLog {
+                freed_bytes: Some(0),
+                ..Default::default()
+            }
+            .facts(),
+            "No space freed"
+        );
+        assert_eq!(ActionLog::default().facts(), "");
+        assert_eq!(
+            command_line(&["echo".into(), "two words".into()]),
+            "echo 'two words'"
+        );
     }
 }

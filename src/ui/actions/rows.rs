@@ -4,10 +4,10 @@
 use adw::prelude::*;
 use serde_json::Value;
 
-use crate::{ghcache, selfupdate, tasks, theming};
 use crate::i18n::tr;
 use crate::tasks::Step;
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
+use crate::{ghcache, selfupdate, tasks, theming};
 
 use super::pyisms::{not_a_path, py_str, py_type, strs, truthy};
 use super::raised;
@@ -22,7 +22,10 @@ pub fn releases_url(url: &str) -> Option<String> {
     };
     let parts: Vec<&str> = tail.trim_matches('/').split('/').collect();
     if parts.len() >= 2 {
-        Some(format!("https://github.com/{}/{}/releases", parts[0], parts[1]))
+        Some(format!(
+            "https://github.com/{}/{}/releases",
+            parts[0], parts[1]
+        ))
     } else if !url.is_empty() {
         Some(url.to_string())
     } else {
@@ -45,7 +48,10 @@ impl Win {
     pub(super) fn open_url_value(&self, url: &Value) {
         match url {
             Value::String(s) => self.open_url(s),
-            other => raised(&format!("TypeError: Must be string, not {}", py_type(other))),
+            other => raised(&format!(
+                "TypeError: Must be string, not {}",
+                py_type(other)
+            )),
         }
     }
 
@@ -59,7 +65,10 @@ impl Win {
             None => String::new(),
             Some(Value::String(s)) => s.clone(),
             Some(other) => {
-                raised(&format!("AttributeError: '{}' object has no attribute 'split'", py_type(other)));
+                raised(&format!(
+                    "AttributeError: '{}' object has no attribute 'split'",
+                    py_type(other)
+                ));
                 return;
             }
         };
@@ -74,6 +83,9 @@ impl Win {
     /// The check is a `git fetch` (up to 90 s): it runs off the main thread,
     /// and the question is asked when it answers.
     pub fn on_self_update(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         spawn_bg(
             || selfupdate::try_check(true),
@@ -92,7 +104,11 @@ impl Win {
         if selfupdate::offers_download(&info) {
             // A newer release than a package nothing updates: pacman
             // installs it, not Almanac, but the download is one click away.
-            let toast = adw::Toast::builder().title(info.note.as_str()).use_markup(false).timeout(0).build();
+            let toast = adw::Toast::builder()
+                .title(info.note.as_str())
+                .use_markup(false)
+                .timeout(0)
+                .build();
             toast.set_button_label(Some(&tr("Open the release")));
             let w = self.downgrade();
             toast.connect_button_clicked(move |_| {
@@ -104,7 +120,11 @@ impl Win {
             return;
         }
         if !info.can_update {
-            let note = if info.note.is_empty() { "Almanac is up to date".to_string() } else { info.note };
+            let note = if info.note.is_empty() {
+                "Almanac is up to date".to_string()
+            } else {
+                info.note
+            };
             self.say(&note, 8);
             return;
         }
@@ -132,8 +152,7 @@ impl Win {
                     .map(|(label, argv)| Step::argv(label, argv))
                     .collect();
                 let w2 = win.downgrade();
-                tasks::run(
-                    &win.window,
+                win.run_task(
                     "Updating Almanac",
                     steps,
                     Some(Box::new(move |ok| {
@@ -188,7 +207,13 @@ impl Win {
         );
     }
 
-    fn show_about(&self, info: selfupdate::Info, theme: &str, github: &str, notes: Option<(String, String)>) {
+    fn show_about(
+        &self,
+        info: selfupdate::Info,
+        theme: &str,
+        github: &str,
+        notes: Option<(String, String)>,
+    ) {
         let about = adw::AboutDialog::builder()
             .application_name("Almanac")
             .application_icon("io.github.twodxme.Almanac")
@@ -212,10 +237,7 @@ impl Win {
         );
         about.set_debug_info(&format!(
             "Installed as: {}\n{}\n{}\n{}",
-            info.kind,
-            info.note,
-            theme,
-            github
+            info.kind, info.note, theme, github
         ));
         if let Some((version, markup)) = notes {
             about.set_release_notes_version(&version);
@@ -228,7 +250,7 @@ impl Win {
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             if let Some(repo) = app.extra.get("repo").filter(|v| truthy(v)) {
-                self.open_url(&format!("file://{}", py_str(repo)));
+                self.open_path(std::path::Path::new(&py_str(repo)));
             }
         }
     }
@@ -236,23 +258,35 @@ impl Win {
     /// Show what is uncommitted, read-only, before offering to move it.
     pub fn row_changes(&self, name: &str) {
         let app = self.shared.borrow().row_actions.get(name).cloned();
-        let repo = match app.as_ref().and_then(|a| a.extra.get("repo")).filter(|v| truthy(v)) {
+        let repo = match app
+            .as_ref()
+            .and_then(|a| a.extra.get("repo"))
+            .filter(|v| truthy(v))
+        {
             None => return,
             Some(Value::String(r)) => r.clone(),
             Some(other) => return raised(&not_a_path(other)),
         };
-        tasks::run(
-            &self.window,
+        self.run_task(
             &format!("Local changes in {name}"),
             vec![
-                Step::argv("Working tree", strs(&["git", "-C", &repo, "status", "--short"])),
-                Step::argv("Diff summary", strs(&["git", "-C", &repo, "diff", "--stat"])),
+                Step::argv(
+                    "Working tree",
+                    strs(&["git", "-C", &repo, "status", "--short"]),
+                ),
+                Step::argv(
+                    "Diff summary",
+                    strs(&["git", "-C", &repo, "diff", "--stat"]),
+                ),
             ],
             None,
         );
     }
 
     pub fn row_pull(&self, name: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             self.on_git_pull(&app);
@@ -261,6 +295,9 @@ impl Win {
 
     /// Update a checkout that has local edits -- see on_git_pull.
     pub fn row_stash(&self, name: &str) {
+        if self.demo_refuses() {
+            return;
+        }
         let app = self.shared.borrow().row_actions.get(name).cloned();
         if let Some(app) = app {
             self.on_git_pull(&app);
@@ -274,8 +311,10 @@ mod tests {
 
     #[test]
     fn releases_url_from_github() {
-        assert_eq!(releases_url("https://github.com/a/b/tree/main").as_deref(),
-                   Some("https://github.com/a/b/releases"));
+        assert_eq!(
+            releases_url("https://github.com/a/b/tree/main").as_deref(),
+            Some("https://github.com/a/b/releases")
+        );
         assert_eq!(releases_url("example.com").as_deref(), Some("example.com"));
         assert_eq!(releases_url(""), None);
     }

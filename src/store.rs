@@ -102,8 +102,14 @@ pub struct Trust {
 }
 
 pub const TRUST_ORDER: &[&str] = &[
-    "official", "first-party", "reviewed", "verified",
-    "reviewed-stale", "stale", "unverified", "unreachable",
+    "official",
+    "first-party",
+    "reviewed",
+    "verified",
+    "reviewed-stale",
+    "stale",
+    "unverified",
+    "unreachable",
 ];
 
 // `remote = "Self"` keeps the derived (typed) impls as inherent functions,
@@ -188,7 +194,8 @@ impl Serialize for Plugin {
         if self.raw.is_empty() {
             return Plugin::serialize(self, s);
         }
-        let mut v = Plugin::serialize(self, serde_json::value::Serializer).map_err(serde::ser::Error::custom)?;
+        let mut v = Plugin::serialize(self, serde_json::value::Serializer)
+            .map_err(serde::ser::Error::custom)?;
         if let Value::Object(m) = &mut v {
             for (k, x) in &self.raw {
                 if let Some(slot) = m.get_mut(k) {
@@ -288,7 +295,11 @@ fn fit(default: &Value, v: &Value) -> Option<Value> {
         },
         Value::Array(_) => match v {
             Value::Array(a) if a.iter().all(Value::is_string) => None,
-            other => Some(json!(py_iter(other).unwrap_or_default().iter().map(py_str).collect::<Vec<_>>())),
+            other => Some(json!(py_iter(other)
+                .unwrap_or_default()
+                .iter()
+                .map(py_str)
+                .collect::<Vec<_>>())),
         },
         Value::Number(n) if n.is_f64() => match v {
             Value::Number(_) => None,
@@ -301,7 +312,11 @@ fn fit(default: &Value, v: &Value) -> Option<Value> {
                 Some(_) => i64::MAX,
                 None => {
                     let f = n.as_f64().unwrap_or(0.0);
-                    if f.is_finite() { f as i64 } else { 0 }
+                    if f.is_finite() {
+                        f as i64
+                    } else {
+                        0
+                    }
                 }
             })),
             Value::Bool(b) => Some(json!(*b as i64)),
@@ -321,10 +336,15 @@ impl Plugin {
     pub fn from_row(row: &Row) -> Result<Plugin, String> {
         for k in row.keys() {
             if !FIELDS.iter().any(|f| f == k) {
-                return Err(format!("TypeError: Plugin.__init__() got an unexpected keyword argument '{k}'"));
+                return Err(format!(
+                    "TypeError: Plugin.__init__() got an unexpected keyword argument '{k}'"
+                ));
             }
         }
-        let missing: Vec<&str> = ["id", "name"].into_iter().filter(|k| !row.contains_key(*k)).collect();
+        let missing: Vec<&str> = ["id", "name"]
+            .into_iter()
+            .filter(|k| !row.contains_key(*k))
+            .collect();
         if !missing.is_empty() {
             let names: Vec<String> = missing.iter().map(|k| format!("'{k}'")).collect();
             return Err(format!(
@@ -337,13 +357,49 @@ impl Plugin {
         Ok(Plugin::lenient(row))
     }
 
+    /// `from_row`, taking the row: its values move into the plugin rather
+    /// than being copied (what loading 6,000 of them costs).
+    pub fn from_row_owned(row: Row) -> Result<Plugin, String> {
+        for k in row.keys() {
+            if !FIELDS.iter().any(|f| f == k) {
+                return Err(format!(
+                    "TypeError: Plugin.__init__() got an unexpected keyword argument '{k}'"
+                ));
+            }
+        }
+        if !(row.contains_key("id") && row.contains_key("name")) {
+            return Plugin::from_row(&row);
+        }
+        let mut typed = Row::new();
+        let mut raw = BTreeMap::new();
+        for (k, v) in row {
+            let Some(default) = DEFAULTS.get(&k) else {
+                continue;
+            };
+            match fit(default, &v) {
+                None => {
+                    typed.insert(k, v);
+                }
+                Some(near) => {
+                    typed.insert(k.clone(), near);
+                    raw.insert(k, v);
+                }
+            }
+        }
+        let mut p = Plugin::deserialize(Value::Object(typed)).unwrap_or_default();
+        p.raw = raw;
+        Ok(p)
+    }
+
     /// The fields of `row` the dataclass has, whatever their types (see
     /// `raw`); other keys are ignored.
     fn lenient(row: &Row) -> Plugin {
         let mut typed = Row::new();
         let mut raw = BTreeMap::new();
         for (k, v) in row {
-            let Some(default) = DEFAULTS.get(k) else { continue };
+            let Some(default) = DEFAULTS.get(k) else {
+                continue;
+            };
             match fit(default, v) {
                 None => {
                     typed.insert(k.clone(), v.clone());
@@ -366,11 +422,15 @@ impl Plugin {
 
     // ---- marketplace ----
     pub fn market_name(&self) -> String {
-        market(&self.market).map(|m| m.name.clone()).unwrap_or_else(|| self.market.clone())
+        market(&self.market)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| self.market.clone())
     }
 
     pub fn page(&self) -> String {
-        market(&self.market).map(|m| m.listing_url(self)).unwrap_or_else(|| self.repo.clone())
+        market(&self.market)
+            .map(|m| m.listing_url(self))
+            .unwrap_or_else(|| self.repo.clone())
     }
 
     pub fn asset(&self, rel: &str) -> String {
@@ -404,17 +464,29 @@ impl Plugin {
     /// says where the code comes from.
     pub fn owner(&self) -> String {
         let parts = self.repo_parts();
-        if parts.len() > 2 { parts[2].to_string() } else { String::new() }
+        if parts.len() > 2 {
+            parts[2].to_string()
+        } else {
+            String::new()
+        }
     }
 
     pub fn host(&self) -> String {
         let parts = self.repo_parts();
-        if parts.len() > 1 { parts[1].to_string() } else { String::new() }
+        if parts.len() > 1 {
+            parts[1].to_string()
+        } else {
+            String::new()
+        }
     }
 
     pub fn repo_name(&self) -> String {
         let parts = self.repo_parts();
-        if parts.len() > 3 { parts[2..4].join("/") } else { String::new() }
+        if parts.len() > 3 {
+            parts[2..4].join("/")
+        } else {
+            String::new()
+        }
     }
 
     /// One line naming where the code comes from, for the card.
@@ -425,7 +497,11 @@ impl Plugin {
         let repo_name = self.repo_name();
         if !repo_name.is_empty() {
             let host = self.host();
-            return format!("{}/{}", if host.is_empty() { "github.com" } else { &host }, repo_name);
+            return format!(
+                "{}/{}",
+                if host.is_empty() { "github.com" } else { &host },
+                repo_name
+            );
         }
         "unknown source".into()
     }
@@ -437,7 +513,8 @@ impl Plugin {
         if !self.raw.is_empty() {
             // On the values as the Python holds them (truthiness, `==`).
             return truthy(Some(&self.pv("installable")))
-                && (truthy(Some(&self.pv("install_cmd"))) || self.pv("install_kind").as_str() == Some("appimage"));
+                && (truthy(Some(&self.pv("install_cmd")))
+                    || self.pv("install_kind").as_str() == Some("appimage"));
         }
         self.installable && (!self.install_cmd.is_empty() || self.install_kind == "appimage")
     }
@@ -463,8 +540,15 @@ impl Plugin {
         };
 
         if self.built_in {
-            return t("official", "Official", "pill-accent",
-                     format!("Ships with Omarchy itself, listed by {}", self.market_name()));
+            return t(
+                "official",
+                "Official",
+                "pill-accent",
+                format!(
+                    "Ships with Omarchy itself, listed by {}",
+                    self.market_name()
+                ),
+            );
         }
         let m = market(&self.market);
         if let Some(m) = m.filter(|m| {
@@ -478,52 +562,114 @@ impl Plugin {
             // repository is exactly the case this must not wave through.
             // On github.com: the same account name on another host (or a
             // look-alike one) can belong to anybody.
-            let rel = if self.version.is_empty() { String::new() } else { format!(", release {}", self.version) };
-            return t("first-party", "First-party", "pill-accent",
-                     format!("Published by {} itself, from github.com/{}{rel}", m.name, self.owner()));
+            let rel = if self.version.is_empty() {
+                String::new()
+            } else {
+                format!(", release {}", self.version)
+            };
+            return t(
+                "first-party",
+                "First-party",
+                "pill-accent",
+                format!(
+                    "Published by {} itself, from github.com/{}{rel}",
+                    m.name,
+                    self.owner()
+                ),
+            );
         }
         if self.upstream_status == "failed" || self.upstream_status == "unreachable" {
-            return t("unreachable", "Source unreachable", "pill-warn",
-                     format!("{} could not reach the repository on its last check ({})",
-                             self.market_name(), pfx(&self.upstream_checked_at, 10)));
+            return t(
+                "unreachable",
+                "Source unreachable",
+                "pill-warn",
+                format!(
+                    "{} could not reach the repository on its last check ({})",
+                    self.market_name(),
+                    pfx(&self.upstream_checked_at, 10)
+                ),
+            );
         }
         if self.review_method == "maintainer-reviewed" {
-            let who = if self.reviewed_by.is_empty() { String::new() } else { format!(" by {}", self.reviewed_by) };
-            let when = if self.reviewed_at.is_empty() { String::new() } else { format!(" on {}", pfx(&self.reviewed_at, 10)) };
+            let who = if self.reviewed_by.is_empty() {
+                String::new()
+            } else {
+                format!(" by {}", self.reviewed_by)
+            };
+            let when = if self.reviewed_at.is_empty() {
+                String::new()
+            } else {
+                format!(" on {}", pfx(&self.reviewed_at, 10))
+            };
             let base = format!("Source reviewed{who}{when} for {}", self.market_name());
             if self.drifted() {
-                return t("reviewed-stale", "Changed since review", "pill-warn",
-                         base + ", but upstream has committed since then");
+                return t(
+                    "reviewed-stale",
+                    "Changed since review",
+                    "pill-warn",
+                    base + ", but upstream has committed since then",
+                );
             }
             return t("reviewed", "Reviewed", "pill-ok", base);
         }
         if self.coverage == "snapshot-verified" && !self.drifted() {
-            return t("verified", "Verified", "pill-ok",
-                     format!("{} automated checks passed against commit {}",
-                             self.market_name(), pfx(&self.validated_commit, 7)));
+            return t(
+                "verified",
+                "Verified",
+                "pill-ok",
+                format!(
+                    "{} automated checks passed against commit {}",
+                    self.market_name(),
+                    pfx(&self.validated_commit, 7)
+                ),
+            );
         }
         if self.coverage == "snapshot-verified" || self.coverage == "update-unverified" {
-            return t("stale", "Changed since check", "pill-warn",
-                     format!("Validated at {}, but upstream is now at {} -- the newer \
+            return t(
+                "stale",
+                "Changed since check",
+                "pill-warn",
+                format!(
+                    "Validated at {}, but upstream is now at {} -- the newer \
                               commits have not been checked",
-                             pfx(&self.validated_commit, 7), pfx(&self.upstream_commit, 7)));
+                    pfx(&self.validated_commit, 7),
+                    pfx(&self.upstream_commit, 7)
+                ),
+            );
         }
-        t("unverified", "Unverified", "pill-quiet",
-          format!("{} records no automated or human review", self.market_name()))
+        t(
+            "unverified",
+            "Unverified",
+            "pill-quiet",
+            format!(
+                "{} records no automated or human review",
+                self.market_name()
+            ),
+        )
     }
 
     pub fn haystack(&self) -> String {
         [
-            self.name.as_str(), &self.id, &self.description, &self.author,
-            &self.category, &self.kind, &self.repo_name(),
-            &self.market_name(), &self.tags.join(" "),
+            self.name.as_str(),
+            &self.id,
+            &self.description,
+            &self.author,
+            &self.category,
+            &self.kind,
+            &self.repo_name(),
+            &self.market_name(),
+            &self.tags.join(" "),
         ]
         .join(" ")
         .to_lowercase()
     }
 
     pub fn subtitle(&self) -> String {
-        let mut bits: Vec<&str> = if self.author.is_empty() { vec![] } else { vec![&self.author] };
+        let mut bits: Vec<&str> = if self.author.is_empty() {
+            vec![]
+        } else {
+            vec![&self.author]
+        };
         if !self.kind.is_empty() {
             bits.push(&self.kind);
         }
@@ -607,7 +753,11 @@ impl Plugin {
     pub fn try_page(&self) -> Result<Value, String> {
         Ok(match self.py_market()? {
             Some(m) if !m.listing.is_empty() => {
-                json!(format!("{}{}", m.site, m.listing.replace("{id}", &py_str(&self.pv("id")))))
+                json!(format!(
+                    "{}{}",
+                    m.site,
+                    m.listing.replace("{id}", &py_str(&self.pv("id")))
+                ))
             }
             _ => self.pv("repo"),
         })
@@ -625,22 +775,38 @@ impl Plugin {
 
     fn try_repo_parts(&self) -> Result<Vec<String>, String> {
         let repo = self.ps("repo", "split")?;
-        Ok(repo.split('/').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        Ok(repo
+            .split('/')
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     pub fn try_owner(&self) -> Result<String, String> {
         let parts = self.try_repo_parts()?;
-        Ok(if parts.len() > 2 { parts[2].clone() } else { String::new() })
+        Ok(if parts.len() > 2 {
+            parts[2].clone()
+        } else {
+            String::new()
+        })
     }
 
     pub fn try_host(&self) -> Result<String, String> {
         let parts = self.try_repo_parts()?;
-        Ok(if parts.len() > 1 { parts[1].clone() } else { String::new() })
+        Ok(if parts.len() > 1 {
+            parts[1].clone()
+        } else {
+            String::new()
+        })
     }
 
     pub fn try_repo_name(&self) -> Result<String, String> {
         let parts = self.try_repo_parts()?;
-        Ok(if parts.len() > 3 { parts[2..4].join("/") } else { String::new() })
+        Ok(if parts.len() > 3 {
+            parts[2..4].join("/")
+        } else {
+            String::new()
+        })
     }
 
     pub fn try_publisher(&self) -> Result<String, String> {
@@ -650,7 +816,11 @@ impl Plugin {
         let repo_name = self.try_repo_name()?;
         if !repo_name.is_empty() {
             let host = self.try_host()?;
-            return Ok(format!("{}/{}", if host.is_empty() { "github.com" } else { &host }, repo_name));
+            return Ok(format!(
+                "{}/{}",
+                if host.is_empty() { "github.com" } else { &host },
+                repo_name
+            ));
         }
         Ok("unknown source".into())
     }
@@ -670,8 +840,12 @@ impl Plugin {
         let cut = |field: &str, n: usize| py_slice(&self.pv(field), n).map(|v| py_str(&v));
 
         if truthy(Some(&self.pv("built_in"))) {
-            return Ok(t("official", "Official", "pill-accent",
-                        format!("Ships with Omarchy itself, listed by {}", market_name()?)));
+            return Ok(t(
+                "official",
+                "Official",
+                "pill-accent",
+                format!("Ships with Omarchy itself, listed by {}", market_name()?),
+            ));
         }
         if let Some(m) = self.py_market()? {
             if !m.first_party_owner.is_empty()
@@ -679,20 +853,43 @@ impl Plugin {
                 && self.try_host()?.eq_ignore_ascii_case("github.com")
             {
                 let version = self.pv("version");
-                let rel = if truthy(Some(&version)) { format!(", release {}", py_str(&version)) } else { String::new() };
-                return Ok(t("first-party", "First-party", "pill-accent",
-                            format!("Published by {} itself, from github.com/{}{rel}", m.name, self.try_owner()?)));
+                let rel = if truthy(Some(&version)) {
+                    format!(", release {}", py_str(&version))
+                } else {
+                    String::new()
+                };
+                return Ok(t(
+                    "first-party",
+                    "First-party",
+                    "pill-accent",
+                    format!(
+                        "Published by {} itself, from github.com/{}{rel}",
+                        m.name,
+                        self.try_owner()?
+                    ),
+                ));
             }
         }
         let status = self.pv("upstream_status");
         if matches!(status.as_str(), Some("failed" | "unreachable")) {
-            return Ok(t("unreachable", "Source unreachable", "pill-warn",
-                        format!("{} could not reach the repository on its last check ({})",
-                                market_name()?, cut("upstream_checked_at", 10)?)));
+            return Ok(t(
+                "unreachable",
+                "Source unreachable",
+                "pill-warn",
+                format!(
+                    "{} could not reach the repository on its last check ({})",
+                    market_name()?,
+                    cut("upstream_checked_at", 10)?
+                ),
+            ));
         }
         if self.pv("review_method").as_str() == Some("maintainer-reviewed") {
             let by = self.pv("reviewed_by");
-            let who = if truthy(Some(&by)) { format!(" by {}", py_str(&by)) } else { String::new() };
+            let who = if truthy(Some(&by)) {
+                format!(" by {}", py_str(&by))
+            } else {
+                String::new()
+            };
             let when = if truthy(Some(&self.pv("reviewed_at"))) {
                 format!(" on {}", cut("reviewed_at", 10)?)
             } else {
@@ -700,25 +897,50 @@ impl Plugin {
             };
             let base = format!("Source reviewed{who}{when} for {}", market_name()?);
             if self.drifted() {
-                return Ok(t("reviewed-stale", "Changed since review", "pill-warn",
-                            base + ", but upstream has committed since then"));
+                return Ok(t(
+                    "reviewed-stale",
+                    "Changed since review",
+                    "pill-warn",
+                    base + ", but upstream has committed since then",
+                ));
             }
             return Ok(t("reviewed", "Reviewed", "pill-ok", base));
         }
         let coverage = self.pv("coverage");
         if coverage.as_str() == Some("snapshot-verified") && !self.drifted() {
-            return Ok(t("verified", "Verified", "pill-ok",
-                        format!("{} automated checks passed against commit {}",
-                                market_name()?, cut("validated_commit", 7)?)));
+            return Ok(t(
+                "verified",
+                "Verified",
+                "pill-ok",
+                format!(
+                    "{} automated checks passed against commit {}",
+                    market_name()?,
+                    cut("validated_commit", 7)?
+                ),
+            ));
         }
-        if matches!(coverage.as_str(), Some("snapshot-verified" | "update-unverified")) {
-            return Ok(t("stale", "Changed since check", "pill-warn",
-                        format!("Validated at {}, but upstream is now at {} -- the newer \
+        if matches!(
+            coverage.as_str(),
+            Some("snapshot-verified" | "update-unverified")
+        ) {
+            return Ok(t(
+                "stale",
+                "Changed since check",
+                "pill-warn",
+                format!(
+                    "Validated at {}, but upstream is now at {} -- the newer \
                                  commits have not been checked",
-                                cut("validated_commit", 7)?, cut("upstream_commit", 7)?)));
+                    cut("validated_commit", 7)?,
+                    cut("upstream_commit", 7)?
+                ),
+            ));
         }
-        Ok(t("unverified", "Unverified", "pill-quiet",
-             format!("{} records no automated or human review", market_name()?)))
+        Ok(t(
+            "unverified",
+            "Unverified",
+            "pill-quiet",
+            format!("{} records no automated or human review", market_name()?),
+        ))
     }
 
     /// What a bulk plugin update weighs about this listing: its trust key,
@@ -754,7 +976,11 @@ impl Plugin {
 
     pub fn try_subtitle(&self) -> Result<String, String> {
         let author = self.pv("author");
-        let mut bits = if truthy(Some(&author)) { vec![author] } else { vec![] };
+        let mut bits = if truthy(Some(&author)) {
+            vec![author]
+        } else {
+            vec![]
+        };
         let kind = self.pv("kind");
         if truthy(Some(&kind)) {
             bits.push(kind);
@@ -771,9 +997,15 @@ impl Plugin {
                 (None, Some(u)) => SortKey::I(-i128::from(u)),
                 _ => SortKey::F(-n.as_f64().unwrap_or(0.0)),
             }),
-            other => Err(format!("TypeError: bad operand type for unary -: '{}'", py_type(&other))),
+            other => Err(format!(
+                "TypeError: bad operand type for unary -: '{}'",
+                py_type(&other)
+            )),
         };
-        let lower = |field: &str| self.ps(field, "lower").map(|s| SortKey::S(s.to_lowercase()));
+        let lower = |field: &str| {
+            self.ps(field, "lower")
+                .map(|s| SortKey::S(s.to_lowercase()))
+        };
         let ts = |field: &str| {
             let v = self.pv(field);
             if !truthy(Some(&v)) {
@@ -852,7 +1084,10 @@ fn cmp_keys(a: &[SortKey], b: &[SortKey]) -> Ordering {
 /// `sorted(items, key=_SORT_FN[key])`, as indices into `items`: every key is
 /// built first, so the first one that raises is the error.
 fn try_sorted(items: &[&Plugin], key: &str) -> Result<Vec<usize>, String> {
-    let keys = items.iter().map(|p| p.try_sort_key(key)).collect::<Result<Vec<_>, _>>()?;
+    let keys = items
+        .iter()
+        .map(|p| p.try_sort_key(key))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut idx: Vec<usize> = (0..items.len()).collect();
     idx.sort_by(|a, b| cmp_keys(&keys[*a], &keys[*b]));
     Ok(idx)
@@ -870,7 +1105,10 @@ fn py_join(sep: &str, items: &[Value]) -> Result<String, String> {
         match v {
             Value::String(s) => out.push(s),
             other => {
-                return Err(format!("TypeError: sequence item {i}: expected str instance, {} found", py_type(other)));
+                return Err(format!(
+                    "TypeError: sequence item {i}: expected str instance, {} found",
+                    py_type(other)
+                ));
             }
         }
     }
@@ -880,7 +1118,9 @@ fn py_join(sep: &str, items: &[Value]) -> Result<String, String> {
 /// `a == b` on JSON values, as Python compares them (`1 == 1.0 == True`).
 fn py_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q)),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| py_eq(p, q))
+        }
         (Value::Object(x), Value::Object(y)) => {
             x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| py_eq(v, w)))
         }
@@ -923,7 +1163,11 @@ fn or_(e: &Row, key: &str, default: Value) -> Value {
 
 /// `a or b` on values.
 fn or_v(a: Value, b: Value) -> Value {
-    if truthy(Some(&a)) { a } else { b }
+    if truthy(Some(&a)) {
+        a
+    } else {
+        b
+    }
 }
 
 /// `str(v)`.
@@ -946,7 +1190,10 @@ fn py_repr(v: &Value) -> String {
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!(
             "{{{}}}",
-            o.iter().map(|(k, x)| format!("{}: {}", py_repr_str(k), py_repr(x))).collect::<Vec<_>>().join(", ")
+            o.iter()
+                .map(|(k, x)| format!("{}: {}", py_repr_str(k), py_repr(x)))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         other => py_str(other),
     }
@@ -980,40 +1227,141 @@ fn py_strip(s: &str) -> &str {
 /// ligatures (`ß` -> `Ss`, `ﬁ` -> `Fi`), Georgian and the Greek letters with
 /// a subscript iota. Sorted by character.
 const TITLECASE: &[(char, &str)] = &[
-    ('\u{DF}', "\u{53}\u{73}"), ('\u{1C4}', "\u{1C5}"), ('\u{1C5}', "\u{1C5}"), ('\u{1C6}', "\u{1C5}"),
-    ('\u{1C7}', "\u{1C8}"), ('\u{1C8}', "\u{1C8}"), ('\u{1C9}', "\u{1C8}"), ('\u{1CA}', "\u{1CB}"),
-    ('\u{1CB}', "\u{1CB}"), ('\u{1CC}', "\u{1CB}"), ('\u{1F1}', "\u{1F2}"), ('\u{1F2}', "\u{1F2}"),
-    ('\u{1F3}', "\u{1F2}"), ('\u{587}', "\u{535}\u{582}"), ('\u{10D0}', "\u{10D0}"), ('\u{10D1}', "\u{10D1}"),
-    ('\u{10D2}', "\u{10D2}"), ('\u{10D3}', "\u{10D3}"), ('\u{10D4}', "\u{10D4}"), ('\u{10D5}', "\u{10D5}"),
-    ('\u{10D6}', "\u{10D6}"), ('\u{10D7}', "\u{10D7}"), ('\u{10D8}', "\u{10D8}"), ('\u{10D9}', "\u{10D9}"),
-    ('\u{10DA}', "\u{10DA}"), ('\u{10DB}', "\u{10DB}"), ('\u{10DC}', "\u{10DC}"), ('\u{10DD}', "\u{10DD}"),
-    ('\u{10DE}', "\u{10DE}"), ('\u{10DF}', "\u{10DF}"), ('\u{10E0}', "\u{10E0}"), ('\u{10E1}', "\u{10E1}"),
-    ('\u{10E2}', "\u{10E2}"), ('\u{10E3}', "\u{10E3}"), ('\u{10E4}', "\u{10E4}"), ('\u{10E5}', "\u{10E5}"),
-    ('\u{10E6}', "\u{10E6}"), ('\u{10E7}', "\u{10E7}"), ('\u{10E8}', "\u{10E8}"), ('\u{10E9}', "\u{10E9}"),
-    ('\u{10EA}', "\u{10EA}"), ('\u{10EB}', "\u{10EB}"), ('\u{10EC}', "\u{10EC}"), ('\u{10ED}', "\u{10ED}"),
-    ('\u{10EE}', "\u{10EE}"), ('\u{10EF}', "\u{10EF}"), ('\u{10F0}', "\u{10F0}"), ('\u{10F1}', "\u{10F1}"),
-    ('\u{10F2}', "\u{10F2}"), ('\u{10F3}', "\u{10F3}"), ('\u{10F4}', "\u{10F4}"), ('\u{10F5}', "\u{10F5}"),
-    ('\u{10F6}', "\u{10F6}"), ('\u{10F7}', "\u{10F7}"), ('\u{10F8}', "\u{10F8}"), ('\u{10F9}', "\u{10F9}"),
-    ('\u{10FA}', "\u{10FA}"), ('\u{10FD}', "\u{10FD}"), ('\u{10FE}', "\u{10FE}"), ('\u{10FF}', "\u{10FF}"),
-    ('\u{1F80}', "\u{1F88}"), ('\u{1F81}', "\u{1F89}"), ('\u{1F82}', "\u{1F8A}"), ('\u{1F83}', "\u{1F8B}"),
-    ('\u{1F84}', "\u{1F8C}"), ('\u{1F85}', "\u{1F8D}"), ('\u{1F86}', "\u{1F8E}"), ('\u{1F87}', "\u{1F8F}"),
-    ('\u{1F88}', "\u{1F88}"), ('\u{1F89}', "\u{1F89}"), ('\u{1F8A}', "\u{1F8A}"), ('\u{1F8B}', "\u{1F8B}"),
-    ('\u{1F8C}', "\u{1F8C}"), ('\u{1F8D}', "\u{1F8D}"), ('\u{1F8E}', "\u{1F8E}"), ('\u{1F8F}', "\u{1F8F}"),
-    ('\u{1F90}', "\u{1F98}"), ('\u{1F91}', "\u{1F99}"), ('\u{1F92}', "\u{1F9A}"), ('\u{1F93}', "\u{1F9B}"),
-    ('\u{1F94}', "\u{1F9C}"), ('\u{1F95}', "\u{1F9D}"), ('\u{1F96}', "\u{1F9E}"), ('\u{1F97}', "\u{1F9F}"),
-    ('\u{1F98}', "\u{1F98}"), ('\u{1F99}', "\u{1F99}"), ('\u{1F9A}', "\u{1F9A}"), ('\u{1F9B}', "\u{1F9B}"),
-    ('\u{1F9C}', "\u{1F9C}"), ('\u{1F9D}', "\u{1F9D}"), ('\u{1F9E}', "\u{1F9E}"), ('\u{1F9F}', "\u{1F9F}"),
-    ('\u{1FA0}', "\u{1FA8}"), ('\u{1FA1}', "\u{1FA9}"), ('\u{1FA2}', "\u{1FAA}"), ('\u{1FA3}', "\u{1FAB}"),
-    ('\u{1FA4}', "\u{1FAC}"), ('\u{1FA5}', "\u{1FAD}"), ('\u{1FA6}', "\u{1FAE}"), ('\u{1FA7}', "\u{1FAF}"),
-    ('\u{1FA8}', "\u{1FA8}"), ('\u{1FA9}', "\u{1FA9}"), ('\u{1FAA}', "\u{1FAA}"), ('\u{1FAB}', "\u{1FAB}"),
-    ('\u{1FAC}', "\u{1FAC}"), ('\u{1FAD}', "\u{1FAD}"), ('\u{1FAE}', "\u{1FAE}"), ('\u{1FAF}', "\u{1FAF}"),
-    ('\u{1FB2}', "\u{1FBA}\u{345}"), ('\u{1FB3}', "\u{1FBC}"), ('\u{1FB4}', "\u{386}\u{345}"), ('\u{1FB7}', "\u{391}\u{342}\u{345}"),
-    ('\u{1FBC}', "\u{1FBC}"), ('\u{1FC2}', "\u{1FCA}\u{345}"), ('\u{1FC3}', "\u{1FCC}"), ('\u{1FC4}', "\u{389}\u{345}"),
-    ('\u{1FC7}', "\u{397}\u{342}\u{345}"), ('\u{1FCC}', "\u{1FCC}"), ('\u{1FF2}', "\u{1FFA}\u{345}"), ('\u{1FF3}', "\u{1FFC}"),
-    ('\u{1FF4}', "\u{38F}\u{345}"), ('\u{1FF7}', "\u{3A9}\u{342}\u{345}"), ('\u{1FFC}', "\u{1FFC}"), ('\u{FB00}', "\u{46}\u{66}"),
-    ('\u{FB01}', "\u{46}\u{69}"), ('\u{FB02}', "\u{46}\u{6C}"), ('\u{FB03}', "\u{46}\u{66}\u{69}"), ('\u{FB04}', "\u{46}\u{66}\u{6C}"),
-    ('\u{FB05}', "\u{53}\u{74}"), ('\u{FB06}', "\u{53}\u{74}"), ('\u{FB13}', "\u{544}\u{576}"), ('\u{FB14}', "\u{544}\u{565}"),
-    ('\u{FB15}', "\u{544}\u{56B}"), ('\u{FB16}', "\u{54E}\u{576}"), ('\u{FB17}', "\u{544}\u{56D}"),
+    ('\u{DF}', "\u{53}\u{73}"),
+    ('\u{1C4}', "\u{1C5}"),
+    ('\u{1C5}', "\u{1C5}"),
+    ('\u{1C6}', "\u{1C5}"),
+    ('\u{1C7}', "\u{1C8}"),
+    ('\u{1C8}', "\u{1C8}"),
+    ('\u{1C9}', "\u{1C8}"),
+    ('\u{1CA}', "\u{1CB}"),
+    ('\u{1CB}', "\u{1CB}"),
+    ('\u{1CC}', "\u{1CB}"),
+    ('\u{1F1}', "\u{1F2}"),
+    ('\u{1F2}', "\u{1F2}"),
+    ('\u{1F3}', "\u{1F2}"),
+    ('\u{587}', "\u{535}\u{582}"),
+    ('\u{10D0}', "\u{10D0}"),
+    ('\u{10D1}', "\u{10D1}"),
+    ('\u{10D2}', "\u{10D2}"),
+    ('\u{10D3}', "\u{10D3}"),
+    ('\u{10D4}', "\u{10D4}"),
+    ('\u{10D5}', "\u{10D5}"),
+    ('\u{10D6}', "\u{10D6}"),
+    ('\u{10D7}', "\u{10D7}"),
+    ('\u{10D8}', "\u{10D8}"),
+    ('\u{10D9}', "\u{10D9}"),
+    ('\u{10DA}', "\u{10DA}"),
+    ('\u{10DB}', "\u{10DB}"),
+    ('\u{10DC}', "\u{10DC}"),
+    ('\u{10DD}', "\u{10DD}"),
+    ('\u{10DE}', "\u{10DE}"),
+    ('\u{10DF}', "\u{10DF}"),
+    ('\u{10E0}', "\u{10E0}"),
+    ('\u{10E1}', "\u{10E1}"),
+    ('\u{10E2}', "\u{10E2}"),
+    ('\u{10E3}', "\u{10E3}"),
+    ('\u{10E4}', "\u{10E4}"),
+    ('\u{10E5}', "\u{10E5}"),
+    ('\u{10E6}', "\u{10E6}"),
+    ('\u{10E7}', "\u{10E7}"),
+    ('\u{10E8}', "\u{10E8}"),
+    ('\u{10E9}', "\u{10E9}"),
+    ('\u{10EA}', "\u{10EA}"),
+    ('\u{10EB}', "\u{10EB}"),
+    ('\u{10EC}', "\u{10EC}"),
+    ('\u{10ED}', "\u{10ED}"),
+    ('\u{10EE}', "\u{10EE}"),
+    ('\u{10EF}', "\u{10EF}"),
+    ('\u{10F0}', "\u{10F0}"),
+    ('\u{10F1}', "\u{10F1}"),
+    ('\u{10F2}', "\u{10F2}"),
+    ('\u{10F3}', "\u{10F3}"),
+    ('\u{10F4}', "\u{10F4}"),
+    ('\u{10F5}', "\u{10F5}"),
+    ('\u{10F6}', "\u{10F6}"),
+    ('\u{10F7}', "\u{10F7}"),
+    ('\u{10F8}', "\u{10F8}"),
+    ('\u{10F9}', "\u{10F9}"),
+    ('\u{10FA}', "\u{10FA}"),
+    ('\u{10FD}', "\u{10FD}"),
+    ('\u{10FE}', "\u{10FE}"),
+    ('\u{10FF}', "\u{10FF}"),
+    ('\u{1F80}', "\u{1F88}"),
+    ('\u{1F81}', "\u{1F89}"),
+    ('\u{1F82}', "\u{1F8A}"),
+    ('\u{1F83}', "\u{1F8B}"),
+    ('\u{1F84}', "\u{1F8C}"),
+    ('\u{1F85}', "\u{1F8D}"),
+    ('\u{1F86}', "\u{1F8E}"),
+    ('\u{1F87}', "\u{1F8F}"),
+    ('\u{1F88}', "\u{1F88}"),
+    ('\u{1F89}', "\u{1F89}"),
+    ('\u{1F8A}', "\u{1F8A}"),
+    ('\u{1F8B}', "\u{1F8B}"),
+    ('\u{1F8C}', "\u{1F8C}"),
+    ('\u{1F8D}', "\u{1F8D}"),
+    ('\u{1F8E}', "\u{1F8E}"),
+    ('\u{1F8F}', "\u{1F8F}"),
+    ('\u{1F90}', "\u{1F98}"),
+    ('\u{1F91}', "\u{1F99}"),
+    ('\u{1F92}', "\u{1F9A}"),
+    ('\u{1F93}', "\u{1F9B}"),
+    ('\u{1F94}', "\u{1F9C}"),
+    ('\u{1F95}', "\u{1F9D}"),
+    ('\u{1F96}', "\u{1F9E}"),
+    ('\u{1F97}', "\u{1F9F}"),
+    ('\u{1F98}', "\u{1F98}"),
+    ('\u{1F99}', "\u{1F99}"),
+    ('\u{1F9A}', "\u{1F9A}"),
+    ('\u{1F9B}', "\u{1F9B}"),
+    ('\u{1F9C}', "\u{1F9C}"),
+    ('\u{1F9D}', "\u{1F9D}"),
+    ('\u{1F9E}', "\u{1F9E}"),
+    ('\u{1F9F}', "\u{1F9F}"),
+    ('\u{1FA0}', "\u{1FA8}"),
+    ('\u{1FA1}', "\u{1FA9}"),
+    ('\u{1FA2}', "\u{1FAA}"),
+    ('\u{1FA3}', "\u{1FAB}"),
+    ('\u{1FA4}', "\u{1FAC}"),
+    ('\u{1FA5}', "\u{1FAD}"),
+    ('\u{1FA6}', "\u{1FAE}"),
+    ('\u{1FA7}', "\u{1FAF}"),
+    ('\u{1FA8}', "\u{1FA8}"),
+    ('\u{1FA9}', "\u{1FA9}"),
+    ('\u{1FAA}', "\u{1FAA}"),
+    ('\u{1FAB}', "\u{1FAB}"),
+    ('\u{1FAC}', "\u{1FAC}"),
+    ('\u{1FAD}', "\u{1FAD}"),
+    ('\u{1FAE}', "\u{1FAE}"),
+    ('\u{1FAF}', "\u{1FAF}"),
+    ('\u{1FB2}', "\u{1FBA}\u{345}"),
+    ('\u{1FB3}', "\u{1FBC}"),
+    ('\u{1FB4}', "\u{386}\u{345}"),
+    ('\u{1FB7}', "\u{391}\u{342}\u{345}"),
+    ('\u{1FBC}', "\u{1FBC}"),
+    ('\u{1FC2}', "\u{1FCA}\u{345}"),
+    ('\u{1FC3}', "\u{1FCC}"),
+    ('\u{1FC4}', "\u{389}\u{345}"),
+    ('\u{1FC7}', "\u{397}\u{342}\u{345}"),
+    ('\u{1FCC}', "\u{1FCC}"),
+    ('\u{1FF2}', "\u{1FFA}\u{345}"),
+    ('\u{1FF3}', "\u{1FFC}"),
+    ('\u{1FF4}', "\u{38F}\u{345}"),
+    ('\u{1FF7}', "\u{3A9}\u{342}\u{345}"),
+    ('\u{1FFC}', "\u{1FFC}"),
+    ('\u{FB00}', "\u{46}\u{66}"),
+    ('\u{FB01}', "\u{46}\u{69}"),
+    ('\u{FB02}', "\u{46}\u{6C}"),
+    ('\u{FB03}', "\u{46}\u{66}\u{69}"),
+    ('\u{FB04}', "\u{46}\u{66}\u{6C}"),
+    ('\u{FB05}', "\u{53}\u{74}"),
+    ('\u{FB06}', "\u{53}\u{74}"),
+    ('\u{FB13}', "\u{544}\u{576}"),
+    ('\u{FB14}', "\u{544}\u{565}"),
+    ('\u{FB15}', "\u{544}\u{56B}"),
+    ('\u{FB16}', "\u{54E}\u{576}"),
+    ('\u{FB17}', "\u{544}\u{56D}"),
 ];
 
 /// The titlecase letters (category Lt): cased, though neither upper- nor
@@ -1081,7 +1429,9 @@ impl pyjson::Build for Loaded {
             pyjson::Num::UInt(u) => Value::from(u),
             // Not made with EXACT_INTS off: a long int is a float.
             pyjson::Num::Big(_) => Value::Null,
-            pyjson::Num::Float(f) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
+            pyjson::Num::Float(f) => {
+                serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number)
+            }
         })
     }
     fn str(s: String) -> Self {
@@ -1094,7 +1444,10 @@ impl pyjson::Build for Loaded {
         s
     }
     fn wkey(units: Vec<u32>) -> String {
-        units.into_iter().map(|u| char::from_u32(u).unwrap_or('\u{fffd}')).collect()
+        units
+            .into_iter()
+            .map(|u| char::from_u32(u).unwrap_or('\u{fffd}'))
+            .collect()
     }
     fn list(items: Vec<Self>) -> Self {
         Loaded(Value::Array(items.into_iter().map(|x| x.0).collect()))
@@ -1114,8 +1467,18 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut it = s.char_indices().peekable();
     while let Some((i, c)) = it.next() {
-        let brk = matches!(c, '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}'
-                              | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let brk = matches!(
+            c,
+            '\n' | '\r'
+                | '\u{0b}'
+                | '\u{0c}'
+                | '\u{1c}'
+                | '\u{1d}'
+                | '\u{1e}'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        );
         if brk {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
@@ -1144,7 +1507,11 @@ fn int_value(n: &num_bigint::BigInt) -> Value {
         return Value::from(u);
     }
     let f: f64 = n.to_string().parse().unwrap_or(0.0);
-    Value::from(if f.is_finite() { f } else { f64::MAX.copysign(f) })
+    Value::from(if f.is_finite() {
+        f
+    } else {
+        f64::MAX.copysign(f)
+    })
 }
 
 /// `int(v)` for a JSON value: Python's `int()` of a bool, number or string,
@@ -1209,7 +1576,11 @@ fn py_printable(c: char) -> bool {
 
 /// `repr(s)` for a str.
 fn py_repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -1253,14 +1624,22 @@ pub fn shlex_quote(s: &str) -> String {
 
 /// `e.get(...)` on something that is not a dict raises AttributeError.
 fn as_dict(e: &Value) -> Result<&Row, String> {
-    e.as_object()
-        .ok_or_else(|| format!("AttributeError: '{}' object has no attribute 'get'", py_type(e)))
+    e.as_object().ok_or_else(|| {
+        format!(
+            "AttributeError: '{}' object has no attribute 'get'",
+            py_type(e)
+        )
+    })
 }
 
 /// `v.lower()` / `v.lstrip()` ... on a value that must be a str.
 fn as_str<'a>(v: &'a Value, attr: &str) -> Result<&'a str, String> {
-    v.as_str()
-        .ok_or_else(|| format!("AttributeError: '{}' object has no attribute '{attr}'", py_type(v)))
+    v.as_str().ok_or_else(|| {
+        format!(
+            "AttributeError: '{}' object has no attribute '{attr}'",
+            py_type(v)
+        )
+    })
 }
 
 /// The identity of a JSON value as a set element or dict key: equal values
@@ -1291,7 +1670,10 @@ fn py_slice(v: &Value, n: usize) -> Result<Value, String> {
         Value::String(s) => Ok(json!(pfx(s, n))),
         Value::Array(a) => Ok(Value::Array(a.iter().take(n).cloned().collect())),
         Value::Object(_) => Err(format!("KeyError: slice(None, {n}, None)")),
-        other => Err(format!("TypeError: '{}' object is not subscriptable", py_type(other))),
+        other => Err(format!(
+            "TypeError: '{}' object is not subscriptable",
+            py_type(other)
+        )),
     }
 }
 
@@ -1302,7 +1684,10 @@ fn py_iter(v: &Value) -> Result<Vec<Value>, String> {
         Value::Array(a) => Ok(a.clone()),
         Value::Object(o) => Ok(o.keys().map(|k| Value::String(k.clone())).collect()),
         Value::String(s) => Ok(s.chars().map(|c| Value::String(c.to_string())).collect()),
-        other => Err(format!("TypeError: '{}' object is not iterable", py_type(other))),
+        other => Err(format!(
+            "TypeError: '{}' object is not iterable",
+            py_type(other)
+        )),
     }
 }
 
@@ -1346,8 +1731,12 @@ pub fn _needs_setup(e: &Value) -> Result<bool, String> {
 /// kept is written back out from its words, so what runs is exactly what
 /// was checked here, however the original was quoted.
 fn _listed_command(cmd: Option<&Value>, e: &Row) -> Value {
-    let Some(Value::String(cmd)) = cmd else { return Value::Null };
-    let Ok(words) = shell_words::split(cmd) else { return Value::Null };
+    let Some(Value::String(cmd)) = cmd else {
+        return Value::Null;
+    };
+    let Ok(words) = shell_words::split(cmd) else {
+        return Value::Null;
+    };
     let text = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or_default();
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     match words.as_slice() {
@@ -1380,55 +1769,106 @@ pub fn _omarchy_entry(e: &Value) -> Result<Row, String> {
     let e = as_dict(e)?;
     let s = |v: &str| Value::String(v.into());
     let install_cmd = or_v(
-        or_v(_listed_command(e.get("installCommand"), e), _listed_command(e.get("officialCommand"), e)),
+        or_v(
+            _listed_command(e.get("installCommand"), e),
+            _listed_command(e.get("officialCommand"), e),
+        ),
         if setup {
             let repo = e.get("repo").and_then(Value::as_str).unwrap_or_default();
-            s(&format!("omarchy plugin add {} --enable", shlex_quote(repo)))
+            s(&format!(
+                "omarchy plugin add {} --enable",
+                shlex_quote(repo)
+            ))
         } else {
             s("")
         },
     );
     let mut r = Row::new();
     r.insert("id".into(), or_(e, "id", s("")));
-    r.insert("name".into(), or_v(or_(e, "name", Value::Null), or_(e, "id", s(""))));
+    r.insert(
+        "name".into(),
+        or_v(or_(e, "name", Value::Null), or_(e, "id", s(""))),
+    );
     r.insert("description".into(), or_(e, "description", s("")));
     r.insert("author".into(), or_(e, "author", s("")));
     r.insert("version".into(), or_(e, "version", s("")));
     r.insert("category".into(), or_(e, "category", s("Other")));
     r.insert("kind".into(), or_(e, "kind", s("")));
-    r.insert("status".into(), if setup { s("Needs setup") } else { or_(e, "status", s("")) });
+    r.insert(
+        "status".into(),
+        if setup {
+            s("Needs setup")
+        } else {
+            or_(e, "status", s(""))
+        },
+    );
     r.insert("tags".into(), or_(e, "tags", json!([])));
     r.insert("accent".into(), or_(e, "accent", s("")));
     r.insert("initials".into(), or_(e, "initials", s("")));
     r.insert("repo".into(), or_(e, "repo", s("")));
     r.insert("stars".into(), py_int(&or_(e, "stars", json!(0)))?);
-    r.insert("verified".into(), json!(e.get("verificationStatus").and_then(Value::as_str) == Some("verified")));
+    r.insert(
+        "verified".into(),
+        json!(e.get("verificationStatus").and_then(Value::as_str) == Some("verified")),
+    );
     // A built-in is "installable" in the sense that it can be switched on;
     // the catalog expresses that as officialCommand rather than as an add.
-    r.insert("installable".into(),
-             json!(truthy(e.get("installAvailable")) || truthy(e.get("builtIn")) || setup));
+    r.insert(
+        "installable".into(),
+        json!(truthy(e.get("installAvailable")) || truthy(e.get("builtIn")) || setup),
+    );
     r.insert("install_cmd".into(), install_cmd);
     r.insert("needs_setup".into(), json!(setup));
     r.insert("install_note".into(), or_(e, "installNote", s("")));
     r.insert("license".into(), or_(e, "license", s("")));
     r.insert("updated".into(), or_(e, "repositoryUpdatedAt", s("")));
-    r.insert("added".into(), or_v(or_(e, "listedAt", Value::Null), or_(e, "addedAt", s(""))));
+    r.insert(
+        "added".into(),
+        or_v(or_(e, "listedAt", Value::Null), or_(e, "addedAt", s(""))),
+    );
     r.insert("thumb".into(), or_(e, "previewThumbnail", s("")));
-    r.insert("preview".into(), or_v(or_(e, "previewImage", Value::Null), or_(e, "previewThumbnail", s(""))));
+    r.insert(
+        "preview".into(),
+        or_v(
+            or_(e, "previewImage", Value::Null),
+            or_(e, "previewThumbnail", s("")),
+        ),
+    );
     r.insert("built_in".into(), json!(truthy(e.get("builtIn"))));
     r.insert("source_type".into(), or_(e, "sourceType", s("")));
     r.insert("source_url".into(), or_(e, "sourceUrl", s("")));
     r.insert("manifest_path".into(), or_(e, "manifestPath", s("")));
     r.insert("coverage".into(), or_(e, "verificationCoverage", s("")));
     r.insert("review_method".into(), or_(e, "verificationMethod", s("")));
-    r.insert("reviewed_by".into(), or_(e, "verificationReviewedBy", s("")));
-    r.insert("reviewed_at".into(), or_(e, "verificationReviewedAt", s("")));
-    r.insert("validated_commit".into(), or_(e, "listingValidatedCommit", s("")));
+    r.insert(
+        "reviewed_by".into(),
+        or_(e, "verificationReviewedBy", s("")),
+    );
+    r.insert(
+        "reviewed_at".into(),
+        or_(e, "verificationReviewedAt", s("")),
+    );
+    r.insert(
+        "validated_commit".into(),
+        or_(e, "listingValidatedCommit", s("")),
+    );
     r.insert("validated_at".into(), or_(e, "listingValidatedAt", s("")));
-    r.insert("validated_branch".into(), or_(e, "listingValidatedBranch", s("")));
-    r.insert("upstream_commit".into(), or_(e, "upstreamObservedCommit", s("")));
-    r.insert("upstream_checked_at".into(), or_(e, "upstreamCheckedAt", s("")));
-    r.insert("upstream_status".into(), or_(e, "upstreamCheckStatus", s("")));
+    r.insert(
+        "validated_branch".into(),
+        or_(e, "listingValidatedBranch", s("")),
+    );
+    r.insert(
+        "upstream_commit".into(),
+        or_(e, "upstreamObservedCommit", s("")),
+    );
+    r.insert(
+        "upstream_checked_at".into(),
+        or_(e, "upstreamCheckedAt", s("")),
+    );
+    r.insert(
+        "upstream_status".into(),
+        or_(e, "upstreamCheckStatus", s("")),
+    );
     Ok(r)
 }
 
@@ -1484,14 +1924,69 @@ impl Default for Market {
 /// after `timeout_secs` without data. ureq only limits a whole phase, so the
 /// body is read on a helper thread and each chunk waited for in turn.
 fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
+    // Asked unconditionally, the answer always has a body (a 304's empty one).
+    Ok(http_get_since(url, timeout_secs, &Validators::default())?
+        .map(|(body, _)| body)
+        .unwrap_or_default())
+}
+
+/// What identifies one download of a URL, to ask the server whether it
+/// changed since: its `ETag` and `Last-Modified` (empty when not sent).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Validators {
+    pub etag: String,
+    pub modified: String,
+}
+
+impl Validators {
+    fn is_empty(&self) -> bool {
+        self.etag.is_empty() && self.modified.is_empty()
+    }
+}
+
+/// `http_get`, asking only for a body newer than `since`: None when the
+/// server says it has not changed (304), else the body and what identifies
+/// it. Both validators go out: some servers match one and not the other
+/// (plugins.omarchy.org answers If-Modified-Since, but not its weak ETag
+/// once the body is compressed).
+fn http_get_since(
+    url: &str,
+    timeout_secs: u64,
+    since: &Validators,
+) -> Result<Option<(Vec<u8>, Validators)>, String> {
     let t = std::time::Duration::from_secs(timeout_secs);
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(t))
         .timeout_recv_response(Some(t))
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(crate::sources::system_roots())
+                .build(),
+        )
         .build()
         .into();
-    let r = agent.get(url).header(UA.0, UA.1).call().map_err(|e| format!("URLError: {e}"))?;
+    let mut req = agent.get(url).header(UA.0, UA.1);
+    if !since.etag.is_empty() {
+        req = req.header("If-None-Match", &since.etag);
+    }
+    if !since.modified.is_empty() {
+        req = req.header("If-Modified-Since", &since.modified);
+    }
+    let r = req.call().map_err(|e| format!("URLError: {e}"))?;
+    if r.status() == 304 && !since.is_empty() {
+        return Ok(None);
+    }
+    let header = |name: &str| {
+        r.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let got = Validators {
+        etag: header("etag"),
+        modified: header("last-modified"),
+    };
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     std::thread::spawn(move || {
         use std::io::Read;
@@ -1516,7 +2011,7 @@ fn http_get(url: &str, timeout_secs: u64) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
     loop {
         match rx.recv_timeout(t) {
-            Ok(Ok(chunk)) if chunk.is_empty() => return Ok(body),
+            Ok(Ok(chunk)) if chunk.is_empty() => return Ok(Some((body, got))),
             Ok(Ok(chunk)) => body.extend_from_slice(&chunk),
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err("URLError: timed out".into()),
@@ -1540,6 +2035,20 @@ impl Market {
     /// The market's rows, each tagged with `market`. `Err` when the fetch or
     /// the loader fails (the Python raises; `_load_market` catches it).
     pub fn fetch(&self) -> Result<Vec<Row>, String> {
+        Ok(self
+            .fetch_since(&Validators::default())?
+            .map(|(rows, _)| rows)
+            .unwrap_or_default())
+    }
+
+    /// `fetch`, for a market with a catalogue to download: None when the
+    /// download is unchanged since `since` (and nothing was downloaded),
+    /// else the rows and what identifies the download. A market that builds
+    /// its own rows always builds them.
+    pub fn fetch_since(
+        &self,
+        since: &Validators,
+    ) -> Result<Option<(Vec<Row>, Validators)>, String> {
         if let Some(loader) = self.loader {
             let mut out = Vec::new();
             for mut row in loader()? {
@@ -1548,9 +2057,16 @@ impl Market {
                     out.push(row);
                 }
             }
-            return Ok(out);
+            return Ok(Some((out, Validators::default())));
         }
-        let raw = http_get(&self.catalog_url, 60)?;
+        let Some((raw, got)) = http_get_since(&self.catalog_url, 60, since)? else {
+            return Ok(None);
+        };
+        self.rows_from(raw).map(|rows| Some((rows, got)))
+    }
+
+    /// The rows of a downloaded catalogue.
+    fn rows_from(&self, raw: Vec<u8>) -> Result<Vec<Row>, String> {
         let text = String::from_utf8(raw).map_err(|e| format!("UnicodeDecodeError: {e}"))?;
         let data: Value = py_json_loads(&text)?;
         let rows = match &data {
@@ -1558,7 +2074,11 @@ impl Market {
             other => other.clone(),
         };
         let mut out = Vec::new();
-        let entries = if truthy(Some(&rows)) { py_iter(&rows)? } else { Vec::new() };
+        let entries = if truthy(Some(&rows)) {
+            py_iter(&rows)?
+        } else {
+            Vec::new()
+        };
         for e in entries {
             let Some(mapper) = self.mapper else {
                 return Err(format!("AssertionError: {}: no mapper or loader", self.id));
@@ -1586,21 +2106,29 @@ pub const ARTCRAFT_ORG: &str = "storytold";
 /// ArtCraft entries land in the same category filter as everything else rather
 /// than in a bucket of their own.
 pub const _ARTCRAFT_CATEGORY: &[(&str, &str)] = &[
-    ("photocraft", "Graphics"), ("vectorcraft", "Graphics"),
-    ("lightcraft", "Graphics"), ("designcraft", "Graphics"),
-    ("figcraft", "Design"), ("cadcraft", "Design"),
-    ("filmcraft", "Video"), ("effectcraft", "Video"),
+    ("photocraft", "Graphics"),
+    ("vectorcraft", "Graphics"),
+    ("lightcraft", "Graphics"),
+    ("designcraft", "Graphics"),
+    ("figcraft", "Design"),
+    ("cadcraft", "Design"),
+    ("filmcraft", "Video"),
+    ("effectcraft", "Video"),
     ("soundcraft", "Audio"),
-    ("wordcraft", "Productivity"), ("gridcraft", "Productivity"),
-    ("deckcraft", "Productivity"), ("pdfcraft", "Productivity"),
+    ("wordcraft", "Productivity"),
+    ("gridcraft", "Productivity"),
+    ("deckcraft", "Productivity"),
+    ("pdfcraft", "Productivity"),
 ];
 pub const _ACCENT_CYCLE: &[&str] = &["violet", "cyan", "coral", "lime", "amber", "rose"];
 
 static APP_LINK: LazyLock<regex::Regex> = LazyLock::new(|| {
     // Python's `\s` on a str is `str.isspace()`, which also takes the
     // separators \x1c-\x1f; the regex crate's `\s` (White_Space) does not.
-    regex::Regex::new(r#"href="/apps/([a-z0-9-]+)"[^>]*>[\s\x1c-\x1f]*([A-Za-z][A-Za-z ]{1,30}?)[\s\x1c-\x1f]*<"#)
-        .expect("regex")
+    regex::Regex::new(
+        r#"href="/apps/([a-z0-9-]+)"[^>]*>[\s\x1c-\x1f]*([A-Za-z][A-Za-z ]{1,30}?)[\s\x1c-\x1f]*<"#,
+    )
+    .expect("regex")
 });
 static APP_HREF: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"href="/apps/([a-z0-9-]+)""#).expect("regex"));
@@ -1652,8 +2180,10 @@ pub fn _artcraft_rows_with(
                     previous.insert(id, row);
                 }
                 Value::Array(_) | Value::Object(_) => {
-                    return Err(format!("TypeError: cannot use '{t}' as a dict key (unhashable type: '{t}')",
-                                       t = py_type(&id)));
+                    return Err(format!(
+                        "TypeError: cannot use '{t}' as a dict key (unhashable type: '{t}')",
+                        t = py_type(&id)
+                    ));
                 }
                 _ => {}
             }
@@ -1683,7 +2213,11 @@ pub fn _artcraft_rows_with(
     // ghcache's lookups raise out of here, as they do in the Python (and
     // `fetch` then fails, so the cached listing is served).
     let listed = org_repos(ARTCRAFT_ORG)?.unwrap_or(Value::Null);
-    let listed = if truthy(Some(&listed)) { py_iter(&listed)? } else { Vec::new() };
+    let listed = if truthy(Some(&listed)) {
+        py_iter(&listed)?
+    } else {
+        Vec::new()
+    };
     for r in listed {
         if let Value::Object(r) = r {
             if truthy(r.get("name")) {
@@ -1700,7 +2234,8 @@ pub fn _artcraft_rows_with(
     slugs.sort();
     let releases: Vec<Option<Value>> = {
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let results: Mutex<Vec<Result<Option<Value>, String>>> = Mutex::new(vec![Ok(None); slugs.len()]);
+        let results: Mutex<Vec<Result<Option<Value>, String>>> =
+            Mutex::new(vec![Ok(None); slugs.len()]);
         std::thread::scope(|s| {
             for _ in 0..8.min(slugs.len()) {
                 s.spawn(|| loop {
@@ -1714,18 +2249,30 @@ pub fn _artcraft_rows_with(
             }
         });
         // `list(pool.map(...))`: the first lookup, in order, that raised.
-        results.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().collect::<Result<_, _>>()?
+        results
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+            .into_iter()
+            .collect::<Result<_, _>>()?
     };
 
     let empty = Row::new();
     let mut rows = Vec::new();
     for (i, slug) in slugs.iter().enumerate() {
-        let label = names.iter().find(|(s, _)| s == slug).map(|(_, l)| l.clone()).unwrap_or_default();
+        let label = names
+            .iter()
+            .find(|(s, _)| s == slug)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_default();
         let repo = repos.get(slug).unwrap_or(&empty);
-        let (mut tag, mut published, mut url, mut asset) = (json!(""), json!(""), json!(""), json!(""));
+        let (mut tag, mut published, mut url, mut asset) =
+            (json!(""), json!(""), json!(""), json!(""));
         let mut sha256 = json!("");
         let mut size = json!(0);
-        let rel = releases[i].clone().filter(|r| truthy(Some(r))).unwrap_or_else(|| json!({}));
+        let rel = releases[i]
+            .clone()
+            .filter(|r| truthy(Some(r)))
+            .unwrap_or_else(|| json!({}));
         // A release with no tag is a lookup that failed (rate limit, network),
         // not an answer. "No Linux build" is only said when GitHub said so.
         let answered = rel.as_object().is_some_and(|r| truthy(r.get("tag_name")));
@@ -1740,7 +2287,10 @@ pub fn _artcraft_rows_with(
                 let a = as_dict(&a)?;
                 let nm = a.get("name").cloned().unwrap_or_else(|| json!(""));
                 if as_str(&nm, "endswith")?.ends_with("-linux-x86_64.AppImage") {
-                    url = a.get("browser_download_url").cloned().unwrap_or_else(|| json!(""));
+                    url = a
+                        .get("browser_download_url")
+                        .cloned()
+                        .unwrap_or_else(|| json!(""));
                     asset = nm;
                     sha256 = json!(crate::appimage::sha256_of_digest(a.get("digest")));
                     let bytes = or_(a, "size", json!(0));
@@ -1750,8 +2300,10 @@ pub fn _artcraft_rows_with(
                         other => other,
                     };
                     let Some(bytes) = bytes.as_f64() else {
-                        return Err(format!("TypeError: unsupported operand type(s) for /: '{}' and 'int'",
-                                           py_type(&bytes)));
+                        return Err(format!(
+                            "TypeError: unsupported operand type(s) for /: '{}' and 'int'",
+                            py_type(&bytes)
+                        ));
                     };
                     size = json!(crate::util::py_round_to(bytes / 1048576.0, 1));
                     break;
@@ -1762,7 +2314,11 @@ pub fn _artcraft_rows_with(
         if !truthy(Some(&url)) {
             // Fall back to what was known before, so a rate-limited refresh
             // degrades to stale rather than to empty.
-            let old = previous.get(slug).cloned().filter(|o| truthy(Some(o))).unwrap_or_else(|| json!({}));
+            let old = previous
+                .get(slug)
+                .cloned()
+                .filter(|o| truthy(Some(o)))
+                .unwrap_or_else(|| json!({}));
             let old = as_dict(&old)?;
             let get = |k: &str, d: Value| old.get(k).cloned().unwrap_or(d);
             tag = or_v(tag, get("version", json!("")));
@@ -1775,38 +2331,80 @@ pub fn _artcraft_rows_with(
         let has_url = truthy(Some(&url));
         let unchecked = !has_url && !answered;
 
-        let lic = or_(as_dict(&or_(repo, "license", json!({})))?, "spdx_id", json!(""));
+        let lic = or_(
+            as_dict(&or_(repo, "license", json!({})))?,
+            "spdx_id",
+            json!(""),
+        );
         let mut r = Row::new();
         r.insert("id".into(), json!(slug));
         r.insert("name".into(), json!(label));
         r.insert("description".into(), or_(repo, "description", json!("")));
         r.insert("author".into(), json!("ArtCraft"));
         r.insert("version".into(), tag);
-        r.insert("category".into(), json!(_ARTCRAFT_CATEGORY.iter()
-            .find(|(k, _)| k == slug).map(|(_, v)| *v).unwrap_or("Graphics")));
+        r.insert(
+            "category".into(),
+            json!(_ARTCRAFT_CATEGORY
+                .iter()
+                .find(|(k, _)| k == slug)
+                .map(|(_, v)| *v)
+                .unwrap_or("Graphics")),
+        );
         r.insert("kind".into(), json!("Desktop app"));
-        r.insert("status".into(), json!(if has_url { "Available" }
-                                        else if unchecked { "Not checked" } else { "No Linux build" }));
+        r.insert(
+            "status".into(),
+            json!(if has_url {
+                "Available"
+            } else if unchecked {
+                "Not checked"
+            } else {
+                "No Linux build"
+            }),
+        );
         r.insert("tags".into(), json!(["appimage", "desktop"]));
-        r.insert("accent".into(), json!(_ACCENT_CYCLE[i % _ACCENT_CYCLE.len()]));
+        r.insert(
+            "accent".into(),
+            json!(_ACCENT_CYCLE[i % _ACCENT_CYCLE.len()]),
+        );
         r.insert("initials".into(), json!(pfx(&label, 2).to_uppercase()));
-        r.insert("repo".into(), or_(repo, "html_url", json!(format!("https://github.com/{ARTCRAFT_ORG}/{slug}"))));
-        r.insert("stars".into(), py_int(&or_(repo, "stargazers_count", json!(0)))?);
+        r.insert(
+            "repo".into(),
+            or_(
+                repo,
+                "html_url",
+                json!(format!("https://github.com/{ARTCRAFT_ORG}/{slug}")),
+            ),
+        );
+        r.insert(
+            "stars".into(),
+            py_int(&or_(repo, "stargazers_count", json!(0)))?,
+        );
         r.insert("verified".into(), json!(has_url));
         r.insert("installable".into(), json!(has_url));
         // handled in-app, not by a shell command
         r.insert("install_cmd".into(), json!(""));
-        r.insert("install_note".into(), json!(if has_url { "" } else if unchecked {
-            "GitHub did not answer when this was listed; it is asked again on the next refresh."
-        } else {
-            "No x86_64 AppImage in the latest release."
-        }));
+        r.insert(
+            "install_note".into(),
+            json!(if has_url {
+                ""
+            } else if unchecked {
+                "GitHub did not answer when this was listed; it is asked again on the next refresh."
+            } else {
+                "No x86_64 AppImage in the latest release."
+            }),
+        );
         r.insert("unchecked".into(), json!(unchecked));
         r.insert("license".into(), lic);
         r.insert("updated".into(), or_(repo, "pushed_at", json!("")));
         r.insert("added".into(), published.clone());
-        r.insert("thumb".into(), json!(format!("images/apps/{slug}/hero.webp")));
-        r.insert("preview".into(), json!(format!("images/apps/{slug}/hero.webp")));
+        r.insert(
+            "thumb".into(),
+            json!(format!("images/apps/{slug}/hero.webp")),
+        );
+        r.insert(
+            "preview".into(),
+            json!(format!("images/apps/{slug}/hero.webp")),
+        );
         r.insert("built_in".into(), json!(false));
         r.insert("install_kind".into(), json!("appimage"));
         r.insert("download_url".into(), url);
@@ -1814,8 +2412,14 @@ pub fn _artcraft_rows_with(
         r.insert("size_mb".into(), size);
         r.insert("sha256".into(), sha256);
         r.insert("source_type".into(), json!("vendor"));
-        r.insert("source_url".into(), json!(format!("{ARTCRAFT_SITE}apps/{slug}")));
-        r.insert("upstream_status".into(), json!(if has_url { "passed" } else { "" }));
+        r.insert(
+            "source_url".into(),
+            json!(format!("{ARTCRAFT_SITE}apps/{slug}")),
+        );
+        r.insert(
+            "upstream_status".into(),
+            json!(if has_url { "passed" } else { "" }),
+        );
         r.insert("upstream_checked_at".into(), published);
         rows.push(r);
     }
@@ -1866,7 +2470,10 @@ pub fn try_enabled_markets() -> Result<Vec<&'static Market>, String> {
     let mut out = Vec::new();
     for m in MARKETS.iter() {
         let key = format!("net_market_{}", m.id);
-        if m.enabled && crate::settings::default_for(&key).is_some() && truthy(Some(&crate::settings::get(&key)?)) {
+        if m.enabled
+            && crate::settings::default_for(&key).is_some()
+            && truthy(Some(&crate::settings::get(&key)?))
+        {
             out.push(m);
         }
     }
@@ -1883,6 +2490,11 @@ pub fn enabled_markets() -> Vec<&'static Market> {
 
 /// `_cached`, behind `_lock`.
 static CACHED: Mutex<Option<Vec<Plugin>>> = Mutex::new(None);
+
+/// Held while the markets load, so one load runs at a time; CACHED itself
+/// is held only to read or swap the list, so marking it (on the main thread,
+/// after an install) never waits on a download.
+static LOADING: Mutex<()> = Mutex::new(());
 
 /// A catalogue with rows that could not be checked is retried this soon rather
 /// than kept for the full TTL: one rate-limited refresh otherwise reported four
@@ -1907,26 +2519,25 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
     let mut rows: Option<Value> = None;
     let age = match std::fs::metadata(&path).and_then(|md| md.modified()) {
         Ok(mtime) => {
-            let mtime = mtime.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            let mtime = mtime
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
             crate::util::now() - mtime
         }
         Err(_) => TTL,
     };
     if age < TTL && !force {
-        if let Ok(Value::Object(blob)) = read_blob(&path) {
+        if let Ok(Value::Object(mut blob)) = read_blob(&path) {
             if blob.get("schema").and_then(Value::as_f64) == Some(SCHEMA as f64)
                 && !matches!(blob.get("schema"), Some(Value::Bool(_)))
             {
-                rows = blob.get("rows").cloned().filter(|v| !v.is_null());
-                if age >= RETRY {
-                    let scan = rows.clone().unwrap_or(Value::Null);
-                    let scan = if truthy(Some(&scan)) { py_iter(&scan)? } else { Vec::new() };
-                    for r in scan {
-                        if truthy(as_dict(&r)?.get("unchecked")) {
-                            rows = None;
-                            break;
-                        }
-                    }
+                // Taken out of the file's JSON, not copied: the catalogue is
+                // 6,000 rows, and each copy of it was 40 MB more at the peak.
+                rows = blob.remove("rows").filter(|v| !v.is_null());
+                drop(blob);
+                if age >= RETRY && any_unchecked(rows.as_ref())? {
+                    rows = None;
                 }
             }
         }
@@ -1935,11 +2546,38 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
         return Ok(rows);
     }
 
-    let fetched = m.fetch().and_then(|rows| {
+    // A downloaded catalogue is asked for only if it changed since the copy
+    // kept here (15 MB, for a file that changes a few times a day), when
+    // that copy is one this version wrote and nothing in it waits on a
+    // recheck. Unchanged, the kept rows are what mapping it again would give.
+    let kept = if m.loader.is_none() {
+        _unchanged_candidate(&path)?
+    } else {
+        None
+    };
+    let since = kept.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+    let fetched = m.fetch_since(&since).and_then(|got| {
+        let Some((rows, validators)) = got else {
+            let Some((rows, _)) = kept else {
+                return Err("HTTPError: 304 with nothing kept".into());
+            };
+            // The kept copy counts as fetched now: its age restarts.
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            return Ok(rows);
+        };
         let rows = Value::Array(rows.into_iter().map(Value::Object).collect());
-        let blob = json!({"schema": SCHEMA, "rows": rows});
+        let mut blob = json!({"schema": SCHEMA, "rows": rows});
+        if !validators.etag.is_empty() {
+            blob["etag"] = json!(validators.etag);
+        }
+        if !validators.modified.is_empty() {
+            blob["modified"] = json!(validators.modified);
+        }
         crate::util::write_json(&path, &blob, None, false).map_err(|e| format!("OSError: {e}"))?;
-        Ok(rows)
+        Ok(blob["rows"].take())
     });
     match fetched {
         Ok(rows) => Ok(rows),
@@ -1957,6 +2595,72 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
     }
 }
 
+/// Whether any of `rows` is marked unchecked (`for r in rows or []:
+/// if r.get("unchecked")`), read in place. `Err` for a row that is not a
+/// dict, where the Python's `.get` raises.
+fn any_unchecked(rows: Option<&Value>) -> Result<bool, String> {
+    let Some(rows) = rows.filter(|r| truthy(Some(r))) else {
+        return Ok(false);
+    };
+    let check = |r: &Value| -> Result<bool, String> { Ok(truthy(as_dict(r)?.get("unchecked"))) };
+    match rows {
+        Value::Array(list) => {
+            for r in list {
+                if check(r)? {
+                    return Ok(true);
+                }
+            }
+        }
+        other => {
+            for r in py_iter(other)? {
+                if check(&r)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The rows a market's cache file holds and what identifies the download
+/// they came from, when they can stand for an unchanged download: this
+/// schema, a list of rows, none of them marked unchecked, and an ETag or
+/// Last-Modified to ask with. None otherwise; Err where reading the rows
+/// raises, as the fresh-cache check does.
+fn _unchanged_candidate(path: &Path) -> Result<Option<(Value, Validators)>, String> {
+    let Ok(Value::Object(mut blob)) = read_blob(path) else {
+        return Ok(None);
+    };
+    if blob.get("schema").and_then(Value::as_f64) != Some(SCHEMA as f64)
+        || matches!(blob.get("schema"), Some(Value::Bool(_)))
+    {
+        return Ok(None);
+    }
+    let Some(Value::Array(list)) = blob.get("rows") else {
+        return Ok(None);
+    };
+    for r in list {
+        if truthy(as_dict(r)?.get("unchecked")) {
+            return Ok(None);
+        }
+    }
+    let text = |k: &str| {
+        blob.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let v = Validators {
+        etag: text("etag"),
+        modified: text("modified"),
+    };
+    if v.is_empty() {
+        return Ok(None);
+    }
+    // Taken, not copied (see `_load_market`).
+    Ok(blob.remove("rows").map(|rows| (rows, v)))
+}
+
 /// Every listed plugin from every enabled marketplace.
 ///
 /// Memoised process-wide like the Python's `_cached` (behind a lock); returns
@@ -1968,25 +2672,71 @@ pub fn _load_market(m: &Market, force: bool) -> Result<Value, String> {
 /// `Plugin(**r)` rejects -- and then nothing is cached, so the next call
 /// tries again.
 pub fn try_catalog(force: bool) -> Result<Vec<Plugin>, String> {
-    let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = cached.as_ref() {
-        if !force {
-            return Ok(c.clone());
-        }
+    try_load_catalog(force)?;
+    if let Some(c) = CACHED.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        return Ok(c.clone());
     }
+    // Only a test clearing the cache in between gets here: load it again.
+    try_load_catalog(false)?;
+    Ok(CACHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default())
+}
+
+/// Load the catalogue into the cache (unless it is there already and not
+/// `force`d), without handing out a copy: `try_catalog` copies it once for
+/// its caller, and `try_catalog_annotated` marks it first.
+fn try_load_catalog(force: bool) -> Result<(), String> {
+    let _loading = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+    if CACHED.lock().unwrap_or_else(|e| e.into_inner()).is_some() && !force {
+        return Ok(());
+    }
+    let markets = try_enabled_markets()?;
+    // The markets load side by side: one is a download, the others runs of
+    // GitHub lookups, and none waits on another. Read in their order, so the
+    // first one that fails is the one reported, as when they ran in turn.
+    let loaded: Vec<Result<Value, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = markets
+            .iter()
+            .map(|m| {
+                let spawned = std::thread::Builder::new()
+                    .stack_size(crate::util::DEEP_STACK)
+                    .spawn_scoped(s, move || _load_market(m, force));
+                (m, spawned)
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(m, spawned)| match spawned {
+                Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
+                Err(_) => _load_market(m, force),
+            })
+            .collect()
+    });
     let mut out: Vec<Plugin> = Vec::new();
-    for m in try_enabled_markets()? {
-        let rows = _load_market(m, force)?;
-        for r in py_iter(&rows)? {
+    for rows in loaded {
+        // Each market's rows are consumed as they become plugins, so the
+        // JSON and the plugins made from it are not both held in full.
+        let rows = match rows? {
+            Value::Array(list) => list,
+            other => py_iter(&other)?,
+        };
+        out.reserve(rows.len());
+        for r in rows {
             let Value::Object(r) = r else {
-                return Err(format!("TypeError: store.Plugin() argument after ** must be a mapping, not {}",
-                                   py_type(&r)));
+                return Err(format!(
+                    "TypeError: store.Plugin() argument after ** must be a mapping, not {}",
+                    py_type(&r)
+                ));
             };
-            out.push(Plugin::from_row(&r)?);
+            out.push(Plugin::from_row_owned(r)?);
         }
     }
-    *cached = Some(out.clone());
-    Ok(out)
+    out.shrink_to_fit();
+    *CACHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(out);
+    Ok(())
 }
 
 /// `subprocess.run(argv, capture_output=True, text=True, timeout=secs).stdout`,
@@ -2002,7 +2752,13 @@ fn run_text_within(argv: &[&str], timeout: std::time::Duration) -> Option<String
     // The deadline covers reading the pipes too, as `communicate(timeout=...)`
     // does: a grandchild that keeps stdout open past it means a timeout, not
     // a wait for it to close (`util::run_bytes` kills the whole group).
-    let out = crate::util::run_bytes(argv, &crate::util::RunOpts { timeout: Some(timeout), ..Default::default() });
+    let out = crate::util::run_bytes(
+        argv,
+        &crate::util::RunOpts {
+            timeout: Some(timeout),
+            ..Default::default()
+        },
+    );
     if out.failed_to_start || out.timed_out {
         return None;
     }
@@ -2018,16 +2774,20 @@ fn run_text_within(argv: &[&str], timeout: std::time::Duration) -> Option<String
 /// Python counts as one key (`1` and `true`) are one key here too, named
 /// by the first and valued by the last.
 pub fn try_installed_ids() -> Result<BTreeMap<String, bool>, String> {
-    Ok(installed_id_keys()?.into_iter().map(|(_, id, on)| (py_str(&id), on)).collect())
+    Ok(installed_id_keys()?
+        .into_iter()
+        .map(|(_, id, on)| (py_str(&id), on))
+        .collect())
 }
 
 /// The Python's `installed_ids()` dict as (key identity, id as given,
 /// enabled), in insertion order. The id keeps its JSON type: an int id is
 /// not the str id of the same digits, so `p.id in have` never matches it.
 fn installed_id_keys() -> Result<Vec<(String, Value, bool)>, String> {
-    let Some(out) = run_text(&["omarchy", "plugin", "list", "--json"], 25) else {
+    let Some(out) = crate::plugins::omarchy_list_text() else {
         return Ok(Vec::new());
     };
+    let out = out.replace("\r\n", "\n").replace('\r', "\n");
     let Ok(items) = py_json_loads(&out) else {
         return Ok(Vec::new());
     };
@@ -2035,9 +2795,12 @@ fn installed_id_keys() -> Result<Vec<(String, Value, bool)>, String> {
     for i in py_iter(&items)? {
         if let Value::Object(i) = i {
             if let Some(id) = i.get("id").filter(|v| truthy(Some(v))) {
-                let key = py_hash_key(id)
-                    .ok_or_else(|| format!("TypeError: cannot use '{t}' as a dict key (unhashable type: '{t}')",
-                                           t = py_type(id)))?;
+                let key = py_hash_key(id).ok_or_else(|| {
+                    format!(
+                        "TypeError: cannot use '{t}' as a dict key (unhashable type: '{t}')",
+                        t = py_type(id)
+                    )
+                })?;
                 let on = truthy(i.get("enabled"));
                 match keys.iter_mut().find(|(k, _, _)| *k == key) {
                     Some(slot) => slot.2 = on,
@@ -2072,6 +2835,223 @@ pub fn installed_appimages() -> BTreeMap<String, Value> {
     out
 }
 
+/// What `annotate` reads of the system to mark the catalogue: which
+/// plugins Omarchy has (and which are on), which AppImages are tracked,
+/// which themes are installed and which of those are removable. Reading it
+/// runs `omarchy plugin list` and `omarchy theme list`, so it is gathered
+/// on its own, off the window's thread; marking with it is quick.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Facts {
+    /// ALMANAC_DEMO: what counts as installed comes from the fixtures.
+    demo: bool,
+    have: Vec<(String, Value, bool)>,
+    images: BTreeMap<String, Value>,
+    themes: BTreeSet<String>,
+    mine: BTreeSet<String>,
+}
+
+/// Read the [`Facts`] for marking `plugins` (the theme lists only if any of
+/// them is a theme). `Err` where `installed_ids` raises in the Python.
+pub fn annotation_facts(plugins: &[Plugin]) -> Result<Facts, String> {
+    gather_facts(plugins.iter().any(|p| p.install_kind == "theme"))
+}
+
+fn gather_facts(has_themes: bool) -> Result<Facts, String> {
+    if crate::demo::active() {
+        // The catalogue stays real -- it is public data -- but what counts
+        // as installed comes from the fixtures, so a screenshot never
+        // discloses what is actually on the machine taking it.
+        return Ok(Facts {
+            demo: true,
+            ..Facts::default()
+        });
+    }
+    let have = installed_id_keys()?;
+    let images = installed_appimages();
+    let themes = if has_themes {
+        installed_themes()
+    } else {
+        BTreeSet::new()
+    };
+    let mine = if has_themes {
+        removable_themes()
+    } else {
+        BTreeSet::new()
+    };
+    Ok(Facts {
+        demo: false,
+        have,
+        images,
+        themes,
+        mine,
+    })
+}
+
+/// What `annotate` sets on one plugin. `None` leaves a field as it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marks {
+    installed: bool,
+    enabled: bool,
+    /// (the typed value, the raw value kept beside it, if any)
+    local_version: Option<(String, Option<Value>)>,
+    built_in: Option<bool>,
+}
+
+impl Marks {
+    /// The marks `facts` give `p`. `Err` where the Python's loop raises:
+    /// an id that cannot be looked up, a name that is not a str.
+    fn of(p: &Plugin, facts: &Facts) -> Result<Marks, String> {
+        if facts.demo {
+            // `p.id in {...}` (a set: a list id cannot be looked up), then
+            // `p.name.lower()`.
+            let id = p.pv("id");
+            let listed = match &id {
+                Value::String(s) => crate::demo::INSTALLED_PLUGIN_IDS.contains(&s.as_str()),
+                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
+                _ => false,
+            };
+            let installed = listed
+                || (p.install_kind == "theme"
+                    && crate::demo::INSTALLED_THEMES
+                        .contains(&p.ps("name", "lower")?.to_lowercase().as_str()));
+            // p.version, as it is: it may be a raw value.
+            let local = if installed {
+                (p.version.clone(), p.raw.get("version").cloned())
+            } else {
+                (String::new(), None)
+            };
+            return Ok(Marks {
+                installed,
+                enabled: installed,
+                local_version: Some(local),
+                built_in: (p.install_kind == "theme").then_some(false),
+            });
+        }
+        if p.install_kind == "theme" {
+            let name = p.ps("name", "lower")?.to_lowercase();
+            let installed = facts.themes.contains(&name);
+            // A stock theme is "built in" in exactly the sense a built-in
+            // plugin is: it is there, it works, and Remove does not apply.
+            return Ok(Marks {
+                installed,
+                enabled: installed,
+                local_version: None,
+                built_in: Some(installed && !facts.mine.contains(&name)),
+            });
+        }
+        if p.install_kind == "appimage" {
+            // The registry's keys are str: an id of any other type is in it
+            // only if it cannot be looked up at all (and then raises).
+            let id = p.pv("id");
+            let found = match &id {
+                Value::String(s) => facts.images.get(s),
+                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
+                _ => None,
+            };
+            let local = match found {
+                Some(Value::String(v)) => (v.clone(), None),
+                Some(v) => (py_str(v), Some(v.clone())),
+                None => (String::new(), None),
+            };
+            return Ok(Marks {
+                installed: found.is_some(),
+                enabled: found.is_some(),
+                local_version: Some(local),
+                built_in: None,
+            });
+        }
+        let id = p.pv("id");
+        let key = py_hash_key(&id).ok_or_else(|| unhashable(&id))?;
+        let on = facts
+            .have
+            .iter()
+            .find(|(k, _, _)| *k == key)
+            .map(|(_, _, on)| *on);
+        Ok(Marks {
+            installed: on.is_some(),
+            enabled: on.unwrap_or(false),
+            local_version: None,
+            built_in: None,
+        })
+    }
+
+    /// Whether putting these marks on `p` would change it.
+    fn differ(&self, p: &Plugin) -> bool {
+        if p.installed != self.installed
+            || p.enabled != self.enabled
+            || p.raw.contains_key("installed")
+            || p.raw.contains_key("enabled")
+        {
+            return true;
+        }
+        if let Some((typed, raw)) = &self.local_version {
+            if p.local_version != *typed || p.raw.get("local_version") != raw.as_ref() {
+                return true;
+            }
+        }
+        matches!(self.built_in, Some(b) if p.built_in != b || p.raw.contains_key("built_in"))
+    }
+
+    fn apply(&self, p: &mut Plugin) {
+        p.installed = self.installed;
+        p.enabled = self.enabled;
+        p.clear_raw("installed");
+        p.clear_raw("enabled");
+        if let Some((typed, raw)) = &self.local_version {
+            p.local_version = typed.clone();
+            match raw {
+                Some(v) => {
+                    p.raw.insert("local_version".into(), v.clone());
+                }
+                None => p.clear_raw("local_version"),
+            }
+        }
+        if let Some(b) = self.built_in {
+            p.built_in = b;
+            p.clear_raw("built_in");
+        }
+    }
+}
+
+/// The marks `facts` change on `plugins`, by position, in order: everything
+/// a full `annotate` would change, worked out without touching (or copying)
+/// the list. `Err` where the Python's loop raises, with the changes before
+/// it -- the plugins it had marked by then.
+pub fn mark_changes(
+    plugins: &[Plugin],
+    facts: &Facts,
+) -> (Vec<(usize, Marks)>, Result<(), String>) {
+    let mut changes = Vec::new();
+    for (i, p) in plugins.iter().enumerate() {
+        match Marks::of(p, facts) {
+            Ok(m) => {
+                if m.differ(p) {
+                    changes.push((i, m));
+                }
+            }
+            Err(e) => return (changes, Err(e)),
+        }
+    }
+    (changes, Ok(()))
+}
+
+/// Put `changes` (from [`mark_changes`] on this same list) on `plugins`,
+/// and carry them to the cached entries they are copies of.
+pub fn apply_mark_changes(plugins: &mut [Plugin], changes: &[(usize, Marks)]) {
+    for (i, m) in changes {
+        if let Some(p) = plugins.get_mut(*i) {
+            m.apply(p);
+        }
+    }
+    let mut changed: Vec<Plugin> = Vec::new();
+    for (i, _) in changes {
+        if let Some(p) = plugins.get(*i) {
+            changed.push(p.clone());
+        }
+    }
+    sync_cache(&mut changed);
+}
+
 /// Mark what is already on the system, so cards can say so.
 ///
 /// `Err` where the Python raises: `installed_ids` past its `try`, before
@@ -2082,99 +3062,21 @@ pub fn installed_appimages() -> BTreeMap<String, Value> {
 /// themselves, so marking them marks the cache every later `catalog()`
 /// caller sees. Here `catalog()` hands out copies, so the marks are carried
 /// back to the cached entries these plugins were copied from.
+///
+/// It runs `omarchy`: the window gathers [`annotation_facts`] off its own
+/// thread and puts the [`mark_changes`] on with [`apply_mark_changes`].
 pub fn try_annotate(plugins: &mut [Plugin]) -> Result<(), String> {
+    let facts = annotation_facts(plugins)?;
     let mut done = 0;
-    let r = annotate_marks(plugins, &mut done);
-    sync_cache(&plugins[..done]);
+    let r = annotate_marks(plugins, &facts, &mut done);
+    sync_cache(&mut plugins[..done]);
     r
 }
 
-/// The body of `try_annotate`; `done` counts the plugins it got through.
-fn annotate_marks(plugins: &mut [Plugin], done: &mut usize) -> Result<(), String> {
-    if crate::demo::active() {
-        // The catalogue stays real -- it is public data -- but what counts as
-        // installed comes from the fixtures, so a screenshot never discloses
-        // what is actually on the machine taking it.
-        for p in plugins.iter_mut() {
-            // `p.id in {...}` (a set: a list id cannot be looked up), then
-            // `p.name.lower()`.
-            let id = p.pv("id");
-            let listed = match &id {
-                Value::String(s) => crate::demo::INSTALLED_PLUGIN_IDS.contains(&s.as_str()),
-                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
-                _ => false,
-            };
-            p.installed = listed
-                || (p.install_kind == "theme"
-                    && crate::demo::INSTALLED_THEMES.contains(&p.ps("name", "lower")?.to_lowercase().as_str()));
-            p.enabled = p.installed;
-            p.local_version = if p.installed { p.version.clone() } else { String::new() };
-            // p.version, as it is: it may be a raw value.
-            match p.raw.get("version").cloned() {
-                Some(v) if p.installed => {
-                    p.raw.insert("local_version".into(), v);
-                }
-                _ => p.clear_raw("local_version"),
-            }
-            p.clear_raw("installed");
-            p.clear_raw("enabled");
-            if p.install_kind == "theme" {
-                p.built_in = false;
-                p.clear_raw("built_in");
-            }
-            *done += 1;
-        }
-        return Ok(());
-    }
-
-    let have = installed_id_keys()?;
-    let images = installed_appimages();
-    let has_themes = plugins.iter().any(|p| p.install_kind == "theme");
-    let themes = if has_themes { installed_themes() } else { BTreeSet::new() };
-    let mine = if has_themes { removable_themes() } else { BTreeSet::new() };
+/// Mark `plugins` with `facts`; `done` counts the plugins it got through.
+fn annotate_marks(plugins: &mut [Plugin], facts: &Facts, done: &mut usize) -> Result<(), String> {
     for p in plugins.iter_mut() {
-        if p.install_kind == "theme" {
-            let name = p.ps("name", "lower")?.to_lowercase();
-            p.installed = themes.contains(&name);
-            p.enabled = p.installed;
-            // A stock theme is "built in" in exactly the sense a built-in
-            // plugin is: it is there, it works, and Remove does not apply.
-            p.built_in = p.installed && !mine.contains(&name);
-            p.clear_raw("built_in");
-        } else if p.install_kind == "appimage" {
-            // The registry's keys are str: an id of any other type is in it
-            // only if it cannot be looked up at all (and then raises).
-            let id = p.pv("id");
-            let found = match &id {
-                Value::String(s) => images.get(s),
-                Value::Array(_) | Value::Object(_) => return Err(unhashable(&id)),
-                _ => None,
-            };
-            p.installed = found.is_some();
-            p.enabled = p.installed;
-            match found {
-                Some(Value::String(v)) => {
-                    p.local_version = v.clone();
-                    p.clear_raw("local_version");
-                }
-                Some(v) => {
-                    p.local_version = py_str(v);
-                    p.raw.insert("local_version".into(), v.clone());
-                }
-                None => {
-                    p.local_version = String::new();
-                    p.clear_raw("local_version");
-                }
-            }
-        } else {
-            let id = p.pv("id");
-            let key = py_hash_key(&id).ok_or_else(|| unhashable(&id))?;
-            let on = have.iter().find(|(k, _, _)| *k == key).map(|(_, _, on)| *on);
-            p.installed = on.is_some();
-            p.enabled = on.unwrap_or(false);
-        }
-        p.clear_raw("installed");
-        p.clear_raw("enabled");
+        Marks::of(p, facts)?.apply(p);
         *done += 1;
     }
     Ok(())
@@ -2184,53 +3086,89 @@ fn annotate_marks(plugins: &mut [Plugin], done: &mut usize) -> Result<(), String
 /// plugin is.
 const MARKS: &[&str] = &["installed", "enabled", "local_version", "built_in"];
 
-/// `p` with its marks cleared, to compare listings by.
-fn unmarked(p: &Plugin) -> Plugin {
-    let mut q = Plugin { installed: false, enabled: false, local_version: String::new(), ..p.clone() };
-    if q.install_kind == "theme" {
-        q.built_in = false;
+/// A plugin's marks, as taken off it by [`take_marks`].
+type Taken = (bool, bool, String, bool, Vec<(&'static str, Value)>);
+
+/// Clear `p`'s marks (as `unmarked` did to a copy), returning them so
+/// [`put_marks`] can restore them: listings are compared this way in place,
+/// without copying either plugin.
+fn take_marks(p: &mut Plugin) -> Taken {
+    let theme = p.install_kind == "theme";
+    let built_in = p.built_in;
+    if theme {
+        p.built_in = false;
     }
-    for m in MARKS {
-        q.raw.remove(*m);
+    let raw = MARKS
+        .iter()
+        .filter_map(|m| p.raw.remove(*m).map(|v| (*m, v)))
+        .collect();
+    (
+        std::mem::take(&mut p.installed),
+        std::mem::take(&mut p.enabled),
+        std::mem::take(&mut p.local_version),
+        built_in,
+        raw,
+    )
+}
+
+fn put_marks(p: &mut Plugin, taken: Taken) {
+    let (installed, enabled, local_version, built_in, raw) = taken;
+    p.installed = installed;
+    p.enabled = enabled;
+    p.local_version = local_version;
+    p.built_in = built_in;
+    for (m, v) in raw {
+        p.raw.insert(m.to_string(), v);
     }
-    q
 }
 
 /// Carry the marks of freshly annotated plugins back to the cached entries
 /// they are copies of (same listing, whatever it was marked before).
-fn sync_cache(plugins: &[Plugin]) {
+///
+/// The listings are compared with their marks taken off in place and put
+/// back: comparing copies made two clones per plugin, 6,000 of them for one
+/// install.
+fn sync_cache(plugins: &mut [Plugin]) {
     if plugins.is_empty() {
         return;
     }
     let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
     let Some(cache) = cached.as_mut() else { return };
-    let mut by_id: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    let mut by_id: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, c) in cache.iter().enumerate() {
-        by_id.entry((c.market.as_str(), c.id.as_str())).or_default().push(i);
+        by_id
+            .entry((c.market.clone(), c.id.clone()))
+            .or_default()
+            .push(i);
     }
-    let mut hits: Vec<(usize, &Plugin)> = Vec::new();
-    for p in plugins {
-        let Some(candidates) = by_id.get(&(p.market.as_str(), p.id.as_str())) else { continue };
-        let me = unmarked(p);
+    for p in plugins.iter_mut() {
+        let Some(candidates) = by_id.get(&(p.market.clone(), p.id.clone())) else {
+            continue;
+        };
+        let mine = take_marks(p);
+        let mut hits = Vec::new();
         for &i in candidates {
-            if unmarked(&cache[i]) == me {
-                hits.push((i, p));
+            let theirs = take_marks(&mut cache[i]);
+            if cache[i] == *p {
+                hits.push(i);
             }
+            put_marks(&mut cache[i], theirs);
         }
-    }
-    for (i, p) in hits {
-        let c = &mut cache[i];
-        c.installed = p.installed;
-        c.enabled = p.enabled;
-        c.local_version = p.local_version.clone();
-        c.built_in = p.built_in;
-        for m in MARKS {
-            match p.raw.get(*m) {
-                Some(v) => {
-                    c.raw.insert((*m).to_string(), v.clone());
-                }
-                None => {
-                    c.raw.remove(*m);
+        put_marks(p, mine);
+        for i in hits {
+            let c = &mut cache[i];
+            c.installed = p.installed;
+            c.enabled = p.enabled;
+            c.local_version = p.local_version.clone();
+            c.built_in = p.built_in;
+            for m in MARKS {
+                match p.raw.get(*m) {
+                    Some(v) => {
+                        c.raw.insert((*m).to_string(), v.clone());
+                    }
+                    None => {
+                        c.raw.remove(*m);
+                    }
                 }
             }
         }
@@ -2249,21 +3187,32 @@ pub fn annotate(plugins: &mut [Plugin]) {
 /// This marks the cached entries in place (under the cache's lock) and
 /// returns a copy of them as marked.
 ///
+/// The system is read first, with the cache's lock let go: reading it runs
+/// `omarchy`, and the window's thread takes the same lock to carry marks
+/// after an install. `catalog()`'s own copy is not made here (it was made
+/// and thrown away): the cache is marked, then copied once.
+///
 /// `Err` where either step raises in the Python; marks made before an
 /// `annotate` failure stay on the cache, as they do on the Python's objects.
 pub fn try_catalog_annotated(force: bool) -> Result<Vec<Plugin>, String> {
-    let fresh = try_catalog(force)?;
+    try_load_catalog(force)?;
+    let has_themes = CACHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|cache| cache.iter().any(|p| p.install_kind == "theme"));
+    let facts = gather_facts(has_themes)?;
     let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
     let Some(cache) = cached.as_mut() else {
-        // Only a test clearing the cache in between gets here: annotate the
-        // list catalog() returned, as the Python would.
+        // Only a test clearing the cache in between gets here: annotate what
+        // catalog() returns, as the Python would.
         drop(cached);
-        let mut plugins = fresh;
+        let mut plugins = try_catalog(force)?;
         try_annotate(&mut plugins)?;
         return Ok(plugins);
     };
     let mut done = 0;
-    annotate_marks(cache, &mut done)?;
+    annotate_marks(cache, &facts, &mut done)?;
     Ok(cache.clone())
 }
 
@@ -2292,7 +3241,10 @@ fn iso_digits(s: &[char], n: usize) -> Option<i64> {
     if s.len() != n || n == 0 || !s.iter().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    Some(s.iter().fold(0i64, |a, c| a * 10 + i64::from(*c as u8 - b'0')))
+    Some(
+        s.iter()
+            .fold(0i64, |a, c| a * 10 + i64::from(*c as u8 - b'0')),
+    )
 }
 
 /// `_find_isoformat_datetime_separator`.
@@ -2427,7 +3379,11 @@ fn _fromisoformat_ts(s: &str) -> Option<f64> {
     }
     let sep = iso_separator(&c)?;
     let date = iso_date(&c[..sep.min(c.len())])?;
-    let tstr: &[char] = if c.len() > sep + 1 { &c[sep + 1..] } else { &[] };
+    let tstr: &[char] = if c.len() > sep + 1 {
+        &c[sep + 1..]
+    } else {
+        &[]
+    };
     if c.len() > sep && tstr.is_empty() {
         // The C parser rejects a separator with nothing after it.
         return None;
@@ -2439,8 +3395,15 @@ fn _fromisoformat_ts(s: &str) -> Option<f64> {
             return None;
         }
         let find = |ch: char| tstr.iter().position(|x| *x == ch).map(|i| i + 1);
-        let tz_pos = find('-').or_else(|| find('+')).or_else(|| find('Z')).unwrap_or(0);
-        let timestr = if tz_pos > 0 { &tstr[..tz_pos - 1] } else { tstr };
+        let tz_pos = find('-')
+            .or_else(|| find('+'))
+            .or_else(|| find('Z'))
+            .unwrap_or(0);
+        let timestr = if tz_pos > 0 {
+            &tstr[..tz_pos - 1]
+        } else {
+            tstr
+        };
         let comps = iso_hms(timestr)?;
         [h, mi, se, us] = comps;
         if h == 24 {
@@ -2472,7 +3435,9 @@ fn _fromisoformat_ts(s: &str) -> Option<f64> {
     }
     let mut date = date;
     if next_day {
-        date = date.succ_opt().filter(|d| chrono::Datelike::year(d) <= 9999)?;
+        date = date
+            .succ_opt()
+            .filter(|d| chrono::Datelike::year(d) <= 9999)?;
     }
     let naive = date.and_hms_opt(h as u32, mi as u32, se as u32)?;
     match tz {
@@ -2544,13 +3509,16 @@ fn desc_f(a: f64, b: f64) -> Ordering {
 }
 
 fn sort_popular(a: &Plugin, b: &Plugin) -> Ordering {
-    b.stars.cmp(&a.stars).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    b.stars
+        .cmp(&a.stars)
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
 }
 fn sort_trending(a: &Plugin, b: &Plugin) -> Ordering {
     desc_f(_ts(&a.updated), _ts(&b.updated)).then_with(|| b.stars.cmp(&a.stars))
 }
 fn sort_new(a: &Plugin, b: &Plugin) -> Ordering {
-    desc_f(_ts(&a.added), _ts(&b.added)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    desc_f(_ts(&a.added), _ts(&b.added))
+        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
 }
 fn sort_az(a: &Plugin, b: &Plugin) -> Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
@@ -2559,21 +3527,35 @@ fn sort_za(a: &Plugin, b: &Plugin) -> Ordering {
     b.name.to_lowercase().cmp(&a.name.to_lowercase())
 }
 fn sort_category(a: &Plugin, b: &Plugin) -> Ordering {
-    a.category.to_lowercase().cmp(&b.category.to_lowercase()).then_with(|| b.stars.cmp(&a.stars))
+    a.category
+        .to_lowercase()
+        .cmp(&b.category.to_lowercase())
+        .then_with(|| b.stars.cmp(&a.stars))
 }
 fn sort_provenance(a: &Plugin, b: &Plugin) -> Ordering {
-    a.trust().rank.cmp(&b.trust().rank)
-        .then_with(|| a.market_name().to_lowercase().cmp(&b.market_name().to_lowercase()))
+    a.trust()
+        .rank
+        .cmp(&b.trust().rank)
+        .then_with(|| {
+            a.market_name()
+                .to_lowercase()
+                .cmp(&b.market_name().to_lowercase())
+        })
         .then_with(|| a.owner().to_lowercase().cmp(&b.owner().to_lowercase()))
         .then_with(|| b.stars.cmp(&a.stars))
 }
 fn sort_market(a: &Plugin, b: &Plugin) -> Ordering {
-    a.market_name().to_lowercase().cmp(&b.market_name().to_lowercase())
+    a.market_name()
+        .to_lowercase()
+        .cmp(&b.market_name().to_lowercase())
         .then_with(|| a.trust().rank.cmp(&b.trust().rank))
         .then_with(|| b.stars.cmp(&a.stars))
 }
 fn sort_publisher(a: &Plugin, b: &Plugin) -> Ordering {
-    a.owner().to_lowercase().cmp(&b.owner().to_lowercase()).then_with(|| b.stars.cmp(&a.stars))
+    a.owner()
+        .to_lowercase()
+        .cmp(&b.owner().to_lowercase())
+        .then_with(|| b.stars.cmp(&a.stars))
 }
 
 /// (key, label, sort function)
@@ -2621,7 +3603,9 @@ pub fn market_counts(plugins: &[Plugin]) -> Vec<(String, String, usize)> {
     let mut rows: Vec<(String, String, usize)> = counts
         .into_iter()
         .map(|(mid, n)| {
-            let name = market(&mid).map(|m| m.name.clone()).unwrap_or_else(|| mid.clone());
+            let name = market(&mid)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| mid.clone());
             (mid, name, n)
         })
         .collect();
@@ -2644,13 +3628,23 @@ pub fn try_trust_counts(plugins: &[Plugin]) -> Result<Vec<(String, String, usize
     }
     Ok(TRUST_ORDER
         .iter()
-        .filter_map(|k| counts.get(*k).map(|(label, n)| (k.to_string(), label.clone(), *n)))
+        .filter_map(|k| {
+            counts
+                .get(*k)
+                .map(|(label, n)| (k.to_string(), label.clone(), *n))
+        })
         .collect())
 }
 
 /// The plugins with their raw values dropped: what the typed fields say.
 fn typed(plugins: &[Plugin]) -> Vec<Plugin> {
-    plugins.iter().map(|p| Plugin { raw: BTreeMap::new(), ..p.clone() }).collect()
+    plugins
+        .iter()
+        .map(|p| Plugin {
+            raw: BTreeMap::new(),
+            ..p.clone()
+        })
+        .collect()
 }
 
 /// Filter and sort the store's plugins. Python defaults: `query=""`,
@@ -2671,11 +3665,29 @@ pub fn browse(
     market: &str,
     trust: &str,
 ) -> Vec<Plugin> {
-    let idx = browse_idx(plugins, query, category, sort, installed_only, verified_only, market, trust)
-        .or_else(|_| {
-            browse_idx(&typed(plugins), query, category, sort, installed_only, verified_only, market, trust)
-        })
-        .unwrap_or_default();
+    let idx = browse_idx(
+        plugins,
+        query,
+        category,
+        sort,
+        installed_only,
+        verified_only,
+        market,
+        trust,
+    )
+    .or_else(|_| {
+        browse_idx(
+            &typed(plugins),
+            query,
+            category,
+            sort,
+            installed_only,
+            verified_only,
+            market,
+            trust,
+        )
+    })
+    .unwrap_or_default();
     idx.into_iter().map(|i| plugins[i].clone()).collect()
 }
 
@@ -2691,7 +3703,16 @@ pub fn try_browse(
     market: &str,
     trust: &str,
 ) -> Result<Vec<Plugin>, String> {
-    let idx = browse_idx(plugins, query, category, sort, installed_only, verified_only, market, trust)?;
+    let idx = browse_idx(
+        plugins,
+        query,
+        category,
+        sort,
+        installed_only,
+        verified_only,
+        market,
+        trust,
+    )?;
     Ok(idx.into_iter().map(|i| plugins[i].clone()).collect())
 }
 
@@ -2709,7 +3730,16 @@ pub fn try_browse_refs(
     market: &str,
     trust: &str,
 ) -> Result<Vec<usize>, String> {
-    browse_idx(plugins, query, category, sort, installed_only, verified_only, market, trust)
+    browse_idx(
+        plugins,
+        query,
+        category,
+        sort,
+        installed_only,
+        verified_only,
+        market,
+        trust,
+    )
 }
 
 /// The body of `browse`, as indices into `plugins`.
@@ -2727,7 +3757,9 @@ fn browse_idx<P: std::borrow::Borrow<Plugin>>(
     let q = py_strip(query).to_lowercase();
     let mut out: Vec<usize> = (0..plugins.len()).collect();
     // Each filter is a list comprehension over what the last one kept.
-    let keep = |out: Vec<usize>, f: &dyn Fn(&Plugin) -> Result<bool, String>| -> Result<Vec<usize>, String> {
+    let keep = |out: Vec<usize>,
+                f: &dyn Fn(&Plugin) -> Result<bool, String>|
+     -> Result<Vec<usize>, String> {
         let mut kept = Vec::new();
         for i in out {
             if f(plugins[i].borrow())? {
@@ -2748,7 +3780,12 @@ fn browse_idx<P: std::borrow::Borrow<Plugin>>(
     if verified_only {
         // "Trustworthy" here means a review of some kind exists and still
         // applies to what you would install -- not merely that a tick was set.
-        out = keep(out, &|p| Ok(matches!(p.try_trust()?.key.as_str(), "official" | "reviewed" | "verified")))?;
+        out = keep(out, &|p| {
+            Ok(matches!(
+                p.try_trust()?.key.as_str(),
+                "official" | "reviewed" | "verified"
+            ))
+        })?;
     }
     if installed_only {
         out = keep(out, &|p| Ok(truthy(Some(&p.pv("installed")))))?;
@@ -2760,7 +3797,10 @@ fn browse_idx<P: std::borrow::Borrow<Plugin>>(
             return Ok(bucket);
         }
         let items: Vec<&Plugin> = bucket.iter().map(|i| plugins[*i].borrow()).collect();
-        Ok(try_sorted(&items, sort)?.into_iter().map(|j| bucket[j]).collect())
+        Ok(try_sorted(&items, sort)?
+            .into_iter()
+            .map(|j| bucket[j])
+            .collect())
     };
     if !q.is_empty() {
         // Rank name matches above description matches: searching "clock" should
@@ -2792,7 +3832,10 @@ fn browse_idx<P: std::borrow::Borrow<Plugin>>(
 
 /// `Path(rel).suffix`, as Python 3.14 computes it.
 fn py_suffix(rel: &str) -> String {
-    let name = rel.split('/').rfind(|c| !c.is_empty() && *c != ".").unwrap_or("");
+    let name = rel
+        .split('/')
+        .rfind(|c| !c.is_empty() && *c != ".")
+        .unwrap_or("");
     let name = name.trim_start_matches('.');
     match name.rfind('.') {
         Some(i) => name[i..].to_string(),
@@ -2814,7 +3857,10 @@ pub fn thumb_path(p: &Plugin, detail: bool) -> Option<PathBuf> {
     let digest = Sha1::digest(format!("{}/{}", p.market, rel).as_bytes());
     let key = pfx(&hex::encode(digest), 16);
     let suffix = py_suffix(rel);
-    Some(thumbs().join(format!("{key}{}", if suffix.is_empty() { ".webp" } else { &suffix })))
+    Some(thumbs().join(format!(
+        "{key}{}",
+        if suffix.is_empty() { ".webp" } else { &suffix }
+    )))
 }
 
 /// Move a cached thumbnail's mtime to now when it is a day or more old, so
@@ -2822,7 +3868,10 @@ pub fn thumb_path(p: &Plugin, detail: bool) -> Option<PathBuf> {
 /// what is still shown. A day's slack keeps this to one write per file a day.
 fn mark_used(path: &Path, meta: &std::fs::Metadata) {
     let now = std::time::SystemTime::now();
-    let stale = meta.modified().ok().and_then(|t| now.duration_since(t).ok());
+    let stale = meta
+        .modified()
+        .ok()
+        .and_then(|t| now.duration_since(t).ok());
     if stale.is_some_and(|age| age >= std::time::Duration::from_secs(24 * 3600)) {
         if let Ok(f) = std::fs::File::options().write(true).open(path) {
             let _ = f.set_modified(now);
@@ -2842,7 +3891,11 @@ pub fn fetch_thumb(p: &Plugin, detail: bool) -> Option<PathBuf> {
             return Some(dest);
         }
     }
-    let url = if detail { p.preview_url() } else { p.thumb_url() };
+    let url = if detail {
+        p.preview_url()
+    } else {
+        p.thumb_url()
+    };
     if url.is_empty() {
         return None;
     }
@@ -2872,9 +3925,16 @@ pub const THEME_PAGES: u32 = 4;
 /// collections for other bars. Checked against the name, not the description,
 /// because descriptions mention "theme" constantly and legitimately.
 pub const _NOT_A_THEME: &[&str] = &[
-    "awesome-", "-hook", "theme-manager", "theme-switcher",
-    "waybar-themes", "-templates", "themes-collection",
-    "theme-builder", "-generator", "dotfiles",
+    "awesome-",
+    "-hook",
+    "theme-manager",
+    "theme-switcher",
+    "waybar-themes",
+    "-templates",
+    "themes-collection",
+    "theme-builder",
+    "-generator",
+    "dotfiles",
 ];
 
 /// `Err` where the Python raises: a repo that is not a dict, or a truthy
@@ -2895,12 +3955,21 @@ static PRETTY: LazyLock<regex::Regex> =
 /// Theme rows from the `omarchy-theme` GitHub topic. `Err` only where the
 /// Python raises on a malformed answer (ghcache answers None on error).
 pub fn _theme_rows() -> Result<Vec<Row>, String> {
-    _theme_rows_with(&|url| crate::ghcache::try_get_json(url, crate::ghcache::DEFAULT_TTL, true, crate::ghcache::ACCEPT))
+    _theme_rows_with(&|url| {
+        crate::ghcache::try_get_json(
+            url,
+            crate::ghcache::DEFAULT_TTL,
+            true,
+            crate::ghcache::ACCEPT,
+        )
+    })
 }
 
 /// The body of `_theme_rows`, with the GitHub lookup passed in (the seam the
 /// Python tests mock).
-pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>) -> Result<Vec<Row>, String> {
+pub fn _theme_rows_with(
+    get_json: &dyn Fn(&str) -> Result<Option<Value>, String>,
+) -> Result<Vec<Row>, String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut rows = Vec::new();
     for page in 1..=THEME_PAGES {
@@ -2908,7 +3977,9 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             "{}/search/repositories?q=topic:{THEME_TOPIC}&sort=stars&order=desc&per_page=100&page={page}",
             "https://api.github.com"
         ))?;
-        let data = data.filter(|d| truthy(Some(d))).unwrap_or_else(|| json!({}));
+        let data = data
+            .filter(|d| truthy(Some(d)))
+            .unwrap_or_else(|| json!({}));
         let items = or_(as_dict(&data)?, "items", json!([]));
         if !truthy(Some(&items)) {
             break;
@@ -2923,7 +3994,10 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             }
             seen.insert(full_key);
             let owner_v = or_(rd, "owner", json!({}));
-            let owner_v = as_dict(&owner_v)?.get("login").cloned().unwrap_or_else(|| json!(""));
+            let owner_v = as_dict(&owner_v)?
+                .get("login")
+                .cloned()
+                .unwrap_or_else(|| json!(""));
             let owner = as_str(&owner_v, "lower")?.to_string();
             let slug_v = or_(rd, "name", json!(""));
             let slug = as_str(&slug_v, "lower")?.to_lowercase();
@@ -2936,7 +4010,11 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             };
             let pretty = PRETTY.replace_all(body, "").into_owned() + nl;
             let pretty = py_title(py_strip(&pretty.replace(['-', '_'], " ")));
-            let shown = if pretty.is_empty() { slug.clone() } else { pretty.clone() };
+            let shown = if pretty.is_empty() {
+                slug.clone()
+            } else {
+                pretty.clone()
+            };
             let topics = or_(rd, "topics", json!([]));
             let mut tags = vec![json!("theme")];
             tags.extend(
@@ -2948,9 +4026,16 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             let html_url = rd.get("html_url").cloned().unwrap_or_else(|| json!(""));
             let name_raw = py_str(rd.get("name").unwrap_or(&Value::Null));
             let clone_url = py_str(rd.get("clone_url").unwrap_or(&json!("")));
-            let lic = or_(as_dict(&or_(rd, "license", json!({})))?, "spdx_id", json!(""));
+            let lic = or_(
+                as_dict(&or_(rd, "license", json!({})))?,
+                "spdx_id",
+                json!(""),
+            );
             let mut row = Row::new();
-            row.insert("id".into(), json!(format!("theme.{}.{slug}", owner.to_lowercase())));
+            row.insert(
+                "id".into(),
+                json!(format!("theme.{}.{slug}", owner.to_lowercase())),
+            );
             row.insert("name".into(), json!(shown));
             row.insert("description".into(), or_(rd, "description", json!("")));
             row.insert("author".into(), json!(owner));
@@ -2962,10 +4047,16 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             row.insert("accent".into(), json!(""));
             row.insert("initials".into(), json!(pfx(&shown, 2).to_uppercase()));
             row.insert("repo".into(), html_url.clone());
-            row.insert("stars".into(), py_int(&or_(rd, "stargazers_count", json!(0)))?);
+            row.insert(
+                "stars".into(),
+                py_int(&or_(rd, "stargazers_count", json!(0)))?,
+            );
             row.insert("verified".into(), json!(false));
             row.insert("installable".into(), json!(true));
-            row.insert("install_cmd".into(), json!(format!("omarchy theme install {clone_url}")));
+            row.insert(
+                "install_cmd".into(),
+                json!(format!("omarchy theme install {clone_url}")),
+            );
             row.insert("install_note".into(), json!(""));
             row.insert("license".into(), lic);
             row.insert("updated".into(), or_(rd, "pushed_at", json!("")));
@@ -2979,7 +4070,10 @@ pub fn _theme_rows_with(get_json: &dyn Fn(&str) -> Result<Option<Value>, String>
             row.insert("source_type".into(), json!("community"));
             row.insert("source_url".into(), html_url);
             row.insert("upstream_status".into(), json!("passed"));
-            row.insert("upstream_checked_at".into(), or_(rd, "pushed_at", json!("")));
+            row.insert(
+                "upstream_checked_at".into(),
+                or_(rd, "pushed_at", json!("")),
+            );
             rows.push(row);
         }
     }
@@ -3016,20 +4110,43 @@ pub fn installed_themes() -> BTreeSet<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_plugin_list_is_one_run_shared_with_the_scan() {
+        // The scan and the Store asked Omarchy for its plugins at the same
+        // moment at launch, two runs of the same script.
+        let code = include_str!("store.rs");
+        let code = code.split("#[cfg(test)]").next().unwrap_or(code);
+        assert!(
+            !code.contains("\"plugin\", \"list\""),
+            "store.rs runs omarchy plugin list itself"
+        );
+        assert!(code.contains("plugins::omarchy_list_text()"));
+    }
+
     use super::*;
 
     // The tests point XDG_CACHE_HOME / XDG_STATE_HOME at temp dirs; one at a time.
 
-    fn artcraft_rows(releases: &(dyn Fn(&str, &Value) -> Option<Value> + Sync)) -> HashMap<String, Row> {
-        let html = r#"<a href="/apps/wordcraft">WordCraft</a><a href="/apps/gridcraft">GridCraft</a>"#;
+    fn artcraft_rows(
+        releases: &(dyn Fn(&str, &Value) -> Option<Value> + Sync),
+    ) -> HashMap<String, Row> {
+        let html =
+            r#"<a href="/apps/wordcraft">WordCraft</a><a href="/apps/gridcraft">GridCraft</a>"#;
         let asset = json!({"name": "gridcraft-0.7.0-linux-x86_64.AppImage",
                            "browser_download_url": "https://example.invalid/g.AppImage",
                            "digest": format!("sha256:{}", "c".repeat(64)),
                            "size": 1048576});
         let found = json!({"tag_name": "v0.7.0", "assets": [asset]});
-        let rows = _artcraft_rows_with(None, &|| Ok(html.to_string()), &|_| Ok(Some(json!([]))),
-                                       &|r| Ok(releases(r, &found))).expect("rows");
-        rows.into_iter().map(|r| (r["id"].as_str().unwrap_or_default().to_string(), r)).collect()
+        let rows = _artcraft_rows_with(
+            None,
+            &|| Ok(html.to_string()),
+            &|_| Ok(Some(json!([]))),
+            &|r| Ok(releases(r, &found)),
+        )
+        .expect("rows");
+        rows.into_iter()
+            .map(|r| (r["id"].as_str().unwrap_or_default().to_string(), r))
+            .collect()
     }
 
     // CatalogueLookups: a release lookup that failed is not a release without
@@ -3062,29 +4179,165 @@ mod tests {
     #[test]
     fn test_a_release_without_an_appimage_still_says_so() {
         let bare = json!({"tag_name": "v1.0.0", "assets": []});
-        let rows = artcraft_rows(&|r, found| Some(if r.contains("gridcraft") { found.clone() } else { bare.clone() }));
+        let rows = artcraft_rows(&|r, found| {
+            Some(if r.contains("gridcraft") {
+                found.clone()
+            } else {
+                bare.clone()
+            })
+        });
         assert_eq!(rows["wordcraft"]["status"], "No Linux build");
         assert_eq!(rows["wordcraft"]["unchecked"], false);
     }
 
     fn fixed_loader() -> Result<Vec<Row>, String> {
-        Ok(vec![json!({"id": "wordcraft", "unchecked": false}).as_object().cloned().unwrap_or_default()])
+        Ok(vec![json!({"id": "wordcraft", "unchecked": false})
+            .as_object()
+            .cloned()
+            .unwrap_or_default()])
     }
 
     #[test]
     fn test_an_incomplete_catalogue_is_refetched_before_the_ttl() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tmp");
         std::env::set_var("XDG_CACHE_HOME", d.path());
-        let m = Market { id: "t".into(), name: "T".into(), loader: Some(fixed_loader), ..Market::default() };
+        let m = Market {
+            id: "t".into(),
+            name: "T".into(),
+            loader: Some(fixed_loader),
+            ..Market::default()
+        };
         std::fs::create_dir_all(cache()).expect("mkdir");
-        std::fs::write(m.cache(), json!({"schema": SCHEMA, "rows": [{"id": "wordcraft", "unchecked": true}]})
-            .to_string()).expect("write");
+        std::fs::write(
+            m.cache(),
+            json!({"schema": SCHEMA, "rows": [{"id": "wordcraft", "unchecked": true}]}).to_string(),
+        )
+        .expect("write");
         let past = std::time::SystemTime::now() - std::time::Duration::from_secs_f64(RETRY + 1.0);
-        std::fs::File::options().write(true).open(m.cache()).expect("open").set_modified(past).expect("utime");
+        std::fs::File::options()
+            .write(true)
+            .open(m.cache())
+            .expect("open")
+            .set_modified(past)
+            .expect("utime");
         let rows = _load_market(&m, false).expect("rows");
         std::env::remove_var("XDG_CACHE_HOME");
-        assert_eq!(rows[0]["unchecked"], false, "the stale miss must be retried");
+        assert_eq!(
+            rows[0]["unchecked"], false,
+            "the stale miss must be retried"
+        );
+    }
+
+    fn id_only(e: &Value) -> Result<Row, String> {
+        Ok(json!({"id": e["id"]})
+            .as_object()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// A catalogue server on localhost: 304 to a request that says
+    /// `If-Modified-Since: <its date>`, else the catalogue, gzipped when the
+    /// request accepts gzip. Every request's head is kept.
+    fn catalogue_server() -> (String, std::sync::Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        const DATE: &str = "Tue, 27 Oct 2026 01:04:35 GMT";
+        // {"plugins": [{"id": "zipped"}]}, gzipped.
+        const GZ: [u8; 49] = [
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 171, 86, 42, 200, 41, 77, 207, 204, 43, 86, 178, 82,
+            136, 174, 86, 202, 76, 1, 210, 74, 85, 153, 5, 5, 169, 41, 74, 181, 177, 181, 0, 65,
+            213, 120, 226, 31, 0, 0, 0,
+        ];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/catalog.json", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).unwrap_or(0) == 1 {
+                    head.push(b[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_lowercase();
+                log.lock().unwrap().push(head.clone());
+                let mut out = Vec::new();
+                if head.contains(&format!("if-modified-since: {}", DATE.to_lowercase())) {
+                    out.extend_from_slice(
+                        b"HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n",
+                    );
+                } else if head.contains("accept-encoding: gzip") {
+                    let h = format!(
+                        "HTTP/1.1 200 OK\r\nLast-Modified: {DATE}\r\nContent-Encoding: gzip\r\n\
+                                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        GZ.len()
+                    );
+                    out.extend_from_slice(h.as_bytes());
+                    out.extend_from_slice(&GZ);
+                } else {
+                    let body = r#"{"plugins": [{"id": "plain"}]}"#;
+                    let h = format!(
+                        "HTTP/1.1 200 OK\r\nLast-Modified: {DATE}\r\nContent-Length: {}\r\n\
+                                     Connection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    out.extend_from_slice(h.as_bytes());
+                }
+                let _ = s.write_all(&out);
+            }
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn an_unchanged_catalogue_is_not_downloaded_again() {
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().expect("tmp");
+        std::env::set_var("XDG_CACHE_HOME", d.path());
+        let (url, seen) = catalogue_server();
+        let m = Market {
+            id: "cond".into(),
+            catalog_url: url,
+            mapper: Some(id_only),
+            ..Market::default()
+        };
+        // First: downloaded, compressed on the wire, and kept with its date.
+        let first = _load_market(&m, false).expect("rows");
+        assert_eq!(first, json!([{"id": "zipped", "market": "cond"}]));
+        let blob = read_blob(&m.cache()).expect("kept");
+        assert_eq!(blob["modified"], "Tue, 27 Oct 2026 01:04:35 GMT");
+        // Past its TTL: asked again, conditionally; unchanged, the kept rows
+        // stand and their age restarts.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs_f64(TTL + 60.0);
+        std::fs::File::options()
+            .write(true)
+            .open(m.cache())
+            .expect("open")
+            .set_modified(past)
+            .expect("utime");
+        let again = _load_market(&m, false).expect("rows");
+        let age = std::fs::metadata(m.cache())
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap();
+        std::env::remove_var("XDG_CACHE_HOME");
+        assert_eq!(again, first);
+        assert!(age.as_secs() < 60, "the kept copy counts as fresh again");
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert!(!seen[0].contains("if-modified-since"));
+        assert!(
+            seen[1].contains("if-modified-since: tue, 27 oct 2026 01:04:35 gmt"),
+            "{}",
+            seen[1]
+        );
     }
 
     // SetupAfterInstall: plugins the marketplace marks "requires additional
@@ -3108,7 +4361,10 @@ mod tests {
         let row = entry(json!({}));
         assert_eq!(row["installable"], true);
         assert_eq!(row["needs_setup"], true);
-        assert_eq!(row["install_cmd"], "omarchy plugin add https://github.com/a/x --enable");
+        assert_eq!(
+            row["install_cmd"],
+            "omarchy plugin add https://github.com/a/x --enable"
+        );
         assert_eq!(row["status"], "Needs setup");
     }
 
@@ -3130,14 +4386,16 @@ mod tests {
     #[test]
     fn test_a_repo_url_is_quoted_into_the_command() {
         let row = entry(json!({"repo": "https://github.com/a/x;rm -rf ~"}));
-        let words = shell_words::split(row["install_cmd"].as_str().unwrap_or_default()).expect("split");
+        let words =
+            shell_words::split(row["install_cmd"].as_str().unwrap_or_default()).expect("split");
         assert_eq!(words[3], "https://github.com/a/x;rm -rf ~");
     }
 
     #[test]
     fn an_install_command_must_install_the_listed_repository() {
         let listed = |kw: Value| {
-            let mut e = json!({"id": "x", "repo": "https://github.com/a/x", "installAvailable": true});
+            let mut e =
+                json!({"id": "x", "repo": "https://github.com/a/x", "installAvailable": true});
             if let (Some(e), Some(kw)) = (e.as_object_mut(), kw.as_object()) {
                 e.extend(kw.clone());
             }
@@ -3149,10 +4407,19 @@ mod tests {
             "omarchy plugin add https://github.com/A/X/ --enable",
             "omarchy plugin add 'https://github.com/a/x' --enable",
         ] {
-            assert!(listed(json!({"installCommand": cmd})).as_str().is_some_and(|c| c.starts_with("omarchy plugin add ")), "{cmd}");
+            assert!(
+                listed(json!({"installCommand": cmd}))
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("omarchy plugin add ")),
+                "{cmd}"
+            );
         }
-        assert_eq!(listed(json!({"installCommand": "omarchy plugin add 'https://github.com/a/x' --enable"})),
-                   "omarchy plugin add https://github.com/a/x --enable");
+        assert_eq!(
+            listed(
+                json!({"installCommand": "omarchy plugin add 'https://github.com/a/x' --enable"})
+            ),
+            "omarchy plugin add https://github.com/a/x --enable"
+        );
         // Another repository, another program, or extra words: not offered.
         for cmd in [
             "omarchy plugin add https://github.com/mallory/x --enable",
@@ -3168,21 +4435,43 @@ mod tests {
             assert_eq!(listed(json!({"officialCommand": cmd})), json!(""), "{cmd}");
         }
         // A built-in switches on its own id, nothing else.
-        assert_eq!(listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable x"})),
-                   "omarchy plugin enable x");
-        assert_eq!(listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable y"})), json!(""));
+        assert_eq!(
+            listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable x"})),
+            "omarchy plugin enable x"
+        );
+        assert_eq!(
+            listed(json!({"builtIn": true, "officialCommand": "omarchy plugin enable y"})),
+            json!("")
+        );
         // The setup fallback is built from `repo`, so it always matches.
-        assert_eq!(entry(json!({"installCommand": "omarchy plugin add https://github.com/m/x"}))["install_cmd"],
-                   "omarchy plugin add https://github.com/a/x --enable");
+        assert_eq!(
+            entry(json!({"installCommand": "omarchy plugin add https://github.com/m/x"}))
+                ["install_cmd"],
+            "omarchy plugin add https://github.com/a/x --enable"
+        );
     }
 
     #[test]
     fn first_party_needs_the_owner_on_github() {
-        let m = MARKETS.iter().find(|m| !m.first_party_owner.is_empty()).expect("a market with a first-party owner");
+        let m = MARKETS
+            .iter()
+            .find(|m| !m.first_party_owner.is_empty())
+            .expect("a market with a first-party owner");
         let owner = m.first_party_owner.clone();
-        let p = |repo: String| Plugin { id: "x".into(), market: m.id.clone(), repo, ..Plugin::default() };
-        assert_eq!(p(format!("https://github.com/{owner}/x")).trust().key, "first-party");
-        assert_eq!(p(format!("https://GitHub.com/{owner}/x")).trust().key, "first-party");
+        let p = |repo: String| Plugin {
+            id: "x".into(),
+            market: m.id.clone(),
+            repo,
+            ..Plugin::default()
+        };
+        assert_eq!(
+            p(format!("https://github.com/{owner}/x")).trust().key,
+            "first-party"
+        );
+        assert_eq!(
+            p(format!("https://GitHub.com/{owner}/x")).trust().key,
+            "first-party"
+        );
         for repo in [
             format!("https://gitlab.com/{owner}/x"),
             format!("https://github.com.evil.example/{owner}/x"),
@@ -3197,10 +4486,16 @@ mod tests {
     #[test]
     fn test_switched_off_network_features_make_no_request() {
         // The store's part of it: every marketplace switched off loads none.
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tmp");
         std::env::set_var("XDG_STATE_HOME", d.path());
-        for key in ["net_market_omarchy", "net_market_artcraft", "net_market_themes"] {
+        for key in [
+            "net_market_omarchy",
+            "net_market_artcraft",
+            "net_market_themes",
+        ] {
             crate::settings::set(key, json!(false)).expect("set");
         }
         let on = enabled_markets().len();
@@ -3210,11 +4505,23 @@ mod tests {
 
     #[test]
     fn test_an_appimage_listing_offers_install() {
-        let p = Plugin { id: "x".into(), name: "X".into(), installable: true, install_cmd: String::new(),
-                         install_kind: "appimage".into(), market: "artcraft".into(), ..Plugin::default() };
+        let p = Plugin {
+            id: "x".into(),
+            name: "X".into(),
+            installable: true,
+            install_cmd: String::new(),
+            install_kind: "appimage".into(),
+            market: "artcraft".into(),
+            ..Plugin::default()
+        };
         assert!(p.can_install());
-        let q = Plugin { id: "y".into(), name: "Y".into(), installable: false, market: "omarchy".into(),
-                         ..Plugin::default() };
+        let q = Plugin {
+            id: "y".into(),
+            name: "Y".into(),
+            installable: false,
+            market: "omarchy".into(),
+            ..Plugin::default()
+        };
         assert!(!q.can_install());
     }
 
@@ -3239,18 +4546,27 @@ mod tests {
         assert_eq!(v["c"], json!([null, null]));
         assert_eq!(v["d"], json!("\u{1f600}"));
         assert_eq!(v["e"], json!("\\ud83d"));
-        assert_eq!(py_json_loads(r#"{"NaN": "NaN"}"#).expect("loads"), json!({"NaN": "NaN"}));
+        assert_eq!(
+            py_json_loads(r#"{"NaN": "NaN"}"#).expect("loads"),
+            json!({"NaN": "NaN"})
+        );
         assert!(py_json_loads("{nope").is_err());
         assert!(py_json_loads("-NaN").is_err());
         // A float too big for a Value is null too; numbers are serde's otherwise.
-        assert_eq!(py_json_loads("[1e400, -0, 100000000000000000000]").expect("loads"), json!([null, -0.0, 1e20]));
+        assert_eq!(
+            py_json_loads("[1e400, -0, 100000000000000000000]").expect("loads"),
+            json!([null, -0.0, 1e20])
+        );
         assert!(py_json_loads(&format!("{}1{}", "[".repeat(127), "]".repeat(127))).is_ok());
         assert!(py_json_loads(&format!("{}1{}", "[".repeat(128), "]".repeat(128))).is_err());
     }
 
     #[test]
     fn big_integral_floats_key_as_their_int() {
-        assert_eq!(py_hash_key(&json!(1e19)), py_hash_key(&json!(10_000_000_000_000_000_000u64)));
+        assert_eq!(
+            py_hash_key(&json!(1e19)),
+            py_hash_key(&json!(10_000_000_000_000_000_000u64))
+        );
         assert_eq!(py_hash_key(&json!(-0.0)), py_hash_key(&json!(0)));
         assert_ne!(py_hash_key(&json!(1.5)), py_hash_key(&json!(1)));
     }
@@ -3259,9 +4575,62 @@ mod tests {
     fn run_text_times_out_on_a_held_pipe() {
         // The child exits at once; the grandchild keeps stdout open.
         let start = std::time::Instant::now();
-        assert_eq!(run_text_within(&["sh", "-c", "sleep 5 & echo hi"], std::time::Duration::from_millis(200)), None);
+        assert_eq!(
+            run_text_within(
+                &["sh", "-c", "sleep 5 & echo hi"],
+                std::time::Duration::from_millis(200)
+            ),
+            None
+        );
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
-        assert_eq!(run_text(&["sh", "-c", "echo hi"], 5).as_deref(), Some("hi\n"));
+        assert_eq!(
+            run_text(&["sh", "-c", "echo hi"], 5).as_deref(),
+            Some("hi\n")
+        );
+    }
+
+    /// What loading the catalogue costs in memory. A measurement, not a check:
+    /// `XDG_CACHE_HOME=<a copy of the cache> ALMANAC_DEMO=1 cargo test --release
+    /// --lib catalogue_memory_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    fn catalogue_memory_probe() {
+        fn kb(key: &str) -> u64 {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            status
+                .lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        }
+        let show = |when: &str| {
+            eprintln!(
+                "probe {when:>14}: VmRSS {:>7} kB  RssAnon {:>7} kB  VmHWM {:>7} kB",
+                kb("VmRSS:"),
+                kb("RssAnon:"),
+                kb("VmHWM:")
+            )
+        };
+        let _ = std::fs::write("/proc/self/clear_refs", "5");
+        show("before");
+        let t = std::time::Instant::now();
+        let plugins = try_catalog_annotated(false).expect("the catalogue");
+        let took = t.elapsed();
+        show("loaded");
+        eprintln!(
+            "probe {} plugins in {:.0} ms",
+            plugins.len(),
+            took.as_secs_f64() * 1000.0
+        );
+        let one = serde_json::to_string(&plugins)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        let raw: usize = plugins.iter().map(|p| p.raw.len()).sum();
+        eprintln!("probe raw values kept beside the typed fields: {raw}");
+        eprintln!("probe the list as JSON: {} kB", one / 1024);
+        drop(plugins);
+        show("list dropped");
     }
 
     /// The two tests that plant a catalog in `CACHED` let go of its lock in
@@ -3273,8 +4642,15 @@ mod tests {
         let _plant = CACHE_PLANT.lock().unwrap_or_else(|e| e.into_inner());
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let before = cached.take();
-        let p = Plugin { id: "x".into(), name: "X".into(), ..Plugin::default() };
-        let other = Plugin { description: "different listing".into(), ..p.clone() };
+        let p = Plugin {
+            id: "x".into(),
+            name: "X".into(),
+            ..Plugin::default()
+        };
+        let other = Plugin {
+            description: "different listing".into(),
+            ..p.clone()
+        };
         *cached = Some(vec![p.clone()]);
         drop(cached);
         let mut q = p.clone();
@@ -3282,12 +4658,135 @@ mod tests {
         q.enabled = true;
         let mut o = other;
         o.installed = true;
-        sync_cache(&[q, o]);
+        sync_cache(&mut [q, o]);
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let c = &cached.as_ref().expect("cache")[0];
         assert!(c.installed && c.enabled);
         assert_eq!(c.description, "");
         *cached = before;
+    }
+
+    /// Taking the row makes the same plugin as reading it, odd types and
+    /// refusals included.
+    #[test]
+    fn from_row_owned_is_from_row() {
+        for r in [
+            json!({"id": "a", "name": "A", "stars": 3, "tags": ["x"]}),
+            json!({"id": 5, "name": null, "stars": "many", "tags": "ab", "installed": 1}),
+            json!({"id": "a"}),
+            json!({"name": "A", "nonsense": 1}),
+            json!({"id": "a", "name": "A", "description": null, "unchecked": "yes"}),
+        ] {
+            let row = r.as_object().expect("row").clone();
+            assert_eq!(
+                Plugin::from_row_owned(row.clone()),
+                Plugin::from_row(&row),
+                "{r}"
+            );
+        }
+    }
+
+    /// Working out the marks apart from the list, then putting on only the
+    /// ones that change, leaves the list as marking it in full does -- the
+    /// window does the first (off its thread), the workers the second.
+    #[test]
+    fn mark_changes_are_what_a_full_annotate_does() {
+        let row = |r: Value| Plugin::from_row(r.as_object().expect("row")).expect("plugin");
+        let mut plugins = vec![
+            row(json!({"id": "on", "name": "On"})),
+            row(json!({"id": "off", "name": "Off", "installed": true, "enabled": true})),
+            row(json!({"id": "gone", "name": "Gone", "installed": true})),
+            row(json!({"id": "img", "name": "Img", "install_kind": "appimage"})),
+            row(
+                json!({"id": "img2", "name": "Img2", "install_kind": "appimage", "local_version": "old"}),
+            ),
+            row(json!({"id": "t", "name": "Tokyo", "install_kind": "theme"})),
+            row(json!({"id": "t2", "name": "Mine", "install_kind": "theme", "built_in": true})),
+            row(json!({"id": 5, "name": "Int id"})),
+            row(json!({"id": "same", "name": "Same", "installed": true, "enabled": true})),
+        ];
+        plugins.push(Plugin {
+            installed: true,
+            ..plugins[0].clone()
+        });
+        let facts = Facts {
+            demo: false,
+            have: vec![
+                ("s:on".into(), json!("on"), true),
+                ("s:off".into(), json!("off"), false),
+                ("s:same".into(), json!("same"), true),
+                ("i:5".into(), json!(5), true),
+            ]
+            .into_iter()
+            .map(|(_, id, on): (String, Value, bool)| (py_hash_key(&id).expect("key"), id, on))
+            .collect(),
+            images: [
+                ("img".to_string(), json!("1.2")),
+                ("img2".to_string(), json!(3)),
+            ]
+            .into(),
+            themes: ["tokyo".to_string(), "mine".to_string()].into(),
+            mine: ["mine".to_string()].into(),
+        };
+        let mut full = plugins.clone();
+        let mut done = 0;
+        annotate_marks(&mut full, &facts, &mut done).expect("marks");
+        assert_eq!(done, full.len());
+
+        let (changes, r) = mark_changes(&plugins, &facts);
+        r.expect("marks");
+        // "same" is marked already: nothing to put on it.
+        assert!(
+            !changes.iter().any(|(i, _)| plugins[*i].id == "same"),
+            "{changes:?}"
+        );
+        let mut piecemeal = plugins.clone();
+        apply_mark_changes(&mut piecemeal, &changes);
+        assert_eq!(piecemeal, full);
+        assert!(full[0].installed && full[0].enabled && full[1].installed && !full[1].enabled);
+        assert!(!full[2].installed && full[3].installed && full[3].local_version == "1.2");
+        assert_eq!(full[4].local_version, "3");
+        assert_eq!(full[4].raw.get("local_version"), Some(&json!(3)));
+        assert!(full[5].installed && full[5].built_in && full[6].installed && !full[6].built_in);
+        assert!(full[7].installed, "an int id matches an int id");
+
+        // A plugin that cannot be looked up stops both at the same place.
+        let mut bad = plugins.clone();
+        bad.insert(2, row(json!({"id": ["a"], "name": "List id"})));
+        let mut full = bad.clone();
+        let mut done = 0;
+        let err = annotate_marks(&mut full, &facts, &mut done).expect_err("unhashable");
+        let (changes, r) = mark_changes(&bad, &facts);
+        assert_eq!(r.expect_err("unhashable"), err);
+        let mut piecemeal = bad.clone();
+        apply_mark_changes(&mut piecemeal, &changes);
+        assert_eq!(piecemeal, full);
+    }
+
+    /// `try_catalog_annotated` reads the system (which runs `omarchy`) with
+    /// the cache's lock let go: the window's thread takes the same lock.
+    #[test]
+    fn the_cache_is_not_held_while_the_system_is_read() {
+        let body = include_str!("store.rs")
+            .split("pub fn try_catalog_annotated(")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("try_catalog_annotated");
+        let facts = body.find("gather_facts(").expect("reads the system");
+        let lock = body
+            .find("let mut cached = CACHED.lock()")
+            .expect("marks under the lock");
+        assert!(facts < lock, "the system is read under the cache's lock");
+        // ...and the lock taken before it is a statement's temporary.
+        let before = &body[..facts];
+        assert!(
+            !before.contains("let cached = CACHED.lock()"),
+            "a held guard before reading"
+        );
+        assert!(
+            !body.contains("let fresh = try_catalog("),
+            "a catalogue copy made and thrown away"
+        );
     }
 
     #[test]
@@ -3296,8 +4795,13 @@ mod tests {
         let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
         let before = cached.take();
         // Marked installed before; nothing by this id is on any machine.
-        let p = Plugin { id: "almanac-test-no-such-plugin".into(), name: "X".into(), installed: true,
-                         enabled: true, ..Plugin::default() };
+        let p = Plugin {
+            id: "almanac-test-no-such-plugin".into(),
+            name: "X".into(),
+            installed: true,
+            enabled: true,
+            ..Plugin::default()
+        };
         *cached = Some(vec![p]);
         drop(cached);
         let got = try_catalog_annotated(false);
@@ -3315,15 +4819,25 @@ mod tests {
     #[test]
     fn wrong_typed_values_raise_where_python_does() {
         let p = |r: Value| Plugin::from_row(r.as_object().expect("row")).expect("plugin");
-        assert!(p(json!({"id": "x", "name": "X", "tags": ["a", 1]})).try_haystack().is_err());
+        assert!(p(json!({"id": "x", "name": "X", "tags": ["a", 1]}))
+            .try_haystack()
+            .is_err());
         assert!(p(json!({"id": "x", "name": null})).try_haystack().is_err());
-        assert!(p(json!({"id": "x", "name": "X", "repo": null})).try_owner().is_err());
+        assert!(p(json!({"id": "x", "name": "X", "repo": null}))
+            .try_owner()
+            .is_err());
         assert!(p(json!({"id": "x", "name": "X", "upstream_status": "failed", "upstream_checked_at": null}))
             .try_trust()
             .is_err());
-        let rows = vec![p(json!({"id": "s", "name": "S", "stars": "12"})), p(json!({"id": "t", "name": "T", "stars": 3}))];
+        let rows = vec![
+            p(json!({"id": "s", "name": "S", "stars": "12"})),
+            p(json!({"id": "t", "name": "T", "stars": 3})),
+        ];
         assert!(try_browse(&rows, "", "", "popular", false, false, "", "").is_err());
         // the UI still gets a page: sorted on the typed fields
-        assert_eq!(browse(&rows, "", "", "popular", false, false, "", "").len(), 2);
+        assert_eq!(
+            browse(&rows, "", "", "popular", false, false, "", "").len(),
+            2
+        );
     }
 }

@@ -36,9 +36,8 @@ pub(super) fn py_splitlines(s: &str) -> Vec<&str> {
                     i + 1
                 }
             }
-            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                i + c.len_utf8()
-            }
+            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}'
+            | '\u{2029}' => i + c.len_utf8(),
             _ => continue,
         };
         out.push(&s[start..i]);
@@ -113,12 +112,17 @@ pub(super) fn real_str(v: &Value) -> Option<String> {
 /// anything else is the TypeError Python raises.
 pub(super) fn py_iter(v: &Value) -> Result<Vec<Value>, String> {
     if let Some(Exotic::WStr(t)) = exotic(v) {
-        return Ok(wstr_units(t).into_iter().map(|u| units_json(&[u])).collect());
+        return Ok(wstr_units(t)
+            .into_iter()
+            .map(|u| units_json(&[u]))
+            .collect());
     }
     match v {
         Value::Array(a) => Ok(a.clone()),
         Value::Object(o) => Ok(o.keys().map(|k| json!(k)).collect()),
-        Value::String(s) if exotic(v).is_none() => Ok(s.chars().map(|c| json!(c.to_string())).collect()),
+        Value::String(s) if exotic(v).is_none() => {
+            Ok(s.chars().map(|c| json!(c.to_string())).collect())
+        }
         other => Err(format!("'{}' object is not iterable", py_type(other))),
     }
 }
@@ -128,7 +132,11 @@ pub(super) fn py_float_str(f: f64) -> String {
     if f.is_nan() {
         "nan".into()
     } else if f.is_infinite() {
-        if f > 0.0 { "inf".into() } else { "-inf".into() }
+        if f > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }
     } else {
         util::py_float_repr(f)
     }
@@ -215,7 +223,13 @@ pub(super) fn py_repr(v: &Value) -> String {
     }
     match v {
         Value::Null => "None".into(),
-        Value::Bool(b) => if *b { "True".into() } else { "False".into() },
+        Value::Bool(b) => {
+            if *b {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
         Value::Number(n) => match n.as_f64().filter(|_| n.is_f64()) {
             Some(f) => util::py_float_repr(f),
             None => n.to_string(),
@@ -316,7 +330,11 @@ pub(super) fn units_dumps(units: &[u32]) -> String {
 
 /// A str from its code points: a `String` when it has no lone surrogate.
 pub(super) fn units_json(units: &[u32]) -> Value {
-    match units.iter().map(|&u| char::from_u32(u)).collect::<Option<String>>() {
+    match units
+        .iter()
+        .map(|&u| char::from_u32(u))
+        .collect::<Option<String>>()
+    {
         Some(s) => Value::String(s),
         None => Value::String(format!("{PYX}s:{}", units_dumps(units))),
     }
@@ -351,12 +369,17 @@ pub(super) fn wstr_units(text: &str) -> Vec<u32> {
             Units::null()
         }
     }
-    pyjson::loads::<Units>(text, pyjson::Limit::values(1)).map(|u| u.0).unwrap_or_default()
+    pyjson::loads::<Units>(text, pyjson::Limit::values(1))
+        .map(|u| u.0)
+        .unwrap_or_default()
 }
 
 /// A `WStr` as Rust text, each lone surrogate U+FFFD.
 pub(super) fn wstr_lossy(text: &str) -> String {
-    wstr_units(text).into_iter().map(|u| char::from_u32(u).unwrap_or('\u{fffd}')).collect()
+    wstr_units(text)
+        .into_iter()
+        .map(|u| char::from_u32(u).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// `str(Path)` of a path: a name that is not UTF-8 keeps its bytes as
@@ -377,7 +400,12 @@ pub(super) fn path_json(p: &Path) -> Value {
             }
             Err(e) => {
                 let (good, bad) = rest.split_at(e.valid_up_to());
-                units.extend(std::str::from_utf8(good).unwrap_or_default().chars().map(|c| c as u32));
+                units.extend(
+                    std::str::from_utf8(good)
+                        .unwrap_or_default()
+                        .chars()
+                        .map(|c| c as u32),
+                );
                 let n = e.error_len().unwrap_or(bad.len());
                 units.extend(bad[..n].iter().map(|&b| 0xdc00 + b as u32));
                 rest = &bad[n..];
@@ -509,7 +537,6 @@ pub(super) fn dump_into(out: &mut String, v: &Value, indent: Option<usize>, leve
     }
 }
 
-
 /// Every Unicode decimal digit as its ASCII digit; nothing else changes.
 pub(super) fn ascii_digits(s: &str) -> String {
     s.chars()
@@ -567,7 +594,11 @@ pub(super) fn py_int_text(s: &str) -> Option<String> {
     if digits.len() > 4300 {
         return None; // the int-string conversion limit, a ValueError
     }
-    Some(if neg { format!("-{digits}") } else { digits.to_string() })
+    Some(if neg {
+        format!("-{digits}")
+    } else {
+        digits.to_string()
+    })
 }
 
 /// `float(value)` of a JSON value; None where Python would raise.
@@ -592,8 +623,9 @@ pub(super) fn py_float_value(v: &Value) -> Option<f64> {
 /// `float(d.get(key) or 0)`; Err where Python raises (ValueError/TypeError).
 pub(super) fn float_or_zero(d: &Map<String, Value>, key: &str) -> Result<f64, String> {
     match d.get(key) {
-        Some(v) if truthy(v) => py_float_value(v)
-            .ok_or_else(|| format!("could not convert to float: {}", py_str(v))),
+        Some(v) if truthy(v) => {
+            py_float_value(v).ok_or_else(|| format!("could not convert to float: {}", py_str(v)))
+        }
         _ => Ok(0.0),
     }
 }
@@ -622,7 +654,10 @@ pub(super) fn py_path(s: &str) -> String {
     }
     let abs = s.starts_with('/');
     let double = s.starts_with("//") && !s.starts_with("///");
-    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
+    let parts: Vec<&str> = s
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
     let body = parts.join("/");
     if double {
         format!("//{body}")
@@ -650,7 +685,11 @@ pub(super) fn http_json(url: &str, timeout: u64) -> Result<Value, Box<dyn std::e
         .timeout_connect(Some(t))
         .timeout_send_request(Some(t))
         .timeout_recv_response(Some(t))
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(crate::sources::system_roots()).build())
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(crate::sources::system_roots())
+                .build(),
+        )
         .build()
         .into();
     let r = agent.get(url).call()?;
@@ -719,7 +758,10 @@ mod tests {
 
     #[test]
     fn test_str_of_a_list_is_its_repr() {
-        assert_eq!(py_str(&json!(["Al", 1, null, {"k": true}])), "['Al', 1, None, {'k': True}]");
+        assert_eq!(
+            py_str(&json!(["Al", 1, null, {"k": true}])),
+            "['Al', 1, None, {'k': True}]"
+        );
         assert_eq!(py_repr(&json!("it's")), "\"it's\"");
     }
 }

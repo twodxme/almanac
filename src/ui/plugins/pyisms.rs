@@ -3,8 +3,8 @@
 
 use gtk::{gio, glib};
 
-use crate::{inventory, util};
 use crate::verify::ProbeValue;
+use crate::{inventory, util};
 
 /// `str(OSError)` as Python prints it: `[Errno 2] No such file or
 /// directory: 'x'`.
@@ -12,7 +12,9 @@ pub(super) fn py_oserror(e: &std::io::Error, filename: &str) -> String {
     match e.raw_os_error() {
         Some(code) => {
             let text = e.to_string();
-            let text = text.strip_suffix(&format!(" (os error {code})")).unwrap_or(&text);
+            let text = text
+                .strip_suffix(&format!(" (os error {code})"))
+                .unwrap_or(&text);
             format!("[Errno {code}] {text}: {}", py_repr(filename))
         }
         None => e.to_string(),
@@ -114,7 +116,11 @@ fn py_printable(c: char) -> bool {
 
 /// Python's `repr(str)`.
 pub(super) fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::from(quote);
     for c in s.chars() {
         match c {
@@ -159,7 +165,9 @@ fn py_repr_value(v: &serde_json::Value) -> String {
         },
         // Lists and dicts without recursion: an `extra` value printed on the
         // window's thread can be as deep as a cache file holds.
-        V::String(_) | V::Array(_) | V::Object(_) => util::tree::repr_value(v, py_repr, py_repr_value),
+        V::String(_) | V::Array(_) | V::Object(_) => {
+            util::tree::repr_value(v, py_repr, py_repr_value)
+        }
     }
 }
 
@@ -178,9 +186,8 @@ pub(super) fn py_splitlines(s: &str) -> Vec<&str> {
                     i + 1
                 }
             }
-            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                i + c.len_utf8()
-            }
+            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}'
+            | '\u{2029}' => i + c.len_utf8(),
             _ => continue,
         };
         out.push(&s[start..i]);
@@ -219,7 +226,10 @@ pub(super) fn run_checked(argv: &[String], timeout: u64) -> Result<util::Output,
     }
     if r.timed_out {
         let list: Vec<String> = argv.iter().map(|a| py_repr(a)).collect();
-        return Err(format!("Command '[{}]' timed out after {timeout} seconds", list.join(", ")));
+        return Err(format!(
+            "Command '[{}]' timed out after {timeout} seconds",
+            list.join(", ")
+        ));
     }
     Ok(r)
 }
@@ -237,7 +247,11 @@ pub(super) fn truthy(v: &Option<ProbeValue>) -> bool {
 }
 
 pub(super) fn extra_str(app: &inventory::App, key: &str) -> String {
-    app.extra.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    app.extra
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -246,7 +260,10 @@ mod tests {
 
     #[test]
     fn python_string_helpers() {
-        assert_eq!(py_splitlines("a\r\nb\rc\n\nd\x0ce\u{2028}f\n"), vec!["a", "b", "c", "", "d", "e", "f"]);
+        assert_eq!(
+            py_splitlines("a\r\nb\rc\n\nd\x0ce\u{2028}f\n"),
+            vec!["a", "b", "c", "", "d", "e", "f"]
+        );
         assert_eq!(py_splitlines(""), Vec::<&str>::new());
         assert_eq!(py_repr("omarchy"), "'omarchy'");
         assert_eq!(py_repr("it's"), "\"it's\"");
@@ -259,7 +276,10 @@ mod tests {
         assert_eq!(py_repr("\u{e0001}"), "'\\U000e0001'");
         assert_eq!(py_str_value(&serde_json::Value::Null), "None");
         assert_eq!(py_str_value(&serde_json::json!("org.x")), "org.x");
-        assert_eq!(py_str_value(&serde_json::json!([1, "a", true])), "[1, 'a', True]");
+        assert_eq!(
+            py_str_value(&serde_json::json!([1, "a", true])),
+            "[1, 'a', True]"
+        );
     }
 
     #[test]
@@ -273,16 +293,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(err, format!("[Errno 13] Permission denied: '{prog}'"));
         let err = run_checked(&["/nonexistent/almanac-test".to_string()], 5).unwrap_err();
-        assert_eq!(err, "[Errno 2] No such file or directory: '/nonexistent/almanac-test'");
-        let r = run_checked(&["sh".into(), "-c".into(), "echo out; echo err >&2; exit 3".into()], 5).unwrap();
-        assert_eq!((r.stdout.as_str(), r.stderr.as_str(), r.code), ("out\n", "err\n", Some(3)));
+        assert_eq!(
+            err,
+            "[Errno 2] No such file or directory: '/nonexistent/almanac-test'"
+        );
+        let r = run_checked(
+            &[
+                "sh".into(),
+                "-c".into(),
+                "echo out; echo err >&2; exit 3".into(),
+            ],
+            5,
+        )
+        .unwrap();
+        assert_eq!(
+            (r.stdout.as_str(), r.stderr.as_str(), r.code),
+            ("out\n", "err\n", Some(3))
+        );
         let err = run_checked(&["sleep".into(), "5".into()], 0).unwrap_err();
         assert_eq!(err, "Command '['sleep', '5']' timed out after 0 seconds");
         // A grandchild still holding stdout is a timeout, not a hang.
         let t = std::time::Instant::now();
         let argv: Vec<String> = vec!["sh".into(), "-c".into(), "sleep 30 & echo started".into()];
         let err = run_checked(&argv, 1).unwrap_err();
-        assert_eq!(err, "Command '['sh', '-c', 'sleep 30 & echo started']' timed out after 1 seconds");
+        assert_eq!(
+            err,
+            "Command '['sh', '-c', 'sleep 30 & echo started']' timed out after 1 seconds"
+        );
         assert!(t.elapsed() < std::time::Duration::from_secs(10));
     }
 
@@ -294,7 +331,8 @@ mod tests {
         let script = format!("ps -o sid= -p $$ > {}.tmp && mv {0}.tmp {0}", out.display());
         popen_detached(&["sh".into(), "-c".into(), script]).unwrap();
         let mut text = String::new();
-        for _ in 0..200 {
+        // Up to 5 s: on a loaded machine `ps` alone has taken over 2 s.
+        for _ in 0..500 {
             if let Ok(t) = std::fs::read_to_string(&out) {
                 text = t;
                 break;
@@ -302,7 +340,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let _ = std::fs::remove_dir_all(&dir);
-        let mine = rustix::process::getsid(None).unwrap().as_raw_nonzero().get();
+        let mine = rustix::process::getsid(None)
+            .unwrap()
+            .as_raw_nonzero()
+            .get();
         let theirs: i32 = text.trim().parse().unwrap();
         assert_ne!(theirs, mine);
     }
@@ -310,12 +351,18 @@ mod tests {
     #[test]
     fn popen_reports_the_os_error_like_python() {
         let e = popen_detached(&["/nonexistent/almanac-test".to_string()]).unwrap_err();
-        assert_eq!(py_oserror(&e, "/nonexistent/almanac-test"), "[Errno 2] No such file or directory: '/nonexistent/almanac-test'");
+        assert_eq!(
+            py_oserror(&e, "/nonexistent/almanac-test"),
+            "[Errno 2] No such file or directory: '/nonexistent/almanac-test'"
+        );
     }
 
     #[test]
     fn oserror_reads_like_python() {
         let e = std::io::Error::from_raw_os_error(2);
-        assert_eq!(py_oserror(&e, "x"), "[Errno 2] No such file or directory: 'x'");
+        assert_eq!(
+            py_oserror(&e, "x"),
+            "[Errno 2] No such file or directory: 'x'"
+        );
     }
 }

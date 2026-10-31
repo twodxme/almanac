@@ -9,26 +9,25 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use serde_json::{Map, Value};
 
-use crate::{agents, appimage, inventory, patches, plugins, snapshots, tasks, verify};
 use crate::i18n::tr;
 use crate::inventory::App;
 use crate::patches::PatchState;
 use crate::tasks::{LogFn, Step, StepAction};
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
+use crate::{agents, appimage, inventory, patches, plugins, snapshots, tasks, verify};
 
-use super::pyisms::{extra_str, not_a_path, py_oserror, py_path, py_str, py_str_repr, py_type, strerror, truthy};
+use super::pyisms::{
+    extra_str, not_a_path, py_oserror, py_path, py_str, py_str_repr, py_type, strerror, truthy,
+};
 use super::raised;
-use super::verification::{after_pacman_again, after_pacman_cb, app_judge, app_judge_again};
+use super::verification::{
+    after_pacman_again, after_pacman_cb, app_judge, app_judge_again, UpdateLog,
+};
 
 /// The `yay` argv that installs or updates one package (`on_update_one`,
 /// `_install_option`).
 pub fn yay_argv(name: &str) -> Vec<String> {
     tasks::yay_install(&[name])
-}
-
-/// The shell script `on_update_all` runs in a terminal.
-pub fn update_all_script(command: &str) -> String {
-    format!("{command}; echo; read -n1 -r -p 'Done — press any key to close'")
 }
 
 /// The test of `on_update_one`: a release only checkupdates knows about
@@ -93,7 +92,11 @@ pub(in crate::ui) fn update_cmd(app: &App) -> Result<Vec<String>, String> {
 /// `Err`: network, disk, permissions, a download that is not whole.
 pub(in crate::ui) fn appimage_update_work(app: &App) -> Result<(), String> {
     let url = app.extra.get("download").cloned().unwrap_or_default();
-    let sha256 = app.extra.get("sha256").and_then(Value::as_str).unwrap_or_default();
+    let sha256 = app
+        .extra
+        .get("sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let dest = py_path(&app.exec_path);
     // urllib's Request takes str(url).
     appimage::download_verified(&py_str(&url), &dest, None, sha256)?;
@@ -102,11 +105,16 @@ pub(in crate::ui) fn appimage_update_work(app: &App) -> Result<(), String> {
     let k = key_str(&key)?.map(str::to_string);
     // Read afresh under the registry's lock: only this entry changes.
     inventory::update_registry(|reg| {
-        let Some(entry) = k.and_then(|k| reg.get_mut(&k)) else { return Ok(false) };
+        let Some(entry) = k.and_then(|k| reg.get_mut(&k)) else {
+            return Ok(false);
+        };
         let Some(entry) = entry.as_object_mut() else {
             return Err(match entry {
                 Value::Array(_) => "list indices must be integers or slices, not str".to_string(),
-                other => format!("'{}' object does not support item assignment", py_type(other)),
+                other => format!(
+                    "'{}' object does not support item assignment",
+                    py_type(other)
+                ),
             });
         };
         entry.insert("version".to_string(), Value::String(update));
@@ -121,7 +129,10 @@ pub(in crate::ui) fn appimage_update_work(app: &App) -> Result<(), String> {
 
 /// `app.extra.get("key", app.name)`, as Python holds it.
 fn registry_key(app: &App) -> Value {
-    app.extra.get("key").cloned().unwrap_or_else(|| Value::String(app.name.clone()))
+    app.extra
+        .get("key")
+        .cloned()
+        .unwrap_or_else(|| Value::String(app.name.clone()))
 }
 
 /// The registry entry `key` names, if a str: JSON keys are strings, so
@@ -131,7 +142,9 @@ fn key_str(key: &Value) -> Result<Option<&str>, String> {
         Value::String(s) => Ok(Some(s)),
         Value::Array(_) | Value::Object(_) => {
             let t = py_type(key);
-            Err(format!("cannot use '{t}' as a dict key (unhashable type: '{t}')"))
+            Err(format!(
+                "cannot use '{t}' as a dict key (unhashable type: '{t}')"
+            ))
         }
         _ => Ok(None),
     }
@@ -183,7 +196,10 @@ pub fn remove_appimage_with(
     let key = registry_key(app);
     let path = py_path(&app.exec_path);
     if let Err(e) = delete_appimage_files(&path) {
-        let name = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
         return Ok(Removal::NotDeleted(format!("Could not delete {name}: {e}")));
     }
     if let Some(k) = key_str(&key).map_err(|e| format!("TypeError: {e}"))? {
@@ -211,10 +227,12 @@ pub(in crate::ui) fn popen_new_session(argv: &[String]) -> Result<gio::Subproces
         let _ = rustix::process::setsid();
     });
     let args: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsStr::new).collect();
-    launcher.spawn(&args).map_err(|e| match e.kind::<SpawnErrno>() {
-        Some(SpawnErrno(Some(n))) => errno_text(n, prog),
-        _ => e.message().to_string(),
-    })
+    launcher
+        .spawn(&args)
+        .map_err(|e| match e.kind::<SpawnErrno>() {
+            Some(SpawnErrno(Some(n))) => errno_text(n, prog),
+            _ => e.message().to_string(),
+        })
 }
 
 /// `str(OSError)` of a failed exec: `[Errno 2] No such file or directory: 'x'`.
@@ -242,7 +260,11 @@ impl glib::error::ErrorDomain for SpawnErrno {
         // NAMETOOLONG NOENT NOMEM NOTDIR LOOP TXTBUSY IO NFILE MFILE INVAL
         // ISDIR LIBBAD FAILED.
         const ERRNO: [i32; 16] = [13, 1, 7, 8, 36, 2, 12, 20, 40, 26, 5, 23, 24, 22, 21, 80];
-        Some(SpawnErrno(usize::try_from(code - 3).ok().and_then(|i| ERRNO.get(i).copied())))
+        Some(SpawnErrno(
+            usize::try_from(code - 3)
+                .ok()
+                .and_then(|i| ERRNO.get(i).copied()),
+        ))
     }
 }
 
@@ -291,23 +313,53 @@ impl Win {
     /// involved. Every caller has asked first: the file and its rollback
     /// copy are gone for good.
     pub fn remove_appimage(&self, app: &App) {
+        self.remove_appimage_then(app, |_| {});
+    }
+
+    /// `remove_appimage`, then `then` once the removal has been tried
+    /// (whatever came of it): it runs off the main thread, so what reads
+    /// the registry after it waits for it here.
+    pub fn remove_appimage_then(&self, app: &App, then: impl FnOnce(&Win) + 'static) {
+        if self.demo_refuses() {
+            return;
+        }
         // Its read and its write of the registry as one, under the lock;
         // let go before anything (the reload) reads the registry again.
-        let removed = inventory::lock_registry().and_then(|_lock| {
-            remove_appimage_with(app, inventory::load_registry, inventory::save_registry, appimage::remove_desktop_entry)
-        });
-        match removed {
-            Err(e) => raised(&e),
-            Ok(Removal::NotDeleted(msg)) => self.say(&msg, 5),
-            Ok(Removal::Removed) => {
-                self.say(&format!("Removed {}", app.name), 5);
-                self.reload();
-            }
-        }
+        // Off the main thread: the lock waits for whoever holds it (the
+        // scheduled update holds it through its downloads).
+        let (w, app) = (self.downgrade(), app.clone());
+        let name = app.name.clone();
+        crate::ui::shell::spawn_bg_checked(
+            move || {
+                inventory::lock_registry().and_then(|_lock| {
+                    remove_appimage_with(
+                        &app,
+                        inventory::load_registry,
+                        inventory::save_registry,
+                        appimage::remove_desktop_entry,
+                    )
+                })
+            },
+            move |removed| {
+                let Some(w) = w.upgrade() else { return };
+                match removed.and_then(|r| r) {
+                    Err(e) => raised(&e),
+                    Ok(Removal::NotDeleted(msg)) => w.say(&msg, 5),
+                    Ok(Removal::Removed) => {
+                        w.say(&format!("Removed {name}"), 5);
+                        w.reload();
+                    }
+                }
+                then(&w);
+            },
+        );
     }
 
     /// Update one thing, with whatever tool owns it.
     pub fn on_update_one(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let argv = match update_one(app, inventory::synced_version) {
             UpdateOne::Agent => {
                 self.update_agent(app);
@@ -352,10 +404,18 @@ impl Win {
         tasks::confirm(
             &self.window,
             &format!("Update {} only?", app.name),
-            &tr("Arch prefers full system upgrades. Updating one package against a \
+            &tr(
+                "Arch prefers full system upgrades. Updating one package against a \
                  database that has moved on is a partial upgrade, which can break \
-                 linking. “Update all” is the safer choice."),
-            &format!("{}  {} → {}\n\n$ {}", app.name, app.version, app.update, argv.join(" ")),
+                 linking. “Update all” is the safer choice.",
+            ),
+            &format!(
+                "{}  {} → {}\n\n$ {}",
+                app.name,
+                app.version,
+                app.update,
+                argv.join(" ")
+            ),
             &tr("Update anyway"),
             false,
             move || {
@@ -371,17 +431,28 @@ impl Win {
                 };
                 let w = win.downgrade();
                 let title = format!("Updating {}", app.name);
-                win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
-                    if let Some(win) = w.upgrade() {
-                        tasks::run(&win.window, &title, steps, Some(done));
-                    }
-                });
+                let log = Some(UpdateLog::new(&app, &argv));
+                win.checked_logged(
+                    verify::for_app_try(&app),
+                    app_judge(&app),
+                    Some(after_pacman_cb(&win)),
+                    raised,
+                    log,
+                    move |done| {
+                        if let Some(win) = w.upgrade() {
+                            win.run_task(&title, steps, Some(done));
+                        }
+                    },
+                );
             },
         );
     }
 
     /// Agents update themselves, or their version manager does it.
     pub fn update_agent(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let cmd = update_cmd(app);
         if cmd.as_ref().is_ok_and(|c| c.is_empty()) {
             self.say(
@@ -444,24 +515,50 @@ impl Win {
             Ok(c) => c,
             Err(e) => return raised(&e),
         };
-        let mut detail = format!("{}  {} → {}\n\n$ {}", app.name, app.version, app.update, cmd.join(" "));
+        let mut detail = format!(
+            "{}  {} → {}\n\n$ {}",
+            app.name,
+            app.version,
+            app.update,
+            cmd.join(" ")
+        );
         if !notes.is_empty() {
             detail += &format!("\n\nWhat changed\n{notes}");
         }
-        let action = if !major { tr("Update") } else { format!("Update to {}", app.update) };
+        let action = if !major {
+            tr("Update")
+        } else {
+            format!("Update to {}", app.update)
+        };
         let w = self.downgrade();
         let app_c = app.clone();
-        tasks::confirm(&self.window, &heading, &body, &detail, &action, false, move || {
-            let Some(win) = w.upgrade() else { return };
-            let app = app_c.clone();
-            let w = win.downgrade();
-            let (title, cmd) = (format!("Updating {}", app.name), cmd.clone());
-            win.checked(verify::for_app_try(&app), app_judge(&app), Some(after_pacman_cb(&win)), raised, move |done| {
-                if let Some(win) = w.upgrade() {
-                    tasks::run(&win.window, &title, vec![Step::argv(title.clone(), cmd)], Some(done));
-                }
-            });
-        });
+        tasks::confirm(
+            &self.window,
+            &heading,
+            &body,
+            &detail,
+            &action,
+            false,
+            move || {
+                let Some(win) = w.upgrade() else { return };
+                let app = app_c.clone();
+                let w = win.downgrade();
+                let (title, cmd) = (format!("Updating {}", app.name), cmd.clone());
+                let log = Some(UpdateLog::new(&app, &cmd));
+                win.checked_logged(
+                    verify::for_app_try(&app),
+                    app_judge(&app),
+                    Some(after_pacman_cb(&win)),
+                    raised,
+                    log,
+                    move |done| {
+                        if let Some(win) = w.upgrade() {
+                            win.run_task(&title, vec![Step::argv(title.clone(), cmd)], Some(done));
+                        }
+                    },
+                );
+            },
+        );
     }
 
     /// Update a local checkout, taking any local edits into account.
@@ -471,11 +568,18 @@ impl Win {
     /// is dropped, one that still applies is carried over, and one that
     /// conflicts is set aside as a stash. Edits are never discarded.
     pub fn on_git_pull(&self, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         let Some(repo) = app.extra.get("repo").filter(|v| truthy(v)).cloned() else {
             return;
         };
         if extra_str(app, "plugin_state") == plugins::LOCAL {
-            let detail = app.extra.get("plugin_detail").map(py_str).unwrap_or_default();
+            let detail = app
+                .extra
+                .get("plugin_detail")
+                .map(py_str)
+                .unwrap_or_default();
             self.say(&format!("{}: {}", app.name, detail), 8);
             return;
         }
@@ -521,41 +625,77 @@ impl Win {
         let steps = patches::steps(repo, state, &app.name, pull.as_deref());
         let w = self.downgrade();
         let (app, state) = (app.clone(), state.clone());
-        self.checked_again(verify::git_head_try(repo), app_judge_again(&app), after_pacman_again(self), move |done| {
-            if let Some(win) = w.upgrade() {
-                win.confirm_pull_with(&app, &state, steps, done);
-            }
-        });
+        self.checked_again(
+            verify::git_head_try(repo),
+            app_judge_again(&app),
+            after_pacman_again(self),
+            move |done| {
+                if let Some(win) = w.upgrade() {
+                    win.confirm_pull_with(&app, &state, steps, done);
+                }
+            },
+        );
     }
 
     /// `confirm_pull`, once the checkout's head before the pull is known.
-    fn confirm_pull_with(&self, app: &App, state: &PatchState, steps: Vec<Step>, done: Rc<dyn Fn(bool)>) {
+    fn confirm_pull_with(
+        &self,
+        app: &App,
+        state: &PatchState,
+        steps: Vec<Step>,
+        done: Rc<dyn Fn(bool)>,
+    ) {
         if state.kind == patches::CLEAN || state.kind == patches::UNKNOWN {
-            tasks::run(&self.window, &format!("Updating {}", app.name), steps, Some(Box::new(move |ok| done(ok))));
+            self.run_task(
+                &format!("Updating {}", app.name),
+                steps,
+                Some(Box::new(move |ok| done(ok))),
+            );
             return;
         }
         let (heading, body, action) = patches::explain(state, &app.name);
-        let Some(lines) = steps.iter().map(|s| step_text(s).map(|t| format!("$ {t}"))).collect::<Option<Vec<_>>>() else {
+        let Some(lines) = steps
+            .iter()
+            .map(|s| step_text(s).map(|t| format!("$ {t}")))
+            .collect::<Option<Vec<_>>>()
+        else {
             return raised("TypeError: can only join an iterable");
         };
         let mut detail = lines.join("\n");
         if !state.upstream_commits.is_empty() {
             detail += &format!(
                 "\n\nUpstream changes to the same files\n{}",
-                state.upstream_commits.iter().take(15).cloned().collect::<Vec<_>>().join("\n")
+                state
+                    .upstream_commits
+                    .iter()
+                    .take(15)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
         }
         let w = self.downgrade();
         let title = format!("Updating {}", app.name);
-        tasks::confirm(&self.window, &heading, &body, &detail, &action, false, move || {
-            let Some(win) = w.upgrade() else { return };
-            let done = done.clone();
-            tasks::run(&win.window, &title, steps.clone(), Some(Box::new(move |ok| done(ok))));
-        });
+        tasks::confirm(
+            &self.window,
+            &heading,
+            &body,
+            &detail,
+            &action,
+            false,
+            move || {
+                let Some(win) = w.upgrade() else { return };
+                let done = done.clone();
+                win.run_task(&title, steps.clone(), Some(Box::new(move |ok| done(ok))));
+            },
+        );
     }
 
     /// Download the newer AppImage and swap it in, off the UI thread.
     pub fn on_update_appimage(&self, button: &gtk::Button, app: &App) {
+        if self.demo_refuses() {
+            return;
+        }
         if !app.extra.get("download").is_some_and(truthy) {
             self.say(&format!("No download URL for {}", app.name), 5);
             return;
@@ -567,6 +707,8 @@ impl Win {
         let work = move || appimage_update_work(&app_c);
         let w = self.downgrade();
         let (name, version) = (app.name.clone(), app.update.clone());
+        let url = app.extra.get("download").map(py_str).unwrap_or_default();
+        let log = UpdateLog::new(app, &[format!("download {url}")]);
         spawn_bg(
             move || {
                 // A panic is a bug, the Rust form of the TypeErrors and
@@ -575,7 +717,8 @@ impl Win {
                     Ok(Ok(())) => None,
                     Ok(Err(e)) => Some(e), // network, disk, perms
                     Err(p) => Some(
-                        p.downcast_ref::<&str>().map(|s| s.to_string())
+                        p.downcast_ref::<&str>()
+                            .map(|s| s.to_string())
                             .or_else(|| p.downcast_ref::<String>().cloned())
                             .unwrap_or_default(),
                     ),
@@ -583,6 +726,17 @@ impl Win {
             },
             move |error| {
                 if let Some(win) = w.upgrade() {
+                    // The download is checked against the release's sha256
+                    // where it publishes one; a failure is said as is.
+                    let out = match &error {
+                        None => {
+                            verify::Outcome::new(Some(true), format!("{name} updated to {version}"))
+                        }
+                        Some(e) => {
+                            verify::Outcome::new(Some(false), format!("{name} update failed: {e}"))
+                        }
+                    };
+                    win.record_update(&log, error.is_none(), Some(&out));
                     win.after_appimage(&name, &version, error);
                 }
             },
@@ -601,8 +755,8 @@ impl Win {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::pyisms::strs;
+    use super::*;
 
     /// test_a_release_the_system_db_lacks_is_sent_to_update_all: checkupdates
     /// saw 2.0 in a fresh private db; the system db still offers 1.0, so
@@ -611,13 +765,25 @@ mod tests {
     fn a_release_the_system_db_lacks_is_sent_to_update_all() {
         let mut pkg = App::new("somepkg", "1.0", inventory::REPO);
         pkg.update = "2.0".into();
-        assert_eq!(update_one(&pkg, |_| "1.0".to_string()), UpdateOne::FullUpgrade,
-                   "a no-op install must not be run");
-        assert_eq!(update_one(&pkg, |_| "2.0".to_string()), UpdateOne::Single(yay_argv("somepkg")));
-        assert_eq!(update_one(&pkg, |_| String::new()), UpdateOne::Single(yay_argv("somepkg")));
+        assert_eq!(
+            update_one(&pkg, |_| "1.0".to_string()),
+            UpdateOne::FullUpgrade,
+            "a no-op install must not be run"
+        );
+        assert_eq!(
+            update_one(&pkg, |_| "2.0".to_string()),
+            UpdateOne::Single(yay_argv("somepkg"))
+        );
+        assert_eq!(
+            update_one(&pkg, |_| String::new()),
+            UpdateOne::Single(yay_argv("somepkg"))
+        );
         // The AUR is never asked about the system database.
         pkg.source = inventory::AUR.into();
-        assert_eq!(update_one(&pkg, |_| panic!("asked")), UpdateOne::Single(yay_argv("somepkg")));
+        assert_eq!(
+            update_one(&pkg, |_| panic!("asked")),
+            UpdateOne::Single(yay_argv("somepkg"))
+        );
     }
 
     /// test_package_update_takes_a_snapshot_first
@@ -637,7 +803,10 @@ mod tests {
             assert!(step_text(&steps[1]).unwrap_or_default().contains("yay -S"));
         }
         let snap: snapshots::StepFn = Box::new(|_log| Ok(()));
-        let steps = with_snapshot(Some(("Taking a snapshot first".to_string(), snap)), main.clone());
+        let steps = with_snapshot(
+            Some(("Taking a snapshot first".to_string(), snap)),
+            main.clone(),
+        );
         assert!(step_text(&steps[1]).unwrap_or_default().contains("yay -S"));
         // Without Snapper the steps are left as they were.
         assert_eq!(with_snapshot(None, main).len(), 1);
@@ -655,7 +824,10 @@ mod tests {
             std::fs::write(f, b"x").unwrap();
         }
         let mut reg = Map::new();
-        reg.insert("thing".into(), serde_json::json!({"name": "thing", "path": live.to_string_lossy()}));
+        reg.insert(
+            "thing".into(),
+            serde_json::json!({"name": "thing", "path": live.to_string_lossy()}),
+        );
         crate::util::write_json(&target, &Value::Object(reg), Some(2), false).unwrap();
 
         let mut entry = App::new("thing", "1", inventory::APPIMAGE);
@@ -664,9 +836,15 @@ mod tests {
         let removed = std::cell::RefCell::new(Vec::new());
         let out = remove_appimage_with(
             &entry,
-            || crate::util::read_json(&target).and_then(|v| v.as_object().cloned()).unwrap_or_default(),
-            |r| crate::util::write_json(&target, &Value::Object(r.clone()), Some(2), false)
-                .map_err(|e| e.to_string()),
+            || {
+                crate::util::read_json(&target)
+                    .and_then(|v| v.as_object().cloned())
+                    .unwrap_or_default()
+            },
+            |r| {
+                crate::util::write_json(&target, &Value::Object(r.clone()), Some(2), false)
+                    .map_err(|e| e.to_string())
+            },
             |k| {
                 removed.borrow_mut().push(k.to_string());
                 Ok(())
@@ -684,8 +862,14 @@ mod tests {
     fn an_empty_exec_path_is_the_current_directory() {
         let mut entry = App::new("thing", "1", inventory::APPIMAGE);
         entry.exec_path = String::new();
-        let out = remove_appimage_with(&entry, Map::new, |_| panic!("saved"), |_| panic!("removed"));
-        assert_eq!(out, Ok(Removal::NotDeleted("Could not delete : [Errno 21] Is a directory: '.'".into())));
+        let out =
+            remove_appimage_with(&entry, Map::new, |_| panic!("saved"), |_| panic!("removed"));
+        assert_eq!(
+            out,
+            Ok(Removal::NotDeleted(
+                "Could not delete : [Errno 21] Is a directory: '.'".into()
+            ))
+        );
     }
 
     #[test]
@@ -694,10 +878,17 @@ mod tests {
         assert_eq!(update_cmd(&a), Ok(vec![]));
         a.extra.insert("update_cmd".into(), serde_json::json!("ab"));
         assert_eq!(update_cmd(&a), Ok(vec!["a".to_string(), "b".to_string()]));
-        a.extra.insert("update_cmd".into(), serde_json::json!(["a", 5]));
-        assert_eq!(update_cmd(&a), Err("TypeError: sequence item 1: expected str instance, int found".into()));
+        a.extra
+            .insert("update_cmd".into(), serde_json::json!(["a", 5]));
+        assert_eq!(
+            update_cmd(&a),
+            Err("TypeError: sequence item 1: expected str instance, int found".into())
+        );
         a.extra.insert("update_cmd".into(), serde_json::json!(5));
-        assert_eq!(update_cmd(&a), Err("TypeError: can only join an iterable".into()));
+        assert_eq!(
+            update_cmd(&a),
+            Err("TypeError: can only join an iterable".into())
+        );
     }
 
     #[test]
@@ -714,18 +905,18 @@ mod tests {
         let proc = popen_new_session(&argv).expect("sh starts");
         assert!(proc.wait_check(None::<&gio::Cancellable>).is_ok());
         assert_eq!(
-            popen_new_session(&strs(&["almanac-no-such-terminal"])).err().as_deref(),
+            popen_new_session(&strs(&["almanac-no-such-terminal"]))
+                .err()
+                .as_deref(),
             Some("[Errno 2] No such file or directory: 'almanac-no-such-terminal'")
         );
     }
 
     #[test]
-    fn update_all_waits_for_a_key() {
-        assert_eq!(update_all_script("omarchy update"),
-                   "omarchy update; echo; read -n1 -r -p 'Done — press any key to close'");
+    fn one_package_is_installed_with_root_by_path() {
         assert_eq!(
             yay_argv("p").join(" "),
-            "yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"
+            "/usr/bin/yay -S --needed --noconfirm --sudo /usr/bin/pkexec --pacman /usr/bin/pacman p"
         );
     }
 }

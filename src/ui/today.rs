@@ -15,7 +15,7 @@ use crate::picks::{self as picks_mod, Pick};
 use crate::store::{self as store_mod, Plugin};
 use crate::theming;
 use crate::ui::history::severity_css;
-use crate::ui::shell::{name, spawn_bg, AppItem, Win, INSTALL_ICON};
+use crate::ui::shell::{name, page_body, severity_pill, spawn_bg, AppItem, Win, INSTALL_ICON};
 
 pub const HERO_HEIGHT: i32 = 120;
 pub const PICK_HEIGHT: i32 = 176;
@@ -48,22 +48,10 @@ impl Win {
 
     /// The landing page: what deserves attention, assembled from live data.
     pub fn build_featured(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let feat_page = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_top(12)
-            .margin_bottom(16)
-            .build();
+        let (page, feat_page) = page_body();
         self.today.borrow_mut().feat_page = Some(feat_page.clone());
         feat_page.append(&self.build_hero());
         feat_page.append(&self.build_picks());
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&feat_page));
-        page.append(&scroller);
         page.upcast()
     }
 
@@ -75,15 +63,21 @@ impl Win {
             .spacing(4)
             .visible(false)
             .build();
-        let head = gtk::Label::builder().label(tr("Today's picks")).xalign(0.0).build();
+        let head = gtk::Label::builder()
+            .label(tr("Today's picks"))
+            .xalign(0.0)
+            .build();
         head.add_css_class("heading");
-        let why = tr("Standouts today among what you can install here: stars and \
+        let why = tr(
+            "Standouts today among what you can install here: stars and \
                       forks in the last 24 hours, downloads, and how much people \
                       are talking about it this week — measured on GitHub, and \
-                      each figure says what it counts.");
-        head.set_tooltip_text(Some(&why));
+                      each figure says what it counts.",
+        );
         head.update_property(&[gtk::accessible::Property::Description(&why)]);
         picks_area.append(&head);
+        // Said under the heading, as every section's note is (`section`).
+        picks_area.append(&crate::ui::shell::section_note(&why));
         // Two across when there is room, stacked when there is not.
         let picks_flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -121,7 +115,9 @@ impl Win {
             let st = self.today.borrow();
             (st.picks_flow.clone(), st.picks_area.clone())
         };
-        let (Some(flow), Some(area)) = (flow, area) else { return };
+        let (Some(flow), Some(area)) = (flow, area) else {
+            return;
+        };
         while let Some(child) = flow.first_child() {
             flow.remove(&child);
         }
@@ -172,7 +168,10 @@ impl Win {
             .hexpand(true)
             .vexpand(true)
             .build();
-        let clamp = gtk::ScrolledWindow::builder().hexpand(true).vexpand(true).build();
+        let clamp = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .build();
         clamp.set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
         clamp.set_propagate_natural_width(false);
         clamp.set_propagate_natural_height(false);
@@ -190,11 +189,19 @@ impl Win {
             .margin_top(12)
             .margin_bottom(12)
             .build();
-        let what = if p.install_kind == "appimage" { tr("App") } else { tr("Plugin") };
+        let what = if p.install_kind == "appimage" {
+            tr("App")
+        } else {
+            tr("Plugin")
+        };
         let eyebrow = gtk::Label::builder()
             .label(
-                if index == 0 { format!("★ {what} of the day") } else { format!("{what} of the day") }
-                    .to_uppercase(),
+                if index == 0 {
+                    format!("★ {what} of the day")
+                } else {
+                    format!("{what} of the day")
+                }
+                .to_uppercase(),
             )
             .xalign(0.0)
             .build();
@@ -233,7 +240,10 @@ impl Win {
         let foot = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         for (number, label) in &pick.reasons {
             let stat = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            let n = gtk::Label::builder().label(number.as_str()).xalign(0.0).build();
+            let n = gtk::Label::builder()
+                .label(number.as_str())
+                .xalign(0.0)
+                .build();
             n.add_css_class("pick-num");
             let t = gtk::Label::builder()
                 .label(label.as_str())
@@ -245,11 +255,16 @@ impl Win {
             t.add_css_class("dim-label");
             stat.append(&n);
             stat.append(&t);
-            stat.update_property(&[gtk::accessible::Property::Label(&format!("{number} {label}"))]);
+            stat.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{number} {label}"
+            ))]);
             foot.append(&stat);
         }
         foot.append(&gtk::Box::builder().hexpand(true).build());
-        let btn = gtk::Button::builder().icon_name(INSTALL_ICON).valign(gtk::Align::End).build();
+        let btn = gtk::Button::builder()
+            .icon_name(INSTALL_ICON)
+            .valign(gtk::Align::End)
+            .build();
         btn.add_css_class("suggested-action");
         btn.add_css_class("circular");
         name(&btn, &format!("Install {}", p.name));
@@ -319,9 +334,7 @@ impl Win {
             }
         };
         let cached = store_mod::thumb_path(p, false);
-        if let Some(cached) =
-            cached.filter(|c| std::fs::metadata(c).is_ok_and(|m| m.len() > 0))
-        {
+        if let Some(cached) = cached.filter(|c| std::fs::metadata(c).is_ok_and(|m| m.len() > 0)) {
             put(Some(cached));
         } else if !p.thumb.is_empty() {
             let p = p.clone();
@@ -347,7 +360,10 @@ impl Win {
         hero_pic.set_content_fit(gtk::ContentFit::Cover);
         hero_pic.set_hexpand(true);
         hero_pic.set_vexpand(true);
-        let clamp = gtk::ScrolledWindow::builder().hexpand(true).vexpand(true).build();
+        let clamp = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .build();
         clamp.set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
         clamp.set_propagate_natural_width(false);
         clamp.set_propagate_natural_height(false);
@@ -392,15 +408,35 @@ impl Win {
             let st = self.today.borrow();
             (st.hero.clone(), st.hero_pic.clone())
         };
-        let (Some(hero), Some(hero_pic)) = (hero, hero_pic) else { return };
+        let (Some(hero), Some(hero_pic)) = (hero, hero_pic) else {
+            return;
+        };
         let Some(bg) = theming::background() else {
             hero.set_visible(false);
             return;
         };
         hero.set_visible(true);
-        if let Some(tex) = self.texture(&bg, 1200) {
+        if let Some(tex) = self.texture_cached(&bg, 1200) {
             hero_pic.set_paintable(Some(&tex));
+            return;
         }
+        // A wallpaper is a large photo (130-160 ms to decode here), and this
+        // runs while the window is built: decode it off the main thread.
+        let w = self.downgrade();
+        let src = bg.clone();
+        self.thumb_bg(
+            move || crate::ui::store::decode_texture(&src, 1200),
+            move |tex| {
+                let (Some(w), Some(tex)) = (w.upgrade(), tex) else {
+                    return;
+                };
+                w.texture_keep(&bg, 1200, &tex);
+                // The wallpaper may have changed while this one decoded.
+                if theming::background().as_ref() == Some(&bg) {
+                    hero_pic.set_paintable(Some(&tex));
+                }
+            },
+        );
     }
 
     /// `Err` where `theming.theme_name()` raises, before anything is set.
@@ -418,7 +454,9 @@ impl Win {
             let st = self.today.borrow();
             (st.hero_head.clone(), st.hero_sub.clone())
         };
-        let (Some(head), Some(sub)) = (head, sub) else { return Ok(()) };
+        let (Some(head), Some(sub)) = (head, sub) else {
+            return Ok(());
+        };
         if problems > 0 {
             head.set_text(&format!(
                 "{problems} thing{} need you",
@@ -434,7 +472,11 @@ impl Win {
         };
         let updates = (0..store.n_items())
             .filter(|&i| {
-                store.item(i).as_ref().and_then(AppItem::of).is_some_and(|it| it.has_update)
+                store
+                    .item(i)
+                    .as_ref()
+                    .and_then(AppItem::of)
+                    .is_some_and(|it| it.has_update)
             })
             .count();
         if updates > 0 {
@@ -469,30 +511,65 @@ impl Win {
             (sh.store.clone(), sh.findings.clone(), sh.plugins.clone())
         };
         let apps: Vec<App> = (0..store.n_items())
-            .filter_map(|i| store.item(i).as_ref().and_then(AppItem::of).map(|it| it.app.clone()))
+            .filter_map(|i| {
+                store
+                    .item(i)
+                    .as_ref()
+                    .and_then(AppItem::of)
+                    .map(|it| it.app.clone())
+            })
             .collect();
         let w = self.downgrade();
         spawn_bg(
             move || {
-                // `getattr(self, "_findings", None) or maintenance.run_all()`
-                let have = findings.get();
-                let found = if have.is_empty() { maintenance::run_all() } else { have };
-                // Assigned as soon as it is known, not after the catalog: the
-                // Python's GIL-bound worker sets `_findings` long before its
-                // slow main thread first applies the inventory, so the
-                // sidebar stats always show "Free-able"; Rust's main thread
-                // gets there first, and a later assignment came too late.
-                findings.set(found.clone());
-                // `if not plugins: try: catalog(); annotate(); self._plugins
-                // = plugins / except Exception: plugins = []`.
-                let (plugins, fresh) = if plugins.is_empty() {
-                    match store_mod::try_catalog_annotated(false) {
-                        Ok(plugins) => (plugins, true),
-                        Err(_) => (Vec::new(), false),
-                    }
-                } else {
-                    (std::sync::Arc::unwrap_or_clone(plugins), false)
-                };
+                // The checks and the catalogue do not wait on each other.
+                let (found, (plugins, fresh)) = std::thread::scope(|s| {
+                    let checks = std::thread::Builder::new()
+                        .stack_size(crate::util::DEEP_STACK)
+                        .spawn_scoped(s, || {
+                            // `getattr(self, "_findings", None) or
+                            // maintenance.run_all()`, where a run the Health page
+                            // made a few minutes ago counts.
+                            let have = findings.get();
+                            let found = if !have.is_empty() {
+                                have
+                            } else {
+                                match maintenance::last_run() {
+                                    Some((age, found)) if age < maintenance::FINDINGS_FRESH => {
+                                        found
+                                    }
+                                    _ => maintenance::run_all(),
+                                }
+                            };
+                            // Assigned as soon as it is known, not after the
+                            // catalog: the Python's GIL-bound worker sets
+                            // `_findings` long before its slow main thread first
+                            // applies the inventory, so the sidebar stats always
+                            // show "Free-able"; Rust's main thread gets there
+                            // first, and a later assignment came too late.
+                            findings.set(found.clone());
+                            found
+                        });
+                    // `if not plugins: try: catalog(); annotate(); self._plugins
+                    // = plugins / except Exception: plugins = []`.
+                    let catalog = if plugins.is_empty() {
+                        match store_mod::try_catalog_annotated(false) {
+                            Ok(plugins) => (plugins, true),
+                            Err(_) => (Vec::new(), false),
+                        }
+                    } else {
+                        (std::sync::Arc::unwrap_or_clone(plugins), false)
+                    };
+                    let found = match checks {
+                        Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
+                        Err(_) => {
+                            let found = maintenance::run_all();
+                            findings.set(found.clone());
+                            found
+                        }
+                    };
+                    (found, catalog)
+                });
                 let shelves = featured::build(&apps, &found, &plugins);
                 (plugins, fresh, shelves)
             },
@@ -504,6 +581,7 @@ impl Win {
                     sh.plugins_none = false;
                 }
                 w.feat_show(shelves);
+                crate::ui::timings::mark("today shown");
                 if !plugins.is_empty() {
                     w.picks_reload(plugins);
                 }
@@ -518,11 +596,14 @@ impl Win {
             let st = self.today.borrow();
             (st.feat_page.clone(), st.picks_area.clone())
         };
-        let (Some(feat_page), Some(picks_area)) = (feat_page, picks_area) else { return };
+        let (Some(feat_page), Some(picks_area)) = (feat_page, picks_area) else {
+            return;
+        };
         // Keep the hero and the picks; replace everything under them.
         while let Some(child) = picks_area.next_sibling() {
             feat_page.remove(&child);
         }
+        self.news_today(&feat_page);
 
         let mut problems = 0usize;
         for shelf in &shelves {
@@ -552,7 +633,11 @@ impl Win {
                 format!("{} ({})", shelf.title, shelf.items.len())
             };
             let link = self.shelf_link(shelf);
-            let section = Win::section(&title, &shelf.subtitle, link.as_ref().map(|b| b.upcast_ref::<gtk::Widget>()));
+            let section = Win::section(
+                &title,
+                &shelf.subtitle,
+                link.as_ref().map(|b| b.upcast_ref::<gtk::Widget>()),
+            );
             if shelf.items.is_empty() {
                 let row: adw::ActionRow = Win::plain(&shelf.empty, "");
                 if shelf.key == "attention" {
@@ -595,7 +680,11 @@ impl Win {
             },
             Some("featured"),
         );
-        let count = self.shared.borrow().sidebar_row("featured").map(|r| r.count.clone());
+        let count = self
+            .shared
+            .borrow()
+            .sidebar_row("featured")
+            .map(|r| r.count.clone());
         if let Some(count) = count {
             // Featured's shelves are Shelf objects; the AI page's are
             // (title, description, entries) tuples. Different shapes.
@@ -608,15 +697,25 @@ impl Win {
     }
 
     pub fn shelf_link(&self, shelf: &Shelf) -> Option<gtk::Button> {
-        let target = SHELF_TARGET.iter().find(|(k, _)| *k == shelf.key).map(|(_, t)| *t);
+        let target = SHELF_TARGET
+            .iter()
+            .find(|(k, _)| *k == shelf.key)
+            .map(|(_, t)| *t);
         let (Some((label, page, sort)), false) = (target, shelf.items.is_empty()) else {
             return None;
         };
-        let btn = gtk::Button::builder().label(label).valign(gtk::Align::Center).build();
+        let btn = gtk::Button::builder()
+            .label(label)
+            .valign(gtk::Align::Center)
+            .build();
         btn.add_css_class("flat");
         btn.set_tooltip_text(Some(&format!(
             "Open the {}{}",
-            if page == "discover" { "App Store" } else { "Health check" },
+            if page == "discover" {
+                "App Store"
+            } else {
+                "Health check"
+            },
             sort.map(|s| format!(", sorted by {s}")).unwrap_or_default()
         )));
         let w = self.downgrade();
@@ -647,27 +746,19 @@ impl Win {
         row.set_subtitle_lines(1);
         row.set_tooltip_text(Some(&crate::util::human_error(&item.detail)));
 
-        if !item.severity.is_empty() {
-            let (label, css) = severity_css(if item.severity == "crit" {
-                maintenance::CRIT
-            } else {
-                maintenance::WARN
-            })
-            .unwrap_or((String::new(), "pill"));
-            let pill = gtk::Label::builder().label(label).valign(gtk::Align::Center).build();
-            pill.add_css_class(css);
-            row.add_prefix(&pill);
-        }
-
-        let art = gtk::Image::builder().pixel_size(24).valign(gtk::Align::Center).build();
+        // The art keeps its place on every row, so the titles of a shelf
+        // start at one x. A finding has none of its own: its slot stays
+        // empty rather than holding a "!" that says what its pill says.
+        let art = gtk::Image::builder()
+            .pixel_size(24)
+            .valign(gtk::Align::Center)
+            .build();
+        art.set_accessible_role(gtk::AccessibleRole::Presentation);
         if let Some(plugin) = &item.plugin {
             art.set_icon_name(Some("application-x-addon-symbolic"));
             self.plugin_icon(&art, plugin);
         } else if let Some(app) = &item.app {
             self.app_icon(&art, app, 48);
-        } else {
-            art.set_icon_name(Some("emblem-important-symbolic"));
-            art.add_css_class("dim-label");
         }
         row.add_prefix(&art);
 
@@ -682,7 +773,10 @@ impl Win {
 
         if !item.action.is_empty() {
             let btn = if item.action == "Install" {
-                gtk::Button::builder().icon_name(INSTALL_ICON).valign(gtk::Align::Center).build()
+                gtk::Button::builder()
+                    .icon_name(INSTALL_ICON)
+                    .valign(gtk::Align::Center)
+                    .build()
             } else {
                 gtk::Button::builder()
                     .label(item.action.as_str())
@@ -707,6 +801,18 @@ impl Win {
             row.add_suffix(&btn);
         }
 
+        // Last, nearest the edge: the pills of a list are one column, on
+        // every page (see `severity_pill`).
+        if !item.severity.is_empty() {
+            let (label, css) = severity_css(if item.severity == "crit" {
+                maintenance::CRIT
+            } else {
+                maintenance::WARN
+            })
+            .unwrap_or((String::new(), "pill"));
+            row.add_suffix(&severity_pill(&label, css));
+        }
+
         row.set_activatable(true);
         let w = self.downgrade();
         let it = item.clone();
@@ -721,9 +827,7 @@ impl Win {
     /// A marketplace entry's own card art, scaled down to a row icon.
     pub fn plugin_icon(&self, image: &gtk::Image, plugin: &Plugin) {
         let cached = store_mod::thumb_path(plugin, false);
-        if let Some(cached) =
-            cached.filter(|c| std::fs::metadata(c).is_ok_and(|m| m.len() > 0))
-        {
+        if let Some(cached) = cached.filter(|c| std::fs::metadata(c).is_ok_and(|m| m.len() > 0)) {
             self.set_icon(image, &cached, 64);
             return;
         }
@@ -781,11 +885,25 @@ mod tests {
 
     #[test]
     fn shelf_target_table() {
-        let get = |key: &str| SHELF_TARGET.iter().find(|(k, _)| *k == key).map(|(_, t)| *t);
-        assert_eq!(get("attention"), Some(("Open Health check", "maintenance", None)));
+        let get = |key: &str| {
+            SHELF_TARGET
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, t)| *t)
+        };
+        assert_eq!(
+            get("attention"),
+            Some(("Open Health check", "maintenance", None))
+        );
         assert_eq!(get("new"), Some(("Show all", "discover", Some("new"))));
-        assert_eq!(get("trending"), Some(("Show all", "discover", Some("trending"))));
-        assert_eq!(get("affinity"), Some(("Show all", "discover", Some("popular"))));
+        assert_eq!(
+            get("trending"),
+            Some(("Show all", "discover", Some("trending")))
+        );
+        assert_eq!(
+            get("affinity"),
+            Some(("Show all", "discover", Some("popular")))
+        );
         assert_eq!(get("other"), None);
     }
 
@@ -798,8 +916,14 @@ mod tests {
         let mut unnamed = Vec::new();
         let mut seen = 0;
         for (i, line) in lines.iter().enumerate() {
+            // On one line, or a builder chain rustfmt has split.
+            let chained = line.trim_end().ends_with("Button::builder()")
+                && lines
+                    .get(i + 1)
+                    .is_some_and(|n| n.trim_start().starts_with(".icon_name("));
             if !(line.contains("Button::builder().icon_name(")
-                || line.contains("Button::from_icon_name("))
+                || line.contains("Button::from_icon_name(")
+                || chained)
             {
                 continue;
             }
@@ -832,8 +956,14 @@ mod tests {
         const SCALE: [i32; 8] = [2, 4, 6, 8, 12, 16, 20, 24];
         let mut offenders = Vec::new();
         let src = code();
-        for prop in ["margin_start(", "margin_end(", "margin_top(", "margin_bottom(", ".spacing(",
-                     "set_spacing("] {
+        for prop in [
+            "margin_start(",
+            "margin_end(",
+            "margin_top(",
+            "margin_bottom(",
+            ".spacing(",
+            "set_spacing(",
+        ] {
             for (at, _) in src.match_indices(prop) {
                 let rest = &src[at + prop.len()..];
                 let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -847,9 +977,15 @@ mod tests {
         // `gtk::Box::new(orientation, spacing)`
         for (at, _) in src.match_indices("Box::new(gtk::Orientation::") {
             let rest = &src[at..];
-            let Some(close) = rest.find(')') else { continue };
+            let Some(close) = rest.find(')') else {
+                continue;
+            };
             let args = &rest[..close];
-            if let Some(v) = args.rsplit(", ").next().and_then(|v| v.trim().parse::<i32>().ok()) {
+            if let Some(v) = args
+                .rsplit(", ")
+                .next()
+                .and_then(|v| v.trim().parse::<i32>().ok())
+            {
                 if v != 0 && !SCALE.contains(&v) {
                     offenders.push(format!("Box::new spacing {v}"));
                 }
@@ -862,7 +998,14 @@ mod tests {
     /// for the pills this page applies (its own and `severity_css`'s).
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
-        const PILLS: [&str; 6] = ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+        const PILLS: [&str; 6] = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ];
         let src = code();
         let mut used = Vec::new();
         for (at, _) in src.match_indices("\"pill") {
@@ -876,8 +1019,14 @@ mod tests {
         }
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(CSS.contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(PILLS.contains(&name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                CSS.contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                PILLS.contains(&name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
         for sev in [maintenance::CRIT, maintenance::WARN] {
             let (_label, css) = severity_css(sev).unwrap_or((String::new(), "pill"));
@@ -889,13 +1038,30 @@ mod tests {
     /// The classes this page applies are all styled.
     #[test]
     fn page_classes_are_in_the_stylesheet() {
-        for class in ["pick-card", "pick-art", "pick-eyebrow", "pick-name", "pick-num", "hero",
-                      "hero-scrim", "hero-head", "hero-sub", "store-initials", "store-verified",
-                      "acc-none"] {
-            assert!(CSS.contains(&format!(".{class}")), "{class} is applied but never styled");
+        for class in [
+            "pick-card",
+            "pick-art",
+            "pick-eyebrow",
+            "pick-name",
+            "pick-num",
+            "hero",
+            "hero-scrim",
+            "hero-head",
+            "hero-sub",
+            "store-initials",
+            "store-verified",
+            "acc-none",
+        ] {
+            assert!(
+                CSS.contains(&format!(".{class}")),
+                "{class} is applied but never styled"
+            );
         }
         for (accent, _) in store_mod::ACCENTS {
-            assert!(CSS.contains(&format!(".acc-{accent}")), "acc-{accent} is never styled");
+            assert!(
+                CSS.contains(&format!(".acc-{accent}")),
+                "acc-{accent} is never styled"
+            );
         }
     }
 
@@ -909,7 +1075,9 @@ mod tests {
             return;
         }
         fn walk(dir: &Path, out: &mut std::collections::HashSet<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -923,19 +1091,27 @@ mod tests {
         }
         let mut have = std::collections::HashSet::new();
         walk(adwaita, &mut have);
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"),
+            &mut have,
+        );
         let src = code();
         let mut names: Vec<String> = Vec::new();
         for (at, _) in src.match_indices("-symbolic\"") {
             let head = &src[..at];
             if let Some(start) = head.rfind('"') {
                 let n = &src[start + 1..at + "-symbolic".len()];
-                if n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                if n.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                {
                     names.push(n.to_string());
                 }
             }
         }
-        assert!(names.len() >= 3, "the inspection found no icon names: {names:?}");
+        assert!(
+            names.len() >= 3,
+            "the inspection found no icon names: {names:?}"
+        );
         names.push(INSTALL_ICON.to_string());
         let missing: Vec<&String> = names
             .iter()

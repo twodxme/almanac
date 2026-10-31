@@ -41,8 +41,9 @@ static _LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[(?P<ts>[^\]]+)\] \[(?P<who>[^\]]+)\] (?P<msg>.*)$").unwrap());
 // Python's re.I also equates 'i' with U+0130 and U+0131; Rust's (?i) uses
 // simple case folding, which does not, so they are spelled out.
-static _SNAPPER_HOOK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)snap-pac|snapper|t[i\x{130}\x{131}]meshift|btrfs-autosnap").unwrap());
+static _SNAPPER_HOOK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)snap-pac|snapper|t[i\x{130}\x{131}]meshift|btrfs-autosnap").unwrap()
+});
 // `\S` is spelled out: Python's whitespace (str.isspace) includes \x1c-\x1f.
 static _CMDLINE_SNAPSHOT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"subvol=[^\s\x1c-\x1f]*?/(\d+)/snapshot").unwrap());
@@ -195,7 +196,10 @@ pub fn last_transaction(log_text: Option<&str>) -> Option<Transaction> {
         };
         let msg = &m["msg"];
         if msg == "transaction started" {
-            current = Some(Transaction { started: _ts(&m["ts"]), ..Default::default() });
+            current = Some(Transaction {
+                started: _ts(&m["ts"]),
+                ..Default::default()
+            });
             continue;
         }
         let Some(cur) = current.as_mut() else {
@@ -224,17 +228,36 @@ pub fn last_transaction(log_text: Option<&str>) -> Option<Transaction> {
 /// Err where Python raises: a `started` time.localtime cannot convert, or
 /// journal output that is not UTF-8.
 pub fn snapshot_before(started: f64, journal_text: Option<&str>) -> Result<Option<bool>, String> {
+    snapshot_between(started - LEAD as f64, started + 60.0, journal_text)
+}
+
+/// Did someone run `snapper create` between `since` and `until` (epoch
+/// seconds)? None when the journal cannot be read; Err as `snapshot_before`.
+pub fn snapshot_between(
+    since: f64,
+    until: f64,
+    journal_text: Option<&str>,
+) -> Result<Option<bool>, String> {
     let read;
     let journal_text = match journal_text {
         Some(t) => t,
         None => {
-            let since = strftime_local("%Y-%m-%d %H:%M:%S", started - LEAD as f64)?;
-            let until = strftime_local("%Y-%m-%d %H:%M:%S", started + 60.0)?;
+            let since = strftime_local("%Y-%m-%d %H:%M:%S", since)?;
+            let until = strftime_local("%Y-%m-%d %H:%M:%S", until)?;
             let r = run_raw(
                 &[
-                    "journalctl", "--no-pager", "-q", "-o", "short-iso",
-                    "--since", &since, "--until", &until,
-                    "_COMM=sudo", "+", "_COMM=pkexec",
+                    "journalctl",
+                    "--no-pager",
+                    "-q",
+                    "-o",
+                    "short-iso",
+                    "--since",
+                    &since,
+                    "--until",
+                    &until,
+                    "_COMM=sudo",
+                    "+",
+                    "_COMM=pkexec",
                 ],
                 20,
             )?;
@@ -266,32 +289,47 @@ pub fn try_create_step(description: &str) -> Result<Option<(String, StepFn)>, St
     Ok(create_step_with(description, snapper_configs()?, runner))
 }
 
-fn create_step_with(description: &str, configs: Vec<String>, runner: Runner) -> Option<(String, StepFn)> {
+fn create_step_with(
+    description: &str,
+    configs: Vec<String>,
+    runner: Runner,
+) -> Option<(String, StepFn)> {
     if configs.is_empty() {
         return None;
     }
     // One config is the overwhelmingly common case; with several, snapshot
     // the root one, which is what an update changes.
-    let config = if configs.iter().any(|c| c == "root") { "root".to_string() } else { configs[0].clone() };
+    let config = if configs.iter().any(|c| c == "root") {
+        "root".to_string()
+    } else {
+        configs[0].clone()
+    };
     let desc: String = description.chars().take(60).collect();
-    let cmd: Vec<String> = ["snapper", "-c", &config, "create", "-c", "number", "-d", &desc]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let cmd: Vec<String> = [
+        "snapper", "-c", &config, "create", "-c", "number", "-d", &desc,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
 
     let step = move |log: Log<'_>| -> Result<(), String> {
         let argv: Vec<String> = if geteuid() == 0 {
             cmd.clone()
         } else {
-            [crate::tasks::PKEXEC.to_string(), "/usr/bin/snapper".to_string()]
-                .into_iter()
-                .chain(cmd[1..].iter().cloned())
-                .collect()
+            [
+                crate::tasks::PKEXEC.to_string(),
+                "/usr/bin/snapper".to_string(),
+            ]
+            .into_iter()
+            .chain(cmd[1..].iter().cloned())
+            .collect()
         };
         let r = match runner(&argv) {
             Ok(r) => r,
             Err(RunError::OsError(exc)) => {
-                log(&format!("no snapshot was taken ({exc}); continuing without one"));
+                log(&format!(
+                    "no snapshot was taken ({exc}); continuing without one"
+                ));
                 return Ok(());
             }
             // ValueError is neither OSError nor SubprocessError: it fails the task.
@@ -299,8 +337,13 @@ fn create_step_with(description: &str, configs: Vec<String>, runner: Runner) -> 
         };
         if r.timed_out {
             // str(subprocess.TimeoutExpired)
-            let exc = format!("Command '{}' timed out after 120 seconds", py_list_repr(&argv));
-            log(&format!("no snapshot was taken ({exc}); continuing without one"));
+            let exc = format!(
+                "Command '{}' timed out after 120 seconds",
+                py_list_repr(&argv)
+            );
+            log(&format!(
+                "no snapshot was taken ({exc}); continuing without one"
+            ));
             return Ok(());
         }
         // text=True decodes strictly; UnicodeDecodeError is not caught.
@@ -311,7 +354,9 @@ fn create_step_with(description: &str, configs: Vec<String>, runner: Runner) -> 
             let text = if stderr.is_empty() { &stdout } else { &stderr };
             let why = py_splitlines(py_strip(text));
             let last = why.last().copied().unwrap_or("cancelled");
-            log(&format!("no snapshot was taken ({last}); continuing without one"));
+            log(&format!(
+                "no snapshot was taken ({last}); continuing without one"
+            ));
         }
         Ok(())
     };
@@ -359,8 +404,16 @@ fn finding_with(
                  unless the snapshot is made permanent."
             ),
             severity: m::CRIT.into(),
-            fix_label: if restore { "Keep this snapshot".into() } else { String::new() },
-            fix: if restore { Some(m::Fix::argv(&["limine-snapper-restore"])) } else { None },
+            fix_label: if restore {
+                "Keep this snapshot".into()
+            } else {
+                String::new()
+            },
+            fix: if restore {
+                Some(m::Fix::argv(&["limine-snapper-restore"]))
+            } else {
+                None
+            },
             fix_note: if restore {
                 "Makes this snapshot the running system, then asks you to restart.".into()
             } else {
@@ -401,7 +454,11 @@ fn finding_with(
         .iter()
         .filter_map(|c| {
             let parts = py_split(c);
-            if parts.len() > 1 { Some(parts[1]) } else { None }
+            if parts.len() > 1 {
+                Some(parts[1])
+            } else {
+                None
+            }
         })
         .collect();
     let mut what = names.iter().take(4).copied().collect::<Vec<_>>().join(", ");
@@ -409,7 +466,11 @@ fn finding_with(
         what.push_str(&format!(" and {} more", names.len() - 4));
     }
     let items: Vec<String> = tx.changes.iter().take(40).cloned().collect();
-    let covered = if tx.hooks_snapshot { Some(true) } else { before(tx.started)? };
+    let covered = if tx.hooks_snapshot {
+        Some(true)
+    } else {
+        before(tx.started)?
+    };
     if covered == Some(true) {
         let how = "restart, choose the snapshot from the boot menu, then make it \
                    permanent here";
@@ -504,9 +565,18 @@ fn exec_error(argv: &[String]) -> String {
         }
         if let Some(rest) = head.strip_prefix(b"#!") {
             // A script whose interpreter is missing fails with ENOENT.
-            let rest: Vec<u8> = rest.iter().copied().skip_while(|b| *b == b' ' || *b == b'\t').collect();
-            let interp: Vec<u8> = rest.into_iter().take_while(|b| !b" \t\n\r".contains(b)).collect();
-            let interp = std::path::Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&interp));
+            let rest: Vec<u8> = rest
+                .iter()
+                .copied()
+                .skip_while(|b| *b == b' ' || *b == b'\t')
+                .collect();
+            let interp: Vec<u8> = rest
+                .into_iter()
+                .take_while(|b| !b" \t\n\r".contains(b))
+                .collect();
+            let interp = std::path::Path::new(
+                <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&interp),
+            );
             return if interp.exists() { None } else { Some(ENOENT) };
         }
         Some(ENOEXEC)
@@ -535,7 +605,10 @@ fn exec_error(argv: &[String]) -> String {
     }
     let errno = saved.or(last).unwrap_or(ENOENT);
     let text = std::io::Error::from_raw_os_error(errno).to_string();
-    let strerror = text.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&text).to_string();
+    let strerror = text
+        .strip_suffix(&format!(" (os error {errno})"))
+        .unwrap_or(&text)
+        .to_string();
     format!("[Errno {errno}] {strerror}: {}", py_repr(exe))
 }
 
@@ -553,10 +626,13 @@ fn run_raw(argv: &[&str], timeout_secs: u64) -> Result<RawOutput, String> {
     if argv.iter().any(|a| a.contains('\0')) {
         return Err("embedded null byte".to_string());
     }
-    Ok(crate::util::run_bytes(argv, &crate::util::RunOpts {
-        timeout: Some(std::time::Duration::from_secs(timeout_secs)),
-        ..Default::default()
-    }))
+    Ok(crate::util::run_bytes(
+        argv,
+        &crate::util::RunOpts {
+            timeout: Some(std::time::Duration::from_secs(timeout_secs)),
+            ..Default::default()
+        },
+    ))
 }
 
 /// What `subprocess.run(..., text=True)` makes of a stream: decoded
@@ -576,14 +652,27 @@ fn py_utf8_decode(b: &[u8]) -> Result<String, String> {
                 Some(n) => {
                     let lead = b[start];
                     let invalid_start = (0x80..=0xc1).contains(&lead) || lead >= 0xf5;
-                    (start + n, if n == 1 && invalid_start { "invalid start byte" } else { "invalid continuation byte" })
+                    (
+                        start + n,
+                        if n == 1 && invalid_start {
+                            "invalid start byte"
+                        } else {
+                            "invalid continuation byte"
+                        },
+                    )
                 }
                 None => (b.len(), "unexpected end of data"),
             };
             Err(if end == start + 1 {
-                format!("'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}", b[start])
+                format!(
+                    "'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}",
+                    b[start]
+                )
             } else {
-                format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
+                format!(
+                    "'utf-8' codec can't decode bytes in position {start}-{}: {reason}",
+                    end - 1
+                )
             })
         }
     }
@@ -680,7 +769,11 @@ fn zone() -> Arc<Zone> {
         None => b"/etc/localtime".to_vec(),
         Some(v) => {
             let v = v.into_vec();
-            let v = if v.is_empty() { b"Universal".to_vec() } else { v };
+            let v = if v.is_empty() {
+                b"Universal".to_vec()
+            } else {
+                v
+            };
             match v.strip_prefix(b":") {
                 Some(rest) => rest.to_vec(),
                 None => v,
@@ -758,8 +851,14 @@ fn parse_tzif(data: &[u8]) -> Option<TzFile> {
         return None;
     }
     let decode = |b: &[u8]| if width == 8 { be64(b) } else { be32(b) };
-    let transitions: Vec<i64> = take(num_transitions * width)?.chunks(width).map(decode).collect();
-    let type_idxs: Vec<usize> = take(num_transitions)?.iter().map(|&b| usize::from(b)).collect();
+    let transitions: Vec<i64> = take(num_transitions * width)?
+        .chunks(width)
+        .map(decode)
+        .collect();
+    let type_idxs: Vec<usize> = take(num_transitions)?
+        .iter()
+        .map(|&b| usize::from(b))
+        .collect();
     if type_idxs.iter().any(|&i| i >= num_types) {
         return None;
     }
@@ -769,7 +868,12 @@ fn parse_tzif(data: &[u8]) -> Option<TzFile> {
         if t[4] > 1 || usize::from(t[5]) > chars {
             return None;
         }
-        types.push(TType { offset: be32(&t[..4]), isdst: t[4] == 1, isstd: false, isgmt: false });
+        types.push(TType {
+            offset: be32(&t[..4]),
+            isdst: t[4] == 1,
+            isstd: false,
+            isgmt: false,
+        });
     }
     take(chars)?;
     let mut leaps = Vec::with_capacity(num_leaps);
@@ -802,7 +906,15 @@ fn parse_tzif(data: &[u8]) -> Option<TzFile> {
             }
         }
     }
-    let mut f = TzFile { transitions, type_idxs, types, leaps, tzspec, rule_stdoff: 0, rule_dstoff: 0 };
+    let mut f = TzFile {
+        transitions,
+        type_idxs,
+        types,
+        leaps,
+        tzspec,
+        rule_stdoff: 0,
+        rule_dstoff: 0,
+    };
     // The standard and daylight offsets of the latest transitions of each flavour.
     if f.transitions.is_empty() {
         f.rule_stdoff = f.types[0].offset;
@@ -878,7 +990,10 @@ fn scan_hu(s: &[u8], mut i: usize) -> Option<(u16, usize)> {
     let mut v: u64 = 0;
     let mut overflow = false;
     while c_at(s, i).is_ascii_digit() {
-        match v.checked_mul(10).and_then(|x| x.checked_add(u64::from(c_at(s, i) - b'0'))) {
+        match v
+            .checked_mul(10)
+            .and_then(|x| x.checked_add(u64::from(c_at(s, i) - b'0')))
+        {
             Some(x) => v = x,
             None => overflow = true,
         }
@@ -956,7 +1071,11 @@ fn parse_offset(s: &[u8], p: &mut usize, rules: &mut [TzRule; 2], which: usize) 
     }
     let sign: i64 = if c == b'+' || c == b'-' {
         i += 1;
-        if c == b'-' { 1 } else { -1 }
+        if c == b'-' {
+            1
+        } else {
+            -1
+        }
     } else {
         -1
     };
@@ -965,8 +1084,8 @@ fn parse_offset(s: &[u8], p: &mut usize, rules: &mut [TzRule; 2], which: usize) 
     if let Some(&hh) = vals.first() {
         let mm = vals.get(1).copied().unwrap_or(0);
         let ss = vals.get(2).copied().unwrap_or(0);
-        rules[which].offset =
-            sign * (i64::from(ss.min(59)) + i64::from(mm.min(59)) * 60 + i64::from(hh.min(24)) * 3600);
+        rules[which].offset = sign
+            * (i64::from(ss.min(59)) + i64::from(mm.min(59)) * 60 + i64::from(hh.min(24)) * 3600);
     } else if which == 0 {
         // Standard time defaults to offset zero.
         rules[0].offset = 0;
@@ -989,7 +1108,11 @@ fn parse_rule(s: &[u8], p: &mut usize, r: &mut TzRule, first: bool) -> bool {
     }
     let c = c_at(s, i);
     if c == b'J' || c.is_ascii_digit() {
-        r.kind = if c == b'J' { RuleKind::J1 } else { RuleKind::J0 };
+        r.kind = if c == b'J' {
+            RuleKind::J1
+        } else {
+            RuleKind::J0
+        };
         if r.kind == RuleKind::J1 {
             i += 1;
             if !c_at(s, i).is_ascii_digit() {
@@ -999,7 +1122,9 @@ fn parse_rule(s: &[u8], p: &mut usize, r: &mut TzRule, first: bool) -> bool {
         let start = i;
         let mut d: u64 = 0;
         while c_at(s, i).is_ascii_digit() {
-            d = d.saturating_mul(10).saturating_add(u64::from(c_at(s, i) - b'0'));
+            d = d
+                .saturating_mul(10)
+                .saturating_add(u64::from(c_at(s, i) - b'0'));
             i += 1;
         }
         if i == start || d > 365 {
@@ -1065,7 +1190,8 @@ fn parse_rule(s: &[u8], p: &mut usize, r: &mut TzRule, first: bool) -> bool {
         if !vals.is_empty() {
             i = end;
         }
-        r.secs = (if negative { -1 } else { 1 }) * (i64::from(hh) * 3600 + i64::from(mm) * 60 + i64::from(ss));
+        r.secs = (if negative { -1 } else { 1 })
+            * (i64::from(hh) * 3600 + i64::from(mm) * 60 + i64::from(ss));
     } else {
         // Default to 2:00 AM.
         r.secs = 2 * 3600;
@@ -1138,7 +1264,11 @@ fn compute_change(r: &TzRule, year: i32) -> i64 {
             // `__mon_yday[leap][m]`, read as the flat table it is in memory.
             let flat = |k: i64| -> i64 {
                 let k = i64::from(leap) * 13 + k;
-                if (0..26).contains(&k) { i64::from(MON_YDAY[(k / 13) as usize][(k % 13) as usize]) } else { 0 }
+                if (0..26).contains(&k) {
+                    i64::from(MON_YDAY[(k / 13) as usize][(k % 13) as usize])
+                } else {
+                    0
+                }
             };
             let m = i64::from(r.m);
             t += flat(m - 1) * 86_400;
@@ -1172,7 +1302,11 @@ fn tz_compute(rules: &[TzRule; 2], timer: i64, year: i32) -> i64 {
     let start = compute_change(&rules[0], year);
     let end = compute_change(&rules[1], year);
     // The southern hemisphere's DST ends in the next year.
-    let isdst = if start > end { timer < end || timer >= start } else { timer >= start && timer < end };
+    let isdst = if start > end {
+        timer < end || timer >= start
+    } else {
+        timer >= start && timer < end
+    };
     rules[usize::from(isdst)].offset
 }
 
@@ -1212,7 +1346,8 @@ fn tzfile_compute(f: &TzFile, timer: i64) -> (i64, i64, i64) {
     if timer == f.leaps[i].0 && f.leaps[i].1 > if i == 0 { 0 } else { f.leaps[i - 1].1 } {
         hit = 1;
         let mut i = i;
-        while i > 0 && f.leaps[i].0 == f.leaps[i - 1].0 + 1 && f.leaps[i].1 == f.leaps[i - 1].1 + 1 {
+        while i > 0 && f.leaps[i].0 == f.leaps[i - 1].0 + 1 && f.leaps[i].1 == f.leaps[i - 1].1 + 1
+        {
             hit += 1;
             i -= 1;
         }
@@ -1245,7 +1380,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// `localtime_r(t)`; Err(str(OSError)) where glibc fails (a year past int).
 fn localtime_i(t: i64) -> Result<Tm, String> {
-    let (gmtoff, leap_correction, leap_extra_secs) = zone_at(t).ok_or_else(|| EOVERFLOW.to_string())?;
+    let (gmtoff, leap_correction, leap_extra_secs) =
+        zone_at(t).ok_or_else(|| EOVERFLOW.to_string())?;
     // __offtime(timer, tm_gmtoff - leap_correction), then tm_sec += the leap
     // seconds hit (a 60th second).
     let local = i128::from(t) + i128::from(gmtoff) - i128::from(leap_correction);
@@ -1297,7 +1433,9 @@ fn lc_time_name(fmt: &str, month: u32, day: u32, fallback: &str) -> String {
 /// glibc prints the year unpadded, however long or negative.
 fn strftime_local(fmt: &str, t: f64) -> Result<String, String> {
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let tm = localtime(t)?;
     let mut out = String::new();
     let mut chars = fmt.chars();
@@ -1357,9 +1495,8 @@ fn py_splitlines(s: &str) -> Vec<&str> {
                     i + 1
                 }
             }
-            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                i + c.len_utf8()
-            }
+            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}'
+            | '\u{2029}' => i + c.len_utf8(),
             _ => continue,
         };
         out.push(&s[start..i]);
@@ -1381,7 +1518,11 @@ fn py_printable(c: char) -> bool {
 
 /// Python's `repr(str)`.
 fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -1413,7 +1554,14 @@ fn py_repr(s: &str) -> String {
 
 /// Python's `repr(list_of_str)`.
 fn py_list_repr(items: &[String]) -> String {
-    format!("[{}]", items.iter().map(|s| py_repr(s)).collect::<Vec<_>>().join(", "))
+    format!(
+        "[{}]",
+        items
+            .iter()
+            .map(|s| py_repr(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 // --- datetime: _datetimemodule.c, which CPython runs (not _pydatetime) ---
@@ -1427,15 +1575,28 @@ fn is_leap(year: i64) -> bool {
 
 fn days_in_month(year: i64, month: i64) -> i64 {
     const DIM: [i64; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    if month == 2 && is_leap(year) { 29 } else { DIM[month as usize] }
+    if month == 2 && is_leap(year) {
+        29
+    } else {
+        DIM[month as usize]
+    }
 }
 
 /// `utc_to_seconds`: None where it raises (a year outside 1..9999).
-fn utc_to_seconds(year: i64, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> Option<i64> {
+fn utc_to_seconds(
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<i64> {
     if !(1..=9999).contains(&year) {
         return None;
     }
-    let ord = i64::from(chrono::Datelike::num_days_from_ce(&chrono::NaiveDate::from_ymd_opt(year as i32, month, day)?));
+    let ord = i64::from(chrono::Datelike::num_days_from_ce(
+        &chrono::NaiveDate::from_ymd_opt(year as i32, month, day)?,
+    ));
     Some(((ord * 24 + i64::from(hour)) * 60 + i64::from(minute)) * 60 + i64::from(second))
 }
 
@@ -1446,7 +1607,14 @@ fn local(u: i64) -> Option<i64> {
 }
 
 /// `local_to_seconds(..., fold=0)`: a naive local time as seconds.
-fn local_to_seconds(year: i64, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> Option<i64> {
+fn local_to_seconds(
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<i64> {
     const MAX_FOLD_SECONDS: i64 = 24 * 3600;
     let t = utc_to_seconds(year, month, day, hour, minute, second)?;
     let lt = local(t)?;
@@ -1496,7 +1664,11 @@ fn py_true_div(a: i64, b: i64) -> f64 {
         shift += 1;
     }
     if shift < 0 {
-        return if neg { -(a as f64 / b as f64) } else { a as f64 / b as f64 };
+        return if neg {
+            -(a as f64 / b as f64)
+        } else {
+            a as f64 / b as f64
+        };
     }
     let num = a << shift;
     let (mut q, r) = (num / b, num % b);
@@ -1504,7 +1676,11 @@ fn py_true_div(a: i64, b: i64) -> f64 {
         q += 1;
     }
     let v = q as f64 * 2f64.powi(-shift);
-    if neg { -v } else { v }
+    if neg {
+        -v
+    } else {
+        v
+    }
 }
 
 /// `parse_digits`: `n` ASCII digits from `p` onwards, accumulating into `var`.
@@ -1593,9 +1769,14 @@ fn iso_date(at: &dyn Fn(usize) -> u8, len: usize) -> Option<(i64, i64, i64)> {
             return None;
         }
         let weekday = chrono::Weekday::try_from((wday - 1) as u8).ok()?;
-        let d = chrono::NaiveDate::from_isoywd_opt(year as i32, u32::try_from(week).ok()?, weekday)?;
+        let d =
+            chrono::NaiveDate::from_isoywd_opt(year as i32, u32::try_from(week).ok()?, weekday)?;
         use chrono::Datelike;
-        return Some((i64::from(d.year()), i64::from(d.month()), i64::from(d.day())));
+        return Some((
+            i64::from(d.year()),
+            i64::from(d.month()),
+            i64::from(d.day()),
+        ));
     }
     if !parse_digits(at, &mut p, &mut month, 2) {
         return None;
@@ -1690,14 +1871,21 @@ fn iso_time(at: &dyn Fn(usize) -> u8, start: usize, end: usize) -> Option<IsoTim
         return if more { None } else { Some((time, None)) };
     }
     if at(tz) == b'Z' {
-        return if at(tz + 1) != 0 { None } else { Some((time, Some((0, 0)))) };
+        return if at(tz + 1) != 0 {
+            None
+        } else {
+            Some((time, Some((0, 0))))
+        };
     }
     let sign = if at(tz) == b'-' { -1 } else { 1 };
     let (more, off) = iso_hms(at, tz + 1, end)?;
     if more {
         return None;
     }
-    Some((time, Some((sign * (off[0] * 3600 + off[1] * 60 + off[2]), sign * off[3]))))
+    Some((
+        time,
+        Some((sign * (off[0] * 3600 + off[1] * 60 + off[2]), sign * off[3])),
+    ))
 }
 
 /// `datetime.fromisoformat(text).timestamp()`, None on ValueError.
@@ -1738,10 +1926,9 @@ fn fromisoformat_ts(text: &str) -> Option<f64> {
     let offset_us = match offset {
         Some((s, u)) => {
             let total = s * 1_000_000 + u;
-            if (s != 0 || u != 0)
-                && !(-86_400_000_000 + 1..86_400_000_000).contains(&total) {
-                    return None;
-                }
+            if (s != 0 || u != 0) && !(-86_400_000_000 + 1..86_400_000_000).contains(&total) {
+                return None;
+            }
             Some(total)
         }
         None => None,
@@ -1776,7 +1963,13 @@ fn fromisoformat_ts(text: &str) -> Option<f64> {
     {
         return None;
     }
-    let (mo, d, h, mi, s) = (month as u32, day as u32, hour as u32, minute as u32, second as u32);
+    let (mo, d, h, mi, s) = (
+        month as u32,
+        day as u32,
+        hour as u32,
+        minute as u32,
+        second as u32,
+    );
     match offset_us {
         // (self - epoch).total_seconds()
         Some(off) => {
@@ -1821,7 +2014,9 @@ fn digit_value(c: char) -> Option<i64> {
 
 /// `int(text)` for what `_STRPTIME` captured: digits, maybe a leading space.
 fn py_int(text: &str) -> Option<i64> {
-    text.trim_start_matches(' ').chars().try_fold(0i64, |acc, c| Some(acc * 10 + digit_value(c)?))
+    text.trim_start_matches(' ')
+        .chars()
+        .try_fold(0i64, |acc, c| Some(acc * 10 + digit_value(c)?))
 }
 
 /// `datetime.strptime(text, "%Y-%m-%d %H:%M").timestamp()`, None on ValueError.
@@ -1832,10 +2027,16 @@ fn strptime_ts(text: &str) -> Option<f64> {
     if !(1..=9999).contains(&year) || day > days_in_month(year, month) {
         return None;
     }
-    let secs = local_to_seconds(year, month as u32, day as u32, hour as u32, minute as u32, 0)?;
+    let secs = local_to_seconds(
+        year,
+        month as u32,
+        day as u32,
+        hour as u32,
+        minute as u32,
+        0,
+    )?;
     Some((secs - EPOCH_SECONDS) as f64)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1899,7 +2100,11 @@ mod tests {
         let (_label, step) = create_step_with("x", vec!["root".into()], runner).unwrap();
         let lines = std::cell::RefCell::new(Vec::<String>::new());
         assert!(step(&|l: &str| lines.borrow_mut().push(l.to_string())).is_ok()); // must not raise
-        assert!(lines.borrow().last().unwrap().contains("continuing without one"));
+        assert!(lines
+            .borrow()
+            .last()
+            .unwrap()
+            .contains("continuing without one"));
     }
 
     #[test]
@@ -1911,13 +2116,34 @@ mod tests {
     #[test]
     fn utf8_errors_read_as_python_words_them() {
         let cases: [(&[u8], &str); 7] = [
-            (b"ab\xff", "'utf-8' codec can't decode byte 0xff in position 2: invalid start byte"),
-            (b"ab\xe2\x82", "'utf-8' codec can't decode bytes in position 2-3: unexpected end of data"),
-            (b"\xe2\x82A", "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"),
-            (b"\xe2A", "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"),
-            (b"\xed\xa0\x80", "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte"),
-            (b"\xc0\xaf", "'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte"),
-            (b"x\xf0\x9f", "'utf-8' codec can't decode bytes in position 1-2: unexpected end of data"),
+            (
+                b"ab\xff",
+                "'utf-8' codec can't decode byte 0xff in position 2: invalid start byte",
+            ),
+            (
+                b"ab\xe2\x82",
+                "'utf-8' codec can't decode bytes in position 2-3: unexpected end of data",
+            ),
+            (
+                b"\xe2\x82A",
+                "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte",
+            ),
+            (
+                b"\xe2A",
+                "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte",
+            ),
+            (
+                b"\xed\xa0\x80",
+                "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte",
+            ),
+            (
+                b"\xc0\xaf",
+                "'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte",
+            ),
+            (
+                b"x\xf0\x9f",
+                "'utf-8' codec can't decode bytes in position 1-2: unexpected end of data",
+            ),
         ];
         for (b, want) in cases {
             assert_eq!(py_utf8_decode(b), Err(want.to_string()));
@@ -1927,21 +2153,31 @@ mod tests {
     #[test]
     fn exec_errors_name_the_cause() {
         let missing = vec!["/nonexistent/almanac-x".to_string()];
-        assert_eq!(exec_error(&missing), "[Errno 2] No such file or directory: '/nonexistent/almanac-x'");
+        assert_eq!(
+            exec_error(&missing),
+            "[Errno 2] No such file or directory: '/nonexistent/almanac-x'"
+        );
         let dir = vec!["/".to_string()];
         assert_eq!(exec_error(&dir), "[Errno 13] Permission denied: '/'");
     }
 
     #[test]
     fn a_real_replacement_character_is_not_a_decode_error() {
-        assert_eq!(py_text("warning: \u{FFFD}\r\n".as_bytes()), Ok("warning: \u{FFFD}\n".to_string()));
+        assert_eq!(
+            py_text("warning: \u{FFFD}\r\n".as_bytes()),
+            Ok("warning: \u{FFFD}\n".to_string())
+        );
         assert!(py_text(b"bad \xff").is_err());
     }
 
     #[test]
     fn a_nul_byte_in_the_description_fails_the_step() {
-        assert_eq!(run_raw(&["echo", "a\0b"], 5).map(|r| r.ok()), Err("embedded null byte".to_string()));
-        let runner: Runner = Arc::new(|_: &[String]| Err(RunError::Raise("embedded null byte".into())));
+        assert_eq!(
+            run_raw(&["echo", "a\0b"], 5).map(|r| r.ok()),
+            Err("embedded null byte".to_string())
+        );
+        let runner: Runner =
+            Arc::new(|_: &[String]| Err(RunError::Raise("embedded null byte".into())));
         let (_label, step) = create_step_with("a\0b", vec!["root".into()], runner).unwrap();
         assert_eq!(step(&|_: &str| {}), Err("embedded null byte".to_string()));
     }

@@ -8,7 +8,7 @@ use crate::i18n::tr;
 use crate::inventory;
 use crate::maintenance;
 use crate::tasks::{self, OnDone, Step};
-use crate::ui::shell::{spawn_bg, Win};
+use crate::ui::shell::{arrow_space, page_body, severity_pill, spawn_bg, spawn_bg_checked, Win};
 use crate::verify::{self, Outcome};
 
 /// Widgets and data only the History and Health check pages use.
@@ -57,7 +57,10 @@ pub fn empty_states(key: &str) -> Option<EmptyState> {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     if let Some(hit) = CACHE.with(|c| {
-        c.borrow().iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        c.borrow()
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
     }) {
         return hit;
     }
@@ -116,7 +119,10 @@ pub fn severity_css(severity: &str) -> Option<SeverityPill> {
             const { std::cell::RefCell::new(Vec::new()) };
     }
     if let Some(hit) = CACHE.with(|c| {
-        c.borrow().iter().find(|(k, _)| k == severity).map(|(_, v)| v.clone())
+        c.borrow()
+            .iter()
+            .find(|(k, _)| k == severity)
+            .map(|(_, v)| v.clone())
     }) {
         return hit;
     }
@@ -131,6 +137,7 @@ fn severity_css_uncached(severity: &str) -> Option<(String, &'static str)> {
         s if s == maintenance::WARN => Some((tr("Attention"), "pill-warn")),
         s if s == maintenance::INFO => Some((tr("Optional"), "pill")),
         s if s == maintenance::OK => Some((tr("OK"), "pill-ok")),
+        s if s == maintenance::UNKNOWN => Some((tr("Couldn't check"), "pill")),
         _ => None,
     }
 }
@@ -160,14 +167,200 @@ fn fix_steps(label: String, f: &maintenance::Finding) -> Vec<Step> {
     tasks::fix_steps(&label, f.fix.clone())
 }
 
-fn panic_text(err: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = err.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = err.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        // str(exc) of a bare exception is "".
-        String::new()
+/// A pass, a failure or "could not tell" as an icon, named for a screen
+/// reader since the icon is all there is.
+fn verdict_icon(ok: Option<bool>, words: &str) -> gtk::Image {
+    let (icon, class) = match ok {
+        Some(true) => ("object-select-symbolic", "store-verified"),
+        Some(false) => ("dialog-error-symbolic", "error"),
+        None => ("dialog-question-symbolic", "dim-label"),
+    };
+    let image = gtk::Image::builder()
+        .icon_name(icon)
+        .valign(gtk::Align::Center)
+        .build();
+    image.add_css_class(class);
+    crate::ui::shell::name(&image, words);
+    image
+}
+
+/// A dim caption at the end of a row: an exit status, a verdict, versions.
+fn caption(text: &str) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text)
+        .valign(gtk::Align::Center)
+        .build();
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    label.add_css_class("numeric");
+    label
+}
+
+/// A row of an opened event's detail: read, not acted on, so the keyboard
+/// passes over it (Tab used to stop on every command and fact), and its
+/// text is not selectable (a focused selectable title is shown wholly
+/// selected). "Copy details", the one row that acts, copies all of it.
+/// `history-detail` sets the rows in under their event (style.css).
+fn detail_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    let row: adw::ActionRow = Win::plain(title, subtitle);
+    row.set_activatable(false);
+    row.set_focusable(false);
+    row.add_css_class("history-detail");
+    row
+}
+
+/// The rows an open event shows of what its action did: each command and
+/// how it ended, what changed, what was checked and repaired, and the
+/// snapshot, space freed and time taken.
+fn action_rows(a: &history::ActionLog) -> Vec<adw::ActionRow> {
+    let mut rows = Vec::new();
+    for c in &a.commands {
+        let ok = history::exit_ok(c.exit);
+        let row = detail_row(&c.argv, "");
+        // The command as it ran, in the face a terminal would show it in.
+        row.add_css_class("monospace");
+        row.add_prefix(&verdict_icon(ok, history::verdict_text(ok)));
+        let mut end = history::exit_text(c.exit);
+        if let Some(s) = c.secs {
+            end += &format!(" · {}", history::duration_text(s));
+        }
+        row.add_suffix(&caption(&end));
+        rows.push(row);
+    }
+    for c in &a.changes {
+        let row = detail_row(&c.name, "");
+        let icon = gtk::Image::from_icon_name(history_icon(history::PACKAGES));
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        row.add_suffix(&caption(&history::change_text(c)));
+        rows.push(row);
+    }
+    let checked = |r: &history::CheckResult, verdict: &str| {
+        let row = detail_row(&r.name, &r.detail);
+        row.set_subtitle_lines(3);
+        row.add_prefix(&verdict_icon(r.ok, verdict));
+        row.add_suffix(&caption(verdict));
+        row
+    };
+    for r in &a.checks {
+        let verdict = match r.ok {
+            Some(true) => tr("Passed"),
+            Some(false) => tr("Failed"),
+            None => tr("Could not tell"),
+        };
+        rows.push(checked(r, &verdict));
+    }
+    for r in &a.repairs {
+        let verdict = match r.ok {
+            Some(true) => tr("Repaired"),
+            Some(false) => tr("Not repaired"),
+            None => tr("Could not tell"),
+        };
+        rows.push(checked(r, &verdict));
+    }
+    let facts = a.facts();
+    if !facts.is_empty() {
+        let row = detail_row(&facts, "");
+        row.add_css_class("dim-label");
+        // In line with the rows above, which all lead with an icon.
+        let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        rows.push(row);
+    }
+    rows
+}
+
+/// Free space on the root filesystem, in bytes: measured either side of a
+/// cleanup, so History says what it actually freed.
+fn free_bytes() -> Option<u64> {
+    let st = rustix::fs::statvfs("/").ok()?;
+    Some(st.f_bavail.saturating_mul(st.f_frsize))
+}
+
+/// What a Health check fix is recorded with: what it runs, and the clock
+/// and free space before it started.
+struct FixRun {
+    /// the History title for a run of several fixes
+    title: String,
+    commands: Vec<String>,
+    free_before: Option<u64>,
+    started: std::time::Instant,
+}
+
+impl FixRun {
+    /// The command lines `steps` will run, elevated as the task runs them.
+    fn of(title: &str, steps: &[Step], free_before: Option<u64>) -> Self {
+        let commands = steps
+            .iter()
+            .filter_map(|s| match &s.action {
+                tasks::StepAction::Argv(a) if !a.is_empty() => {
+                    Some(history::command_line(&tasks::elevate(a)))
+                }
+                _ => None,
+            })
+            .collect();
+        FixRun {
+            title: title.to_string(),
+            commands,
+            free_before,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// The History entry for the run, once each fixed check has been asked
+    /// again. `ok` is the task's: every command exited 0. When it is not,
+    /// which one failed is not known, and the record says so.
+    fn record(
+        &self,
+        ok: bool,
+        fixed: &[maintenance::Finding],
+        outs: &[Outcome],
+        free_after: Option<u64>,
+    ) -> Result<(), String> {
+        let action = history::ActionLog {
+            commands: self
+                .commands
+                .iter()
+                .map(|argv| history::CommandRun {
+                    argv: argv.clone(),
+                    exit: ok.then_some(0),
+                    secs: None,
+                })
+                .collect(),
+            checks: fixed
+                .iter()
+                .zip(outs)
+                .map(|(f, o)| history::CheckResult {
+                    name: f.title.clone(),
+                    ok: o.changed,
+                    detail: o.message.clone(),
+                })
+                .collect(),
+            freed_bytes: match (self.free_before, free_after) {
+                (Some(b), Some(a)) => Some(a as i64 - b as i64),
+                _ => None,
+            },
+            duration_secs: Some(self.started.elapsed().as_secs_f64()),
+            ..Default::default()
+        };
+        let title = match outs {
+            [one] => one.message.clone(),
+            _ => self.title.clone(),
+        };
+        let detail = fixed
+            .iter()
+            .map(|f| f.fix_label.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let failed = !ok || outs.iter().any(|o| o.changed == Some(false));
+        history::record_action(
+            history::ALMANAC,
+            &title,
+            &detail,
+            if failed { "warn" } else { "" },
+            &action,
+        )
     }
 }
 
@@ -211,15 +404,7 @@ impl Win {
 
     /// One page per question the system can answer about its own health.
     pub fn build_maintenance(&self) -> gtk::Box {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-        let body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
+        let (page, body) = page_body();
         // No heading: the page is already called Health check.
         let section = Win::section(
             "",
@@ -228,11 +413,6 @@ impl Win {
         );
         self.history.borrow_mut().maint_list = Some(section.rows.clone());
         body.append(&section.root);
-
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&body));
-        page.append(&scroller);
         page
     }
 
@@ -240,19 +420,8 @@ impl Win {
 
     /// What changed on this machine, by day. See history.py.
     pub fn build_history(&self) -> gtk::Box {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let history_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        self.history.borrow_mut().history_body = Some(history_body.clone());
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&history_body));
-        page.append(&scroller);
+        let (page, history_body) = page_body();
+        self.history.borrow_mut().history_body = Some(history_body);
         page
     }
 
@@ -283,7 +452,7 @@ impl Win {
             history_body.append(&Win::status_page(
                 "document-open-recent-symbolic",
                 &tr("Nothing recorded yet"),
-                &tr("Package changes, snapshots and settings resets from the last 30 days appear here."),
+                &tr("Package changes, snapshots, settings resets and what Almanac did in the last 30 days appear here."),
                 None,
             ));
             self.summarize(&tr("Nothing in the last 30 days"), Some("history"));
@@ -297,6 +466,31 @@ impl Win {
             &tr("In the last 24 hours"),
             &history::last_day(&days, crate::util::now()),
         ));
+        // Under it, what Almanac keeps of its own and the way to clear it.
+        // Only Almanac's log can be cleared: the package history and the
+        // snapshots are the system's, read from where it keeps them.
+        let own = Win::note_row(
+            history_icon(history::ALMANAC),
+            &tr("Almanac's log"),
+            &tr("What Almanac did is kept for 30 days, then cleared automatically."),
+        );
+        let clear = gtk::Button::builder()
+            .label(tr("Clear…"))
+            .valign(gtk::Align::Center)
+            .build();
+        crate::ui::shell::name(&clear, &tr("Clear Almanac's log"));
+        clear.set_sensitive(days.iter().flat_map(|d| &d.events).any(|e| {
+            (e.kind == history::ALMANAC || e.kind == history::AUTOUPDATE)
+                && !history::is_cleared_marker(e)
+        }));
+        let w = self.downgrade();
+        clear.connect_clicked(move |_| {
+            if let Some(w) = w.upgrade() {
+                w.on_clear_log();
+            }
+        });
+        own.add_suffix(&clear);
+        recent.append(&own);
         history_body.append(&recent);
 
         for day in &days {
@@ -310,7 +504,10 @@ impl Win {
                 let Some(row) = self.history_row(e) else {
                     // fromtimestamp raises in Python; PyGObject prints it and
                     // the idle callback stops here.
-                    eprintln!("ValueError: timestamp {} out of range for datetime.fromtimestamp", e.ts);
+                    eprintln!(
+                        "ValueError: timestamp {} out of range for datetime.fromtimestamp",
+                        e.ts
+                    );
                     return;
                 };
                 section.rows.append(&row);
@@ -318,7 +515,10 @@ impl Win {
             history_body.append(&section.root);
         }
         let n: usize = days.iter().map(|d| d.events.len()).sum();
-        self.summarize(&format!("{n} change(s) in the last 30 days"), Some("history"));
+        self.summarize(
+            &format!("{n} change(s) in the last 30 days"),
+            Some("history"),
+        );
     }
 
     pub fn history_row(&self, e: &history::Event) -> Option<adw::PreferencesRow> {
@@ -326,13 +526,23 @@ impl Win {
         let subtitle = &e.detail;
         // An entry's title can be an outcome that carries an error.
         let title = &crate::util::human_error(&e.title);
-        let row = if !e.items.is_empty() {
+        let row = if let Some(action) = &e.action {
+            // What the action did, recorded as it happened: open the row
+            // to read it, or copy it whole for a bug report.
+            let row: adw::ExpanderRow = Win::plain(title, subtitle);
+            for entry in action_rows(action) {
+                row.add_row(&entry);
+            }
+            row.add_row(&self.copy_details_row(e));
+            Row::Expander(row)
+        } else if !e.items.is_empty() {
             let row: adw::ExpanderRow = Win::plain(title, subtitle);
             for item in e.items.iter().take(80) {
-                let entry: adw::ActionRow = Win::plain(item, "");
+                let entry = detail_row(item, "");
                 entry.add_css_class("property");
                 row.add_row(&entry);
             }
+            row.add_row(&self.copy_details_row(e));
             Row::Expander(row)
         } else {
             Row::Action(Win::plain(title, subtitle))
@@ -344,7 +554,10 @@ impl Win {
         });
         icon.set_accessible_role(gtk::AccessibleRole::Presentation);
         row.add_prefix(&icon);
-        let clock = gtk::Label::builder().label(when).valign(gtk::Align::Center).build();
+        let clock = gtk::Label::builder()
+            .label(when)
+            .valign(gtk::Align::Center)
+            .build();
         clock.add_css_class("dim-label");
         clock.add_css_class("caption");
         clock.add_css_class("numeric");
@@ -352,21 +565,81 @@ impl Win {
         Some(row.row())
     }
 
+    /// The last row of an open event: copies it as plain text.
+    fn copy_details_row(&self, e: &history::Event) -> adw::ActionRow {
+        let row: adw::ActionRow = Win::plain(&tr("Copy details"), "");
+        row.set_activatable(true);
+        // Inside the event, like the rows above it; the one that acts, so
+        // the one the keyboard stops on.
+        row.add_css_class("history-detail");
+        let icon = gtk::Image::from_icon_name("edit-copy-symbolic");
+        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        row.add_prefix(&icon);
+        let text = history::details_text(e);
+        let w = self.downgrade();
+        row.connect_activated(move |r| {
+            r.clipboard().set_text(&text);
+            if let Some(w) = w.upgrade() {
+                w.toast(&tr("Details copied"), 3);
+            }
+        });
+        row
+    }
+
+    /// Ask, then clear Almanac's own log; History reads itself again after.
+    pub fn on_clear_log(&self) {
+        if self.demo_refuses() {
+            return;
+        }
+        let dialog = adw::AlertDialog::new(
+            Some(&tr("Clear Almanac's log?")),
+            Some(&tr(
+                "Removes the record of what Almanac did. Package history from pacman and your \
+                      snapshots are not affected.",
+            )),
+        );
+        dialog.add_response("cancel", &tr("Cancel"));
+        dialog.add_response("clear", &tr("Clear log"));
+        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let w = self.downgrade();
+        dialog.connect_response(None, move |_d, resp| {
+            if resp != "clear" {
+                return;
+            }
+            let w = w.clone();
+            spawn_bg(
+                || history::clear().map_err(|e| e.to_string()),
+                move |result| {
+                    let Some(w) = w.upgrade() else { return };
+                    match result {
+                        Ok(()) => {
+                            w.toast(&tr("Almanac's log cleared"), 5);
+                            w.history_reload();
+                        }
+                        Err(e) => {
+                            w.say(&format!("{}: {e}", tr("Could not clear Almanac's log")), 8)
+                        }
+                    }
+                },
+            );
+        });
+        dialog.present(Some(&self.window));
+    }
+
     pub fn maint_reload(&self) {
         self.busy(true);
         self.summarize(&tr("Checking the system…"), Some("maintenance"));
 
         let w = self.downgrade();
-        spawn_bg(
-            || std::panic::catch_unwind(maintenance::run_all).map_err(|e| panic_text(&*e)),
-            move |result| {
-                let Some(w) = w.upgrade() else { return };
-                match result {
-                    Ok(findings) => w.maint_show(findings),
-                    Err(exc) => w.say(&format!("Health checks failed: {exc}"), 8),
-                }
-            },
-        );
+        spawn_bg_checked(maintenance::run_all, move |result| {
+            let Some(w) = w.upgrade() else { return };
+            match result {
+                Ok(findings) => w.maint_show(findings),
+                Err(exc) => w.say(&format!("Health checks failed: {exc}"), 8),
+            }
+        });
     }
 
     pub fn maint_show(&self, findings: Vec<maintenance::Finding>) {
@@ -384,8 +657,10 @@ impl Win {
         // Problems first, each in full; everything that passed folds into one
         // row. Fifteen "OK" rows of two or three lines each were most of the
         // page, and pushed the one that mattered down with them.
-        let passed: Vec<&maintenance::Finding> =
-            findings.iter().filter(|f| f.severity == maintenance::OK).collect();
+        let passed: Vec<&maintenance::Finding> = findings
+            .iter()
+            .filter(|f| f.severity == maintenance::OK)
+            .collect();
         for f in &findings {
             if f.severity != maintenance::OK {
                 maint_list.append(&self.maint_row(f));
@@ -398,12 +673,12 @@ impl Win {
                 &(titles.join(", ") + if passed.len() > 4 { "…" } else { "" }),
             );
             fold.set_subtitle_lines(1);
-            let tick = gtk::Image::builder()
-                .icon_name("object-select-symbolic")
-                .valign(gtk::Align::Center)
-                .build();
-            tick.add_css_class("store-verified");
-            fold.add_prefix(&tick);
+            // Its verdict where every other row has its own: an OK pill at
+            // the end, not a tick in front that pushed this one title out of
+            // line with the rest.
+            if let Some((label, css)) = severity_css(maintenance::OK) {
+                fold.add_suffix(&severity_pill(&label, css));
+            }
             // Open when nothing else is listed, so the page is never blank.
             fold.set_expanded(passed.len() == findings.len());
             for f in &passed {
@@ -434,7 +709,11 @@ impl Win {
         );
 
         // Keep the sidebar badge honest about what the page says.
-        let count = self.shared.borrow().sidebar_row("maintenance").map(|r| r.count.clone());
+        let count = self
+            .shared
+            .borrow()
+            .sidebar_row("maintenance")
+            .map(|r| r.count.clone());
         if let Some(count) = count {
             let crit = findings.iter().any(|f| f.severity == maintenance::CRIT);
             Win::badge(&count, issues, if crit { "crit" } else { "warn" });
@@ -463,11 +742,13 @@ impl Win {
         };
         // A problem gets room to explain itself; a pass gets one line.
         row.set_subtitle_lines(if f.severity == maintenance::OK { 1 } else { 3 });
-        row.row().set_tooltip_text(Some(&crate::util::human_error(&f.detail)));
+        row.row()
+            .set_tooltip_text(Some(&crate::util::human_error(&f.detail)));
 
-        let pill = gtk::Label::builder().label(label).valign(gtk::Align::Center).build();
-        pill.add_css_class(css);
-        row.add_prefix(&pill);
+        // Suffixes in the order they read, left to right: size, the fix (or
+        // what to do by hand), then the pill nearest the edge on every row
+        // (Today and AI too), so a list's pills are one column.
+        let mut suffixes: Vec<gtk::Widget> = Vec::new();
 
         if f.size_mb != 0.0 && f.id != "disk" {
             let size = gtk::Label::builder()
@@ -476,7 +757,7 @@ impl Win {
                 .build();
             size.add_css_class("dim-label");
             size.add_css_class("caption");
-            row.add_suffix(&size);
+            suffixes.push(size.upcast());
         }
 
         if f.actionable() && !f.fix_label.is_empty() {
@@ -494,10 +775,13 @@ impl Win {
                     w.maint_fix(&f);
                 }
             });
-            row.add_suffix(&btn);
+            suffixes.push(btn.upcast());
         } else if !f.fix_note.is_empty()
             && !matches!(&f.fix, Some(maintenance::Fix::Func(_)))
-            && !f.fix.as_ref().is_some_and(|x| x.commands().iter().any(|a| !a.is_empty()))
+            && !f
+                .fix
+                .as_ref()
+                .is_some_and(|x| x.commands().iter().any(|a| !a.is_empty()))
             && f.severity != maintenance::OK
         {
             // No button, but say what the human would have to do.
@@ -508,12 +792,27 @@ impl Win {
             hint.add_css_class("dim-label");
             hint.add_css_class("caption");
             hint.set_tooltip_text(Some(&f.fix_note));
-            row.add_suffix(&hint);
+            suffixes.push(hint.upcast());
+        }
+        suffixes.push(severity_pill(&label, css).upcast());
+        if matches!(row, Row::Expander(_)) {
+            // An expander row puts each suffix before the ones it has.
+            for w in suffixes.iter().rev() {
+                row.add_suffix(w);
+            }
+        } else {
+            for w in &suffixes {
+                row.add_suffix(w);
+            }
+            row.add_suffix(&arrow_space());
         }
         row.row()
     }
 
     pub fn maint_fix(&self, f: &maintenance::Finding) {
+        if self.demo_refuses() {
+            return;
+        }
         let mut detail = f.fix_note.clone();
         if !f.items.is_empty() {
             let items: Vec<&str> = f.items.iter().take(40).map(String::as_str).collect();
@@ -523,8 +822,14 @@ impl Win {
                 detail += &format!("\n… and {} more", f.items.len() - 40);
             }
         }
-        let destructive = ["trash", "orphans", "dangling-desktop", "broken-symlinks", "rollbacks"]
-            .contains(&f.id.as_str());
+        let destructive = [
+            "trash",
+            "orphans",
+            "dangling-desktop",
+            "broken-symlinks",
+            "rollbacks",
+        ]
+        .contains(&f.id.as_str());
         let w = self.downgrade();
         let fixed = f.clone();
         tasks::confirm(
@@ -537,15 +842,40 @@ impl Win {
             move || {
                 if let Some(w) = w.upgrade() {
                     let steps = fix_steps(fixed.fix_label.clone(), &fixed);
-                    let on_done = w.findings_done(vec![fixed.clone()]);
-                    let _ = tasks::run(&w.window, &fixed.title, steps, Some(on_done));
+                    w.run_fixes(&fixed.title, &fixed.title, steps, vec![fixed.clone()]);
                 }
             },
         );
     }
 
-    /// After fixes: ask each check again, and say what actually changed.
-    pub fn findings_done(&self, fixed: Vec<maintenance::Finding>) -> OnDone {
+    /// Run fix `steps` in a task dialog, then check `fixed` again and record
+    /// what the run did (`summary` titles a run of several fixes there).
+    /// The free space is read first, off the main thread, so History can
+    /// say what the run actually freed.
+    fn run_fixes(
+        &self,
+        title: &str,
+        summary: &str,
+        steps: Vec<Step>,
+        fixed: Vec<maintenance::Finding>,
+    ) {
+        if self.demo_refuses() {
+            return;
+        }
+        let w = self.downgrade();
+        let (title, summary) = (title.to_string(), summary.to_string());
+        spawn_bg(free_bytes, move |free_before| {
+            let Some(w) = w.upgrade() else { return };
+            let run = FixRun::of(&summary, &steps, free_before);
+            let on_done = w.findings_done(fixed, run);
+            w.run_task(&title, steps, Some(on_done));
+        });
+    }
+
+    /// After fixes: ask each check again, say what actually changed, and
+    /// record the run -- its commands, each check's answer, the space it
+    /// freed and how long it took -- as one History entry.
+    fn findings_done(&self, fixed: Vec<maintenance::Finding>, run: FixRun) -> OnDone {
         let w = self.downgrade();
         Box::new(move |ok: bool| {
             let Some(win) = w.upgrade() else { return };
@@ -558,19 +888,30 @@ impl Win {
                         .iter()
                         .map(|f| verify::judge_finding(f, verify::recheck(&f.id).as_ref()))
                         .collect();
-                    let failed: Vec<Outcome> =
-                        outs.iter().filter(|o| o.changed == Some(false)).cloned().collect();
+                    let recorded = run.record(ok, &fixed, &outs, free_bytes());
+                    let failed: Vec<Outcome> = outs
+                        .iter()
+                        .filter(|o| o.changed == Some(false))
+                        .cloned()
+                        .collect();
                     let message = (failed.is_empty() && !outs.is_empty()).then(|| {
-                        outs.iter().map(|o| o.message.as_str()).collect::<Vec<_>>().join(" · ")
+                        outs.iter()
+                            .map(|o| o.message.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · ")
                     });
-                    (failed, message)
+                    (failed, message, recorded)
                 },
                 // spawn_bg's done already runs from the main loop, the one hop
                 // Python's GLib.idle_add makes; deliver straight from it.
-                move |(failed, message)| {
+                move |(failed, message, recorded)| {
                     let Some(w) = w.upgrade() else { return };
+                    if let Err(e) = recorded {
+                        eprintln!("almanac: history: {e}");
+                    }
+                    // Already in History, with the rest of the run.
                     for o in failed {
-                        w.report_outcome(&o);
+                        w.announce_outcome(&o);
                     }
                     if let Some(message) = message {
                         w.say(&message, 8);
@@ -589,6 +930,9 @@ impl Win {
 
     /// The three cleanups that only ever free cached or logged data.
     pub fn reclaim_space(&self) {
+        if self.demo_refuses() {
+            return;
+        }
         let wanted = ["pacman-cache", "yay-cache", "journal"];
         let (mut steps, mut detail, mut total) = (Vec::new(), Vec::new(), 0.0);
         let findings = self.shared.borrow().findings.get();
@@ -627,8 +971,7 @@ impl Win {
                     .filter(|f| wanted.contains(&f.id.as_str()) && f.actionable())
                     .cloned()
                     .collect();
-                let on_done = w.findings_done(fixed);
-                let _ = tasks::run(&w.window, "Reclaiming space", steps.clone(), Some(on_done));
+                w.run_fixes("Reclaiming space", "Space reclaimed", steps.clone(), fixed);
             },
         );
     }
@@ -638,7 +981,14 @@ impl Win {
 mod tests {
     use super::*;
 
-    const PILLS: &[&str] = &["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+    const PILLS: &[&str] = &[
+        "pill",
+        "pill-crit",
+        "pill-warn",
+        "pill-ok",
+        "pill-accent",
+        "pill-quiet",
+    ];
     const SCALE: &[i64] = &[2, 4, 6, 8, 12, 16, 20, 24];
 
     fn source() -> String {
@@ -677,7 +1027,10 @@ mod tests {
                 !icon.is_empty() && !title.is_empty() && !body.is_empty(),
                 "{key}'s empty state is incomplete"
             );
-            assert!(body.chars().count() > 20, "{key}'s empty state does not explain anything");
+            assert!(
+                body.chars().count() > 20,
+                "{key}'s empty state does not explain anything"
+            );
         }
     }
 
@@ -706,6 +1059,70 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_run_is_recorded_with_its_commands_checks_and_space() {
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let d = tempfile::tempdir().unwrap();
+        let old = std::env::var_os("XDG_STATE_HOME");
+        std::env::set_var("XDG_STATE_HOME", d.path());
+        let steps = vec![
+            Step::argv("Trim", vec!["paccache".into(), "-rk2".into()]),
+            Step::argv("Nothing", Vec::new()),
+        ];
+        let run = FixRun::of("Space reclaimed", &steps, Some(10 << 20));
+        let fixed = vec![maintenance::Finding {
+            title: "Package cache".into(),
+            fix_label: "Trim to 2 versions".into(),
+            ..Default::default()
+        }];
+        let worked = vec![Outcome::new(Some(true), "Package cache: resolved")];
+        run.record(true, &fixed, &worked, Some(13 << 20)).unwrap();
+        let stuck = vec![Outcome::new(
+            Some(false),
+            "Package cache: the fix ran but nothing changed",
+        )];
+        run.record(false, &fixed, &stuck, None).unwrap();
+        let evs = history::recorded(0.0).unwrap();
+        match old {
+            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        assert_eq!(evs.len(), 2);
+        let (good, bad) = (
+            evs[0].action.clone().unwrap(),
+            evs[1].action.clone().unwrap(),
+        );
+        assert_eq!(evs[0].title, "Package cache: resolved");
+        assert_eq!(evs[0].detail, "Trim to 2 versions");
+        assert_eq!(evs[0].severity, "");
+        // The command as it ran: elevated, by path.
+        assert_eq!(good.commands.len(), 1);
+        assert_eq!(
+            good.commands[0].argv,
+            "/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2"
+        );
+        assert_eq!(good.commands[0].exit, Some(0));
+        assert_eq!(good.freed_bytes, Some(3 << 20));
+        assert_eq!(good.checks[0].ok, Some(true));
+        assert!(good.duration_secs.is_some());
+        // A task that failed does not say which command did.
+        assert_eq!(bad.commands[0].exit, None);
+        assert_eq!(bad.freed_bytes, None);
+        assert_eq!(bad.checks[0].ok, Some(false));
+        assert_eq!(evs[1].severity, "warn");
+    }
+
+    #[test]
+    fn clearing_says_what_it_does_not_touch_and_asks_first() {
+        let code = code();
+        assert!(code.contains("Package history from pacman and your \\\n                      snapshots are not affected."));
+        assert!(code
+            .contains("set_response_appearance(\"clear\", adw::ResponseAppearance::Destructive)"));
+        assert!(code.contains("set_default_response(Some(\"cancel\"))"));
+    }
+
+    #[test]
     fn clock_is_hours_and_minutes() {
         let t = clock_text(1_700_000_000.7).unwrap();
         assert_eq!(t.len(), 5);
@@ -728,7 +1145,10 @@ mod tests {
             .filter(|c| !SCALE.contains(&c[2].parse::<i64>().unwrap_or(-1)))
             .map(|c| format!("{}={}", &c[1], &c[2]))
             .collect();
-        assert!(offenders.is_empty(), "spacing off the scale {SCALE:?}: {offenders:?}");
+        assert!(
+            offenders.is_empty(),
+            "spacing off the scale {SCALE:?}: {offenders:?}"
+        );
     }
 
     #[test]
@@ -738,18 +1158,33 @@ mod tests {
         let used: Vec<String> = re.captures_iter(&code).map(|c| c[1].to_string()).collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(css().contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(PILLS.contains(&name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                css().contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                PILLS.contains(&name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
     }
 
     #[test]
     fn every_css_class_used_here_is_defined_or_stock() {
         // Classes libadwaita itself styles.
-        let stock = ["dim-label", "caption", "numeric", "property", "suggested-action"];
+        let stock = [
+            "dim-label",
+            "caption",
+            "numeric",
+            "property",
+            "suggested-action",
+        ];
         {
             let class = "store-verified";
-            assert!(css().contains(&format!(".{class}")), "{class} is never styled");
+            assert!(
+                css().contains(&format!(".{class}")),
+                "{class} is never styled"
+            );
         }
         for class in stock {
             assert!(code().contains(&format!("\"{class}\"")));
@@ -766,12 +1201,17 @@ mod tests {
             if line.contains("Button::builder()") || line.contains("Button::from_icon_name(") {
                 let window = lines[i..(i + 12).min(lines.len())].join("\n");
                 if (window.contains(".icon_name(") || line.contains("from_icon_name("))
-                    && !window.contains("name(&") && !window.contains("AccessibleProperty::Label") {
-                        unnamed.push(i + 1);
-                    }
+                    && !window.contains("name(&")
+                    && !window.contains("AccessibleProperty::Label")
+                {
+                    unnamed.push(i + 1);
+                }
             }
         }
-        assert!(unnamed.is_empty(), "unnamed icon buttons at lines {unnamed:?}");
+        assert!(
+            unnamed.is_empty(),
+            "unnamed icon buttons at lines {unnamed:?}"
+        );
     }
 
     // IconsExist: a theme-specific name renders as a blank square elsewhere.

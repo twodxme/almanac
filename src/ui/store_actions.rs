@@ -73,7 +73,10 @@ pub fn catalog_argv_allowed(argv: &[String]) -> Result<(), String> {
         ["omarchy", "plugin", "add", url, flags @ ..] => {
             is_https_url(url)
                 && flags.iter().all(|f| matches!(*f, "--enable" | "--yes"))
-                && flags.iter().enumerate().all(|(i, f)| !flags[..i].contains(f))
+                && flags
+                    .iter()
+                    .enumerate()
+                    .all(|(i, f)| !flags[..i].contains(f))
         }
         ["omarchy", "plugin", "enable", id] => is_plugin_id(id),
         _ => false,
@@ -95,7 +98,9 @@ pub fn is_https_url(s: &str) -> bool {
     s.strip_prefix("https://").is_some_and(|rest| {
         !rest.is_empty()
             && !rest.starts_with('/')
-            && rest.chars().all(|c| c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c))
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c))
     })
 }
 
@@ -104,7 +109,8 @@ pub fn is_https_url(s: &str) -> bool {
 fn is_plugin_id(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with(['-', '.'])
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 /// An argv as a shell would read it back, each word quoted where it needs
@@ -115,7 +121,15 @@ pub fn shown_argv(argv: &[String]) -> String {
         .map(|a| {
             let q = crate::store::shlex_quote(a);
             if q.chars().any(char::is_control) {
-                q.chars().flat_map(|c| if c.is_control() { c.escape_default().collect::<Vec<_>>() } else { vec![c] }).collect()
+                q.chars()
+                    .flat_map(|c| {
+                        if c.is_control() {
+                            c.escape_default().collect::<Vec<_>>()
+                        } else {
+                            vec![c]
+                        }
+                    })
+                    .collect()
             } else {
                 q
             }
@@ -172,7 +186,10 @@ fn shlex_split(s: &str) -> Result<Vec<String>, String> {
             '\\' => match next {
                 None => return Err("No escaped character".to_string()),
                 Some(c) => {
-                    if (escaped_state == '\'' || escaped_state == '"') && c != '\\' && c != escaped_state {
+                    if (escaped_state == '\'' || escaped_state == '"')
+                        && c != '\\'
+                        && c != escaped_state
+                    {
                         token.push('\\');
                     }
                     token.push(c);
@@ -208,13 +225,17 @@ fn shlex_split(s: &str) -> Result<Vec<String>, String> {
 
 /// The body of the plugin install confirmation.
 pub fn install_body(p: &Plugin) -> String {
-    let mut body = tr("Omarchy shell plugins run inside the shell process with your \
-                       permissions — there is no sandbox. Install what you trust.");
+    let mut body = tr(
+        "Omarchy shell plugins run inside the shell process with your \
+                       permissions — there is no sandbox. Install what you trust.",
+    );
     if p.needs_setup {
         body += "\n\n";
-        body += &tr("Its author lists setup beyond the install — packages, a build \
+        body += &tr(
+            "Its author lists setup beyond the install — packages, a build \
                      step or a sign-in. Once it is installed, Almanac shows you each \
-                     step from its README before running any of it.");
+                     step from its README before running any of it.",
+        );
     }
     body
 }
@@ -224,7 +245,11 @@ pub fn install_body(p: &Plugin) -> String {
 /// `Err` where a listing property raises.
 pub fn install_detail(p: &Plugin, argv: &[String]) -> Result<String, String> {
     let t = p.try_trust()?;
-    let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
+    let licence = if p.license.is_empty() {
+        "unstated"
+    } else {
+        p.license.as_str()
+    };
     Ok(format!(
         "Publisher   {}\nProvenance  {} — {}\nLicence     {}\nListed by   {}\n\n$ {}",
         p.try_publisher()?,
@@ -251,7 +276,11 @@ pub fn install_pin_warning(p: &Plugin, head: &str) -> Option<String> {
         p.name,
         tr("this is not the commit that was reviewed, so its trust label does not cover it"),
         tr("installed"),
-        if head.is_empty() { "?".to_string() } else { short(head) },
+        if head.is_empty() {
+            "?".to_string()
+        } else {
+            short(head)
+        },
         tr("reviewed"),
         short(reviewed)
     ))
@@ -262,7 +291,13 @@ pub fn plugin_remove_steps(p: &Plugin) -> Vec<Step> {
     vec![
         Step::argv(
             format!("Removing {}", p.name),
-            vec!["omarchy".into(), "plugin".into(), "remove".into(), p.id.clone(), "--yes".into()],
+            vec![
+                "omarchy".into(),
+                "plugin".into(),
+                "remove".into(),
+                p.id.clone(),
+                "--yes".into(),
+            ],
         ),
         Win::forget_shortcut(&p.id),
     ]
@@ -271,7 +306,10 @@ pub fn plugin_remove_steps(p: &Plugin) -> Vec<Step> {
 /// `p.install_cmd.split()[-1]`: the theme's URL. None where the Python's
 /// index raises (an empty command).
 pub fn theme_url(install_cmd: &str) -> Option<String> {
-    install_cmd.split(py_isspace).rfind(|s| !s.is_empty()).map(str::to_string)
+    install_cmd
+        .split(py_isspace)
+        .rfind(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// `str.isspace()` on one character: Unicode White_Space, plus the four
@@ -281,21 +319,39 @@ fn py_isspace(c: char) -> bool {
 }
 
 pub fn theme_install_argv(url: &str) -> Vec<String> {
-    vec!["omarchy".into(), "theme".into(), "install".into(), url.to_string()]
+    vec![
+        "omarchy".into(),
+        "theme".into(),
+        "install".into(),
+        url.to_string(),
+    ]
 }
 
 pub fn theme_set_argv(name: &str) -> Vec<String> {
-    vec!["omarchy".into(), "theme".into(), "set".into(), name.to_string()]
+    vec![
+        "omarchy".into(),
+        "theme".into(),
+        "set".into(),
+        name.to_string(),
+    ]
 }
 
 pub fn theme_remove_argv(name: &str) -> Vec<String> {
-    vec!["omarchy".into(), "theme".into(), "remove".into(), name.to_string()]
+    vec![
+        "omarchy".into(),
+        "theme".into(),
+        "remove".into(),
+        name.to_string(),
+    ]
 }
 
 /// Why a theme cannot be removed (it ships with Omarchy), or None.
 pub fn theme_removal_refused(p: &Plugin) -> Option<String> {
     if p.built_in {
-        return Some(format!("{} ships with Omarchy and cannot be removed", p.name));
+        return Some(format!(
+            "{} ships with Omarchy and cannot be removed",
+            p.name
+        ));
     }
     None
 }
@@ -305,7 +361,10 @@ pub fn theme_removal_refused(p: &Plugin) -> Option<String> {
 /// is, so the AppImage and its record always land in the same tree.
 fn store_apps_dir() -> PathBuf {
     let reg = inventory::registry();
-    reg.parent().map(Path::to_path_buf).unwrap_or_default().join("apps")
+    reg.parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join("apps")
 }
 
 /// Where a store AppImage is kept: beside the registry, in `apps/`.
@@ -351,7 +410,11 @@ fn py_join(folder: &Path, name: &str) -> PathBuf {
 
 /// Python's `repr(str)`, for the file names in OSError messages.
 fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::from(quote);
     for c in s.chars() {
         match c {
@@ -363,7 +426,9 @@ fn py_repr(s: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -373,10 +438,17 @@ fn py_repr(s: &str) -> String {
 
 /// `str(OSError)` with a filename: `[Errno 17] File exists: '/path'`.
 fn py_os_error(e: &std::io::Error, path: &Path) -> String {
-    let Some(code) = e.raw_os_error() else { return e.to_string() };
+    let Some(code) = e.raw_os_error() else {
+        return e.to_string();
+    };
     let text = e.to_string();
-    let strerror = text.strip_suffix(&format!(" (os error {code})")).unwrap_or(&text);
-    format!("[Errno {code}] {strerror}: {}", py_repr(&path.to_string_lossy()))
+    let strerror = text
+        .strip_suffix(&format!(" (os error {code})"))
+        .unwrap_or(&text);
+    format!(
+        "[Errno {code}] {strerror}: {}",
+        py_repr(&path.to_string_lossy())
+    )
 }
 
 /// The OSError subclass Python raises for an errno, for the logged line.
@@ -397,8 +469,12 @@ fn py_mkdir_parents(path: &Path) -> Result<(), String> {
     match std::fs::create_dir(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let parent = path.parent().filter(|q| *q != path && !q.as_os_str().is_empty());
-            let Some(parent) = parent else { return Err(py_os_error(&e, path)) };
+            let parent = path
+                .parent()
+                .filter(|q| *q != path && !q.as_os_str().is_empty());
+            let Some(parent) = parent else {
+                return Err(py_os_error(&e, path));
+            };
             py_mkdir_parents(parent)?;
             match std::fs::create_dir(path) {
                 Ok(()) => Ok(()),
@@ -419,7 +495,9 @@ fn registry_with(p: &Plugin, dest: &Path) -> Result<serde_json::Map<String, Valu
     let mut reg = match util::read_json(&inventory::registry()) {
         None => serde_json::Map::new(),
         Some(Value::Object(m)) => m,
-        Some(Value::Array(_)) => return Err("list indices must be integers or slices, not str".into()),
+        Some(Value::Array(_)) => {
+            return Err("list indices must be integers or slices, not str".into())
+        }
         Some(other) => {
             let kind = match other {
                 Value::String(_) => "str",
@@ -431,7 +509,10 @@ fn registry_with(p: &Plugin, dest: &Path) -> Result<serde_json::Map<String, Valu
             return Err(format!("'{kind}' object does not support item assignment"));
         }
     };
-    reg.insert(p.id.clone(), appimage_record(p, dest).map_err(|e| crate::ui::shell::exc_str(&e))?);
+    reg.insert(
+        p.id.clone(),
+        appimage_record(p, dest).map_err(|e| crate::ui::shell::exc_str(&e))?,
+    );
     Ok(reg)
 }
 
@@ -504,7 +585,15 @@ fn spawn_errno(e: &glib::Error) -> std::io::Error {
 pub trait Host: Clone + 'static {
     fn say(&self, message: &str, timeout: u32);
     /// `tasks.confirm(self, heading, body, detail, action, destructive, on_yes)`.
-    fn confirm(&self, heading: &str, body: &str, detail: &str, action: &str, destructive: bool, on_yes: Box<dyn Fn()>);
+    fn confirm(
+        &self,
+        heading: &str,
+        body: &str,
+        detail: &str,
+        action: &str,
+        destructive: bool,
+        on_yes: Box<dyn Fn()>,
+    );
     /// `tasks.run(self, title, steps, on_done)`.
     fn run(&self, title: &str, steps: Vec<Step>, on_done: tasks::OnDone);
     /// `_store_after`. False where the Python raises out of it.
@@ -524,18 +613,35 @@ impl Host for WeakWin {
             win.say(message, timeout);
         }
     }
-    fn confirm(&self, heading: &str, body: &str, detail: &str, action: &str, destructive: bool, on_yes: Box<dyn Fn()>) {
+    fn confirm(
+        &self,
+        heading: &str,
+        body: &str,
+        detail: &str,
+        action: &str,
+        destructive: bool,
+        on_yes: Box<dyn Fn()>,
+    ) {
         if let Some(win) = self.upgrade() {
-            tasks::confirm(&win.window, heading, body, detail, action, destructive, on_yes);
+            tasks::confirm(
+                &win.window,
+                heading,
+                body,
+                detail,
+                action,
+                destructive,
+                on_yes,
+            );
         }
     }
     fn run(&self, title: &str, steps: Vec<Step>, on_done: tasks::OnDone) {
         if let Some(win) = self.upgrade() {
-            tasks::run(&win.window, title, steps, Some(on_done));
+            win.run_task(title, steps, Some(on_done));
         }
     }
     fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
-        self.upgrade().is_some_and(|win| win.store_after(ok, p, verb))
+        self.upgrade()
+            .is_some_and(|win| win.store_after(ok, p, verb))
     }
     fn offer_setup(&self, p: &Plugin) {
         if let Some(win) = self.upgrade() {
@@ -610,7 +716,9 @@ pub fn plugin_install<H: Host>(h: &H, p: &Plugin) {
                     return;
                 }
                 if ok && adds {
-                    if let Some(warning) = install_pin_warning(&after_p, &after_h.installed_head(&after_p)) {
+                    if let Some(warning) =
+                        install_pin_warning(&after_p, &after_h.installed_head(&after_p))
+                    {
                         after_h.say(&warning, 15);
                     }
                 }
@@ -676,7 +784,11 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
     };
     // The theme catalog is remote too: `omarchy theme install` is only
     // handed an https URL (it clones it), never an option or another scheme.
-    let words: Vec<&str> = p.install_cmd.split(py_isspace).filter(|s| !s.is_empty()).collect();
+    let words: Vec<&str> = p
+        .install_cmd
+        .split(py_isspace)
+        .filter(|s| !s.is_empty())
+        .collect();
     if words.as_slice() != ["omarchy", "theme", "install", url.as_str()] || !is_https_url(&url) {
         h.say(
             &format!(
@@ -688,7 +800,11 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
         );
         return;
     }
-    let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
+    let licence = if p.license.is_empty() {
+        "unstated"
+    } else {
+        p.license.as_str()
+    };
     let detail = format!(
         "Publisher  {}\nLicence    {}\nStars      {}\n\n$ {}",
         or_log!(p.try_publisher()),
@@ -699,8 +815,10 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
     let (host, p) = (h.clone(), p.clone());
     h.confirm(
         &format!("Install the {} theme?", p.name),
-        &tr("The theme is cloned into ~/.config/omarchy/themes. Nothing \
-             changes appearance until you apply it."),
+        &tr(
+            "The theme is cloned into ~/.config/omarchy/themes. Nothing \
+             changes appearance until you apply it.",
+        ),
         &detail,
         &tr("Install"),
         false,
@@ -708,7 +826,10 @@ pub fn theme_install<H: Host>(h: &H, p: &Plugin) {
             let (after_h, after_p) = (host.clone(), p.clone());
             host.run(
                 &format!("Installing {}", p.name),
-                vec![Step::argv(format!("Installing {}", p.name), theme_install_argv(&url))],
+                vec![Step::argv(
+                    format!("Installing {}", p.name),
+                    theme_install_argv(&url),
+                )],
                 Box::new(move |ok| after_h.theme_installed(ok, &after_p)),
             );
         }),
@@ -724,8 +845,10 @@ pub fn theme_remove<H: Host>(h: &H, p: &Plugin) {
     let (host, p) = (h.clone(), p.clone());
     h.confirm(
         &format!("Remove the {} theme?", p.name),
-        &tr("Deletes the cloned theme from ~/.config/omarchy/themes. If it is \
-             the theme you are wearing, Omarchy falls back to another one."),
+        &tr(
+            "Deletes the cloned theme from ~/.config/omarchy/themes. If it is \
+             the theme you are wearing, Omarchy falls back to another one.",
+        ),
         &format!("$ omarchy theme remove {}", p.name),
         &tr("Remove"),
         true,
@@ -733,7 +856,10 @@ pub fn theme_remove<H: Host>(h: &H, p: &Plugin) {
             let (after_h, after_p) = (host.clone(), p.clone());
             host.run(
                 &format!("Removing {}", p.name),
-                vec![Step::argv(format!("Removing {}", p.name), theme_remove_argv(&p.name))],
+                vec![Step::argv(
+                    format!("Removing {}", p.name),
+                    theme_remove_argv(&p.name),
+                )],
                 Box::new(move |ok| {
                     after_h.store_after(ok, &after_p, "removed");
                 }),
@@ -750,7 +876,9 @@ impl Win {
     /// when it runs. Here the copies are looked up again in `_plugins`; one
     /// that is not there (the list was replaced) stays as it was.
     pub fn live(&self, p: &Plugin) -> Plugin {
-        let Ok(sh) = self.shared.try_borrow() else { return p.clone() };
+        let Ok(sh) = self.shared.try_borrow() else {
+            return p.clone();
+        };
         sh.plugins
             .iter()
             .find(|q| q.id == p.id && q.market == p.market && q.install_kind == p.install_kind)
@@ -761,7 +889,9 @@ impl Win {
     // ---- marketplace actions ---------------------------------------------
     pub fn on_card_activated(&self, position: u32) {
         let model = self.shared.borrow().store_model.clone();
-        let Some(obj) = model.item(position) else { return };
+        let Some(obj) = model.item(position) else {
+            return;
+        };
         let plugin = PluginItem::of(&obj).map(|item| item.plugin.clone());
         if let Some(p) = plugin {
             self.show_plugin(&p);
@@ -785,15 +915,21 @@ impl Win {
             return Ok(Some(direct));
         }
         // root.glob("*/manifest.json"): pathlib's "*" matches dot-folders too.
-        let Ok(entries) = std::fs::read_dir(&root) else { return Ok(None) };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return Ok(None);
+        };
         for entry in entries.flatten() {
             let folder = entry.path();
             let manifest = folder.join("manifest.json");
             if !manifest.exists() {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
-            let Ok(data) = serde_json::from_str::<Value>(&text) else { continue };
+            let Ok(text) = std::fs::read_to_string(&manifest) else {
+                continue;
+            };
+            let Ok(data) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
             let Some(obj) = data.as_object() else {
                 let kind = match data {
                     Value::Array(_) => "list",
@@ -803,7 +939,9 @@ impl Win {
                     Value::Bool(_) => "bool",
                     _ => "NoneType",
                 };
-                return Err(format!("AttributeError: '{kind}' object has no attribute 'get'"));
+                return Err(format!(
+                    "AttributeError: '{kind}' object has no attribute 'get'"
+                ));
             };
             if obj.get("id").and_then(Value::as_str) == Some(p.id.as_str()) {
                 return Ok(Some(folder));
@@ -823,7 +961,10 @@ impl Win {
             }
         };
         let Some(folder) = folder else {
-            self.say(&format!("{}: installed, but its folder was not found", p.name), 5);
+            self.say(
+                &format!("{}: installed, but its folder was not found", p.name),
+                5,
+            );
             return;
         };
 
@@ -844,7 +985,10 @@ impl Win {
 
     pub fn show_setup(&self, p: &Plugin, plan: &SetupPlan) {
         if plan.empty() {
-            self.say(&format!("{} installed — its README asks for nothing more", p.name), 5);
+            self.say(
+                &format!("{} installed — its README asks for nothing more", p.name),
+                5,
+            );
             return;
         }
         let body = if plan.automatable() {
@@ -856,7 +1000,8 @@ impl Win {
             tr("Nothing here can be done for you — these need you. The \
                 README has the details.")
         };
-        let dialog = adw::AlertDialog::new(Some(&format!("Finish setting up {}", p.name)), Some(&body));
+        let dialog =
+            adw::AlertDialog::new(Some(&format!("Finish setting up {}", p.name)), Some(&body));
         let buf = gtk::TextBuffer::new(None);
         buf.set_text(&setup_mod::describe(plan));
         let text = gtk::TextView::builder()
@@ -902,15 +1047,14 @@ impl Win {
             let Some(win) = w.upgrade() else { return };
             if resp == "script" {
                 if let Some(script) = cut.first() {
-                    win.open_url(&gtk::gio::File::for_path(script).uri());
+                    win.open_path(std::path::Path::new(script));
                 }
             } else if resp == "readme" {
-                let url = if !p.repo.is_empty() {
-                    format!("{}#readme", p.repo)
+                if !p.repo.is_empty() {
+                    win.open_url(&format!("{}#readme", p.repo));
                 } else {
-                    format!("file://{}", py_join(&plan.plugin_dir, &plan.readme).display())
-                };
-                win.open_url(&url);
+                    win.open_path(&py_join(&plan.plugin_dir, &plan.readme));
+                }
             } else if resp == "run" {
                 win.run_setup(&p, &plan);
             }
@@ -919,6 +1063,9 @@ impl Win {
     }
 
     pub fn run_setup(&self, p: &Plugin, plan: &SetupPlan) {
+        if self.demo_refuses() {
+            return;
+        }
         let commands = {
             let w = self.downgrade();
             let p = p.clone();
@@ -931,7 +1078,13 @@ impl Win {
                 // confirmation was built is not run unseen.
                 if let Err(name) = setup_mod::unchanged(&plan) {
                     if let Some(win) = w.upgrade() {
-                        win.say(&format!("{}: {name}", tr("Setup was not run — a file changed after it was shown")), 10);
+                        win.say(
+                            &format!(
+                                "{}: {name}",
+                                tr("Setup was not run — a file changed after it was shown")
+                            ),
+                            10,
+                        );
                     }
                     return;
                 }
@@ -947,15 +1100,33 @@ impl Win {
                 // Popen raising stops before the record: logged, as the
                 // traceback out of the task callback is.
                 if let Err(e) = popen_new_session(&argv) {
-                    eprintln!("almanac: {}: {}", py_os_error_class(&e), py_os_error(&e, Path::new(&argv[0])));
+                    eprintln!(
+                        "almanac: {}: {}",
+                        py_os_error_class(&e),
+                        py_os_error(&e, Path::new(&argv[0]))
+                    );
                     return;
                 }
-                if let Err(e) = history::record_checked(
+                // They run in a terminal, which does not report back: how
+                // each ended is not known, and is recorded as such.
+                let action = history::ActionLog {
+                    commands: plan
+                        .commands
+                        .iter()
+                        .map(|c| history::CommandRun {
+                            argv: c.clone(),
+                            exit: None,
+                            secs: None,
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                if let Err(e) = history::record_action(
                     history::ALMANAC,
                     &format!("Setup commands run for {}", p.name),
                     "",
                     "",
-                    &plan.commands,
+                    &action,
                 ) {
                     eprintln!("almanac: {e}");
                 }
@@ -986,8 +1157,7 @@ impl Win {
                 }
             };
             let w = self.downgrade();
-            tasks::run(
-                &self.window,
+            self.run_task(
                 &format!("Setting up {}", p.name),
                 steps,
                 Some(Box::new(move |ok| {
@@ -1020,34 +1190,38 @@ impl Win {
             self.say(&format!("{} was not installed", p.name), 8);
             return;
         }
-        if !self.annotate_plugins() {
-            return;
-        }
-        self.store_refresh();
-        let toast = adw::Toast::builder()
-            .title(format!("{} installed", p.name))
-            .use_markup(false)
-            .timeout(0)
-            .build();
-        toast.set_button_label(Some("Apply"));
-        let w = self.downgrade();
         let p = p.clone();
-        toast.connect_button_clicked(move |_| {
-            if let Some(win) = w.upgrade() {
-                win.apply_theme_now(&p);
-            }
+        self.annotate_plugins_then(move |win| {
+            win.store_refresh();
+            let toast = adw::Toast::builder()
+                .title(format!("{} installed", p.name))
+                .use_markup(false)
+                .timeout(0)
+                .build();
+            toast.set_button_label(Some("Apply"));
+            let w = win.downgrade();
+            toast.connect_button_clicked(move |_| {
+                if let Some(win) = w.upgrade() {
+                    win.apply_theme_now(&p);
+                }
+            });
+            win.toasts.add_toast(toast);
         });
-        self.toasts.add_toast(toast);
     }
 
     pub fn apply_theme_now(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let w = self.downgrade();
         let p = p.clone();
         tasks::confirm(
             &self.window,
             &format!("Switch to {}?", p.name),
-            &tr("Applies the theme to the whole desktop — bar, terminal, editor \
-                 and this window. Your previous theme stays installed."),
+            &tr(
+                "Applies the theme to the whole desktop — bar, terminal, editor \
+                 and this window. Your previous theme stays installed.",
+            ),
             &format!("$ omarchy theme set {}", p.name),
             &tr("Apply"),
             false,
@@ -1055,10 +1229,12 @@ impl Win {
                 let Some(win) = w.upgrade() else { return };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
+                win.run_task(
                     &format!("Applying {}", p.name),
-                    vec![Step::argv(format!("Applying {}", p.name), theme_set_argv(&p.name))],
+                    vec![Step::argv(
+                        format!("Applying {}", p.name),
+                        theme_set_argv(&p.name),
+                    )],
                     Some(Box::new(move |ok| {
                         if let Some(win) = w.upgrade() {
                             win.after_theme(ok, &after_p);
@@ -1085,9 +1261,16 @@ impl Win {
 
     // ---- store entries that are AppImages, not plugins ----
     pub fn install_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let dest = store_appimage_path(p);
         let t = or_log!(p.try_trust());
-        let licence = if p.license.is_empty() { "unstated" } else { p.license.as_str() };
+        let licence = if p.license.is_empty() {
+            "unstated"
+        } else {
+            p.license.as_str()
+        };
         let detail = format!(
             "Publisher   {}\nProvenance  {} — {}\nLicence     {}\nVersion     {}\n\
              Download    {} ({:.0} MB)\nInstalls to {}",
@@ -1131,10 +1314,12 @@ impl Win {
                 };
                 let w = w.clone();
                 let after_p = p.clone();
-                tasks::run(
-                    &win.window,
+                win.run_task(
                     &format!("Installing {}", p.name),
-                    vec![Step::call(format!("Downloading {} {}", p.name, p.version), fetch)],
+                    vec![Step::call(
+                        format!("Downloading {} {}", p.name, p.version),
+                        fetch,
+                    )],
                     Some(Box::new(move |ok| {
                         let Some(win) = w.upgrade() else { return };
                         if ok {
@@ -1168,15 +1353,21 @@ impl Win {
         // NaN or infinity Python's int() would raise on.
         let progress = |frac: f64| {
             let pct = (frac * 100.0) as i64;
-            if pct >= seen.get() + 10 { // one line per 10%, not per chunk
+            if pct >= seen.get() + 10 {
+                // one line per 10%, not per chunk
                 seen.set(pct);
                 log(&format!("  {pct}%"));
             }
         };
 
         // Checked against the asset's published sha256 when it has one.
-        let got = crate::appimage::download_verified(&p.download_url, dest, Some(&progress), &p.sha256)?;
-        log(if got.checksum_verified { "checksum verified" } else { "unverified (no checksum published)" });
+        let got =
+            crate::appimage::download_verified(&p.download_url, dest, Some(&progress), &p.sha256)?;
+        log(if got.checksum_verified {
+            "checksum verified"
+        } else {
+            "unverified (no checksum published)"
+        });
         log("downloaded, registering");
 
         // Read and written under the registry's lock, so an entry another
@@ -1194,8 +1385,15 @@ impl Win {
     }
 
     pub fn remove_store_appimage(&self, p: &Plugin) {
+        if self.demo_refuses() {
+            return;
+        }
         let p = &self.live(p);
-        let version = if p.local_version.is_empty() { &p.version } else { &p.local_version };
+        let version = if p.local_version.is_empty() {
+            &p.version
+        } else {
+            &p.local_version
+        };
         let mut extra = serde_json::Map::new();
         extra.insert("key".into(), Value::String(p.id.clone()));
         let entry = inventory::App {
@@ -1207,21 +1405,29 @@ impl Win {
             exec_path: store_appimage_path(p).to_string_lossy().into_owned(),
             extra: extra.into(),
         };
-        let detail = format!("{}\n{}", entry.exec_path, entry.exec_path.replace(".AppImage", ".previous"));
+        let detail = format!(
+            "{}\n{}",
+            entry.exec_path,
+            entry.exec_path.replace(".AppImage", ".previous")
+        );
         let w = self.downgrade();
         let p = p.clone();
         tasks::confirm(
             &self.window,
             &format!("Remove {}?", p.name),
-            &tr("The AppImage, its rollback copy and its launcher entry are \
-                 deleted. Documents you created with it are untouched."),
+            &tr(
+                "The AppImage, its rollback copy and its launcher entry are \
+                 deleted. Documents you created with it are untouched.",
+            ),
             &detail,
             &tr("Remove"),
             true,
             move || {
                 if let Some(win) = w.upgrade() {
-                    win.remove_appimage(&entry);
-                    win.store_after(true, &p, "removed");
+                    let p = p.clone();
+                    win.remove_appimage_then(&entry, move |win| {
+                        win.store_after(true, &p, "removed");
+                    });
                 }
             },
         );
@@ -1229,45 +1435,97 @@ impl Win {
 
     /// The app ran the command, so it knows when to re-read the system.
     ///
-    /// False where the Python raises (see `annotate_plugins`), so a caller
-    /// with more to do after it stops there too.
+    /// False where the Python raises before anything is read (see
+    /// `annotate_plugins_then`), so a caller with more to do after it stops
+    /// there too. The marks themselves land a moment later: the store is
+    /// refreshed and the result said once they have.
     pub fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
         if !ok {
             self.say(&format!("{} was not {}", p.name, verb), 5);
             return true;
         }
-        if !self.annotate_plugins() {
-            return false;
-        }
-        self.store_refresh();
-        self.say(&format!("{} {}", p.name, verb), 5);
-        if p.install_kind == "appimage" {
-            self.reload();
-        }
-        true
+        let (p, verb) = (p.clone(), verb.to_string());
+        self.annotate_plugins_then(move |w| {
+            w.store_refresh();
+            w.say(&format!("{} {}", p.name, verb), 5);
+            if p.install_kind == "appimage" {
+                w.reload();
+            }
+        })
     }
 
-    /// `store_mod.annotate(self._plugins)`. False where the Python raises:
-    /// `_plugins` is None after Preferences' `reload_store`, annotate's loop
-    /// raises TypeError; or annotate itself raises. Either way the caller
-    /// stops there (logged, no toast).
+    /// `store_mod.annotate(self._plugins)`, then `then`. False where the
+    /// Python raises at once: `_plugins` is None after Preferences'
+    /// `reload_store` (logged, no toast).
     ///
-    /// The list is taken out for the call and put back, so nothing annotate
-    /// reaches can find `shared` borrowed.
-    fn annotate_plugins(&self) -> bool {
+    /// Reading what is installed runs `omarchy plugin list` (two seconds
+    /// through the shell's IPC, up to 25 when it hangs), so it is read off
+    /// the main thread, and the marks it changes are worked out there too.
+    /// Only those are put on the list, back on this thread; where annotate
+    /// raises, they are logged and `then` does not run.
+    pub fn annotate_plugins_then(&self, then: impl FnOnce(&Win) + 'static) -> bool {
         let none = self.shared.borrow().plugins_none;
         if none {
             eprintln!("almanac: TypeError: 'NoneType' object is not iterable");
             return false;
         }
-        let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
-        let r = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut plugins));
-        self.shared.borrow_mut().plugins = plugins;
-        if let Err(e) = r {
-            eprintln!("almanac: {e}");
-            return false;
-        }
+        let plugins = self.shared.borrow().plugins.clone();
+        let w = self.downgrade();
+        crate::ui::shell::spawn_bg_checked(
+            move || {
+                let facts = store_mod::annotation_facts(&plugins)?;
+                let (changes, r) = store_mod::mark_changes(&plugins, &facts);
+                Ok::<_, String>((plugins, changes, r))
+            },
+            move |result| {
+                let Some(w) = w.upgrade() else { return };
+                let (seen, changes, r) = match result.and_then(|r| r) {
+                    Ok(got) => got,
+                    Err(e) => {
+                        eprintln!("almanac: {e}");
+                        return;
+                    }
+                };
+                w.put_marks(seen, &changes);
+                if let Err(e) = r {
+                    eprintln!("almanac: {e}");
+                    return;
+                }
+                then(&w);
+            },
+        );
         true
+    }
+
+    /// Put marks worked out on `seen` on the window's plugin list, if it is
+    /// still that list (a reload in between brought its own, marked).
+    ///
+    /// The list is shared with the store's current results; both let go of
+    /// it while it is changed, so it is changed in place rather than copied
+    /// (all 6,000 plugins, for one install), and both get it back.
+    fn put_marks(&self, seen: Arc<Vec<Plugin>>, changes: &[(usize, store_mod::Marks)]) {
+        if changes.is_empty() {
+            return;
+        }
+        let mut plugins = std::mem::take(&mut self.shared.borrow_mut().plugins);
+        if !Arc::ptr_eq(&plugins, &seen) {
+            self.shared.borrow_mut().plugins = plugins;
+            return;
+        }
+        drop(seen);
+        let results = self
+            .store
+            .borrow_mut()
+            .store_results
+            .take_plugins_if(&plugins);
+        store_mod::apply_mark_changes(Arc::<Vec<Plugin>>::make_mut(&mut plugins), changes);
+        if results {
+            self.store
+                .borrow_mut()
+                .store_results
+                .put_plugins(plugins.clone());
+        }
+        self.shared.borrow_mut().plugins = plugins;
     }
 
     /// The full listing for one plugin, as the marketplace shows it.
@@ -1312,7 +1570,11 @@ impl Win {
             );
         }
 
-        let title = gtk::Label::builder().label(&p.name).xalign(0.0).wrap(true).build();
+        let title = gtk::Label::builder()
+            .label(&p.name)
+            .xalign(0.0)
+            .wrap(true)
+            .build();
         title.add_css_class("title-2");
         head.append(&title);
         let subtitle = or_log!(p.try_subtitle());
@@ -1332,12 +1594,20 @@ impl Win {
         head.append(&badges);
 
         if !p.description.is_empty() {
-            let body = gtk::Label::builder().label(&p.description).xalign(0.0).wrap(true).build();
+            let body = gtk::Label::builder()
+                .label(&p.description)
+                .xalign(0.0)
+                .wrap(true)
+                .build();
             body.set_wrap_mode(pango::WrapMode::WordChar);
             head.append(&body);
         }
         if !p.install_note.is_empty() {
-            let note = gtk::Label::builder().label(&p.install_note).xalign(0.0).wrap(true).build();
+            let note = gtk::Label::builder()
+                .label(&p.install_note)
+                .xalign(0.0)
+                .wrap(true)
+                .build();
             note.add_css_class("dim-label");
             note.add_css_class("caption");
             head.append(&note);
@@ -1352,7 +1622,11 @@ impl Win {
             .description(tr("Where this comes from and what has actually been \
                              checked about it"))
             .build();
-        Win::detail_row(&prov, &tr("Marketplace"), &or_log!(p.try_market_name_text()));
+        Win::detail_row(
+            &prov,
+            &tr("Marketplace"),
+            &or_log!(p.try_market_name_text()),
+        );
         Win::detail_row(&prov, &tr("Publisher"), &or_log!(p.try_publisher()));
         Win::detail_row(&prov, &tr("Declared author"), &p.author);
         Win::detail_row(&prov, &tr("Assurance"), &format!("{} — {}", t.label, t.why));
@@ -1361,7 +1635,11 @@ impl Win {
         }
         Win::detail_row(&prov, &tr("Reviewed by"), &p.reviewed_by);
         let validated = if !p.validated_commit.is_empty() {
-            format!("{} on {}", head_chars(&p.validated_commit, 12), p.validated_branch)
+            format!(
+                "{} on {}",
+                head_chars(&p.validated_commit, 12),
+                p.validated_branch
+            )
         } else {
             String::new()
         };
@@ -1371,7 +1649,11 @@ impl Win {
             format!(
                 "{}{}",
                 head_chars(&p.upstream_commit, 12),
-                if p.drifted() { "  (differs from what was validated)" } else { "  (matches)" }
+                if p.drifted() {
+                    "  (differs from what was validated)"
+                } else {
+                    "  (matches)"
+                }
             )
         } else {
             String::new()
@@ -1394,8 +1676,14 @@ impl Win {
         Win::detail_row(&prov, &tr("Manifest"), &p.manifest_path);
         page.add(&prov);
 
-        let facts = adw::PreferencesGroup::builder().title(tr("Listing")).build();
-        let stars = if p.stars != 0 { p.stars.to_string() } else { String::new() };
+        let facts = adw::PreferencesGroup::builder()
+            .title(tr("Listing"))
+            .build();
+        let stars = if p.stars != 0 {
+            p.stars.to_string()
+        } else {
+            String::new()
+        };
         for (label, value) in [
             ("Identifier", p.id.clone()),
             ("Version", p.version.clone()),
@@ -1415,8 +1703,16 @@ impl Win {
 
         let links = adw::PreferencesGroup::new();
         for (label, url, icon) in [
-            ("Marketplace listing", or_log!(p.try_page_text()), "web-browser-symbolic"),
-            ("Source repository", p.repo.clone(), "folder-remote-symbolic"),
+            (
+                "Marketplace listing",
+                or_log!(p.try_page_text()),
+                "web-browser-symbolic",
+            ),
+            (
+                "Source repository",
+                p.repo.clone(),
+                "folder-remote-symbolic",
+            ),
         ] {
             if url.is_empty() {
                 continue;
@@ -1498,10 +1794,23 @@ impl Win {
             bottom.append(&rm);
             if p.install_kind == "plugin" {
                 // A switch shows the state as well as changing it.
-                let holder = gtk::Box::builder().spacing(6).valign(gtk::Align::Center).build();
+                let holder = gtk::Box::builder()
+                    .spacing(6)
+                    .valign(gtk::Align::Center)
+                    .build();
                 holder.append(&gtk::Label::new(Some(&tr("On"))));
-                let sw = gtk::Switch::builder().active(p.enabled).valign(gtk::Align::Center).build();
-                name(&sw, &if p.enabled { format!("{} on", p.name) } else { format!("{} off", p.name) });
+                let sw = gtk::Switch::builder()
+                    .active(p.enabled)
+                    .valign(gtk::Align::Center)
+                    .build();
+                name(
+                    &sw,
+                    &if p.enabled {
+                        format!("{} on", p.name)
+                    } else {
+                        format!("{} off", p.name)
+                    },
+                );
                 // One object for the dialog's life, as the Python's `info`:
                 // each toggle sees what the last one wrote to it.
                 let info = std::rc::Rc::new(std::cell::RefCell::new(plugins_mod::Installed {
@@ -1569,7 +1878,10 @@ impl Win {
             lbl.add_css_class("pill-ok");
             bottom.append(&lbl);
         } else if p.can_install() {
-            let content = adw::ButtonContent::builder().icon_name(INSTALL_ICON).label(tr("Install")).build();
+            let content = adw::ButtonContent::builder()
+                .icon_name(INSTALL_ICON)
+                .label(tr("Install"))
+                .build();
             let ins = gtk::Button::builder().child(&content).build();
             ins.add_css_class("suggested-action");
             let (w, p, close) = (self.downgrade(), p.clone(), closer.clone());
@@ -1627,13 +1939,20 @@ mod tests {
         static SRC: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file!());
             let text = std::fs::read_to_string(&path).expect("own source");
-            text.split("#[cfg(test)]").next().unwrap_or_default().to_string()
+            text.split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default()
+                .to_string()
         });
         SRC.as_str()
     }
 
     fn plugin(id: &str, name: &str) -> Plugin {
-        Plugin { id: id.into(), name: name.into(), ..Default::default() }
+        Plugin {
+            id: id.into(),
+            name: name.into(),
+            ..Default::default()
+        }
     }
 
     // ---- the stand-ins: `_Stub` and `_Confirmed` -------------------------
@@ -1662,7 +1981,12 @@ mod tests {
 
     impl Fake {
         fn say_yes(&self) {
-            let on_yes = self.0.borrow().on_yes.clone().expect("nothing asked for confirmation");
+            let on_yes = self
+                .0
+                .borrow()
+                .on_yes
+                .clone()
+                .expect("nothing asked for confirmation");
             on_yes();
         }
         fn finish(&self, ok: bool) {
@@ -1687,10 +2011,23 @@ mod tests {
         fn say(&self, message: &str, _timeout: u32) {
             self.0.borrow_mut().said.push(message.to_string());
         }
-        fn confirm(&self, heading: &str, body: &str, detail: &str, action: &str, destructive: bool, on_yes: Box<dyn Fn()>) {
+        fn confirm(
+            &self,
+            heading: &str,
+            body: &str,
+            detail: &str,
+            action: &str,
+            destructive: bool,
+            on_yes: Box<dyn Fn()>,
+        ) {
             let mut r = self.0.borrow_mut();
-            r.confirm_args =
-                Some((heading.into(), body.into(), detail.into(), action.into(), destructive));
+            r.confirm_args = Some((
+                heading.into(),
+                body.into(),
+                detail.into(),
+                action.into(),
+                destructive,
+            ));
             r.on_yes = Some(Rc::from(on_yes));
         }
         fn run(&self, _title: &str, steps: Vec<Step>, on_done: tasks::OnDone) {
@@ -1699,14 +2036,20 @@ mod tests {
             r.done = Some(on_done);
         }
         fn store_after(&self, ok: bool, p: &Plugin, verb: &str) -> bool {
-            self.0.borrow_mut().store_after.push((ok, p.name.clone(), verb.into()));
+            self.0
+                .borrow_mut()
+                .store_after
+                .push((ok, p.name.clone(), verb.into()));
             true
         }
         fn offer_setup(&self, p: &Plugin) {
             self.0.borrow_mut().offer_setup.push(p.clone());
         }
         fn theme_installed(&self, ok: bool, p: &Plugin) {
-            self.0.borrow_mut().theme_installed.push((ok, p.name.clone()));
+            self.0
+                .borrow_mut()
+                .theme_installed
+                .push((ok, p.name.clone()));
         }
         fn apply_theme_now(&self, p: &Plugin) {
             self.0.borrow_mut().applied.push(p.name.clone());
@@ -1750,13 +2093,25 @@ mod tests {
     #[test]
     fn yes_is_only_added_where_the_command_takes_it() {
         // `plugin enable` does not take the flag at all.
-        assert_eq!(install_argv("omarchy plugin enable x").unwrap(), ["omarchy", "plugin", "enable", "x"]);
+        assert_eq!(
+            install_argv("omarchy plugin enable x").unwrap(),
+            ["omarchy", "plugin", "enable", "x"]
+        );
         assert_eq!(
             install_argv("omarchy plugin add https://github.com/a/u --yes").unwrap(),
-            ["omarchy", "plugin", "add", "https://github.com/a/u", "--yes"]
+            [
+                "omarchy",
+                "plugin",
+                "add",
+                "https://github.com/a/u",
+                "--yes"
+            ]
         );
         // shlex.split raises on an open quote.
-        assert_eq!(install_argv("omarchy plugin add 'u"), Err("No closing quotation".to_string()));
+        assert_eq!(
+            install_argv("omarchy plugin add 'u"),
+            Err("No closing quotation".to_string())
+        );
     }
 
     #[test]
@@ -1809,12 +2164,21 @@ mod tests {
     #[test]
     fn a_refused_install_command_is_said_and_not_run() {
         let fake = Fake::default();
-        let p = Plugin { install_cmd: "bash -c 'curl x | sh'".into(), ..plugin("x", "X") };
+        let p = Plugin {
+            install_cmd: "bash -c 'curl x | sh'".into(),
+            ..plugin("x", "X")
+        };
         plugin_install(&fake, &p);
         let r = fake.0.borrow();
         assert!(r.confirm_args.is_none());
         assert!(r.ran.is_empty());
-        assert!(r.said.iter().any(|s| s.contains("X was not installed") && s.contains("'curl x | sh'")), "{:?}", r.said);
+        assert!(
+            r.said
+                .iter()
+                .any(|s| s.contains("X was not installed") && s.contains("'curl x | sh'")),
+            "{:?}",
+            r.said
+        );
         drop(r);
         let theme = Plugin {
             install_kind: "theme".into(),
@@ -1824,23 +2188,38 @@ mod tests {
         plugin_install(&fake, &theme);
         let r = fake.0.borrow();
         assert!(r.confirm_args.is_none());
-        assert!(r.said.iter().any(|s| s.contains("T was not installed")), "{:?}", r.said);
+        assert!(
+            r.said.iter().any(|s| s.contains("T was not installed")),
+            "{:?}",
+            r.said
+        );
     }
 
     /// The confirmation shows the command quoted, as a shell would read it.
     #[test]
     fn the_confirmation_shows_the_command_quoted() {
-        let argv: Vec<String> = ["omarchy", "plugin", "add", "https://h/a b", "--yes"].map(String::from).to_vec();
-        assert_eq!(shown_argv(&argv), "omarchy plugin add 'https://h/a b' --yes");
+        let argv: Vec<String> = ["omarchy", "plugin", "add", "https://h/a b", "--yes"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            shown_argv(&argv),
+            "omarchy plugin add 'https://h/a b' --yes"
+        );
     }
 
     #[test]
     fn a_bad_install_command_asks_nothing() {
         let fake = Fake::default();
-        let p = Plugin { install_cmd: "omarchy plugin add 'u".into(), ..plugin("x", "X") };
+        let p = Plugin {
+            install_cmd: "omarchy plugin add 'u".into(),
+            ..plugin("x", "X")
+        };
         plugin_install(&fake, &p);
         assert!(fake.0.borrow().confirm_args.is_none());
-        let theme = Plugin { install_kind: "theme".into(), ..plugin("t", "T") };
+        let theme = Plugin {
+            install_kind: "theme".into(),
+            ..plugin("t", "T")
+        };
         plugin_install(&fake, &theme);
         assert!(fake.0.borrow().confirm_args.is_none());
     }
@@ -1860,7 +2239,10 @@ mod tests {
         fake.say_yes();
         let joined = fake.commands().join(" ");
         assert!(joined.contains("omarchy theme remove Lumon"));
-        assert!(!joined.contains("plugin remove"), "a theme is not a plugin and the CLI knows it");
+        assert!(
+            !joined.contains("plugin remove"),
+            "a theme is not a plugin and the CLI knows it"
+        );
     }
 
     #[test]
@@ -1875,7 +2257,10 @@ mod tests {
         };
         plugin_remove(&fake, &stock);
         let r = fake.0.borrow();
-        assert!(r.confirm_args.is_none(), "must not offer to remove what omarchy ships");
+        assert!(
+            r.confirm_args.is_none(),
+            "must not offer to remove what omarchy ships"
+        );
         assert!(r.ran.is_empty());
         assert!(!r.said.is_empty());
     }
@@ -1894,7 +2279,10 @@ mod tests {
         fake.say_yes();
         let joined = fake.commands().join(" ");
         assert!(joined.contains("theme install"));
-        assert!(!joined.contains("theme set"), "installing must not re-skin the desktop on its own");
+        assert!(
+            !joined.contains("theme set"),
+            "installing must not re-skin the desktop on its own"
+        );
         assert!(fake.0.borrow().applied.is_empty());
     }
 
@@ -1912,7 +2300,14 @@ mod tests {
             ..plugin("x", "X")
         };
         plugin_install(&fake, &p);
-        assert!(fake.0.borrow().confirm_args.as_ref().unwrap().1.contains("setup"));
+        assert!(fake
+            .0
+            .borrow()
+            .confirm_args
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("setup"));
         fake.say_yes();
         fake.finish(true);
         assert_eq!(fake.0.borrow().offer_setup, vec![p]);
@@ -1928,10 +2323,22 @@ mod tests {
         };
         assert_eq!(install_pin_warning(&p, sha), None);
         assert_eq!(install_pin_warning(&p, &sha.to_uppercase()), None);
-        let w = install_pin_warning(&p, "2222222222222222222222222222222222222222").expect("warned");
-        assert!(w.contains("not the commit that was reviewed") && w.contains("2222222") && w.contains("1111111"), "{w}");
-        assert!(install_pin_warning(&p, "").is_some(), "an unreadable head is not the reviewed one");
-        let unreviewed = Plugin { validated_commit: String::new(), ..p.clone() };
+        let w =
+            install_pin_warning(&p, "2222222222222222222222222222222222222222").expect("warned");
+        assert!(
+            w.contains("not the commit that was reviewed")
+                && w.contains("2222222")
+                && w.contains("1111111"),
+            "{w}"
+        );
+        assert!(
+            install_pin_warning(&p, "").is_some(),
+            "an unreadable head is not the reviewed one"
+        );
+        let unreviewed = Plugin {
+            validated_commit: String::new(),
+            ..p.clone()
+        };
         assert_eq!(install_pin_warning(&unreviewed, "2222222"), None);
 
         // And the install says so, after the usual "installed".
@@ -1940,7 +2347,12 @@ mod tests {
         plugin_install(&fake, &p);
         fake.say_yes();
         fake.finish(true);
-        assert!(fake.0.borrow().said.iter().any(|m| m.contains("not the commit that was reviewed")));
+        assert!(fake
+            .0
+            .borrow()
+            .said
+            .iter()
+            .any(|m| m.contains("not the commit that was reviewed")));
         let fake = Fake::default();
         fake.0.borrow_mut().head = sha.into();
         plugin_install(&fake, &p);
@@ -2007,9 +2419,15 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let file = d.join("f");
         std::fs::write(&file, "").unwrap();
-        assert_eq!(py_mkdir_parents(&file), Err(format!("[Errno 17] File exists: '{}'", file.display())));
+        assert_eq!(
+            py_mkdir_parents(&file),
+            Err(format!("[Errno 17] File exists: '{}'", file.display()))
+        );
         let under = file.join("x");
-        assert_eq!(py_mkdir_parents(&under), Err(format!("[Errno 20] Not a directory: '{}'", under.display())));
+        assert_eq!(
+            py_mkdir_parents(&under),
+            Err(format!("[Errno 20] Not a directory: '{}'", under.display()))
+        );
         assert_eq!(py_mkdir_parents(&d.join("a/b/c")), Ok(()));
         assert_eq!(py_mkdir_parents(&d.join("a/b")), Ok(()));
         let _ = std::fs::remove_dir_all(&d);
@@ -2019,11 +2437,17 @@ mod tests {
 
     #[test]
     fn store_removal_also_removes_the_shortcut() {
-        let p = Plugin { install_kind: "plugin".into(), market: "omarchy".into(), ..plugin("x", "X") };
+        let p = Plugin {
+            install_kind: "plugin".into(),
+            market: "omarchy".into(),
+            ..plugin("x", "X")
+        };
         let steps = plugin_remove_steps(&p);
         assert_eq!(steps[1].label, "Removing its keyboard shortcut");
         match &steps[0].action {
-            tasks::StepAction::Argv(a) => assert_eq!(a, &["omarchy", "plugin", "remove", "x", "--yes"]),
+            tasks::StepAction::Argv(a) => {
+                assert_eq!(a, &["omarchy", "plugin", "remove", "x", "--yes"])
+            }
             other => panic!("expected a command, got {other:?}"),
         }
     }
@@ -2033,12 +2457,18 @@ mod tests {
     #[test]
     fn python_path_joins() {
         assert_eq!(py_join(Path::new("/a"), ""), PathBuf::from("/a"));
-        assert_eq!(py_join(Path::new("/a"), "README.md"), PathBuf::from("/a/README.md"));
+        assert_eq!(
+            py_join(Path::new("/a"), "README.md"),
+            PathBuf::from("/a/README.md")
+        );
         assert_eq!(py_join(Path::new("/a"), "."), PathBuf::from("/a"));
         assert_eq!(py_join(Path::new("/a"), "x/").as_os_str(), "/a/x");
         assert_eq!(py_join(Path::new("/a"), "x/./y//").as_os_str(), "/a/x/y");
         assert_eq!(py_join(Path::new("/a"), "/b"), PathBuf::from("/b"));
-        assert_eq!(theme_url("omarchy theme install\x1fhttps://x"), Some("https://x".into()));
+        assert_eq!(
+            theme_url("omarchy theme install\x1fhttps://x"),
+            Some("https://x".into())
+        );
         assert_eq!(theme_url("  "), None);
         assert_eq!(head_chars("abcdefé", 7), "abcdefé");
         assert_eq!(head_chars("2024-01-02T03:04", 10), "2024-01-02");
@@ -2049,13 +2479,23 @@ mod tests {
         let p = plugin("thing", "Thing");
         let path = store_appimage_path(&p);
         assert!(path.ends_with("apps/thing.AppImage"));
-        assert_eq!(path.parent().and_then(Path::parent), inventory::registry().parent());
+        assert_eq!(
+            path.parent().and_then(Path::parent),
+            inventory::registry().parent()
+        );
     }
 
     // ---- VisualSystem / Accessibility / IconsExist, over this section -----
 
     const SCALE: &[u32] = &[2, 4, 6, 8, 12, 16, 20, 24];
-    const PILLS: &[&str] = &["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+    const PILLS: &[&str] = &[
+        "pill",
+        "pill-crit",
+        "pill-warn",
+        "pill-ok",
+        "pill-accent",
+        "pill-quiet",
+    ];
 
     #[test]
     fn spacing_comes_from_the_scale() {
@@ -2075,27 +2515,52 @@ mod tests {
                 offenders.push(format!("spacing={v}"));
             }
         }
-        assert!(offenders.is_empty(), "spacing off the scale {SCALE:?}: {offenders:?}");
+        assert!(
+            offenders.is_empty(),
+            "spacing off the scale {SCALE:?}: {offenders:?}"
+        );
     }
 
     #[test]
     fn badges_use_one_pill_system() {
         let retired = [
-            "crit-pill", "stale-pill", "crit-core", "store-chip", "store-installed",
-            "trust-official", "trust-ok", "trust-warn", "trust-none",
+            "crit-pill",
+            "stale-pill",
+            "crit-core",
+            "store-chip",
+            "store-installed",
+            "trust-official",
+            "trust-ok",
+            "trust-warn",
+            "trust-none",
         ];
-        let found: Vec<_> = retired.iter().filter(|n| source().contains(&format!("\"{n}\""))).collect();
-        assert!(found.is_empty(), "retired badge classes still referenced: {found:?}");
+        let found: Vec<_> = retired
+            .iter()
+            .filter(|n| source().contains(&format!("\"{n}\"")))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "retired badge classes still referenced: {found:?}"
+        );
     }
 
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
         let re = Regex::new(r#""(pill(?:-[a-z]+)?)""#).unwrap();
-        let used: BTreeSet<String> = re.captures_iter(source()).map(|c| c[1].to_string()).collect();
+        let used: BTreeSet<String> = re
+            .captures_iter(source())
+            .map(|c| c[1].to_string())
+            .collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(CSS.contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(PILLS.contains(&name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                CSS.contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                PILLS.contains(&name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
     }
 
@@ -2105,7 +2570,9 @@ mod tests {
         let made = Regex::new(r"let (\w+) = gtk::(?:Menu|Toggle)?Button::(?:from_icon_name|builder\(\)\s*\.icon_name)").unwrap();
         let mut unnamed = Vec::new();
         for (i, line) in lines.iter().enumerate() {
-            let Some(m) = made.captures(line) else { continue };
+            let Some(m) = made.captures(line) else {
+                continue;
+            };
             let var = &m[1];
             let window = lines[i..(i + 12).min(lines.len())].join("\n");
             if !window.contains(&format!("name(&{var}")) && !window.contains("Property::Label") {
@@ -2123,12 +2590,17 @@ mod tests {
             return;
         }
         fn walk(dir: &Path, out: &mut BTreeSet<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in entries.flatten() {
                 let path = e.path();
                 if path.is_dir() {
                     walk(&path, out);
-                } else if matches!(path.extension().and_then(|x| x.to_str()), Some("svg" | "png")) {
+                } else if matches!(
+                    path.extension().and_then(|x| x.to_str()),
+                    Some("svg" | "png")
+                ) {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         out.insert(stem.to_string());
                     }
@@ -2137,7 +2609,10 @@ mod tests {
         }
         let mut have = BTreeSet::new();
         walk(adwaita, &mut have);
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"),
+            &mut have,
+        );
         let re = Regex::new(r#""([a-z0-9-]+-symbolic)""#).unwrap();
         let missing: Vec<String> = re
             .captures_iter(source())

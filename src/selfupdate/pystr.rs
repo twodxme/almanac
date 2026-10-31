@@ -27,7 +27,18 @@ pub(super) fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut it = s.char_indices().peekable();
     while let Some((i, c)) = it.next() {
-        let brk = matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let brk = matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        );
         if brk {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
@@ -76,7 +87,11 @@ pub(super) fn py_int(s: &str) -> Option<BigInt> {
 
 /// `repr(str)`, as `str(TimeoutExpired)` shows each argv entry.
 pub(super) fn py_str_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let q = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::from(q);
     for c in s.chars() {
         let cp = c as u32;
@@ -133,7 +148,8 @@ pub(super) mod py_int_json {
         } else if let Some(u) = n.as_u64() {
             BigInt::from(u)
         } else {
-            BigInt::parse_bytes(format!("{:.0}", n.as_f64().unwrap_or(0.0)).as_bytes(), 10).unwrap_or_default()
+            BigInt::parse_bytes(format!("{:.0}", n.as_f64().unwrap_or(0.0)).as_bytes(), 10)
+                .unwrap_or_default()
         })
     }
 }
@@ -166,9 +182,12 @@ pub(super) fn py_codec(name: &str) -> Codec {
         }
     }
     let table = |t: &'static [(&'static str, &'static str)], k: &str| -> Option<&'static str> {
-        t.binary_search_by(|(a, _)| (*a).cmp(k)).ok().map(|i| t[i].1)
+        t.binary_search_by(|(a, _)| (*a).cmp(k))
+            .ok()
+            .map(|i| t[i].1)
     };
-    let alias = table(CODEC_ALIASES, &norm).or_else(|| table(CODEC_ALIASES, &norm.replace('.', "_")));
+    let alias =
+        table(CODEC_ALIASES, &norm).or_else(|| table(CODEC_ALIASES, &norm.replace('.', "_")));
     for module in alias.into_iter().chain(std::iter::once(norm.as_str())) {
         if module.is_empty() || module.contains('.') {
             continue;
@@ -205,8 +224,14 @@ mod tests {
         assert_eq!(py_int("٣"), Some(BigInt::from(3)));
         assert_eq!(py_int("x"), None);
         assert_eq!(py_str_repr("it's"), "\"it's\"");
-        assert_eq!(py_str_repr("a\u{a0}\u{2028}\u{85}\u{200b}é"), "'a\\xa0\\u2028\\x85\\u200bé'");
-        assert_eq!(py_path(OsStr::new("/tmp//a/./b/")), OsString::from("/tmp/a/b"));
+        assert_eq!(
+            py_str_repr("a\u{a0}\u{2028}\u{85}\u{200b}é"),
+            "'a\\xa0\\u2028\\x85\\u200bé'"
+        );
+        assert_eq!(
+            py_path(OsStr::new("/tmp//a/./b/")),
+            OsString::from("/tmp/a/b")
+        );
         assert_eq!(py_path(OsStr::new("//x")), OsString::from("//x"));
     }
 }

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the weekly update check
+# Left enabled after Almanac was removed: do not start at all.
+ConditionPathExists=/usr/lib/almanac/omarchy-auto-update
+
+[Timer]
+OnCalendar=Sun 11:00
+# A laptop is often asleep at the scheduled time; run on next wake instead of
+# skipping the week entirely.
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

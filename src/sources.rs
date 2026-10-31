@@ -153,7 +153,11 @@ impl Serialize for Option {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut st = s.serialize_struct("Option", 10)?;
-        ser_fields!(st, self, [kind, name, version, title, reasons, warnings, rank, url, sha256, size_mb]);
+        ser_fields!(
+            st,
+            self,
+            [kind, name, version, title, reasons, warnings, rank, url, sha256, size_mb]
+        );
         st.end()
     }
 }
@@ -162,7 +166,20 @@ impl Serialize for Resolution {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut st = s.serialize_struct("Resolution", 8)?;
-        ser_fields!(st, self, [owner, repo, description, stars, license, archived, options, error]);
+        ser_fields!(
+            st,
+            self,
+            [
+                owner,
+                repo,
+                description,
+                stars,
+                license,
+                archived,
+                options,
+                error
+            ]
+        );
         st.end()
     }
 }
@@ -182,7 +199,10 @@ const INT_MAX_STR_DIGITS: usize = 4300;
 
 impl BigInt {
     fn from_i64(i: i64) -> BigInt {
-        BigInt { neg: i < 0, digits: i.unsigned_abs().to_string() }
+        BigInt {
+            neg: i < 0,
+            digits: i.unsigned_abs().to_string(),
+        }
     }
 
     /// From ASCII decimal digits (leading zeros allowed).
@@ -195,7 +215,10 @@ impl BigInt {
             ));
         }
         let d = if d.is_empty() { "0" } else { d };
-        Ok(BigInt { neg: neg && d != "0", digits: d.to_string() })
+        Ok(BigInt {
+            neg: neg && d != "0",
+            digits: d.to_string(),
+        })
     }
 
     /// `int(f)` of a finite float: truncated, exactly.
@@ -208,7 +231,11 @@ impl BigInt {
         let bits = t.to_bits();
         let exp = ((bits >> 52) & 0x7ff) as i64 - 1075;
         let mant = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
-        let mut limbs: Vec<u64> = vec![mant % 1_000_000_000, (mant / 1_000_000_000) % 1_000_000_000, mant / 1_000_000_000_000_000_000];
+        let mut limbs: Vec<u64> = vec![
+            mant % 1_000_000_000,
+            (mant / 1_000_000_000) % 1_000_000_000,
+            mant / 1_000_000_000_000_000_000,
+        ];
         for _ in 0..exp.max(0) {
             let mut carry = 0;
             for l in limbs.iter_mut() {
@@ -227,18 +254,26 @@ impl BigInt {
         for l in limbs.iter().rev().skip(1) {
             s.push_str(&format!("{l:09}"));
         }
-        BigInt { neg: t < 0.0, digits: s }
+        BigInt {
+            neg: t < 0.0,
+            digits: s,
+        }
     }
 
     /// The value as an i64, if it fits.
     fn to_i64(&self) -> std::option::Option<i64> {
-        let mag: i128 = if self.digits.len() > 20 { return None } else { self.digits.parse().ok()? };
+        let mag: i128 = if self.digits.len() > 20 {
+            return None;
+        } else {
+            self.digits.parse().ok()?
+        };
         i64::try_from(if self.neg { -mag } else { mag }).ok()
     }
 
     /// The value as an i64, clamped.
     fn to_i64_sat(&self) -> i64 {
-        self.to_i64().unwrap_or(if self.neg { i64::MIN } else { i64::MAX })
+        self.to_i64()
+            .unwrap_or(if self.neg { i64::MIN } else { i64::MAX })
     }
 
     /// `float(self)`, infinite when it is too large.
@@ -325,14 +360,21 @@ impl Py {
                 if let Some(i) = n.as_i64() {
                     Py::Int(BigInt::from_i64(i))
                 } else if let Some(u) = n.as_u64() {
-                    Py::Int(BigInt { neg: false, digits: u.to_string() })
+                    Py::Int(BigInt {
+                        neg: false,
+                        digits: u.to_string(),
+                    })
                 } else {
                     Py::Float(n.as_f64().unwrap_or(f64::NAN))
                 }
             }
             Value::String(s) => Py::Str(s.clone()),
             Value::Array(a) => Py::List(a.iter().map(Py::from_value).collect()),
-            Value::Object(o) => Py::Dict(o.iter().map(|(k, v)| (k.clone(), Py::from_value(v))).collect()),
+            Value::Object(o) => Py::Dict(
+                o.iter()
+                    .map(|(k, v)| (k.clone(), Py::from_value(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -364,7 +406,10 @@ impl Py {
 
     /// The AttributeError Python raises calling `method` on this value.
     fn no_attr(&self, method: &str) -> String {
-        format!("AttributeError: '{}' object has no attribute '{method}'", self.type_name())
+        format!(
+            "AttributeError: '{}' object has no attribute '{method}'",
+            self.type_name()
+        )
     }
 
     /// `d.get(key)`: the value must be a dict to have `.get`.
@@ -389,7 +434,10 @@ impl Py {
             Py::List(l) => Ok(l.clone()),
             Py::Dict(d) => Ok(d.iter().map(|(k, _)| Py::Str(k.clone())).collect()),
             Py::Str(s) => Ok(s.chars().map(|c| Py::Str(c.to_string())).collect()),
-            other => Err(format!("TypeError: '{}' object is not iterable", other.type_name())),
+            other => Err(format!(
+                "TypeError: '{}' object is not iterable",
+                other.type_name()
+            )),
         }
     }
 
@@ -409,13 +457,25 @@ impl Py {
             Py::Bool(false) => "False".into(),
             Py::Int(i) => i.to_string(),
             Py::Float(f) if f.is_nan() => "nan".into(),
-            Py::Float(f) if f.is_infinite() => if *f > 0.0 { "inf".into() } else { "-inf".into() },
+            Py::Float(f) if f.is_infinite() => {
+                if *f > 0.0 {
+                    "inf".into()
+                } else {
+                    "-inf".into()
+                }
+            }
             Py::Float(f) => crate::util::py_float_repr(*f),
             Py::Str(s) => str_repr(s),
-            Py::List(l) => format!("[{}]", l.iter().map(Py::repr).collect::<Vec<_>>().join(", ")),
+            Py::List(l) => format!(
+                "[{}]",
+                l.iter().map(Py::repr).collect::<Vec<_>>().join(", ")
+            ),
             Py::Dict(d) => format!(
                 "{{{}}}",
-                d.iter().map(|(k, v)| format!("{}: {}", str_repr(k), v.repr())).collect::<Vec<_>>().join(", ")
+                d.iter()
+                    .map(|(k, v)| format!("{}: {}", str_repr(k), v.repr()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         }
     }
@@ -435,7 +495,11 @@ impl Py {
 /// backslash escapes for the quote, `\\`, `\t\n\r` and characters that are
 /// not printable.
 fn str_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let q = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for c in s.chars() {
@@ -503,7 +567,18 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut it = s.char_indices().peekable();
     while let Some((i, c)) = it.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
             if c == '\r' {
@@ -587,7 +662,11 @@ fn unquote_to_bytes(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
             let hex = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
             out.push(hex(b[i + 1]) * 16 + hex(b[i + 2]));
             i += 3;
@@ -670,7 +749,9 @@ fn loads(raw: &[u8]) -> Result<Py, String> {
     pyjson::loads(&text, pyjson::Limit::values(2001)).map_err(|e| match e {
         pyjson::Error::Value(m) if m.starts_with("Exceeds the limit") => format!("ValueError: {m}"),
         pyjson::Error::Value(m) => format!("JSONDecodeError: {m}"),
-        pyjson::Error::Recursion(_) => "RecursionError: maximum recursion depth exceeded while decoding a JSON document".into(),
+        pyjson::Error::Recursion(_) => {
+            "RecursionError: maximum recursion depth exceeded while decoding a JSON document".into()
+        }
     })
 }
 
@@ -704,13 +785,21 @@ impl crate::util::pyjson::Build for Py {
     }
     /// A lone surrogate is a str to Python; a Rust String cannot hold one.
     fn wstr(units: Vec<u32>) -> Py {
-        Py::Str(units.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect())
+        Py::Str(
+            units
+                .iter()
+                .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+                .collect(),
+        )
     }
     fn key(s: String) -> String {
         s
     }
     fn wkey(units: Vec<u32>) -> String {
-        units.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+        units
+            .iter()
+            .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+            .collect()
     }
     fn list(items: Vec<Py>) -> Py {
         Py::List(items)
@@ -727,8 +816,16 @@ fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
         if !b.len().is_multiple_of(2) {
             return Err(bad("utf-16: truncated data"));
         }
-        let units = b.chunks(2).map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) });
-        char::decode_utf16(units).collect::<Result<String, _>>().map_err(|e| bad(&e.to_string()))
+        let units = b.chunks(2).map(|c| {
+            if be {
+                u16::from_be_bytes([c[0], c[1]])
+            } else {
+                u16::from_le_bytes([c[0], c[1]])
+            }
+        });
+        char::decode_utf16(units)
+            .collect::<Result<String, _>>()
+            .map_err(|e| bad(&e.to_string()))
     };
     let utf32 = |b: &[u8], be: bool| -> Result<String, String> {
         if !b.len().is_multiple_of(4) {
@@ -736,12 +833,20 @@ fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
         }
         b.chunks(4)
             .map(|c| {
-                let n = if be { u32::from_be_bytes([c[0], c[1], c[2], c[3]]) } else { u32::from_le_bytes([c[0], c[1], c[2], c[3]]) };
+                let n = if be {
+                    u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+                } else {
+                    u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+                };
                 char::from_u32(n).ok_or_else(|| bad("utf-32: code point not in range"))
             })
             .collect()
     };
-    let utf8 = |b: &[u8]| std::str::from_utf8(b).map(str::to_string).map_err(|e| bad(&e.to_string()));
+    let utf8 = |b: &[u8]| {
+        std::str::from_utf8(b)
+            .map(str::to_string)
+            .map_err(|e| bad(&e.to_string()))
+    };
     if b.starts_with(&[0, 0, 0xfe, 0xff]) {
         return utf32(&b[4..], true);
     }
@@ -759,10 +864,18 @@ fn decode_json_bytes(b: &[u8]) -> Result<String, String> {
     }
     if b.len() >= 4 {
         if b[0] == 0 {
-            return if b[1] != 0 { utf16(b, true) } else { utf32(b, true) };
+            return if b[1] != 0 {
+                utf16(b, true)
+            } else {
+                utf32(b, true)
+            };
         }
         if b[1] == 0 {
-            return if b[2] != 0 || b[3] != 0 { utf16(b, false) } else { utf32(b, false) };
+            return if b[2] != 0 || b[3] != 0 {
+                utf16(b, false)
+            } else {
+                utf32(b, false)
+            };
         }
     } else if b.len() == 2 {
         if b[0] == 0 {
@@ -826,10 +939,20 @@ pub fn get(url: &str, timeout: u64) -> Result<Vec<u8>, String> {
         Some(i) => (&u[..i], &u[i + 1..]),
         None => (u, ""),
     };
-    let full_url = if fragment.is_empty() { base.to_string() } else { format!("{base}#{fragment}") };
+    let full_url = if fragment.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}#{fragment}")
+    };
     // _splittype: the scheme is everything before the first ':', no '/'.
-    let Some((scheme, rest)) = base.split_once(':').filter(|(s, _)| !s.is_empty() && !s.contains('/')) else {
-        return Err(format!("ValueError: unknown url type: {}", str_repr(&full_url)));
+    let Some((scheme, rest)) = base
+        .split_once(':')
+        .filter(|(s, _)| !s.is_empty() && !s.contains('/'))
+    else {
+        return Err(format!(
+            "ValueError: unknown url type: {}",
+            str_repr(&full_url)
+        ));
     };
     let scheme = scheme.to_lowercase();
     match scheme.as_str() {
@@ -846,7 +969,9 @@ pub fn get(url: &str, timeout: u64) -> Result<Vec<u8>, String> {
         }
         "data" => data_url(&full_url),
         "file" => file_url(&full_url),
-        _ => Err(format!("URLError: <urlopen error unknown url type: {scheme}>")),
+        _ => Err(format!(
+            "URLError: <urlopen error unknown url type: {scheme}>"
+        )),
     }
 }
 
@@ -860,11 +985,14 @@ fn get_hostport(host: &str, default: u16) -> Result<(String, u16), String> {
     if let Some(i) = i.filter(|&i| j.is_none_or(|j| i > j)) {
         let p = &host[i + 1..];
         if !p.is_empty() {
-            let n = py_int(&Py::Str(p.to_string())).map_err(|_| format!("InvalidURL: nonnumeric port: '{p}'"))?;
+            let n = py_int(&Py::Str(p.to_string()))
+                .map_err(|_| format!("InvalidURL: nonnumeric port: '{p}'"))?;
             port = n
                 .to_i64()
                 .and_then(|n| u16::try_from(n).ok())
-                .ok_or_else(|| "OverflowError: getsockaddrarg: port must be 0-65535.".to_string())?;
+                .ok_or_else(|| {
+                    "OverflowError: getsockaddrarg: port must be 0-65535.".to_string()
+                })?;
         }
         h = &host[..i];
     }
@@ -884,14 +1012,18 @@ fn unquote(s: &str) -> String {
 /// removes the scheme. Under CGI (`REQUEST_METHOD` set) an upper-case
 /// `HTTP_PROXY` is ignored.
 fn env_proxies() -> HashMap<String, String> {
-    let env: Vec<(String, String)> =
-        std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
+    let env: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect();
     let mut proxies = HashMap::new();
     let mut environment = Vec::new();
     for (name, value) in &env {
         let chars: Vec<char> = name.chars().collect();
         let n = chars.len();
-        if n > 5 && chars[n - 6] == '_' && chars[n - 5..].iter().collect::<String>().to_lowercase() == "proxy" {
+        if n > 5
+            && chars[n - 6] == '_'
+            && chars[n - 5..].iter().collect::<String>().to_lowercase() == "proxy"
+        {
             let proxy_name = chars[..n - 6].iter().collect::<String>().to_lowercase();
             if !value.is_empty() {
                 proxies.insert(proxy_name.clone(), value.clone());
@@ -917,7 +1049,9 @@ fn env_proxies() -> HashMap<String, String> {
 /// `urllib.request.proxy_bypass_environment(host)`: `no_proxy` is `*` or
 /// a comma-separated list of host names and DNS suffixes.
 fn proxy_bypass(host: &str, proxies: &HashMap<String, String>) -> bool {
-    let Some(no_proxy) = proxies.get("no") else { return false };
+    let Some(no_proxy) = proxies.get("no") else {
+        return false;
+    };
     if no_proxy == "*" {
         return true;
     }
@@ -948,7 +1082,15 @@ fn proxy_bypass(host: &str, proxies: &HashMap<String, String>) -> bool {
 #[allow(clippy::type_complexity)]
 fn parse_proxy(
     proxy: &str,
-) -> Result<(std::option::Option<String>, std::option::Option<String>, std::option::Option<String>, String), String> {
+) -> Result<
+    (
+        std::option::Option<String>,
+        std::option::Option<String>,
+        std::option::Option<String>,
+        String,
+    ),
+    String,
+> {
     // _splittype: '([^/:]+):(.*)'
     let (scheme, r_scheme) = match proxy.split_once(':') {
         Some((s, r)) if !s.is_empty() && !s.contains('/') => (Some(s.to_lowercase()), r),
@@ -958,7 +1100,10 @@ fn parse_proxy(
         (None, proxy)
     } else {
         if !r_scheme.starts_with("//") {
-            return Err(format!("ValueError: proxy URL with no authority: {}", str_repr(proxy)));
+            return Err(format!(
+                "ValueError: proxy URL with no authority: {}",
+                str_repr(proxy)
+            ));
         }
         let end = match r_scheme.find('@') {
             Some(at) => r_scheme[at..].find('/').map(|e| e + at),
@@ -989,7 +1134,9 @@ fn parse_proxy(
 /// written in the variable, where urllib percent-decodes them first.
 fn proxy_for(scheme: &str, host: &str) -> Result<std::option::Option<ureq::Proxy>, String> {
     let proxies = env_proxies();
-    let Some(proxy) = proxies.get(scheme) else { return Ok(None) };
+    let Some(proxy) = proxies.get(scheme) else {
+        return Ok(None);
+    };
     let (proxy_type, user, password, hostport) = parse_proxy(proxy)?;
     let proxy_type = proxy_type.unwrap_or_else(|| scheme.to_string());
     if !host.is_empty() && proxy_bypass(host, &proxies) {
@@ -997,19 +1144,29 @@ fn proxy_for(scheme: &str, host: &str) -> Result<std::option::Option<ureq::Proxy
     }
     let hostport = unquote(&hostport);
     let (protocol, default_port) = if scheme == "https" || proxy_type == "http" {
-        (ureq::ProxyProtocol::Http, if scheme == "https" { 443 } else { 80 })
+        (
+            ureq::ProxyProtocol::Http,
+            if scheme == "https" { 443 } else { 80 },
+        )
     } else if proxy_type == "https" {
         (ureq::ProxyProtocol::Https, 443)
     } else {
-        return Err(format!("URLError: <urlopen error unknown url type: {proxy_type}>"));
+        return Err(format!(
+            "URLError: <urlopen error unknown url type: {proxy_type}>"
+        ));
     };
     let (h, port) = get_hostport(&hostport, default_port)?;
     let h = if h.contains(':') { format!("[{h}]") } else { h };
     let mut b = ureq::Proxy::builder(protocol).host(&h).port(port);
-    if let (Some(u), Some(p)) = (user.filter(|u| !u.is_empty()), password.filter(|p| !p.is_empty())) {
+    if let (Some(u), Some(p)) = (
+        user.filter(|u| !u.is_empty()),
+        password.filter(|p| !p.is_empty()),
+    ) {
         b = b.username(&u).password(&p);
     }
-    b.build().map(Some).map_err(|e| format!("URLError: <urlopen error {e}>"))
+    b.build()
+        .map(Some)
+        .map_err(|e| format!("URLError: <urlopen error {e}>"))
 }
 
 /// The CA certificates Python's `ssl.create_default_context()` trusts:
@@ -1017,9 +1174,16 @@ fn proxy_for(scheme: &str, host: &str) -> Result<std::option::Option<ureq::Proxy
 /// and the hashed `<subject hash>.<n>` files of each `SSL_CERT_DIR` entry
 /// (else `/etc/ssl/certs`). Read once per pair of settings.
 pub(crate) fn system_roots() -> ureq::tls::RootCerts {
-    type Key = (std::option::Option<std::ffi::OsString>, std::option::Option<std::ffi::OsString>);
-    static CACHE: std::sync::Mutex<std::option::Option<(Key, ureq::tls::RootCerts)>> = std::sync::Mutex::new(None);
-    let key: Key = (std::env::var_os("SSL_CERT_FILE"), std::env::var_os("SSL_CERT_DIR"));
+    type Key = (
+        std::option::Option<std::ffi::OsString>,
+        std::option::Option<std::ffi::OsString>,
+    );
+    static CACHE: std::sync::Mutex<std::option::Option<(Key, ureq::tls::RootCerts)>> =
+        std::sync::Mutex::new(None);
+    let key: Key = (
+        std::env::var_os("SSL_CERT_FILE"),
+        std::env::var_os("SSL_CERT_DIR"),
+    );
     if let Ok(cache) = CACHE.lock() {
         if let Some((k, roots)) = cache.as_ref() {
             if *k == key {
@@ -1037,13 +1201,19 @@ pub(crate) fn system_roots() -> ureq::tls::RootCerts {
             }
         }
     };
-    let file = key.0.clone().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/etc/ssl/cert.pem"));
+    let file = key
+        .0
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/ssl/cert.pem"));
     add_pem(&file);
     static HASHED: OnceLock<Regex> = OnceLock::new();
     let hashed = HASHED.get_or_init(|| Regex::new(r"^[0-9a-f]{8}\.[0-9]+$").expect("hashed"));
     let dirs = key.1.clone().unwrap_or_else(|| "/etc/ssl/certs".into());
     for dir in std::env::split_paths(&dirs) {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut names: Vec<PathBuf> = rd
             .flatten()
             .filter(|e| e.file_name().to_str().is_some_and(|n| hashed.is_match(n)))
@@ -1072,7 +1242,12 @@ pub(crate) fn system_roots() -> ureq::tls::RootCerts {
 /// two), so those go percent-encoded, which servers read as the same path.
 /// A host with userinfo (`u:p@host`) is to urllib a host name, which does
 /// not resolve; ureq would strip it and send Basic auth.
-fn http_get(scheme: &str, authority: &str, selector: &str, timeout: u64) -> Result<Vec<u8>, String> {
+fn http_get(
+    scheme: &str,
+    authority: &str,
+    selector: &str,
+    timeout: u64,
+) -> Result<Vec<u8>, String> {
     let host = unquote(authority);
     // _validate_host / _validate_path, then the request line in ASCII.
     let bad = |s: &str| s.chars().find(|&c| (c as u32) <= 0x20 || c == '\x7f');
@@ -1104,8 +1279,15 @@ fn http_get(scheme: &str, authority: &str, selector: &str, timeout: u64) -> Resu
         let (h, port) = get_hostport(&host, if scheme == "https" { 443 } else { 80 })?;
         if let Err(e) = (h.as_str(), port).to_socket_addrs() {
             let msg = e.to_string();
-            let msg = msg.strip_prefix("failed to lookup address information: ").unwrap_or(&msg).to_string();
-            let errno = if msg.contains("Temporary failure") { -3 } else { -2 };
+            let msg = msg
+                .strip_prefix("failed to lookup address information: ")
+                .unwrap_or(&msg)
+                .to_string();
+            let errno = if msg.contains("Temporary failure") {
+                -3
+            } else {
+                -2
+            };
             return Err(format!("URLError: <urlopen error [Errno {errno}] {msg}>"));
         }
     }
@@ -1126,17 +1308,28 @@ fn http_get(scheme: &str, authority: &str, selector: &str, timeout: u64) -> Resu
         .timeout_send_request(Some(t))
         .timeout_recv_response(Some(t))
         .proxy(proxy)
-        .tls_config(ureq::tls::TlsConfig::builder().root_certs(system_roots()).build())
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(system_roots())
+                .build(),
+        )
         .build()
         .into();
-    let r = agent.get(&url).header(UA.0, UA.1).call().map_err(|e| match e {
-        ureq::Error::StatusCode(code) => {
-            let reason = ureq::http::StatusCode::from_u16(code).ok().and_then(|s| s.canonical_reason()).unwrap_or("");
-            format!("HTTPError: HTTP Error {code}: {reason}")
-        }
-        ureq::Error::Timeout(_) => "URLError: <urlopen error timed out>".into(),
-        other => format!("URLError: <urlopen error {other}>"),
-    })?;
+    let r = agent
+        .get(&url)
+        .header(UA.0, UA.1)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(code) => {
+                let reason = ureq::http::StatusCode::from_u16(code)
+                    .ok()
+                    .and_then(|s| s.canonical_reason())
+                    .unwrap_or("");
+                format!("HTTPError: HTTP Error {code}: {reason}")
+            }
+            ureq::Error::Timeout(_) => "URLError: <urlopen error timed out>".into(),
+            other => format!("URLError: <urlopen error {other}>"),
+        })?;
     let mut reader = r.into_body().into_reader();
     let (tx, rx) = std::sync::mpsc::channel::<Result<std::option::Option<Vec<u8>>, String>>();
     std::thread::spawn(move || {
@@ -1185,7 +1378,10 @@ fn data_url(full_url: &str) -> Result<Vec<u8>, String> {
 /// for a URL with no host, `localhost`, or a name of this machine.
 fn file_url(full_url: &str) -> Result<Vec<u8>, String> {
     // urlsplit: tabs and newlines removed, query and fragment discarded.
-    let u: String = full_url.chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
+    let u: String = full_url
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+        .collect();
     let rest = u.split_once(':').map(|(_, r)| r).unwrap_or("");
     let (authority, path) = match rest.strip_prefix("//") {
         Some(r) => {
@@ -1196,11 +1392,18 @@ fn file_url(full_url: &str) -> Result<Vec<u8>, String> {
     };
     let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
     if !is_local_authority(authority) {
-        return Err("URLError: <urlopen error file:// scheme is supported only on localhost>".into());
+        return Err(
+            "URLError: <urlopen error file:// scheme is supported only on localhost>".into(),
+        );
     }
     use std::os::unix::ffi::OsStringExt;
     let local = PathBuf::from(std::ffi::OsString::from_vec(unquote_to_bytes(path)));
-    std::fs::read(&local).map_err(|e| format!("URLError: <urlopen error {e}: {}>", str_repr(&local.to_string_lossy())))
+    std::fs::read(&local).map_err(|e| {
+        format!(
+            "URLError: <urlopen error {e}: {}>",
+            str_repr(&local.to_string_lossy())
+        )
+    })
 }
 
 /// `urllib.request._is_local_authority(authority, resolve=True)`.
@@ -1209,15 +1412,22 @@ fn is_local_authority(authority: &str) -> bool {
     if authority.is_empty() || authority == "localhost" {
         return true;
     }
-    let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname").map(|h| h.trim().to_string()).unwrap_or_default();
+    let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_string())
+        .unwrap_or_default();
     if !hostname.is_empty() && authority == hostname {
         return true;
     }
     // gethostbyname: the first IPv4 address.
     let v4 = |h: &str| -> Vec<std::net::IpAddr> {
-        (h, 0).to_socket_addrs().map(|a| a.map(|s| s.ip()).filter(|ip| ip.is_ipv4()).collect()).unwrap_or_default()
+        (h, 0)
+            .to_socket_addrs()
+            .map(|a| a.map(|s| s.ip()).filter(|ip| ip.is_ipv4()).collect())
+            .unwrap_or_default()
     };
-    let Some(addr) = v4(authority).into_iter().next() else { return false };
+    let Some(addr) = v4(authority).into_iter().next() else {
+        return false;
+    };
     let mut names = v4("localhost");
     if !hostname.is_empty() {
         names.extend(v4(&hostname));
@@ -1257,8 +1467,14 @@ pub fn official(name: &str) -> std::option::Option<Option> {
         kind: REPO.into(),
         name: name.into(),
         version: version.into(),
-        title: format!("Official package ({})", fields.get("Repository").copied().unwrap_or("repo")),
-        reasons: vec!["Built and signed by your distribution".into(), "Updated with the rest of the system".into()],
+        title: format!(
+            "Official package ({})",
+            fields.get("Repository").copied().unwrap_or("repo")
+        ),
+        reasons: vec![
+            "Built and signed by your distribution".into(),
+            "Updated with the rest of the system".into(),
+        ],
         rank: 0,
         ..Default::default()
     })
@@ -1289,8 +1505,16 @@ pub fn aur(names: &[&str], homes: &[&str]) -> Result<Vec<Option>, String> {
 }
 
 fn aur_with(names: &[&str], homes: &[Py], fetch: Fetch) -> Result<Vec<Option>, String> {
-    let query: Vec<String> = names.iter().map(|n| format!("arg[]={}", quote(n))).collect();
-    let data = match fetch(&format!("https://aur.archlinux.org/rpc/v5/info?{}", query.join("&"))).and_then(|b| loads(&b)) {
+    let query: Vec<String> = names
+        .iter()
+        .map(|n| format!("arg[]={}", quote(n)))
+        .collect();
+    let data = match fetch(&format!(
+        "https://aur.archlinux.org/rpc/v5/info?{}",
+        query.join("&")
+    ))
+    .and_then(|b| loads(&b))
+    {
         Ok(d) => d,
         Err(_) => return Ok(Vec::new()),
     };
@@ -1318,7 +1542,10 @@ fn aur_records(data: &Py, homes: &[Py]) -> Result<Vec<Option>, String> {
             reasons.push("Points at this project".into());
         } else {
             let stated = Py::Str("not stated".into());
-            warnings.push(format!("Its upstream is {}, which is not this project", or(rec.get("URL")?, &stated).py_str()));
+            warnings.push(format!(
+                "Its upstream is {}, which is not this project",
+                or(rec.get("URL")?, &stated).py_str()
+            ));
         }
         reasons.push(format!("{votes} vote(s) on the AUR"));
         let maintained = rec.get("Maintainer")?.is_some_and(Py::truthy);
@@ -1330,7 +1557,10 @@ fn aur_records(data: &Py, homes: &[Py]) -> Result<Vec<Option>, String> {
             warnings.push("Flagged out of date".into());
         }
         if binary {
-            warnings.push("Repackages a prebuilt binary; nothing is built from the source you can read".into());
+            warnings.push(
+                "Repackages a prebuilt binary; nothing is built from the source you can read"
+                    .into(),
+            );
         } else if name.ends_with("-git") {
             warnings.push("Builds the newest commit, not a release".into());
         } else {
@@ -1353,7 +1583,10 @@ fn aur_records(data: &Py, homes: &[Py]) -> Result<Vec<Option>, String> {
             rank += 20;
         }
         // rec.get("Version", ""): whatever the RPC sent.
-        let version = rec.get("Version")?.cloned().unwrap_or_else(|| EMPTY_STR.clone());
+        let version = rec
+            .get("Version")?
+            .cloned()
+            .unwrap_or_else(|| EMPTY_STR.clone());
         let mut opt = Option {
             kind: AUR.into(),
             name: name.into(),
@@ -1375,17 +1608,27 @@ fn aur_records(data: &Py, homes: &[Py]) -> Result<Vec<Option>, String> {
 /// `x < 65536` for a JSON value.
 fn lt_65536(v: &Py) -> Result<bool, String> {
     match v {
-        Py::Bool(b) => Ok({ let _ = b; true }),
+        Py::Bool(b) => Ok({
+            let _ = b;
+            true
+        }),
         Py::Int(i) => Ok(i.lt(65536)),
         Py::Float(f) => Ok(*f < 65536.0),
-        other => Err(format!("TypeError: '<' not supported between instances of '{}' and 'int'", other.type_name())),
+        other => Err(format!(
+            "TypeError: '<' not supported between instances of '{}' and 'int'",
+            other.type_name()
+        )),
     }
 }
 
 fn sums_with(assets: &[Py], fetch: Fetch) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     for a in assets {
-        let nm = a.get("name")?.unwrap_or(&EMPTY_STR).as_str("lower")?.to_lowercase();
+        let nm = a
+            .get("name")?
+            .unwrap_or(&EMPTY_STR)
+            .as_str("lower")?
+            .to_lowercase();
         if !(nm.contains("sha256") || nm.contains("checksum")) {
             continue;
         }
@@ -1404,7 +1647,10 @@ fn sums_with(assets: &[Py], fetch: Fetch) -> Result<BTreeMap<String, String>, St
         for line in py_splitlines(&text) {
             let parts = py_split(line);
             if parts.len() >= 2 && hex64().is_match(parts[0]) {
-                out.insert(parts[parts.len() - 1].trim_start_matches('*').to_string(), parts[0].to_lowercase());
+                out.insert(
+                    parts[parts.len() - 1].trim_start_matches('*').to_string(),
+                    parts[0].to_lowercase(),
+                );
             } else if parts.len() == 1 && hex64().is_match(parts[0]) && nm.ends_with(".sha256") {
                 // a["name"][: -len(".sha256")], on the original spelling
                 let name = a.get("name")?.unwrap_or(&EMPTY_STR).as_str("lower")?;
@@ -1454,9 +1700,15 @@ fn appimage_with(release: &Py, fetch: Fetch) -> Result<std::option::Option<Optio
         sha = d.to_string();
     }
     if sha.is_empty() {
-        sha = sums_with(&assets, fetch)?.get(&a_name).cloned().unwrap_or_default();
+        sha = sums_with(&assets, fetch)?
+            .get(&a_name)
+            .cloned()
+            .unwrap_or_default();
     }
-    let tag = or(release.get("tag_name")?, &EMPTY_STR).as_str("lstrip")?.trim_start_matches('v').to_string();
+    let tag = or(release.get("tag_name")?, &EMPTY_STR)
+        .as_str("lstrip")?
+        .trim_start_matches('v')
+        .to_string();
     let mut reasons: Vec<String> = vec![
         "Published by the project itself, on its releases page".into(),
         "Runs without installing anything system-wide".into(),
@@ -1478,11 +1730,17 @@ fn appimage_with(release: &Py, fetch: Fetch) -> Result<std::option::Option<Optio
         Py::Float(f) => *f,
         Py::Bool(b) => *b as i64 as f64,
         other => {
-            return Err(format!("TypeError: unsupported operand type(s) for /: '{}' and 'int'", other.type_name()))
+            return Err(format!(
+                "TypeError: unsupported operand type(s) for /: '{}' and 'int'",
+                other.type_name()
+            ))
         }
     };
     // a.get("browser_download_url", ""): whatever the release held.
-    let url = a.get("browser_download_url")?.cloned().unwrap_or_else(|| EMPTY_STR.clone());
+    let url = a
+        .get("browser_download_url")?
+        .cloned()
+        .unwrap_or_else(|| EMPTY_STR.clone());
     let mut opt = Option {
         kind: APPIMAGE.into(),
         name: a_name,
@@ -1532,9 +1790,14 @@ fn resolve_with(
     fetch: Fetch,
 ) -> Result<Resolution, String> {
     let Some((owner, repo)) = parse(link) else {
-        return Ok(Resolution { error: "That is not a GitHub repository link.".into(), ..Default::default() });
+        return Ok(Resolution {
+            error: "That is not a GitHub repository link.".into(),
+            ..Default::default()
+        });
     };
-    let meta = repo_fn(&format!("{owner}/{repo}"))?.map(|v| Py::from_value(&v)).unwrap_or(Py::None);
+    let meta = repo_fn(&format!("{owner}/{repo}"))?
+        .map(|v| Py::from_value(&v))
+        .unwrap_or(Py::None);
     let meta = or(Some(&meta), &EMPTY_DICT).clone();
     let has_name = match &meta {
         Py::Dict(_) => meta.get("name")?.is_some_and(Py::truthy),
@@ -1544,7 +1807,9 @@ fn resolve_with(
         return Ok(Resolution {
             owner,
             repo,
-            error: "GitHub did not return that repository. Check the link, or try again in a minute.".into(),
+            error:
+                "GitHub did not return that repository. Check the link, or try again in a minute."
+                    .into(),
             ..Default::default()
         });
     }
@@ -1553,8 +1818,15 @@ fn resolve_with(
     let owner_py = or(login, &Py::Str(owner)).clone();
     let repo_py = meta.get("name")?.cloned().unwrap_or(Py::None);
     let description = or(meta.get("description")?, &EMPTY_STR).clone();
-    let stars = py_int(or(meta.get("stargazers_count")?, &Py::Int(BigInt::from_i64(0))))?;
-    let license = or(or(meta.get("license")?, &EMPTY_DICT).get("spdx_id")?, &EMPTY_STR).clone();
+    let stars = py_int(or(
+        meta.get("stargazers_count")?,
+        &Py::Int(BigInt::from_i64(0)),
+    ))?;
+    let license = or(
+        or(meta.get("license")?, &EMPTY_DICT).get("spdx_id")?,
+        &EMPTY_STR,
+    )
+    .clone();
     let archived = meta.get("archived")?.is_some_and(Py::truthy);
     // name = repo.lower()
     let repo = repo_py.as_str("lower")?.to_string();
@@ -1567,7 +1839,11 @@ fn resolve_with(
         archived,
         ..Default::default()
     };
-    for (field, v) in [("owner", &owner_py), ("description", &description), ("license", &license)] {
+    for (field, v) in [
+        ("owner", &owner_py),
+        ("description", &description),
+        ("license", &license),
+    ] {
         if !matches!(v, Py::Str(_)) {
             res.py.insert(field, v.clone());
         }
@@ -1589,12 +1865,20 @@ fn resolve_with(
     }
     // [res.url, meta.get("homepage") or ""]: _aur only reads them once the
     // AUR has answered.
-    let homes = [Py::Str(res.url()), or(meta.get("homepage")?, &EMPTY_STR).clone()];
-    let (bin, git, app) = (format!("{name}-bin"), format!("{name}-git"), format!("{name}-appimage"));
+    let homes = [
+        Py::Str(res.url()),
+        or(meta.get("homepage")?, &EMPTY_STR).clone(),
+    ];
+    let (bin, git, app) = (
+        format!("{name}-bin"),
+        format!("{name}-git"),
+        format!("{name}-appimage"),
+    );
     opts.extend(aur_with(&[name.as_str(), &bin, &git, &app], &homes, fetch)?);
     if res.archived {
         for o in &mut opts {
-            o.warnings.push("The repository is archived: no further updates".into());
+            o.warnings
+                .push("The repository is archived: no further updates".into());
         }
     }
     opts.sort_by_key(|o| o.rank);
@@ -1610,7 +1894,13 @@ fn resolve_with(
 /// "text (os error N)" becomes OSError's "[Errno N] text".
 fn exc_str(e: &str) -> String {
     let msg = match e.split_once(": ") {
-        Some((t, m)) if t.ends_with("Error") && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') => m,
+        Some((t, m))
+            if t.ends_with("Error")
+                && t.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
+        {
+            m
+        }
         _ => e,
     };
     static OS: OnceLock<Regex> = OnceLock::new();
@@ -1629,7 +1919,11 @@ fn os_error(e: &std::io::Error, path: &Path) -> String {
 
 /// `str(OSError)` for a failed `src.replace(dst)`: "... 'src' -> 'dst'".
 fn os_error2(e: &std::io::Error, src: &Path, dst: &Path) -> String {
-    format!("{} -> {}", os_error(e, src), str_repr(&dst.to_string_lossy()))
+    format!(
+        "{} -> {}",
+        os_error(e, src),
+        str_repr(&dst.to_string_lossy())
+    )
 }
 
 /// `inventory._load_registry()`, as Python reads it: the file's text through
@@ -1638,9 +1932,13 @@ fn os_error2(e: &std::io::Error, src: &Path, dst: &Path) -> String {
 /// a list or a number included. `Err` only for what the Python does not
 /// catch (a RecursionError on absurd nesting).
 fn load_registry_py() -> Result<Py, String> {
-    let Ok(raw) = std::fs::read(crate::inventory::registry()) else { return Ok(Py::Dict(Vec::new())) };
+    let Ok(raw) = std::fs::read(crate::inventory::registry()) else {
+        return Ok(Py::Dict(Vec::new()));
+    };
     // read_text(): strict UTF-8 (a UnicodeDecodeError is a ValueError).
-    let Ok(text) = String::from_utf8(raw) else { return Ok(Py::Dict(Vec::new())) };
+    let Ok(text) = String::from_utf8(raw) else {
+        return Ok(Py::Dict(Vec::new()));
+    };
     // json.loads(str) refuses a BOM ("Unexpected UTF-8 BOM").
     if text.starts_with('\u{feff}') {
         return Ok(Py::Dict(Vec::new()));
@@ -1731,13 +2029,23 @@ fn save_registry_py(data: &Py) -> Result<(), String> {
 /// an object fails the install (the TypeError of `reg[key] = ...`) and is
 /// left as it was. The new entry records GitHub's values as they came
 /// (a description that is not a string stays one).
-pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> Result<PathBuf, String> {
+pub fn install_appimage(
+    res: &Resolution,
+    opt: &Option,
+    log: &dyn Fn(&str),
+) -> Result<PathBuf, String> {
     static KEY: OnceLock<Regex> = OnceLock::new();
     let key_re = KEY.get_or_init(|| Regex::new(r"[^a-z0-9._-]").expect("key"));
 
-    let key = key_re.replace_all(&res.repo.to_lowercase(), "-").into_owned();
+    let key = key_re
+        .replace_all(&res.repo.to_lowercase(), "-")
+        .into_owned();
     let registry = crate::inventory::registry();
-    let dest = registry.parent().unwrap_or(Path::new("")).join("apps").join(format!("{key}.AppImage"));
+    let dest = registry
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join("apps")
+        .join(format!("{key}.AppImage"));
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| os_error(&e, parent))?;
     }
@@ -1752,8 +2060,14 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
                 Py::Dict(e) => e.iter().find(|(k, _)| k == "url").map(|(_, u)| u.py_str()),
                 _ => None,
             };
-            if !from.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(&res.url())) {
-                let from = from.filter(|u| !u.is_empty()).map(|u| format!(", from {u}")).unwrap_or_default();
+            if !from
+                .as_deref()
+                .is_some_and(|u| u.eq_ignore_ascii_case(&res.url()))
+            {
+                let from = from
+                    .filter(|u| !u.is_empty())
+                    .map(|u| format!(", from {u}"))
+                    .unwrap_or_default();
                 return Err(format!(
                     "another AppImage is already tracked as {key}{from}; remove it first to install this one"
                 ));
@@ -1786,19 +2100,29 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
         }
         log("checksum verified");
     }
-    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755)).map_err(|e| os_error(&e, &partial))?;
+    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| os_error(&e, &partial))?;
     std::fs::rename(&partial, &dest).map_err(|e| os_error2(&e, &partial, &dest))?;
 
     // The values as Python holds them: what GitHub sent, kept in `py` for a
     // field that was not a string.
-    let raw = |py: &BTreeMap<&'static str, Py>, f: &str, shown: &str| py.get(f).cloned().unwrap_or_else(|| Py::Str(shown.to_string()));
+    let raw = |py: &BTreeMap<&'static str, Py>, f: &str, shown: &str| {
+        py.get(f)
+            .cloned()
+            .unwrap_or_else(|| Py::Str(shown.to_string()))
+    };
     let version = raw(&opt.py, "version", &opt.version);
     // Track by the asset's naming pattern with the version wildcarded, so the
     // existing update check finds the next release.
     let pattern = match &version {
         v if !v.truthy() => opt.name.clone(),
         Py::Str(v) => opt.name.replace(v.as_str(), "*"),
-        other => return Err(format!("replace() argument 1 must be str, not {}", other.type_name())),
+        other => {
+            return Err(format!(
+                "replace() argument 1 must be str, not {}",
+                other.type_name()
+            ))
+        }
     };
     // Read, changed and written under the registry's lock: an entry another
     // writer changed meanwhile is kept as they left it.
@@ -1808,7 +2132,10 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
         ("name".into(), Py::Str(key.clone())),
         ("path".into(), Py::Str(dest.to_string_lossy().into_owned())),
         ("version".into(), version.clone()),
-        ("description".into(), raw(&res.py, "description", &res.description)),
+        (
+            "description".into(),
+            raw(&res.py, "description", &res.description),
+        ),
         ("url".into(), Py::Str(res.url())),
         ("latest".into(), Py::Dict(Vec::new())),
         ("checked_at".into(), Py::Int(BigInt::from_i64(0))),
@@ -1830,19 +2157,51 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
             None => d.push((key.clone(), entry)),
         },
         Py::List(_) => return Err("list indices must be integers or slices, not str".into()),
-        other => return Err(format!("'{}' object does not support item assignment", other.type_name())),
+        other => {
+            return Err(format!(
+                "'{}' object does not support item assignment",
+                other.type_name()
+            ))
+        }
     }
     save_registry_py(&reg)?;
     drop(_lock);
     if crate::appimage::install_desktop_entry(&dest, &key).map_err(|e| exc_str(&e))? {
         log("launcher entry added");
     }
-    crate::history::record_checked(
+    // A mismatched checksum stopped the install above, so one that was
+    // given has been checked and matched.
+    let checks = if opt.sha256.is_empty() {
+        Vec::new()
+    } else {
+        vec![crate::history::CheckResult {
+            name: "SHA-256 checksum".into(),
+            ok: Some(true),
+            detail: String::new(),
+        }]
+    };
+    crate::history::record_action(
         crate::history::ALMANAC,
         &format!("Installed {} {}", res.repo, version.py_str()),
-        &format!("AppImage from {}{}", res.url(), if !opt.sha256.is_empty() { " · checksum verified" } else { "" }),
+        &format!(
+            "AppImage from {}{}",
+            res.url(),
+            if !opt.sha256.is_empty() {
+                " · checksum verified"
+            } else {
+                ""
+            }
+        ),
         "",
-        &[],
+        &crate::history::ActionLog {
+            changes: vec![crate::history::Change {
+                name: res.repo.clone(),
+                from: String::new(),
+                to: version.py_str(),
+            }],
+            checks,
+            ..Default::default()
+        },
     )
     .map_err(|e| exc_str(&e))?;
     Ok(dest)
@@ -1850,8 +2209,8 @@ pub fn install_appimage(res: &Resolution, opt: &Option, log: &dyn Fn(&str)) -> R
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn the_deepest_answer_fits_a_background_stack() {
@@ -1865,7 +2224,10 @@ mod tests {
                 let v = loads(text.as_bytes()).unwrap();
                 assert_eq!(v.clone(), v);
                 assert_eq!(serde_json::to_string(&v).unwrap(), text);
-                assert_eq!(Py::from_value(&serde_json::from_str::<Value>("[[1]]").unwrap()), loads(b"[[1]]").unwrap());
+                assert_eq!(
+                    Py::from_value(&serde_json::from_str::<Value>("[[1]]").unwrap()),
+                    loads(b"[[1]]").unwrap()
+                );
             })
             .unwrap()
             .join()
@@ -1880,7 +2242,10 @@ mod tests {
             "github.com/storytold/wordcraft/releases",
             "https://github.com/storytold/wordcraft.git",
         ] {
-            assert_eq!(parse(link), Some(("storytold".to_string(), "wordcraft".to_string())));
+            assert_eq!(
+                parse(link),
+                Some(("storytold".to_string(), "wordcraft".to_string()))
+            );
         }
         assert_eq!(parse("https://gitlab.com/a/b"), None);
         assert_eq!(parse("wordcraft"), None);
@@ -1918,14 +2283,22 @@ mod tests {
              "URL": "https://app.example.org"}]})
         .to_string();
         let fetch = |_u: &str| Ok(data.as_bytes().to_vec());
-        let homes = [Py::Str("https://github.com/owner/app".into()), Py::Str("https://app.example.org/".into())];
+        let homes = [
+            Py::Str("https://github.com/owner/app".into()),
+            Py::Str("https://app.example.org/".into()),
+        ];
         let opts: HashMap<String, Option> = aur_with(&["app", "app-bin"], &homes, &fetch)
             .expect("an AUR answer")
             .into_iter()
             .map(|o| (o.name.clone(), o))
             .collect();
-        assert!(opts["app"].warnings.iter().any(|w| w.contains("not this project")));
-        assert!(opts["app-bin"].reasons.contains(&"Points at this project".to_string()));
+        assert!(opts["app"]
+            .warnings
+            .iter()
+            .any(|w| w.contains("not this project")));
+        assert!(opts["app-bin"]
+            .reasons
+            .contains(&"Points at this project".to_string()));
     }
 
     #[test]
@@ -1934,7 +2307,9 @@ mod tests {
         // one-shot local HTTP server serves it, and XDG_STATE_HOME points
         // inventory's REGISTRY at the temp dir.
         use std::io::Write;
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tempdir");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
@@ -1943,12 +2318,20 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
                 let body = b"not what was published";
-                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
                 let _ = s.write_all(body);
             }
         });
         std::env::set_var("XDG_STATE_HOME", d.path());
-        let res = Resolution { owner: "o".into(), repo: "app".into(), ..Default::default() };
+        let res = Resolution {
+            owner: "o".into(),
+            repo: "app".into(),
+            ..Default::default()
+        };
         let opt = Option {
             kind: APPIMAGE.into(),
             name: "app-1-x86_64.AppImage".into(),
@@ -1968,18 +2351,40 @@ mod tests {
     /// replaced by a link install; the same project's is (an update).
     #[test]
     fn test_another_projects_app_of_the_same_name_is_not_replaced() {
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tempdir");
         std::env::set_var("XDG_STATE_HOME", d.path());
         let reg = crate::inventory::registry();
         std::fs::create_dir_all(reg.parent().expect("parent")).expect("dir");
-        std::fs::write(&reg, r#"{"app": {"url": "https://github.com/someone-else/app", "path": "/x"}}"#).expect("write");
-        let res = Resolution { owner: "o".into(), repo: "app".into(), ..Default::default() };
+        std::fs::write(
+            &reg,
+            r#"{"app": {"url": "https://github.com/someone-else/app", "path": "/x"}}"#,
+        )
+        .expect("write");
+        let res = Resolution {
+            owner: "o".into(),
+            repo: "app".into(),
+            ..Default::default()
+        };
         // A URL nothing listens on: reaching the download would fail differently.
-        let opt = Option { kind: APPIMAGE.into(), url: "http://127.0.0.1:9/app".into(), ..Default::default() };
-        let err = install_appimage(&res, &opt, &|_m: &str| {}).expect_err("replaced another project's app");
-        assert!(err.contains("already tracked as app, from https://github.com/someone-else/app"), "{err}");
-        std::fs::write(&reg, r#"{"app": {"url": "https://github.com/O/app", "path": "/x"}}"#).expect("write");
+        let opt = Option {
+            kind: APPIMAGE.into(),
+            url: "http://127.0.0.1:9/app".into(),
+            ..Default::default()
+        };
+        let err = install_appimage(&res, &opt, &|_m: &str| {})
+            .expect_err("replaced another project's app");
+        assert!(
+            err.contains("already tracked as app, from https://github.com/someone-else/app"),
+            "{err}"
+        );
+        std::fs::write(
+            &reg,
+            r#"{"app": {"url": "https://github.com/O/app", "path": "/x"}}"#,
+        )
+        .expect("write");
         let err = install_appimage(&res, &opt, &|_m: &str| {}).expect_err("nothing listens there");
         assert!(!err.contains("already tracked"), "{err}");
     }
@@ -1990,7 +2395,9 @@ mod tests {
     #[test]
     fn test_a_stale_partial_download_does_not_replace_the_rollback_copy() {
         use std::io::Write;
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let d = tempfile::tempdir().expect("tempdir");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
@@ -1999,7 +2406,11 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
                 let body = crate::appimage::test_elf(b" new build");
-                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
                 let _ = s.write_all(&body);
             }
         });
@@ -2009,7 +2420,11 @@ mod tests {
         std::fs::write(apps.join("app.AppImage"), b"\x7fELF installed").expect("write");
         std::fs::write(apps.join("app.previous"), b"\x7fELF rollback").expect("write");
         std::fs::write(apps.join("app.unverified"), b"stale").expect("write");
-        let res = Resolution { owner: "o".into(), repo: "app".into(), ..Default::default() };
+        let res = Resolution {
+            owner: "o".into(),
+            repo: "app".into(),
+            ..Default::default()
+        };
         let opt = Option {
             kind: APPIMAGE.into(),
             name: "app-1-x86_64.AppImage".into(),
@@ -2023,28 +2438,52 @@ mod tests {
         };
         assert!(install_appimage(&res, &opt, &|_m: &str| {}).is_err());
         let _ = server.join();
-        assert_eq!(std::fs::read(apps.join("app.previous")).expect("rollback"), b"\x7fELF rollback");
-        assert_eq!(std::fs::read(apps.join("app.AppImage")).expect("installed"), b"\x7fELF installed");
+        assert_eq!(
+            std::fs::read(apps.join("app.previous")).expect("rollback"),
+            b"\x7fELF rollback"
+        );
+        assert_eq!(
+            std::fs::read(apps.join("app.AppImage")).expect("installed"),
+            b"\x7fELF installed"
+        );
     }
 
     #[test]
     fn py_helpers() {
-        assert_eq!(py_splitlines("a\r\nb\rc\n\nd"), vec!["a", "b", "c", "", "d"]);
+        assert_eq!(
+            py_splitlines("a\r\nb\rc\n\nd"),
+            vec!["a", "b", "c", "", "d"]
+        );
         assert_eq!(py_splitlines("a\n"), vec!["a"]);
         assert_eq!(quote("a b/ü"), "a%20b/%C3%BC");
         assert_eq!(norm(" HTTPS://www.GitHub.com/O/R.git/ "), "github.com/o/r");
         assert_eq!(norm("https://github.com/o/r.git"), "github.com/o/r");
         assert_eq!(BigInt::from_f64(1e20).to_string(), "100000000000000000000");
-        assert_eq!(BigInt::from_f64(-2f64.powi(70)).to_string(), "-1180591620717411303424");
-        assert_eq!(py_int(&Py::Str(" １_２ ".into())).map(|i| i.to_string()), Ok("12".into()));
+        assert_eq!(
+            BigInt::from_f64(-2f64.powi(70)).to_string(),
+            "-1180591620717411303424"
+        );
+        assert_eq!(
+            py_int(&Py::Str(" １_２ ".into())).map(|i| i.to_string()),
+            Ok("12".into())
+        );
         assert!(py_int(&Py::Str("1__2".into())).is_err());
         assert_eq!(b64decode(b"aGk=").as_deref(), Ok(&b"hi"[..]));
         assert!(b64decode(b"aGk").is_err());
-        assert_eq!(b64decode(b"aGVsbA==QQ==").as_deref(), Ok(&b"hell\x04\x10"[..]));
+        assert_eq!(
+            b64decode(b"aGVsbA==QQ==").as_deref(),
+            Ok(&b"hell\x04\x10"[..])
+        );
         assert!(b64decode(b"aGVsbG8=abcd").is_err());
-        assert_eq!(decode_json_bytes(b"\xff\xfe[\x001\x00]\x00").as_deref(), Ok("[1]"));
+        assert_eq!(
+            decode_json_bytes(b"\xff\xfe[\x001\x00]\x00").as_deref(),
+            Ok("[1]")
+        );
         assert_eq!(decode_json_bytes(b"\x00\x00\x00[").as_deref(), Ok("["));
-        assert_eq!(loads(b"\xef\xbb\xbf[NaN, -Infinity, 1e400, 18446744073709551616]").map(|v| v.repr()), Ok("[nan, -inf, inf, 18446744073709551616]".into()));
+        assert_eq!(
+            loads(b"\xef\xbb\xbf[NaN, -Infinity, 1e400, 18446744073709551616]").map(|v| v.repr()),
+            Ok("[nan, -inf, inf, 18446744073709551616]".into())
+        );
         assert!(loads(b"[1,]").is_err());
         assert!(loads(b"01").is_err());
         assert!(other_arch().is_match("app-\u{131}686.AppImage"));
@@ -2063,20 +2502,41 @@ mod tests {
         py_dumps(&v, 2, 0, &mut out);
         assert_eq!(out, "{\n  \"b\": NaN,\n  \"a\": [\n    100000000000000000000000,\n    -Infinity,\n    1.5,\n    {}\n  ],\n  \"c\": \"\\u00fc\"\n}");
         // str(exc)
-        assert_eq!(exc_str("RuntimeError: checksum mismatch: x"), "checksum mismatch: x");
-        assert_eq!(exc_str("OSError: No such file or directory (os error 2)"), "[Errno 2] No such file or directory");
-        assert_eq!(exc_str("HTTPError: HTTP Error 404: Not Found"), "HTTP Error 404: Not Found");
+        assert_eq!(
+            exc_str("RuntimeError: checksum mismatch: x"),
+            "checksum mismatch: x"
+        );
+        assert_eq!(
+            exc_str("OSError: No such file or directory (os error 2)"),
+            "[Errno 2] No such file or directory"
+        );
+        assert_eq!(
+            exc_str("HTTPError: HTTP Error 404: Not Found"),
+            "HTTP Error 404: Not Found"
+        );
         // urllib's proxy helpers
-        assert_eq!(get_hostport("[::1]:8080", 80), Ok(("::1".to_string(), 8080)));
+        assert_eq!(
+            get_hostport("[::1]:8080", 80),
+            Ok(("::1".to_string(), 8080))
+        );
         assert_eq!(get_hostport("h:", 443), Ok(("h".to_string(), 443)));
         assert!(get_hostport("u:p@h", 80).is_err());
         assert_eq!(
             parse_proxy("http://u:p@proxy:3128/"),
-            Ok((Some("http".into()), Some("u".into()), Some("p".into()), "proxy:3128".into()))
+            Ok((
+                Some("http".into()),
+                Some("u".into()),
+                Some("p".into()),
+                "proxy:3128".into()
+            ))
         );
-        assert_eq!(parse_proxy("proxy:3128"), Ok((None, None, None, "proxy:3128".into())));
+        assert_eq!(
+            parse_proxy("proxy:3128"),
+            Ok((None, None, None, "proxy:3128".into()))
+        );
         assert!(parse_proxy("http:/x").is_err());
-        let p: HashMap<String, String> = [("no".to_string(), " .Example.org, localhost".to_string())].into();
+        let p: HashMap<String, String> =
+            [("no".to_string(), " .Example.org, localhost".to_string())].into();
         assert!(proxy_bypass("a.example.org:443", &p));
         assert!(proxy_bypass("LOCALHOST:80", &p));
         assert!(!proxy_bypass("example.com", &p));

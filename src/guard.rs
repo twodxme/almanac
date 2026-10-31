@@ -73,16 +73,28 @@ pub struct PyStack {
 impl PyStack {
     /// app.py `_config_check`: `work` on its own thread (`_bootstrap`,
     /// `_bootstrap_inner`, `run`, `work`).
-    pub const WORKER: PyStack = PyStack { frames: 4, thread: true };
+    pub const WORKER: PyStack = PyStack {
+        frames: 4,
+        thread: true,
+    };
     /// The Health check: `maintenance.run_all` on `_maint_reload`'s (or
     /// `_feat_reload`'s) worker thread, then `config_resets` and `finding`.
-    pub const HEALTH: PyStack = PyStack { frames: 7, thread: true };
+    pub const HEALTH: PyStack = PyStack {
+        frames: 7,
+        thread: true,
+    };
     /// `almanac --guard`: app.py's module frame, then `watcher.main`.
-    pub const WATCHER: PyStack = PyStack { frames: 2, thread: false };
+    pub const WATCHER: PyStack = PyStack {
+        frames: 2,
+        thread: false,
+    };
     /// app.py `_watch_configs`, from the window's construction: the module,
     /// Gio's `Application.run` override, `do_command_line`, `do_activate`,
     /// `AlmanacWindow.__init__`, `_watch_configs`.
-    pub const WINDOW: PyStack = PyStack { frames: 6, thread: false };
+    pub const WINDOW: PyStack = PyStack {
+        frames: 6,
+        thread: false,
+    };
 
     /// How many arrays/objects deep `json.loads` gets before RecursionError.
     fn json_depth(self) -> usize {
@@ -148,12 +160,20 @@ pub struct Reset {
 
 impl Reset {
     pub fn new(path: PathBuf, backup: PathBuf, when: f64, lost: Vec<String>) -> Self {
-        Reset { path, backup, when, lost }
+        Reset {
+            path,
+            backup,
+            when,
+            lost,
+        }
     }
 
     pub fn name(&self) -> String {
         let home = config_home();
-        let shown = match py_relative_to(self.path.as_os_str().as_bytes(), home.as_os_str().as_bytes()) {
+        let shown = match py_relative_to(
+            self.path.as_os_str().as_bytes(),
+            home.as_os_str().as_bytes(),
+        ) {
             Some(rel) => rel,
             None => py_str(self.path.as_os_str().as_bytes()),
         };
@@ -174,7 +194,10 @@ fn py_parts(raw: &[u8]) -> (&'static [u8], Vec<&[u8]>) {
     } else {
         (b"//", &raw[2..])
     };
-    let parts = rest.split(|&c| c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts = rest
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     (root, parts)
 }
 
@@ -202,7 +225,11 @@ fn py_path(p: &Path) -> PathBuf {
 
 /// `PurePath.name`.
 fn py_name(p: &Path) -> Vec<u8> {
-    py_parts(p.as_os_str().as_bytes()).1.last().map(|n| n.to_vec()).unwrap_or_default()
+    py_parts(p.as_os_str().as_bytes())
+        .1
+        .last()
+        .map(|n| n.to_vec())
+        .unwrap_or_default()
 }
 
 /// `str(Path(path).relative_to(other))`, or `None` where it raises
@@ -223,7 +250,10 @@ fn py_with_name(p: &Path, name: &[u8]) -> Result<PathBuf, String> {
     let raw = p.as_os_str().as_bytes();
     let (root, mut parts) = py_parts(raw);
     if parts.is_empty() {
-        return Err(format!("PosixPath({}) has an empty name", py_repr(&surrogateescape(&py_join(root, &parts)))));
+        return Err(format!(
+            "PosixPath({}) has an empty name",
+            py_repr(&surrogateescape(&py_join(root, &parts)))
+        ));
     }
     if name.is_empty() || name == b"." || name.contains(&b'/') {
         return Err(format!("Invalid name {}", py_repr(&surrogateescape(name))));
@@ -248,7 +278,9 @@ fn pystr(s: &str) -> PyStr {
 
 /// For display: a lone surrogate becomes U+FFFD.
 fn pystr_lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// UTF-8, where `on_bad` decides what an invalid sequence becomes: the code
@@ -295,9 +327,10 @@ fn surrogateescape(b: &[u8]) -> PyStr {
 /// (`ED A0..BF 80..BF`) is that code point; anything else invalid fails.
 fn utf8_surrogatepass(b: &[u8]) -> Option<PyStr> {
     decode_utf8(b, |bad| match bad {
-        [0xed, b1 @ 0xa0..=0xbf, b2 @ 0x80..=0xbf, ..] => {
-            Some((vec![0xd000 | ((*b1 as u32 & 0x3f) << 6) | (*b2 as u32 & 0x3f)], 3))
-        }
+        [0xed, b1 @ 0xa0..=0xbf, b2 @ 0x80..=0xbf, ..] => Some((
+            vec![0xd000 | ((*b1 as u32 & 0x3f) << 6) | (*b2 as u32 & 0x3f)],
+            3,
+        )),
         _ => None,
     })
 }
@@ -305,7 +338,11 @@ fn utf8_surrogatepass(b: &[u8]) -> Option<PyStr> {
 /// `repr(str)`, for messages: single quotes unless the text has one and no
 /// double quote, and escapes for what is not printable.
 fn py_repr(s: &[u32]) -> String {
-    let q = if s.contains(&('\'' as u32)) && !s.contains(&('"' as u32)) { '"' } else { '\'' };
+    let q = if s.contains(&('\'' as u32)) && !s.contains(&('"' as u32)) {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for &c in s {
@@ -342,7 +379,10 @@ fn os_error_on(e: &std::io::Error, file: &str) -> String {
     match e.raw_os_error() {
         Some(n) => {
             let text = e.to_string();
-            let msg = text.strip_suffix(&format!(" (os error {n})")).unwrap_or(&text).to_string();
+            let msg = text
+                .strip_suffix(&format!(" (os error {n})"))
+                .unwrap_or(&text)
+                .to_string();
             format!("[Errno {n}] {msg}: {file}")
         }
         None => format!("{e}: {file}"),
@@ -451,7 +491,8 @@ fn py_eq(da: &Doc, db: &Doc) -> bool {
                 if x.len() != y.len() {
                     false
                 } else {
-                    let index: HashMap<&[u32], usize> = y.iter().map(|(k, v)| (k.as_slice(), *v)).collect();
+                    let index: HashMap<&[u32], usize> =
+                        y.iter().map(|(k, v)| (k.as_slice(), *v)).collect();
                     let mut ok = true;
                     for (k, v) in x {
                         match index.get(k.as_slice()) {
@@ -491,7 +532,11 @@ fn normal_eq(a: &Option<Normal>, b: &Option<Normal>) -> bool {
 fn py_bytes_strip(raw: &[u8]) -> Vec<u8> {
     let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
     let start = raw.iter().position(|c| !ws(c)).unwrap_or(raw.len());
-    let end = raw.iter().rposition(|c| !ws(c)).map(|e| e + 1).unwrap_or(start);
+    let end = raw
+        .iter()
+        .rposition(|c| !ws(c))
+        .map(|e| e + 1)
+        .unwrap_or(start);
     raw[start..end.max(start)].to_vec()
 }
 
@@ -511,7 +556,10 @@ fn py_json_decode(b: &[u8]) -> Option<PyStr> {
         let mut i = 0;
         while i < units.len() {
             let u = units[i];
-            if (0xd800..0xdc00).contains(&u) && i + 1 < units.len() && (0xdc00..0xe000).contains(&units[i + 1]) {
+            if (0xd800..0xdc00).contains(&u)
+                && i + 1 < units.len()
+                && (0xdc00..0xe000).contains(&units[i + 1])
+            {
                 out.push(0x10000 + ((u - 0xd800) << 10) + (units[i + 1] - 0xdc00));
                 i += 2;
             } else {
@@ -556,10 +604,18 @@ fn py_json_decode(b: &[u8]) -> Option<PyStr> {
     }
     if b.len() >= 4 {
         if b[0] == 0 {
-            return if b[1] != 0 { utf16(b, true) } else { utf32(b, true) };
+            return if b[1] != 0 {
+                utf16(b, true)
+            } else {
+                utf32(b, true)
+            };
         }
         if b[1] == 0 {
-            return if b[2] != 0 || b[3] != 0 { utf16(b, false) } else { utf32(b, false) };
+            return if b[2] != 0 || b[3] != 0 {
+                utf16(b, false)
+            } else {
+                utf32(b, false)
+            };
         }
     } else if b.len() == 2 {
         if b[0] == 0 {
@@ -599,14 +655,19 @@ impl PyJson<'_> {
     }
 
     fn ws(&mut self) {
-        while matches!(self.peek(), Some(c) if c == cp(' ') || c == cp('\t') || c == cp('\n') || c == cp('\r')) {
+        while matches!(self.peek(), Some(c) if c == cp(' ') || c == cp('\t') || c == cp('\n') || c == cp('\r'))
+        {
             self.i += 1;
         }
     }
 
     fn starts(&self, lit: &str) -> bool {
         let n = lit.len();
-        self.i + n <= self.s.len() && self.s[self.i..self.i + n].iter().copied().eq(lit.chars().map(|c| c as u32))
+        self.i + n <= self.s.len()
+            && self.s[self.i..self.i + n]
+                .iter()
+                .copied()
+                .eq(lit.chars().map(|c| c as u32))
     }
 
     fn eat(&mut self, c: char) -> Result<(), JsonFail> {
@@ -773,7 +834,10 @@ impl PyJson<'_> {
             }
         }
         // All ASCII by construction.
-        let text: String = self.s[start..self.i].iter().filter_map(|&c| char::from_u32(c)).collect();
+        let text: String = self.s[start..self.i]
+            .iter()
+            .filter_map(|&c| char::from_u32(c))
+            .collect();
         if is_float {
             return text.parse::<f64>().ok().map(Node::Float);
         }
@@ -803,7 +867,10 @@ impl PyJson<'_> {
                 out.push(c);
                 continue;
             }
-            let e = self.peek().and_then(char::from_u32).ok_or(JsonFail::Value)?;
+            let e = self
+                .peek()
+                .and_then(char::from_u32)
+                .ok_or(JsonFail::Value)?;
             self.i += 1;
             let plain = match e {
                 '"' => '"',
@@ -842,7 +909,10 @@ impl PyJson<'_> {
         }
         let mut v = 0;
         for &c in &self.s[self.i..self.i + 4] {
-            v = v * 16 + char::from_u32(c).and_then(|c| c.to_digit(16)).ok_or(JsonFail::Value)?;
+            v = v * 16
+                + char::from_u32(c)
+                    .and_then(|c| c.to_digit(16))
+                    .ok_or(JsonFail::Value)?;
         }
         self.i += 4;
         Ok(v)
@@ -852,7 +922,11 @@ impl PyJson<'_> {
 /// `json.loads(raw)`, nesting at most `max` deep.
 fn py_json_loads(raw: &[u8], max: usize) -> Result<Doc, JsonFail> {
     let text = py_json_decode(raw).ok_or(JsonFail::Value)?;
-    let mut p = PyJson { s: &text, i: 0, max };
+    let mut p = PyJson {
+        s: &text,
+        i: 0,
+        max,
+    };
     p.ws();
     let v = p.document()?;
     p.ws();
@@ -926,11 +1000,15 @@ fn ids(doc: &Doc, max: usize) -> Result<Vec<PyStr>, String> {
 ///
 /// `at` is where `_lost` itself is called from.
 fn lost(current: &Path, backup: &Path, at: PyStack) -> Result<Vec<PyStr>, String> {
-    let (a, b) = (normal(backup, Some(current), at)?, normal(current, None, at)?);
+    let (a, b) = (
+        normal(backup, Some(current), at)?,
+        normal(current, None, at)?,
+    );
     let max = PyStack::ids_depth(at.frames + 1);
-    let container =
-        |n: &Option<Normal>| matches!(n, Some(Normal::Json(d)) if matches!(d.top(), Node::Dict(_) | Node::List(_)));
-    if let (true, true, Some(Normal::Json(a)), Some(Normal::Json(b))) = (container(&a), container(&b), &a, &b) {
+    let container = |n: &Option<Normal>| matches!(n, Some(Normal::Json(d)) if matches!(d.top(), Node::Dict(_) | Node::List(_)));
+    if let (true, true, Some(Normal::Json(a)), Some(Normal::Json(b))) =
+        (container(&a), container(&b), &a, &b)
+    {
         let kept: HashSet<PyStr> = ids(b, max)?.into_iter().collect();
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -979,7 +1057,10 @@ fn walk_into(root: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 /// code point -- an undecodable byte (U+DCxx) sorts below `豈` although its
 /// byte 0xff sorts above that character's UTF-8.
 fn py_sort_key(p: &Path) -> Vec<PyStr> {
-    py_str(p.as_os_str().as_bytes()).split(|&c| c == b'/').map(surrogateescape).collect()
+    py_str(p.as_os_str().as_bytes())
+        .split(|&c| c == b'/')
+        .map(surrogateescape)
+        .collect()
 }
 
 /// `now` defaults to the current time (`None`, or 0 as in Python's `now or`).
@@ -1021,7 +1102,10 @@ fn resets_exact(now: Option<f64>, at: PyStack) -> Result<Vec<(Reset, Vec<PyStr>)
         let Some(m) = BAK_BYTES.captures(raw) else {
             continue;
         };
-        let Some(ts) = std::str::from_utf8(&m["ts"]).ok().and_then(crate::util::py_digits_value) else {
+        let Some(ts) = std::str::from_utf8(&m["ts"])
+            .ok()
+            .and_then(crate::util::py_digits_value)
+        else {
             continue;
         };
         if ts < cutoff {
@@ -1040,18 +1124,30 @@ fn resets_exact(now: Option<f64>, at: PyStack) -> Result<Vec<(Reset, Vec<PyStr>)
 
     let mut out = Vec::new();
     for (_, (ts, bak, base)) in newest {
-        let Ok(rel) = base.strip_prefix(&home) else { continue };
+        let Ok(rel) = base.strip_prefix(&home) else {
+            continue;
+        };
         let shipped = defaults.join(rel);
         if !(base.is_file() && shipped.is_file()) {
             continue;
         }
-        let (current, theirs, stock) =
-            (normal(&base, None, at)?, normal(&bak, Some(&base), at)?, normal(&shipped, Some(&base), at)?);
+        let (current, theirs, stock) = (
+            normal(&base, None, at)?,
+            normal(&bak, Some(&base), at)?,
+            normal(&shipped, Some(&base), at)?,
+        );
         if current.is_none() || theirs.is_none() {
             continue;
         }
         if normal_eq(&current, &stock) && !normal_eq(&theirs, &stock) {
-            let gone = lost(&base, &bak, PyStack { frames: at.frames + 1, ..at })?;
+            let gone = lost(
+                &base,
+                &bak,
+                PyStack {
+                    frames: at.frames + 1,
+                    ..at
+                },
+            )?;
             let shown = gone.iter().map(|i| pystr_lossy(i)).collect();
             out.push((Reset::new(base, bak, ts, shown), gone));
         }
@@ -1075,12 +1171,20 @@ fn copy2(src: &Path, dst: &Path) -> Result<(), String> {
     };
     let shown = |p: &Path, is_str: bool| {
         let text = surrogateescape(&py_str(p.as_os_str().as_bytes()));
-        if is_str { (py_repr(&text), text) } else { (format!("PosixPath({})", py_repr(&text)), text) }
+        if is_str {
+            (py_repr(&text), text)
+        } else {
+            (format!("PosixPath({})", py_repr(&text)), text)
+        }
     };
     // copyfile: refuses to copy a file onto itself, names each by its repr.
     if let (Ok(a), Ok(b)) = (std::fs::metadata(src), std::fs::metadata(dst)) {
         if a.dev() == b.dev() && a.ino() == b.ino() {
-            return Err(format!("{} and {} are the same file", shown(src, false).0, shown(dst, dst_str).0));
+            return Err(format!(
+                "{} and {} are the same file",
+                shown(src, false).0,
+                shown(dst, dst_str).0
+            ));
         }
     }
     // ...and to read from or write to a named pipe (SpecialFileError), which
@@ -1088,7 +1192,10 @@ fn copy2(src: &Path, dst: &Path) -> Result<(), String> {
     for (fname, is_str) in [(src, false), (dst, dst_str)] {
         if let Ok(st) = std::fs::metadata(fname) {
             if st.file_type().is_fifo() {
-                return Err(format!("`{}` is a named pipe", pystr_lossy(&shown(fname, is_str).1)));
+                return Err(format!(
+                    "`{}` is a named pipe",
+                    pystr_lossy(&shown(fname, is_str).1)
+                ));
             }
         }
     }
@@ -1106,7 +1213,10 @@ fn copy2(src: &Path, dst: &Path) -> Result<(), String> {
     drop(fdst);
     // copystat
     let st = std::fs::metadata(src).map_err(|e| os_error(&e, src))?;
-    let ts = |s: i64, ns: i64| rustix::fs::Timespec { tv_sec: s, tv_nsec: ns as _ };
+    let ts = |s: i64, ns: i64| rustix::fs::Timespec {
+        tv_sec: s,
+        tv_nsec: ns as _,
+    };
     let times = rustix::fs::Timestamps {
         last_access: ts(st.atime(), st.atime_nsec()),
         last_modification: ts(st.mtime(), st.mtime_nsec()),
@@ -1145,7 +1255,15 @@ fn copy_xattr(src: &Path, dst: &Path) -> Result<(), String> {
         };
         match copy() {
             Ok(()) => {}
-            Err(e) if [Errno::PERM, Errno::NOTSUP, Errno::NODATA, Errno::INVAL, Errno::ACCESS].contains(&e) => {}
+            Err(e)
+                if [
+                    Errno::PERM,
+                    Errno::NOTSUP,
+                    Errno::NODATA,
+                    Errno::INVAL,
+                    Errno::ACCESS,
+                ]
+                .contains(&e) => {}
             Err(e) => return Err(os_error(&std::io::Error::from(e), dst)),
         }
     }
@@ -1166,15 +1284,39 @@ pub fn restore(reset: &Reset, log: crate::tasks::LogFn<'_>) -> Result<(), String
     let keep = py_with_name(&reset.path, &keep_name)?;
     copy2(&reset.path, &keep)?;
     copy2(&reset.backup, &reset.path)?;
-    log(&format!("restored {} from {}", reset.name(), file_name(&reset.backup)));
-    crate::history::record_checked(
+    log(&format!(
+        "restored {} from {}",
+        reset.name(),
+        file_name(&reset.backup)
+    ));
+    // Checked, not assumed: the file now holds what the backup does.
+    let same = match (std::fs::read(&reset.path), std::fs::read(&reset.backup)) {
+        (Ok(now), Ok(backup)) => Some(now == backup),
+        _ => None,
+    };
+    let check = crate::history::CheckResult {
+        name: format!("{} matches {}", reset.name(), file_name(&reset.backup)),
+        ok: same,
+        detail: String::new(),
+    };
+    crate::history::record_action(
         crate::history::ALMANAC,
         &format!("{} restored", reset.name()),
-        &format!("From {}; the defaults were kept as {}", file_name(&reset.backup), file_name(&keep)),
-        "",
-        &[],
+        &format!(
+            "From {}; the defaults were kept as {}",
+            file_name(&reset.backup),
+            file_name(&keep)
+        ),
+        if same == Some(false) { "warn" } else { "" },
+        &crate::history::ActionLog {
+            checks: vec![check],
+            ..Default::default()
+        },
     )?;
-    log(&format!("the defaults it replaced are in {}", file_name(&keep)));
+    log(&format!(
+        "the defaults it replaced are in {}",
+        file_name(&keep)
+    ));
     Ok(())
 }
 
@@ -1184,7 +1326,11 @@ pub fn restore(reset: &Reset, log: crate::tasks::LogFn<'_>) -> Result<(), String
 fn py_which(name: &str) -> Option<PathBuf> {
     path_candidates(name).into_iter().find(|file| {
         file.exists()
-            && rustix::fs::access(file.as_path(), rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK).is_ok()
+            && rustix::fs::access(
+                file.as_path(),
+                rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK,
+            )
+            .is_ok()
             && !file.is_dir()
     })
 }
@@ -1198,7 +1344,13 @@ fn path_candidates(name: &str) -> Vec<PathBuf> {
     }
     path.as_bytes()
         .split(|&c| c == b':')
-        .map(|dir| if dir.is_empty() { PathBuf::from(name) } else { Path::new(OsStr::from_bytes(dir)).join(name) })
+        .map(|dir| {
+            if dir.is_empty() {
+                PathBuf::from(name)
+            } else {
+                Path::new(OsStr::from_bytes(dir)).join(name)
+            }
+        })
         .collect()
 }
 
@@ -1244,7 +1396,9 @@ fn local_when(when: f64) -> String {
         return s.to_string();
     }
     match chrono::Local.timestamp_opt(secs, 0) {
-        chrono::LocalResult::Single(t) | chrono::LocalResult::Ambiguous(t, _) => t.format("%a %H:%M").to_string(),
+        chrono::LocalResult::Single(t) | chrono::LocalResult::Ambiguous(t, _) => {
+            t.format("%a %H:%M").to_string()
+        }
         chrono::LocalResult::None => String::new(),
     }
 }
@@ -1277,14 +1431,23 @@ pub fn finding() -> crate::maintenance::Finding {
 ///
 /// Called from the Health check, as `maintenance.run_all` calls it.
 pub fn try_finding() -> Result<crate::maintenance::Finding, String> {
-    try_finding_at(PyStack { frames: PyStack::HEALTH.frames - 1, ..PyStack::HEALTH })
+    try_finding_at(PyStack {
+        frames: PyStack::HEALTH.frames - 1,
+        ..PyStack::HEALTH
+    })
 }
 
 /// [`try_finding`] as called from `at` (frames above `finding`).
 pub fn try_finding_at(at: PyStack) -> Result<crate::maintenance::Finding, String> {
     use crate::maintenance as m;
 
-    let found = try_resets_at(None, PyStack { frames: at.frames + 1, ..at })?;
+    let found = try_resets_at(
+        None,
+        PyStack {
+            frames: at.frames + 1,
+            ..at
+        },
+    )?;
     if found.is_empty() {
         return Ok(m::Finding {
             id: "config-reset".into(),
@@ -1299,9 +1462,17 @@ pub fn try_finding_at(at: PyStack) -> Result<crate::maintenance::Finding, String
     let mut items = Vec::new();
     for r in &found {
         let when = local_when(r.when);
-        let lost = if r.lost.is_empty() { String::new() } else { format!(", dropping {} entries", r.lost.len()) };
+        let lost = if r.lost.is_empty() {
+            String::new()
+        } else {
+            format!(", dropping {} entries", r.lost.len())
+        };
         parts.push(format!("{} at {when}{lost}", r.name()));
-        items.push(format!("{} — your version is {}", r.name(), file_name(&r.backup)));
+        items.push(format!(
+            "{} — your version is {}",
+            r.name(),
+            file_name(&r.backup)
+        ));
         items.extend(r.lost.iter().take(30).map(|i| format!("    removed: {i}")));
     }
 
@@ -1316,14 +1487,19 @@ pub fn try_finding_at(at: PyStack) -> Result<crate::maintenance::Finding, String
             let out = crate::util::run(&argv, 60);
             // subprocess.run raises on a timeout or a program it cannot start.
             if out.timed_out {
-                return Err(format!("Command '{}' timed out after 60 seconds", py_list_repr(&cmd)));
+                return Err(format!(
+                    "Command '{}' timed out after 60 seconds",
+                    py_list_repr(&cmd)
+                ));
             }
             if out.failed_to_start {
                 // util::run does not say why; exec fails with EACCES where
                 // a file of that name is on PATH but not ours to run, with
                 // ENOENT where there is none.
                 let prog = py_repr(&pystr(&cmd[0]));
-                let there = path_candidates(&cmd[0]).iter().any(|f| f.exists() && !f.is_dir());
+                let there = path_candidates(&cmd[0])
+                    .iter()
+                    .any(|f| f.exists() && !f.is_dir());
                 return Err(if there {
                     format!("[Errno 13] Permission denied: {prog}")
                 } else {
@@ -1395,13 +1571,17 @@ fn doc_json(d: &Doc, n: usize) -> serde_json::Value {
             Node::Float(f) => Value::from(*f),
             Node::Str(s) => Value::String(pystr_lossy(s)),
             Node::List(items) => Value::Array(items.iter().map(|c| take(*c)).collect()),
-            Node::Dict(items) => Value::Object(items.iter().map(|(k, c)| (pystr_lossy(k), take(*c))).collect()),
+            Node::Dict(items) => Value::Object(
+                items
+                    .iter()
+                    .map(|(k, c)| (pystr_lossy(k), take(*c)))
+                    .collect(),
+            ),
         };
         done[i] = Some(v);
     }
     done[n].take().unwrap_or(Value::Null)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1427,7 +1607,9 @@ mod tests {
 
     impl ConfigReset {
         fn set_up() -> ConfigReset {
-            let guard = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::util::TEST_ENV
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().to_path_buf();
             let home = root.join("config");
@@ -1437,17 +1619,36 @@ mod tests {
             let default = serde_json::json!({"bar": [{"id": "omarchy.clock"}]});
             let mine = serde_json::json!({"bar": [{"id": "omarchy.clock"}, {"id": "my.widget"},
                                                   {"id": "my.tray"}]});
-            std::fs::write(shipped.join("config/omarchy/shell.json"), dumps(&default, None)).unwrap();
+            std::fs::write(
+                shipped.join("config/omarchy/shell.json"),
+                dumps(&default, None),
+            )
+            .unwrap();
             let cfg = home.join("omarchy/shell.json");
             std::fs::write(&cfg, dumps(&default, Some(2))).unwrap();
-            let bak = home.join(format!("omarchy/shell.json.bak.{}", crate::util::now() as i64 - 60));
+            let bak = home.join(format!(
+                "omarchy/shell.json.bak.{}",
+                crate::util::now() as i64 - 60
+            ));
             std::fs::write(&bak, dumps(&mine, None)).unwrap();
             let mut saved = Vec::new();
-            for (k, v) in [("XDG_CONFIG_HOME", home.clone()), ("OMARCHY_PATH", shipped.clone())] {
+            for (k, v) in [
+                ("XDG_CONFIG_HOME", home.clone()),
+                ("OMARCHY_PATH", shipped.clone()),
+            ] {
                 saved.push((k, std::env::var_os(k)));
                 std::env::set_var(k, v);
             }
-            ConfigReset { _tmp: tmp, _guard: guard, tmp: root, cfg, bak, default, mine, saved }
+            ConfigReset {
+                _tmp: tmp,
+                _guard: guard,
+                tmp: root,
+                cfg,
+                bak,
+                default,
+                mine,
+                saved,
+            }
         }
     }
 
@@ -1486,12 +1687,17 @@ mod tests {
             None => std::env::remove_var("XDG_STATE_HOME"),
         }
         res.unwrap();
-        let back: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&t.cfg).unwrap()).unwrap();
+        let back: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&t.cfg).unwrap()).unwrap();
         assert_eq!(back, t.mine);
         let kept = std::fs::read_dir(t.cfg.parent().unwrap())
             .unwrap()
             .flatten()
-            .any(|e| e.file_name().to_string_lossy().starts_with("shell.json.defaults."));
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("shell.json.defaults.")
+            });
         assert!(kept);
         assert_eq!(try_resets(None).unwrap(), vec![]);
     }
@@ -1539,7 +1745,10 @@ mod tests {
         let t = ConfigReset::set_up();
         let cmds = reload_for_with([&t.cfg], |cmd| cmd == "omarchy-restart-shell");
         assert_eq!(cmds, vec![vec!["omarchy-restart-shell".to_string()]]);
-        assert_eq!(reload_for_with([&t.cfg], |_| false), Vec::<Vec<String>>::new());
+        assert_eq!(
+            reload_for_with([&t.cfg], |_| false),
+            Vec::<Vec<String>>::new()
+        );
     }
 
     #[test]
@@ -1550,7 +1759,10 @@ mod tests {
         assert!(!eq("NaN", "NaN"));
         assert!(eq("[NaN]", "[NaN]"));
         assert!(eq("{\"a\":1,\"a\":2}", "{\"a\":2}"));
-        assert!(matches!(py_json_loads(b"[1,]", usize::MAX), Err(JsonFail::Value)));
+        assert!(matches!(
+            py_json_loads(b"[1,]", usize::MAX),
+            Err(JsonFail::Value)
+        ));
         let got = ids(&p("{\"z\":{\"id\":\"b\"},\"id\":\"a\"}"), usize::MAX).unwrap();
         assert_eq!(got, vec![pystr("a"), pystr("b")]);
     }
@@ -1562,8 +1774,14 @@ mod tests {
         assert!(!py_eq(&p(b"\"\xed\xa0\x80\""), &p(b"\"\xed\xaf\xbf\"")));
         assert!(py_eq(&p(b"\"\xed\xa0\x80\""), &p(br#""\ud800""#)));
         // an escaped pair is one character, the encoded pair two
-        assert!(py_eq(&p(br#""\ud83d\ude00""#), &p("\"\u{1f600}\"".as_bytes())));
-        assert!(!py_eq(&p(b"\"\xed\xa0\xbd\xed\xb8\x80\""), &p(br#""\ud83d\ude00""#)));
+        assert!(py_eq(
+            &p(br#""\ud83d\ude00""#),
+            &p("\"\u{1f600}\"".as_bytes())
+        ));
+        assert!(!py_eq(
+            &p(b"\"\xed\xa0\xbd\xed\xb8\x80\""),
+            &p(br#""\ud83d\ude00""#)
+        ));
         assert_eq!(surrogateescape(b"a\xffb"), vec![0x61, 0xdcff, 0x62]);
     }
 
@@ -1575,25 +1793,41 @@ mod tests {
         // a worker thread's depth is fixed by RLIMIT_STACK (8 MB: 52154)
         let t = PyStack::HEALTH.json_depth();
         assert!(loads(t, PyStack::HEALTH).is_ok());
-        assert!(matches!(loads(t + 1, PyStack::HEALTH), Err(JsonFail::Recursion(_))));
+        assert!(matches!(
+            loads(t + 1, PyStack::HEALTH),
+            Err(JsonFail::Recursion(_))
+        ));
         assert!(PyStack::WINDOW.json_depth() < t);
         // `_ids` shares the recursion limit with the frames above it: under
         // run.py's 6, `resets`, `_lost` and `_ids`, 991 levels fit
         let max = PyStack::ids_depth(6 + 2);
         assert_eq!(max, 991);
-        let d = py_json_loads(deep(max).as_bytes(), usize::MAX).ok().unwrap();
+        let d = py_json_loads(deep(max).as_bytes(), usize::MAX)
+            .ok()
+            .unwrap();
         assert!(ids(&d, max).is_ok());
-        let d = py_json_loads(deep(max + 1).as_bytes(), usize::MAX).ok().unwrap();
+        let d = py_json_loads(deep(max + 1).as_bytes(), usize::MAX)
+            .ok()
+            .unwrap();
         assert!(ids(&d, max).is_err());
     }
 
     #[test]
     fn pathlib_relative_to_keeps_a_double_slash_root() {
-        assert_eq!(py_relative_to(b"/tmp/cfg/a/b", b"/tmp/cfg").as_deref(), Some(&b"a/b"[..]));
-        assert_eq!(py_relative_to(b"/tmp/cfg", b"/tmp/cfg/").as_deref(), Some(&b"."[..]));
+        assert_eq!(
+            py_relative_to(b"/tmp/cfg/a/b", b"/tmp/cfg").as_deref(),
+            Some(&b"a/b"[..])
+        );
+        assert_eq!(
+            py_relative_to(b"/tmp/cfg", b"/tmp/cfg/").as_deref(),
+            Some(&b"."[..])
+        );
         assert_eq!(py_relative_to(b"//tmp/cfg/a", b"/tmp/cfg"), None);
         assert_eq!(py_relative_to(b"/tmp/cfg/a", b"//tmp/cfg"), None);
-        assert_eq!(py_relative_to(b"///tmp/cfg/a", b"/tmp/cfg").as_deref(), Some(&b"a"[..]));
+        assert_eq!(
+            py_relative_to(b"///tmp/cfg/a", b"/tmp/cfg").as_deref(),
+            Some(&b"a"[..])
+        );
         assert!(py_with_name(Path::new("/a/..bak.1"), b".").is_err());
     }
 

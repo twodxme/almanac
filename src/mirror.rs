@@ -35,9 +35,22 @@ const DAY: f64 = 86_400.0;
 /// and what it loads at boot, and libraries every running process has open.
 /// Best known first, which is the order a note names them in.
 pub const RESTART: &[&str] = &[
-    "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt", "systemd", "glibc",
-    "mesa", "nvidia", "nvidia-open", "nvidia-utils", "linux-firmware", "intel-ucode",
-    "amd-ucode", "dbus", "dbus-broker",
+    "linux",
+    "linux-lts",
+    "linux-zen",
+    "linux-hardened",
+    "linux-rt",
+    "systemd",
+    "glibc",
+    "mesa",
+    "nvidia",
+    "nvidia-open",
+    "nvidia-utils",
+    "linux-firmware",
+    "intel-ucode",
+    "amd-ucode",
+    "dbus",
+    "dbus-broker",
 ];
 
 /// Where the Arch repositories come from.
@@ -74,22 +87,33 @@ pub fn needs_restart(name: &str) -> bool {
 
 /// Where `name` stands in [`RESTART`]; past the end when it is not there.
 fn restart_rank(name: &str) -> usize {
-    RESTART.iter().position(|r| *r == firmware_as_one(name)).unwrap_or(RESTART.len())
+    RESTART
+        .iter()
+        .position(|r| *r == firmware_as_one(name))
+        .unwrap_or(RESTART.len())
 }
 
 /// linux-firmware ships as a dozen split packages (linux-firmware-intel,
 /// -amdgpu, ...) that update together; a note names them once.
 fn firmware_as_one(name: &str) -> &str {
-    if name.starts_with("linux-firmware-") { "linux-firmware" } else { name }
+    if name.starts_with("linux-firmware-") {
+        "linux-firmware"
+    } else {
+        name
+    }
 }
 
 /// The mirror lines of pacman.conf and the files it includes, in order.
 fn servers(conf: &Path, depth: usize) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(conf) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(conf) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let value = value.trim();
         match key.trim() {
             "Server" => out.push(value.to_string()),
@@ -105,9 +129,16 @@ fn servers(conf: &Path, depth: usize) -> Vec<String> {
 /// Which kind of mirror a list of Server lines points at.
 pub fn source_of(servers: &[String]) -> Source {
     let stable = servers.iter().any(|s| {
-        s.split("://").nth(1).and_then(|rest| rest.split('/').next()) == Some(OMARCHY_STABLE_HOST)
+        s.split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+            == Some(OMARCHY_STABLE_HOST)
     });
-    if stable { Source::OmarchyStable } else { Source::Rolling }
+    if stable {
+        Source::OmarchyStable
+    } else {
+        Source::Rolling
+    }
 }
 
 fn mtime(path: &Path) -> Option<f64> {
@@ -121,7 +152,9 @@ pub fn checkupdates_db() -> PathBuf {
     if let Some(path) = std::env::var_os("CHECKUPDATES_DB").filter(|p| !p.is_empty()) {
         return PathBuf::from(path);
     }
-    let tmp = std::env::var_os("TMPDIR").filter(|p| !p.is_empty()).unwrap_or_else(|| "/tmp".into());
+    let tmp = std::env::var_os("TMPDIR")
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "/tmp".into());
     PathBuf::from(tmp).join(format!("checkup-db-{}", rustix::process::getuid().as_raw()))
 }
 
@@ -180,7 +213,9 @@ pub fn notes(state: &State, repo_pending: &[String], all_pending: usize) -> Vec<
         if days >= NOTE_AFTER_DAYS && !repo_pending.is_empty() {
             let n = repo_pending.len();
             let updates = match n {
-                _ if n < all_pending => format!("{n} of these updates {}", if n == 1 { "is" } else { "are" }),
+                _ if n < all_pending => {
+                    format!("{n} of these updates {}", if n == 1 { "is" } else { "are" })
+                }
                 1 => "this update is".to_string(),
                 _ => format!("these {n} updates are"),
             };
@@ -205,16 +240,26 @@ pub fn notes(state: &State, repo_pending: &[String], all_pending: usize) -> Vec<
             });
         }
     }
-    let mut restart: Vec<&str> =
-        repo_pending.iter().map(|p| firmware_as_one(p)).filter(|p| needs_restart(p)).collect();
+    let mut restart: Vec<&str> = repo_pending
+        .iter()
+        .map(|p| firmware_as_one(p))
+        .filter(|p| needs_restart(p))
+        .collect();
     restart.sort_by_key(|p| restart_rank(p));
     restart.dedup();
     if !restart.is_empty() {
         let body = match restart.as_slice() {
             [one] => format!("The update to {one} only takes effect after a restart."),
-            _ => format!("Updates to {} only take effect after a restart.", name_list(&restart)),
+            _ => format!(
+                "Updates to {} only take effect after a restart.",
+                name_list(&restart)
+            ),
         };
-        out.push(Note { icon: "system-reboot-symbolic", title: "Restart after updating".to_string(), body });
+        out.push(Note {
+            icon: "system-reboot-symbolic",
+            title: "Restart after updating".to_string(),
+            body,
+        });
     }
     out
 }
@@ -258,36 +303,71 @@ mod tests {
         std::fs::write(&conf, format!("[options]\n[core]\nInclude = {}\n[omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\n", list.display()))
             .unwrap();
         let found = servers(&conf, 0);
-        assert_eq!(found, pending(&[
-            "https://stable-mirror.omarchy.org/$repo/os/$arch",
-            "https://pkgs.omarchy.org/stable/$arch",
-        ]));
+        assert_eq!(
+            found,
+            pending(&[
+                "https://stable-mirror.omarchy.org/$repo/os/$arch",
+                "https://pkgs.omarchy.org/stable/$arch",
+            ])
+        );
         assert_eq!(source_of(&found), Source::OmarchyStable);
     }
 
     #[test]
     fn a_new_batch_explains_the_jump() {
         // This machine on 2026-10-18: the batch from 8 Sep, the mirror's from 17 Oct.
-        let notes = notes(&at(40.0, 1.0, Source::OmarchyStable), &pending(&["aom", "argon2", "chromium"]), 3);
+        let notes = notes(
+            &at(40.0, 1.0, Source::OmarchyStable),
+            &pending(&["aom", "argon2", "chromium"]),
+            3,
+        );
         assert_eq!(notes.len(), 1);
-        assert!(notes[0].title.starts_with("Omarchy released a new batch of Arch packages on "));
-        assert!(notes[0].body.contains("these 3 updates are 6 weeks of Arch"), "{}", notes[0].body);
+        assert!(notes[0]
+            .title
+            .starts_with("Omarchy released a new batch of Arch packages on "));
+        assert!(
+            notes[0]
+                .body
+                .contains("these 3 updates are 6 weeks of Arch"),
+            "{}",
+            notes[0].body
+        );
     }
 
     #[test]
     fn other_pending_updates_are_not_counted_as_the_batch() {
-        let notes = notes(&at(40.0, 1.0, Source::OmarchyStable), &pending(&["aom", "argon2"]), 5);
-        assert!(notes[0].body.contains("so 2 of these updates are 6 weeks"), "{}", notes[0].body);
+        let notes = notes(
+            &at(40.0, 1.0, Source::OmarchyStable),
+            &pending(&["aom", "argon2"]),
+            5,
+        );
+        assert!(
+            notes[0].body.contains("so 2 of these updates are 6 weeks"),
+            "{}",
+            notes[0].body
+        );
         let notes = super::notes(&at(40.0, 1.0, Source::OmarchyStable), &pending(&["aom"]), 5);
-        assert!(notes[0].body.contains("so 1 of these updates is 6 weeks"), "{}", notes[0].body);
+        assert!(
+            notes[0].body.contains("so 1 of these updates is 6 weeks"),
+            "{}",
+            notes[0].body
+        );
     }
 
     #[test]
     fn a_rolling_mirror_says_when_it_last_synced() {
         let notes = notes(&at(21.0, 0.1, Source::Rolling), &pending(&["aom"]), 1);
         assert!(notes[0].title.starts_with("Package lists last synced on "));
-        assert!(notes[0].body.contains("this update is 3 weeks of Arch"), "{}", notes[0].body);
-        assert!(notes[0].body.contains("this update is"), "{}", notes[0].body);
+        assert!(
+            notes[0].body.contains("this update is 3 weeks of Arch"),
+            "{}",
+            notes[0].body
+        );
+        assert!(
+            notes[0].body.contains("this update is"),
+            "{}",
+            notes[0].body
+        );
     }
 
     #[test]
@@ -308,30 +388,79 @@ mod tests {
 
     #[test]
     fn restart_packages_are_named_most_important_first() {
-        let notes = notes(&at(0.0, 0.0, Source::Rolling), &pending(&["mesa", "aom", "glibc", "linux", "systemd"]), 5);
+        let notes = notes(
+            &at(0.0, 0.0, Source::Rolling),
+            &pending(&["mesa", "aom", "glibc", "linux", "systemd"]),
+            5,
+        );
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].title, "Restart after updating");
-        assert_eq!(notes[0].body, "Updates to linux, systemd, glibc and 1 more only take effect after a restart.");
-        let one = super::notes(&at(0.0, 0.0, Source::Rolling), &pending(&["linux-firmware-intel"]), 1);
-        assert_eq!(one[0].body, "The update to linux-firmware only takes effect after a restart.");
+        assert_eq!(
+            notes[0].body,
+            "Updates to linux, systemd, glibc and 1 more only take effect after a restart."
+        );
+        let one = super::notes(
+            &at(0.0, 0.0, Source::Rolling),
+            &pending(&["linux-firmware-intel"]),
+            1,
+        );
+        assert_eq!(
+            one[0].body,
+            "The update to linux-firmware only takes effect after a restart."
+        );
         // The firmware's split packages count once, after the better known names.
         let split = super::notes(
             &at(0.0, 0.0, Source::Rolling),
-            &pending(&["linux-firmware", "linux-firmware-amdgpu", "linux-firmware-intel", "linux", "systemd"]),
+            &pending(&[
+                "linux-firmware",
+                "linux-firmware-amdgpu",
+                "linux-firmware-intel",
+                "linux",
+                "systemd",
+            ]),
             5,
         );
-        assert_eq!(split[0].body, "Updates to linux, systemd and linux-firmware only take effect after a restart.");
-        let two = super::notes(&at(0.0, 0.0, Source::Rolling), &pending(&["glibc", "linux"]), 2);
-        assert_eq!(two[0].body, "Updates to linux and glibc only take effect after a restart.");
-        assert!(super::notes(&at(0.0, 0.0, Source::Rolling), &pending(&["aom", "pacman"]), 2).is_empty());
+        assert_eq!(
+            split[0].body,
+            "Updates to linux, systemd and linux-firmware only take effect after a restart."
+        );
+        let two = super::notes(
+            &at(0.0, 0.0, Source::Rolling),
+            &pending(&["glibc", "linux"]),
+            2,
+        );
+        assert_eq!(
+            two[0].body,
+            "Updates to linux and glibc only take effect after a restart."
+        );
+        assert!(super::notes(
+            &at(0.0, 0.0, Source::Rolling),
+            &pending(&["aom", "pacman"]),
+            2
+        )
+        .is_empty());
     }
 
     #[test]
     fn restart_rule() {
-        for name in ["linux", "linux-zen", "linux-firmware", "linux-firmware-amdgpu", "glibc", "amd-ucode"] {
+        for name in [
+            "linux",
+            "linux-zen",
+            "linux-firmware",
+            "linux-firmware-amdgpu",
+            "glibc",
+            "amd-ucode",
+        ] {
             assert!(needs_restart(name), "{name}");
         }
-        for name in ["linux-api-headers", "linux-tools", "pacman", "mkinitcpio", "limine", "chromium"] {
+        for name in [
+            "linux-api-headers",
+            "linux-tools",
+            "pacman",
+            "mkinitcpio",
+            "limine",
+            "chromium",
+        ] {
             assert!(!needs_restart(name), "{name}");
         }
     }

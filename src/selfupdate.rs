@@ -39,20 +39,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::util;
 
-mod notes;
-mod checkout;
 mod check;
-mod restart;
+mod checkout;
+mod notes;
 mod process;
 mod pystr;
+mod restart;
 mod tables;
 
-pub use notes::*;
-pub use checkout::*;
 pub use check::*;
-pub use restart::*;
+pub use checkout::*;
+pub use notes::*;
 use process::*;
 use pystr::*;
+pub use restart::*;
 use tables::*;
 
 /// The Almanac checkout this binary was built in, if it runs from one.
@@ -65,12 +65,15 @@ use tables::*;
 /// does not exist, so nothing is read or run from its build directory.
 /// Symlinks are resolved.
 pub static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
-    let from_exe = std::env::current_exe().ok().map(|e| py_resolve(&e)).and_then(|exe| {
-        exe.ancestors()
-            .skip(1)
-            .find(|d| d.join("Cargo.toml").is_file() && d.join(".git").exists())
-            .map(PathBuf::from)
-    });
+    let from_exe = std::env::current_exe()
+        .ok()
+        .map(|e| py_resolve(&e))
+        .and_then(|exe| {
+            exe.ancestors()
+                .skip(1)
+                .find(|d| d.join("Cargo.toml").is_file() && d.join(".git").exists())
+                .map(PathBuf::from)
+        });
     let root = from_exe
         .or_else(crate::util::build_checkout)
         .unwrap_or_else(|| PathBuf::from("/nonexistent/almanac"));
@@ -84,7 +87,9 @@ fn py_resolve(p: &Path) -> PathBuf {
         return real;
     }
     match (p.parent(), p.file_name()) {
-        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => py_resolve(parent).join(name),
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            py_resolve(parent).join(name)
+        }
         _ => p.to_path_buf(),
     }
 }
@@ -129,21 +134,56 @@ pub struct Info {
 /// `as_app`, with an exception the Python lets through as `Err`: the row for
 /// this compiled build (`compiled_check_in`).
 pub fn try_as_app(check_updates: bool) -> Result<crate::inventory::App, String> {
-    let mut info = compiled_check_in(&ROOT, &running_exe(), check_updates)?;
+    let exe = running_exe();
+    // A build running from its own checkout fetches from its remote to see
+    // what is new: a network round trip every scan, for news that comes
+    // a few times a day. Within a few minutes of the last fetch the refs it
+    // left say the same thing. ("Check for updates" always fetches.)
+    let fetch =
+        check_updates && !(exe.starts_with(&*ROOT) && fetched_within(&ROOT, SCAN_FETCH_SECONDS));
+    let mut info = compiled_check_in(&ROOT, &exe, fetch)?;
     note_release(&mut info, check_updates);
     app_with_home(&ROOT, info)
+}
+
+/// How recent a checkout's last fetch must be for a scan to skip its own.
+pub const SCAN_FETCH_SECONDS: u64 = 600;
+
+/// Whether `root`'s checkout fetched within the last `secs` seconds, by the
+/// FETCH_HEAD every fetch rewrites. A clock that went back counts as not.
+pub fn fetched_within(root: &Path, secs: u64) -> bool {
+    // A linked worktree's `.git` is a file naming its git directory.
+    let dot_git = root.join(".git");
+    let git_dir = match std::fs::read_to_string(&dot_git) {
+        Ok(text) => match text.trim().strip_prefix("gitdir:") {
+            Some(dir) => root.join(dir.trim()),
+            None => return false,
+        },
+        Err(_) => dot_git,
+    };
+    std::fs::metadata(git_dir.join("FETCH_HEAD"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age.as_secs() < secs)
 }
 
 /// `as_app` for a compiled build: the same row, from `compiled_check_in`. It
 /// never carries an update (can_update is never set), so it stays out of the
 /// Updates list: pacman lists the package; a checkout says to rebuild.
-pub fn compiled_as_app_in(root: &Path, exe: &Path, check_updates: bool) -> Result<crate::inventory::App, String> {
+pub fn compiled_as_app_in(
+    root: &Path,
+    exe: &Path,
+    check_updates: bool,
+) -> Result<crate::inventory::App, String> {
     let info = compiled_check_in(root, exe, check_updates)?;
     app_with_home(root, info)
 }
 
 fn app_with_home(root: &Path, info: Info) -> Result<crate::inventory::App, String> {
-    let exec_path = py_path_join(&py_home()?, ".local/bin/almanac").to_string_lossy().into_owned();
+    let exec_path = py_path_join(&py_home()?, ".local/bin/almanac")
+        .to_string_lossy()
+        .into_owned();
     Ok(app_from(root, info, exec_path))
 }
 
@@ -153,7 +193,11 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
     if info.can_update {
         update = format!("{} commit(s)", info.behind);
     }
-    let url = if info.remote.starts_with("http") { info.remote.replace(".git", "") } else { String::new() };
+    let url = if info.remote.starts_with("http") {
+        info.remote.replace(".git", "")
+    } else {
+        String::new()
+    };
     let mut extra = Map::new();
     extra.insert("key".into(), json!("almanac"));
     extra.insert("self".into(), json!(true));
@@ -184,10 +228,32 @@ fn app_from(root: &Path, info: Info, exec_path: String) -> crate::inventory::App
 /// parameter entities are never read, so after a reference to one later
 /// declarations are skipped unless standalone="yes"), the namespace rules, and
 /// `tostring(encoding="unicode")` with its recursion limit.
-mod et;
+pub(crate) mod et;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_file_is_named_after_the_app() {
+        // Notifications, portals and software centres find an app's desktop
+        // file by its id; under another name they show it without its own.
+        let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        let id = "io.github.twodxme.Almanac";
+        assert!(docs.join(format!("{id}.desktop")).is_file());
+        let meta = std::fs::read_to_string(docs.join(METAINFO)).unwrap();
+        assert!(meta.contains(&format!(
+            "<launchable type=\"desktop-id\">{id}.desktop</launchable>"
+        )));
+        for pkgbuild in ["PKGBUILD", "packaging/aur/almanac/PKGBUILD"] {
+            let text =
+                std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(pkgbuild))
+                    .unwrap();
+            assert!(
+                text.contains(&format!("applications/{id}.desktop")),
+                "{pkgbuild}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -197,7 +263,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let real = std::fs::canonicalize(dir.path()).unwrap();
         std::os::unix::fs::symlink(&real, real.join("link")).unwrap();
-        assert_eq!(py_resolve(&real.join("link/missing/x")), real.join("missing/x"));
+        assert_eq!(
+            py_resolve(&real.join("link/missing/x")),
+            real.join("missing/x")
+        );
+    }
+
+    #[test]
+    fn a_scan_skips_the_fetch_only_just_after_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!fetched_within(dir.path(), 600), "never fetched");
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        let head = dir.path().join(".git/FETCH_HEAD");
+        std::fs::write(&head, "").unwrap();
+        assert!(fetched_within(dir.path(), 600));
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&head)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(
+            !fetched_within(dir.path(), 600),
+            "an hour-old fetch is asked again"
+        );
+        // A linked worktree: `.git` names the directory FETCH_HEAD is in.
+        let tree = dir.path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(
+            tree.join(".git"),
+            format!("gitdir: {}\n", dir.path().join("wt").display()),
+        )
+        .unwrap();
+        assert!(!fetched_within(&tree, 600));
+        std::fs::create_dir(dir.path().join("wt")).unwrap();
+        std::fs::write(dir.path().join("wt/FETCH_HEAD"), "").unwrap();
+        assert!(fetched_within(&tree, 600));
     }
 }
-

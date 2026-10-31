@@ -46,10 +46,23 @@ pub const FETCH_EVERY: f64 = 3600.0;
 /// Bulk-update scopes, by the marketplace provenance a plugin carries:
 /// `(key, label, allowed trust keys)`. `None`: anything, listed or not.
 pub const SCOPES: &[(&str, &str, Option<&[&str]>)] = &[
-    ("verified", "Verified only",
-     Some(&["official", "first-party", "reviewed", "verified"])),
-    ("changed", "Verified, and changed since review",
-     Some(&["official", "first-party", "reviewed", "verified", "reviewed-stale", "stale"])),
+    (
+        "verified",
+        "Verified only",
+        Some(&["official", "first-party", "reviewed", "verified"]),
+    ),
+    (
+        "changed",
+        "Verified, and changed since review",
+        Some(&[
+            "official",
+            "first-party",
+            "reviewed",
+            "verified",
+            "reviewed-stale",
+            "stale",
+        ]),
+    ),
     ("all", "All plugins", None), // None: anything, listed or not
 ];
 
@@ -143,7 +156,10 @@ fn py_path(d: &Path) -> PathBuf {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = b.split(|c| *c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = b
+        .split(|c| *c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend(parts.join(&b'/'));
     if out.is_empty() {
@@ -169,7 +185,11 @@ fn py_name(d: &Path) -> String {
 
 /// Python's `repr(str)`, enough for the argv in a TimeoutExpired message.
 fn py_repr_str(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let q = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for c in s.chars() {
@@ -182,7 +202,9 @@ fn py_repr_str(s: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -199,8 +221,7 @@ enum PyErr {
     Raise(String),
 }
 
-impl PyErr {
-}
+impl PyErr {}
 
 /// What `subprocess.run(argv, capture_output=True, text=True, timeout=n)`
 /// hands back: the exit status and the decoded output.
@@ -253,7 +274,14 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
                     // continuation byte".
                     let b0 = bytes[start];
                     let starts = matches!(b0, 0xc2..=0xf4);
-                    (start + n, if starts { "invalid continuation byte" } else { "invalid start byte" })
+                    (
+                        start + n,
+                        if starts {
+                            "invalid continuation byte"
+                        } else {
+                            "invalid start byte"
+                        },
+                    )
                 }
                 None => (bytes.len(), "unexpected end of data"),
             };
@@ -262,7 +290,9 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
             } else {
                 format!("bytes in position {start}-{}", end - 1)
             };
-            return Err(format!("UnicodeDecodeError: 'utf-8' codec can't decode {what}: {reason}"));
+            return Err(format!(
+                "UnicodeDecodeError: 'utf-8' codec can't decode {what}: {reason}"
+            ));
         }
     };
     Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
@@ -272,7 +302,10 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
 /// directory: 'git'".
 fn os_error(n: i32, prog: &str) -> String {
     let text = std::io::Error::from_raw_os_error(n).to_string();
-    let text = text.strip_suffix(&format!(" (os error {n})")).unwrap_or(&text).to_string();
+    let text = text
+        .strip_suffix(&format!(" (os error {n})"))
+        .unwrap_or(&text)
+        .to_string();
     format!("[Errno {n}] {text}: {}", py_repr_str(prog))
 }
 
@@ -287,7 +320,11 @@ fn os_error(n: i32, prog: &str) -> String {
 ///
 /// The arguments are OS strings, as Python's are once `os.fsencode`d: a
 /// path that is not UTF-8 reaches the child as its own bytes.
-fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], timeout: u64) -> Result<Ran, RunErr> {
+fn py_run(
+    argv: &[&OsStr],
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    timeout: u64,
+) -> Result<Ran, RunErr> {
     use std::os::unix::ffi::OsStrExt;
     const ENOENT: i32 = 2;
     const ENOTDIR: i32 = 20;
@@ -297,12 +334,21 @@ fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], tim
         vec![PathBuf::from(prog)]
     } else {
         // os.get_exec_path(): the child's PATH, else os.defpath.
-        let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone())
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
             .or_else(|| std::env::var_os("PATH"))
             .unwrap_or_else(|| "/bin:/usr/bin".into());
         std::env::split_paths(&path)
             // os.path.join("", prog) is prog itself: relative to the cwd.
-            .map(|dir| if dir.as_os_str().is_empty() { Path::new(".").join(prog) } else { dir.join(prog) })
+            .map(|dir| {
+                if dir.as_os_str().is_empty() {
+                    Path::new(".").join(prog)
+                } else {
+                    dir.join(prog)
+                }
+            })
             .collect()
     };
     let opts = crate::util::RunOpts {
@@ -339,7 +385,11 @@ fn py_run(argv: &[&OsStr], env: &[(std::ffi::OsString, std::ffi::OsString)], tim
     // stdout is decoded first, so its error is the one raised.
     let stdout = py_decode(out.stdout).map_err(RunErr::Decode)?;
     let stderr = py_decode(out.stderr).map_err(RunErr::Decode)?;
-    Ok(Ran { code: out.code, stdout, stderr })
+    Ok(Ran {
+        code: out.code,
+        stdout,
+        stderr,
+    })
 }
 
 /// `git -C d *args` with prompts disabled (GIT_TERMINAL_PROMPT=0, batch-mode ssh).
@@ -360,13 +410,22 @@ fn _git(d: &Path, args: &[&str], timeout: u64) -> Result<Ran, PyErr> {
         return Err(PyErr::Raise("ValueError: embedded null byte".to_string()));
     }
     let ssh = std::env::var_os("GIT_SSH_COMMAND").unwrap_or_else(|| "ssh -oBatchMode=yes".into());
-    let env = vec![("GIT_TERMINAL_PROMPT".into(), "0".into()), ("GIT_SSH_COMMAND".into(), ssh)];
+    let env = vec![
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GIT_SSH_COMMAND".into(), ssh),
+    ];
     match py_run(&argv, &env, timeout) {
         Ok(ran) => Ok(ran),
         Err(RunErr::Os(e)) => Err(PyErr::Caught(e)),
         Err(RunErr::Timeout) => {
-            let cmd: Vec<String> = argv.iter().map(|a| py_repr_str(&a.to_string_lossy())).collect();
-            Err(PyErr::Caught(format!("Command '[{}]' timed out after {timeout} seconds", cmd.join(", "))))
+            let cmd: Vec<String> = argv
+                .iter()
+                .map(|a| py_repr_str(&a.to_string_lossy()))
+                .collect();
+            Err(PyErr::Caught(format!(
+                "Command '[{}]' timed out after {timeout} seconds",
+                cmd.join(", ")
+            )))
         }
         Err(RunErr::Decode(e)) => Err(PyErr::Raise(e)),
     }
@@ -382,15 +441,48 @@ fn _git(d: &Path, args: &[&str], timeout: u64) -> Result<Ran, PyErr> {
 /// the exception's text; `try_classify` returns it instead.
 pub fn classify(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> State {
     try_classify(d, cache, fetch).unwrap_or_else(|exc| {
-        State::new(&py_name(d), ERROR, &exc.chars().take(80).collect::<String>(), 0, "")
+        State::new(
+            &py_name(d),
+            ERROR,
+            &exc.chars().take(80).collect::<String>(),
+            0,
+            "",
+        )
     })
 }
 
+/// `classify` for each of `dirs`, side by side (`classify_all`), in `dirs`
+/// order.
+pub fn classify_each(dirs: &[PathBuf], cache: Option<&mut FetchCache>, fetch: bool) -> Vec<State> {
+    classify_all(dirs, cache, fetch)
+        .into_iter()
+        .zip(dirs)
+        .map(|(st, d)| {
+            st.unwrap_or_else(|exc| {
+                State::new(
+                    &py_name(d),
+                    ERROR,
+                    &exc.chars().take(80).collect::<String>(),
+                    0,
+                    "",
+                )
+            })
+        })
+        .collect()
+}
+
 /// `classify` as the Python has it: `Err` for an exception it does not catch.
-pub fn try_classify(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<State, String> {
+pub fn try_classify(
+    d: &Path,
+    cache: Option<&mut FetchCache>,
+    fetch: bool,
+) -> Result<State, String> {
     let d = &py_path(d);
     let pid = py_name(d);
-    if d.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if d.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return Ok(State::new(&pid, LOCAL, "symlink", 0, ""));
     }
     if !d.join(".git").is_dir() {
@@ -398,13 +490,24 @@ pub fn try_classify(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Re
     }
     match classify_git(d, &pid, cache, fetch) {
         Ok(st) => Ok(st),
-        Err(PyErr::Caught(exc)) => Ok(State::new(&pid, ERROR, &exc.chars().take(80).collect::<String>(), 0, "")),
+        Err(PyErr::Caught(exc)) => Ok(State::new(
+            &pid,
+            ERROR,
+            &exc.chars().take(80).collect::<String>(),
+            0,
+            "",
+        )),
         Err(PyErr::Raise(exc)) => Err(exc),
     }
 }
 
 /// The `try:` body of `classify`.
-fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: bool) -> Result<State, PyErr> {
+fn classify_git(
+    d: &Path,
+    pid: &str,
+    mut cache: Option<&mut FetchCache>,
+    fetch: bool,
+) -> Result<State, PyErr> {
     let url = py_strip(&_git(d, &["remote", "get-url", "origin"], 25)?.stdout).to_string();
     if url.is_empty() {
         return Ok(State::new(pid, LOCAL, "no-origin", 0, ""));
@@ -420,7 +523,11 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
         // Still worth knowing how far behind: patches.py weighs the edit
         // against the update, and needs there to be one.
         let remote = remote_head(d, cache.as_deref_mut(), fetch)?;
-        let behind = if remote.is_empty() { 0 } else { count(d, &head, &remote)? };
+        let behind = if remote.is_empty() {
+            0
+        } else {
+            count(d, &head, &remote)?
+        };
         return Ok(State::new(pid, LOCAL_CHANGES, "modified", behind, &url));
     }
     let remote = remote_head(d, cache, fetch)?;
@@ -435,7 +542,9 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
         return Ok(State::new(pid, CURRENT, "", 0, &url));
     }
     if _git(d, &["merge-base", "--is-ancestor", &head, &remote], 25)?.ok() {
-        return Ok(State::new(pid, UPDATE, "behind", count(d, &head, &remote)?, &url).with_remote(&remote));
+        return Ok(
+            State::new(pid, UPDATE, "behind", count(d, &head, &remote)?, &url).with_remote(&remote),
+        );
     }
     if _git(d, &["merge-base", "--is-ancestor", &remote, &head], 25)?.ok() {
         return Ok(State::new(pid, LOCAL_CHANGES, "ahead", 0, &url));
@@ -449,7 +558,17 @@ fn classify_git(d: &Path, pid: &str, mut cache: Option<&mut FetchCache>, fetch: 
 /// where it fails or says something unexpected, the three are asked one by
 /// one, as they always were (`rev-parse`, `symbolic-ref`, `status`).
 fn head_state(d: &Path) -> Result<(String, bool, bool), PyErr> {
-    let st = _git(d, &["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=normal"], 25)?;
+    let st = _git(
+        d,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--no-ahead-behind",
+            "--untracked-files=normal",
+        ],
+        25,
+    )?;
     if st.ok() {
         if let Some(parsed) = parse_status_v2(&st.stdout) {
             return Ok(parsed);
@@ -469,7 +588,15 @@ fn head_state_apart(d: &Path) -> Result<(String, bool, bool), PyErr> {
     if !_git(d, &["symbolic-ref", "--quiet", "HEAD"], 25)?.ok() {
         return Ok((head, false, false));
     }
-    let modified = !py_strip(&_git(d, &["status", "--porcelain", "--untracked-files=normal"], 25)?.stdout).is_empty();
+    let modified = !py_strip(
+        &_git(
+            d,
+            &["status", "--porcelain", "--untracked-files=normal"],
+            25,
+        )?
+        .stdout,
+    )
+    .is_empty();
     Ok((head, true, modified))
 }
 
@@ -481,7 +608,11 @@ fn parse_status_v2(out: &str) -> Option<(String, bool, bool)> {
     let (mut oid, mut branch, mut edited) = (None, None, false);
     for line in out.lines() {
         if let Some(v) = line.strip_prefix("# branch.oid ") {
-            oid = Some(if v == "(initial)" { String::new() } else { v.trim().to_string() });
+            oid = Some(if v == "(initial)" {
+                String::new()
+            } else {
+                v.trim().to_string()
+            });
         } else if let Some(v) = line.strip_prefix("# branch.head ") {
             branch = Some(v != "(detached)");
         } else if !line.starts_with('#') && !line.trim().is_empty() {
@@ -496,7 +627,11 @@ fn parse_status_v2(out: &str) -> Option<(String, bool, bool)> {
 /// most of the Plugins page's load. Results in `dirs` order. Each worker
 /// classifies against its own copy of `cache`; what it learns is merged
 /// back in `dirs` order.
-pub fn classify_all(dirs: &[PathBuf], cache: Option<&mut FetchCache>, fetch: bool) -> Vec<Result<State, String>> {
+pub fn classify_all(
+    dirs: &[PathBuf],
+    cache: Option<&mut FetchCache>,
+    fetch: bool,
+) -> Vec<Result<State, String>> {
     let seed = cache.as_deref().cloned();
     let results = crate::agents::pool_map(dirs, 8, |d| {
         let mut own = seed.clone();
@@ -561,37 +696,57 @@ fn py_float_str(s: &str) -> Option<f64> {
 /// `float(x or 0)` for a cached `fetched_at`: ValueError for a string that
 /// is not a number, TypeError for a list or dict.
 fn py_float(v: Option<&Value>) -> Result<f64, String> {
-    let Some(v) = v.filter(|v| truthy(Some(v))) else { return Ok(0.0) };
+    let Some(v) = v.filter(|v| truthy(Some(v))) else {
+        return Ok(0.0);
+    };
     match v {
         Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0)),
         Value::Bool(b) => Ok(f64::from(u8::from(*b))),
-        Value::String(s) => py_float_str(s)
-            .ok_or_else(|| format!("ValueError: could not convert string to float: {}", py_repr_str(s))),
-        other => Err(format!("TypeError: float() argument must be a string or a real number, not '{}'",
-                             py_type(other))),
+        Value::String(s) => py_float_str(s).ok_or_else(|| {
+            format!(
+                "ValueError: could not convert string to float: {}",
+                py_repr_str(s)
+            )
+        }),
+        other => Err(format!(
+            "TypeError: float() argument must be a string or a real number, not '{}'",
+            py_type(other)
+        )),
     }
 }
-
 
 fn remote_head(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<String, PyErr> {
     let key = path_str(d);
     // `(cache or {}).get(key) or {}`, then `.get` on it: AttributeError for
     // an entry that is not a dict.
     let empty = serde_json::Map::new();
-    let entry = match cache.as_ref().and_then(|c| c.get(&key)).filter(|v| truthy(Some(v))) {
+    let entry = match cache
+        .as_ref()
+        .and_then(|c| c.get(&key))
+        .filter(|v| truthy(Some(v)))
+    {
         None => &empty,
         Some(Value::Object(o)) => o,
         Some(other) => {
-            return Err(PyErr::Raise(format!("AttributeError: '{}' object has no attribute 'get'", py_type(other))))
+            return Err(PyErr::Raise(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                py_type(other)
+            )))
         }
     };
-    let fresh = util::now() - py_float(entry.get("fetched_at")).map_err(PyErr::Raise)? < FETCH_EVERY;
-    let sha = entry.get("remote").cloned().unwrap_or_else(|| Value::String(String::new()));
+    let fresh =
+        util::now() - py_float(entry.get("fetched_at")).map_err(PyErr::Raise)? < FETCH_EVERY;
+    let sha = entry
+        .get("remote")
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new()));
     if (fresh || !fetch) && truthy(Some(&sha)) {
         // Anything but a string in an argv makes subprocess raise TypeError.
         let Value::String(sha) = sha else {
-            return Err(PyErr::Raise(format!("TypeError: expected str, bytes or os.PathLike object, not {}",
-                                            py_type(&sha))));
+            return Err(PyErr::Raise(format!(
+                "TypeError: expected str, bytes or os.PathLike object, not {}",
+                py_type(&sha)
+            )));
         };
         if _git(d, &["cat-file", "-e", &sha], 25)?.ok() {
             return Ok(sha);
@@ -606,18 +761,23 @@ fn remote_head(d: &Path, cache: Option<&mut FetchCache>, fetch: bool) -> Result<
     let sha = py_strip(&_git(d, &["rev-parse", "--verify", "FETCH_HEAD"], 25)?.stdout).to_string();
     if let Some(cache) = cache {
         if !sha.is_empty() {
-            cache.insert(key, serde_json::json!({"remote": sha, "fetched_at": util::now()}));
+            cache.insert(
+                key,
+                serde_json::json!({"remote": sha, "fetched_at": util::now()}),
+            );
         }
     }
     Ok(sha)
 }
 
-
 fn count(d: &Path, head: &str, remote: &str) -> Result<i64, PyErr> {
     let range = format!("{head}..{remote}");
     let out = py_strip(&_git(d, &["rev-list", "--count", &range], 25)?.stdout).to_string();
     // `int(out) if out.isdigit() else 0`: any decimal digits, not only ASCII.
-    let digits: Option<String> = out.chars().map(|c| crate::util::decimal_value(c).and_then(|v| char::from_digit(v, 10))).collect();
+    let digits: Option<String> = out
+        .chars()
+        .map(|c| crate::util::decimal_value(c).and_then(|v| char::from_digit(v, 10)))
+        .collect();
     Ok(match digits {
         Some(d) if !d.is_empty() => d.parse().unwrap_or(i64::MAX),
         _ => 0,
@@ -679,14 +839,19 @@ impl Default for Installed {
 impl Serialize for Installed {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let or = |raw: &Option<Py>, plain: &str| raw.as_ref().map_or_else(|| Value::String(plain.to_string()), Py::to_value);
+        let or = |raw: &Option<Py>, plain: &str| {
+            raw.as_ref()
+                .map_or_else(|| Value::String(plain.to_string()), Py::to_value)
+        };
         let mut st = s.serialize_struct("Installed", 10)?;
         st.serialize_field("id", &or(&self.raw.id, &self.id))?;
         st.serialize_field("name", &self.name)?;
         st.serialize_field("description", &or(&self.raw.description, &self.description))?;
         st.serialize_field("version", &or(&self.raw.version, &self.version))?;
         match &self.raw.kinds {
-            Some(k) => st.serialize_field("kinds", &k.iter().map(Py::to_value).collect::<Vec<_>>())?,
+            Some(k) => {
+                st.serialize_field("kinds", &k.iter().map(Py::to_value).collect::<Vec<_>>())?
+            }
             None => st.serialize_field("kinds", &self.kinds)?,
         }
         st.serialize_field("enabled", &self.enabled)?;
@@ -706,12 +871,21 @@ impl Installed {
     /// `has_panel` as the Python has it: `set(self.kinds)` raises TypeError
     /// for a kind that is a list or a dict.
     pub fn try_has_panel(&self) -> Result<bool, String> {
-        if let Some(k) = self.raw.kinds.as_ref().and_then(|k| k.iter().find(|k| k.is_list() || k.is_dict())) {
+        if let Some(k) = self
+            .raw
+            .kinds
+            .as_ref()
+            .and_then(|k| k.iter().find(|k| k.is_list() || k.is_dict()))
+        {
             return Err(format!("TypeError: unhashable type: '{}'", k.type_name()));
         }
         Ok(self.kinds.iter().enumerate().any(|(n, k)| {
             // A kind that was not a string is never one of these.
-            let was_str = self.raw.kinds.as_ref().is_none_or(|r| r.get(n).is_some_and(Py::is_str));
+            let was_str = self
+                .raw
+                .kinds
+                .as_ref()
+                .is_none_or(|r| r.get(n).is_some_and(Py::is_str));
             was_str && matches!(k.as_str(), "panel" | "bar-widget" | "overlay")
         }))
     }
@@ -816,7 +990,9 @@ fn py_str_of(s: &str) -> PyStr {
 
 /// A Rust string of a Python one: a lone surrogate becomes U+FFFD.
 fn lossy(s: &[u32]) -> String {
-    s.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    s.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// `str(float)`: "nan", "inf", "-inf", else the shortest repr.
@@ -837,7 +1013,10 @@ const SHOW_DEPTH: usize = 100;
 
 impl Py {
     fn leaf(node: Node) -> Py {
-        Py { doc: std::sync::Arc::new(Doc { nodes: vec![node] }), id: 0 }
+        Py {
+            doc: std::sync::Arc::new(Doc { nodes: vec![node] }),
+            id: 0,
+        }
     }
 
     /// A str value.
@@ -850,7 +1029,10 @@ impl Py {
     }
 
     fn at(&self, id: usize) -> Py {
-        Py { doc: self.doc.clone(), id }
+        Py {
+            doc: self.doc.clone(),
+            id,
+        }
     }
 
     pub fn is_str(&self) -> bool {
@@ -867,9 +1049,14 @@ impl Py {
 
     /// `d.get(key)` on a dict; None for anything else.
     fn get(&self, key: &str) -> Option<Py> {
-        let Node::Dict(entries) = self.node() else { return None };
+        let Node::Dict(entries) = self.node() else {
+            return None;
+        };
         let key = py_str_of(key);
-        entries.iter().find(|(k, _)| *k == key).map(|(_, c)| self.at(*c))
+        entries
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, c)| self.at(*c))
     }
 
     /// A list's items.
@@ -917,7 +1104,11 @@ impl Py {
     /// `repr(x)`.
     fn repr(&self, depth: usize) -> String {
         let deeper = |c: usize| {
-            if depth >= SHOW_DEPTH { "...".to_string() } else { self.at(c).repr(depth + 1) }
+            if depth >= SHOW_DEPTH {
+                "...".to_string()
+            } else {
+                self.at(c).repr(depth + 1)
+            }
         };
         match self.node() {
             Node::Null => "None".into(),
@@ -925,10 +1116,21 @@ impl Py {
             Node::Int(s) => s.clone(),
             Node::Float(f) => py_float_str_repr(*f),
             Node::Str(s) => repr_pystr(s),
-            Node::List(items) => format!("[{}]", items.iter().map(|c| deeper(*c)).collect::<Vec<_>>().join(", ")),
+            Node::List(items) => format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(|c| deeper(*c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Node::Dict(entries) => format!(
                 "{{{}}}",
-                entries.iter().map(|(k, c)| format!("{}: {}", repr_pystr(k), deeper(*c))).collect::<Vec<_>>().join(", ")
+                entries
+                    .iter()
+                    .map(|(k, c)| format!("{}: {}", repr_pystr(k), deeper(*c)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         }
     }
@@ -947,7 +1149,10 @@ impl Py {
             Node::Float(f) => PyKey::Float(py_float_str_repr(*f)),
             Node::Str(s) => PyKey::Str(s.clone()),
             Node::List(_) | Node::Dict(_) => {
-                return Err(format!("TypeError: unhashable type: '{}'", self.type_name()))
+                return Err(format!(
+                    "TypeError: unhashable type: '{}'",
+                    self.type_name()
+                ))
             }
         }))
     }
@@ -968,15 +1173,25 @@ impl Py {
         match self.node() {
             Node::Null => Value::Null,
             Node::Bool(b) => Value::Bool(*b),
-            Node::Int(s) => s.parse::<i64>().map(Value::from)
+            Node::Int(s) => s
+                .parse::<i64>()
+                .map(Value::from)
                 .or_else(|_| s.parse::<u64>().map(Value::from))
                 .unwrap_or_else(|_| float(s.parse::<f64>().unwrap_or(f64::NAN))),
             Node::Float(f) => float(*f),
             Node::Str(s) => Value::String(lossy(s)),
-            Node::List(items) => Value::Array(items.iter().map(|c| self.at(*c).value_at(depth + 1)).collect()),
-            Node::Dict(entries) => {
-                Value::Object(entries.iter().map(|(k, c)| (lossy(k), self.at(*c).value_at(depth + 1))).collect())
-            }
+            Node::List(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|c| self.at(*c).value_at(depth + 1))
+                    .collect(),
+            ),
+            Node::Dict(entries) => Value::Object(
+                entries
+                    .iter()
+                    .map(|(k, c)| (lossy(k), self.at(*c).value_at(depth + 1)))
+                    .collect(),
+            ),
         }
     }
 
@@ -1034,7 +1249,11 @@ impl Py {
 /// `repr(str)`, lone surrogates as `\udXXX`.
 fn repr_pystr(s: &[u32]) -> String {
     let text = lossy(s);
-    let q = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
+    let q = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for &c in s {
@@ -1047,7 +1266,9 @@ fn repr_pystr(s: &[u32]) -> String {
                 out.push('\\');
                 out.push(ch);
             }
-            Some(ch) if (ch as u32) < 0x20 || ch as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", ch as u32)),
+            Some(ch) if (ch as u32) < 0x20 || ch as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", ch as u32))
+            }
             Some(ch) => out.push(ch),
             None => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -1071,7 +1292,11 @@ fn push_json_str(out: &mut String, s: &[u32]) {
             0x20..=0x7e => out.push(char::from(c as u8)),
             0x10000.. => {
                 let v = c - 0x10000;
-                out.push_str(&format!("\\u{:04x}\\u{:04x}", 0xd800 | (v >> 10), 0xdc00 | (v & 0x3ff)));
+                out.push_str(&format!(
+                    "\\u{:04x}\\u{:04x}",
+                    0xd800 | (v >> 10),
+                    0xdc00 | (v & 0x3ff)
+                ));
             }
             _ => out.push_str(&format!("\\u{c:04x}")),
         }
@@ -1109,10 +1334,17 @@ fn recursion_message(is_obj: bool) -> String {
 /// `json.loads(text)`, following CPython's C scanner.
 fn py_loads(text: &str) -> Result<Py, LoadErr> {
     use crate::util::pyjson;
-    let limit = if on_main_thread() { MAX_DEPTH_MAIN } else { MAX_DEPTH_THREAD };
+    let limit = if on_main_thread() {
+        MAX_DEPTH_MAIN
+    } else {
+        MAX_DEPTH_THREAD
+    };
     let mut sink = Nodes(Vec::new());
     match pyjson::loads_into(text, pyjson::Limit::containers(limit), &mut sink) {
-        Ok(id) => Ok(Py { doc: std::sync::Arc::new(Doc { nodes: sink.0 }), id }),
+        Ok(id) => Ok(Py {
+            doc: std::sync::Arc::new(Doc { nodes: sink.0 }),
+            id,
+        }),
         Err(pyjson::Error::Value(_)) => Err(LoadErr::Value),
         Err(pyjson::Error::Recursion(is_obj)) => Err(LoadErr::Recursion(recursion_message(is_obj))),
     }
@@ -1180,11 +1412,16 @@ struct PyDict<T> {
 
 impl<T> PyDict<T> {
     fn new() -> Self {
-        PyDict { index: BTreeMap::new(), items: Vec::new() }
+        PyDict {
+            index: BTreeMap::new(),
+            items: Vec::new(),
+        }
     }
 
     fn get(&self, k: &Py) -> Result<Option<&T>, String> {
-        Ok(k.key()?.and_then(|k| self.index.get(&k)).map(|&n| &self.items[n].1))
+        Ok(k.key()?
+            .and_then(|k| self.index.get(&k))
+            .map(|&n| &self.items[n].1))
     }
 
     /// `d[k] = v`.
@@ -1217,8 +1454,16 @@ fn kinds_of(v: &Py) -> Result<Vec<Py>, String> {
     Ok(match v.node() {
         Node::List(_) => v.items(),
         Node::Str(s) => s.iter().map(|&c| Py::leaf(Node::Str(vec![c]))).collect(),
-        Node::Dict(entries) => entries.iter().map(|(k, _)| Py::leaf(Node::Str(k.clone()))).collect(),
-        _ => return Err(format!("TypeError: '{}' object is not iterable", v.type_name())),
+        Node::Dict(entries) => entries
+            .iter()
+            .map(|(k, _)| Py::leaf(Node::Str(k.clone())))
+            .collect(),
+        _ => {
+            return Err(format!(
+                "TypeError: '{}' object is not iterable",
+                v.type_name()
+            ))
+        }
     })
 }
 
@@ -1235,7 +1480,9 @@ fn rglob_manifests(root: &Path) -> Vec<PathBuf> {
     }
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
@@ -1254,7 +1501,9 @@ fn rglob_manifests(root: &Path) -> Vec<PathBuf> {
 /// `Ok(None)` where that except is taken (unreadable, not UTF-8, not JSON),
 /// `Err` for the RecursionError it does not catch.
 fn load_file(path: &Path) -> Result<Option<Py>, String> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Ok(None) };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
     match py_loads(&text) {
         Ok(v) => Ok(Some(v)),
         Err(LoadErr::Value) => Ok(None),
@@ -1268,7 +1517,11 @@ fn load_file(path: &Path) -> Result<Option<Py>, String> {
 fn _manifests(root: &Path) -> Result<PyDict<(Py, PathBuf)>, String> {
     let root = py_path(root);
     let mut out = PyDict::new();
-    let found = if root.is_dir() { rglob_manifests(&root) } else { Vec::new() };
+    let found = if root.is_dir() {
+        rglob_manifests(&root)
+    } else {
+        Vec::new()
+    };
     for m in found {
         let Some(d) = load_file(&m)? else { continue };
         if let Some(id) = d.get("id").filter(Py::truthy) {
@@ -1284,13 +1537,25 @@ fn _manifests(root: &Path) -> Result<PyDict<(Py, PathBuf)>, String> {
 /// missing, timed out, output that is not UTF-8 or not JSON), `Err` for the
 /// RecursionError it lets through.
 fn omarchy_list() -> Result<Option<Py>, String> {
-    let argv = ["omarchy", "plugin", "list", "--json"].map(OsStr::new);
-    let Ok(out) = py_run(&argv, &[], 25) else { return Ok(None) };
-    match py_loads(&out.stdout) {
+    let Some(out) = omarchy_list_text() else {
+        return Ok(None);
+    };
+    match py_loads(&out) {
         Ok(v) => Ok(Some(v)),
         Err(LoadErr::Value) => Ok(None),
         Err(LoadErr::Recursion(e)) => Err(e),
     }
+}
+
+/// One `omarchy plugin list --json` at a time: the scan and the Store both
+/// ask for it at launch, and it is a script run of its own. Its stdout, or
+/// None when it did not start, timed out or printed what is not UTF-8.
+pub fn omarchy_list_text() -> Option<String> {
+    static LIST: crate::agents::SingleFlight<Option<String>> = crate::agents::SingleFlight::new();
+    LIST.run(|| {
+        let argv = ["omarchy", "plugin", "list", "--json"].map(OsStr::new);
+        py_run(&argv, &[], 25).ok().map(|r| r.stdout)
+    })
 }
 
 /// Iterating the parsed list: a list's items, a string's characters or a
@@ -1298,10 +1563,16 @@ fn omarchy_list() -> Result<Option<Py>, String> {
 /// null. Only the dicts with a truthy id are kept.
 fn listed_dicts(v: &Py) -> Result<Vec<Py>, String> {
     match v.node() {
-        Node::List(_) => Ok(v.items().into_iter()
-            .filter(|i| i.is_dict() && i.get("id").is_some_and(|x| x.truthy())).collect()),
+        Node::List(_) => Ok(v
+            .items()
+            .into_iter()
+            .filter(|i| i.is_dict() && i.get("id").is_some_and(|x| x.truthy()))
+            .collect()),
         Node::Str(_) | Node::Dict(_) => Ok(Vec::new()),
-        _ => Err(format!("TypeError: '{}' object is not iterable", v.type_name())),
+        _ => Err(format!(
+            "TypeError: '{}' object is not iterable",
+            v.type_name()
+        )),
     }
 }
 
@@ -1317,10 +1588,12 @@ fn split_str(v: &Py, plain: impl Fn(&Py) -> String) -> (String, Option<Py>) {
 /// `str.lower()` as a sort key: by code point, each lowered as Python lowers
 /// it (a lone surrogate stays itself).
 fn lower_key(s: &[u32]) -> Vec<u32> {
-    s.iter().flat_map(|&c| match char::from_u32(c) {
-        Some(ch) => ch.to_lowercase().map(u32::from).collect::<Vec<_>>(),
-        None => vec![c],
-    }).collect()
+    s.iter()
+        .flat_map(|&c| match char::from_u32(c) {
+            Some(ch) => ch.to_lowercase().map(u32::from).collect::<Vec<_>>(),
+            None => vec![c],
+        })
+        .collect()
 }
 
 /// Every plugin Omarchy knows about, with what each one is and its state.
@@ -1337,31 +1610,47 @@ pub fn installed(fetch: bool, cache: Option<&mut FetchCache>) -> Vec<Installed> 
 }
 
 /// `installed` as the Python has it: `Err` for an exception it does not catch.
-pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<Vec<Installed>, String> {
+pub fn try_installed(
+    fetch: bool,
+    mut cache: Option<&mut FetchCache>,
+) -> Result<Vec<Installed>, String> {
     if crate::demo::active() {
         return Ok(crate::demo::plugins());
     }
-    let Some(parsed) = omarchy_list()? else { return Ok(Vec::new()) };
+    let Some(parsed) = omarchy_list()? else {
+        return Ok(Vec::new());
+    };
     let listed = listed_dicts(&parsed)?;
-    let omarchy_path = std::env::var_os("OMARCHY_PATH").filter(|s| !s.is_empty())
+    let omarchy_path = std::env::var_os("OMARCHY_PATH")
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/usr/share/omarchy".into());
     let shipped = _manifests(&PathBuf::from(omarchy_path).join("shell").join("plugins"))?;
     let mut mine: PyDict<(Py, PathBuf)> = PyDict::new();
     let pdir = plugins_dir();
     let mut dirs: Vec<PathBuf> = if pdir.is_dir() {
-        std::fs::read_dir(&pdir).map(|r| r.flatten().map(|e| e.path()).collect()).unwrap_or_default()
+        std::fs::read_dir(&pdir)
+            .map(|r| r.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
     dirs.sort();
     for d in dirs {
-        let Some(m) = load_file(&d.join("manifest.json"))? else { continue };
+        let Some(m) = load_file(&d.join("manifest.json"))? else {
+            continue;
+        };
         // `m.get("id") or d.name`: AttributeError for a manifest that is
         // not a dict; the id kept as whatever it is.
         if !m.is_dict() {
-            return Err(format!("AttributeError: '{}' object has no attribute 'get'", m.type_name()));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                m.type_name()
+            ));
         }
-        let key = m.get("id").filter(Py::truthy).unwrap_or_else(|| Py::string(&py_name(&d)));
+        let key = m
+            .get("id")
+            .filter(Py::truthy)
+            .unwrap_or_else(|| Py::string(&py_name(&d)));
         mine.set(key, (m, d))?;
     }
 
@@ -1376,8 +1665,11 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
             }
         }
     }
-    let classified: Vec<(PathBuf, Result<State, String>)> =
-        own_dirs.iter().cloned().zip(classify_all(&own_dirs, cache.as_deref_mut(), fetch)).collect();
+    let classified: Vec<(PathBuf, Result<State, String>)> = own_dirs
+        .iter()
+        .cloned()
+        .zip(classify_all(&own_dirs, cache.as_deref_mut(), fetch))
+        .collect();
 
     let mut result = Vec::new();
     for item in listed {
@@ -1393,13 +1685,25 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
         let from_manifest = |k: &str| manifest.and_then(|m| m.get(k));
         // `item.get("name") or manifest.get("name") or pid`: a name that
         // is not a string makes the sort below raise.
-        let name = [item.get("name"), from_manifest("name")].into_iter().flatten()
-            .find(Py::truthy).unwrap_or_else(|| pid.clone());
+        let name = [item.get("name"), from_manifest("name")]
+            .into_iter()
+            .flatten()
+            .find(Py::truthy)
+            .unwrap_or_else(|| pid.clone());
         let missing = Py::string("");
-        let (description, raw_description) =
-            split_str(&from_manifest("description").unwrap_or_else(|| missing.clone()), |_| String::new());
-        let (version, raw_version) = split_str(&from_manifest("version").unwrap_or(missing), |_| String::new());
-        let kinds = match [item.get("kinds"), from_manifest("kinds")].into_iter().flatten().find(Py::truthy) {
+        let (description, raw_description) = split_str(
+            &from_manifest("description").unwrap_or_else(|| missing.clone()),
+            |_| String::new(),
+        );
+        let (version, raw_version) =
+            split_str(&from_manifest("version").unwrap_or(missing), |_| {
+                String::new()
+            });
+        let kinds = match [item.get("kinds"), from_manifest("kinds")]
+            .into_iter()
+            .flatten()
+            .find(Py::truthy)
+        {
             Some(k) => kinds_of(&k)?,
             None => Vec::new(),
         };
@@ -1412,26 +1716,37 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
             _ => None,
         };
         let (id, raw_id) = split_str(&pid, Py::py_str);
-        result.push((name.clone(), Installed {
-            id,
-            name: name.py_str(),
-            description,
-            version,
-            kinds: kinds.iter().map(Py::py_str).collect(),
-            enabled: item.get("enabled").is_some_and(|v| v.truthy()),
-            can_disable: item.get("canDisable").is_none_or(|v| v.truthy()),
-            built_in: item.get("firstParty").is_some_and(|v| v.truthy()) && !own,
-            folder,
-            state,
-            raw: Raw { id: raw_id, description: raw_description, version: raw_version, kinds: raw_kinds },
-        }));
+        result.push((
+            name.clone(),
+            Installed {
+                id,
+                name: name.py_str(),
+                description,
+                version,
+                kinds: kinds.iter().map(Py::py_str).collect(),
+                enabled: item.get("enabled").is_some_and(|v| v.truthy()),
+                can_disable: item.get("canDisable").is_none_or(|v| v.truthy()),
+                built_in: item.get("firstParty").is_some_and(|v| v.truthy()) && !own,
+                folder,
+                state,
+                raw: Raw {
+                    id: raw_id,
+                    description: raw_description,
+                    version: raw_version,
+                    kinds: raw_kinds,
+                },
+            },
+        ));
     }
     // `key=lambda i: (i.built_in, i.name.lower())`: every key is computed
     // first, so the first name that is not a string raises.
     let mut keyed = Vec::with_capacity(result.len());
     for (name, inst) in result {
         let Node::Str(s) = name.node() else {
-            return Err(format!("AttributeError: '{}' object has no attribute 'lower'", name.type_name()));
+            return Err(format!(
+                "AttributeError: '{}' object has no attribute 'lower'",
+                name.type_name()
+            ));
         };
         keyed.push(((inst.built_in, lower_key(s)), inst));
     }
@@ -1445,53 +1760,82 @@ pub fn try_installed(fetch: bool, mut cache: Option<&mut FetchCache>) -> Result<
 /// vendor's own domain (icons.py) -- matched on the plugin's id and name only,
 /// never its description, where "works with Slack" would mislabel it.
 pub const VENDORS: &[(&str, &str)] = &[
-    ("tailscale", "tailscale.com"), ("slack", "slack.com"),
-    ("spotify", "spotify.com"), ("github", "github.com"),
-    ("dropbox", "dropbox.com"), ("1password", "1password.com"),
-    ("docker", "docker.com"), ("obsidian", "obsidian.md"),
-    ("discord", "discord.com"), ("youtube", "youtube.com"),
-    ("google", "google.com"), ("todoist", "todoist.com"),
-    ("notion", "notion.so"), ("proton", "proton.me"),
-    ("steam", "steampowered.com"), ("twitch", "twitch.tv"),
-    ("claude", "anthropic.com"), ("anthropic", "anthropic.com"),
-    ("openai", "openai.com"), ("chatgpt", "openai.com"),
-    ("home assistant", "home-assistant.io"), ("jellyfin", "jellyfin.org"),
+    ("tailscale", "tailscale.com"),
+    ("slack", "slack.com"),
+    ("spotify", "spotify.com"),
+    ("github", "github.com"),
+    ("dropbox", "dropbox.com"),
+    ("1password", "1password.com"),
+    ("docker", "docker.com"),
+    ("obsidian", "obsidian.md"),
+    ("discord", "discord.com"),
+    ("youtube", "youtube.com"),
+    ("google", "google.com"),
+    ("todoist", "todoist.com"),
+    ("notion", "notion.so"),
+    ("proton", "proton.me"),
+    ("steam", "steampowered.com"),
+    ("twitch", "twitch.tv"),
+    ("claude", "anthropic.com"),
+    ("anthropic", "anthropic.com"),
+    ("openai", "openai.com"),
+    ("chatgpt", "openai.com"),
+    ("home assistant", "home-assistant.io"),
+    ("jellyfin", "jellyfin.org"),
 ];
 
 /// Otherwise, a system icon for what it does. Adwaita names only, each checked
 /// to exist, so the row looks right under any icon theme that follows it.
 pub const SYMBOLS: &[(&str, &str)] = &[
     ("bluetooth", "bluetooth-symbolic"),
-    ("wifi", "network-wireless-symbolic"), ("network", "network-wireless-symbolic"),
+    ("wifi", "network-wireless-symbolic"),
+    ("network", "network-wireless-symbolic"),
     ("tailscale", "network-transmit-receive-symbolic"),
     ("vpn", "network-transmit-receive-symbolic"),
-    ("audio", "audio-volume-high-symbolic"), ("volume", "audio-volume-high-symbolic"),
+    ("audio", "audio-volume-high-symbolic"),
+    ("volume", "audio-volume-high-symbolic"),
     ("sound", "audio-volume-high-symbolic"),
     ("microphone", "microphone-sensitivity-high-symbolic"),
-    ("media", "media-playback-start-symbolic"), ("music", "media-playback-start-symbolic"),
-    ("battery", "battery-full-symbolic"), ("power", "system-shutdown-symbolic"),
-    ("clock", "preferences-system-time-symbolic"), ("time", "preferences-system-time-symbolic"),
-    ("reminder", "alarm-symbolic"), ("alarm", "alarm-symbolic"),
+    ("media", "media-playback-start-symbolic"),
+    ("music", "media-playback-start-symbolic"),
+    ("battery", "battery-full-symbolic"),
+    ("power", "system-shutdown-symbolic"),
+    ("clock", "preferences-system-time-symbolic"),
+    ("time", "preferences-system-time-symbolic"),
+    ("reminder", "alarm-symbolic"),
+    ("alarm", "alarm-symbolic"),
     ("weather", "weather-few-clouds-symbolic"),
-    ("clipboard", "edit-paste-symbolic"), ("emoji", "face-smile-symbolic"),
-    ("image", "image-x-generic-symbolic"), ("screenshot", "camera-photo-symbolic"),
-    ("lock", "system-lock-screen-symbolic"), ("idle", "system-lock-screen-symbolic"),
-    ("polkit", "dialog-password-symbolic"), ("password", "dialog-password-symbolic"),
-    ("menu", "open-menu-symbolic"), ("background", "preferences-desktop-wallpaper-symbolic"),
+    ("clipboard", "edit-paste-symbolic"),
+    ("emoji", "face-smile-symbolic"),
+    ("image", "image-x-generic-symbolic"),
+    ("screenshot", "camera-photo-symbolic"),
+    ("lock", "system-lock-screen-symbolic"),
+    ("idle", "system-lock-screen-symbolic"),
+    ("polkit", "dialog-password-symbolic"),
+    ("password", "dialog-password-symbolic"),
+    ("menu", "open-menu-symbolic"),
+    ("background", "preferences-desktop-wallpaper-symbolic"),
     ("wallpaper", "preferences-desktop-wallpaper-symbolic"),
     ("appearance", "preferences-desktop-appearance-symbolic"),
     ("theme", "preferences-desktop-appearance-symbolic"),
-    ("monitor", "video-display-symbolic"), ("display", "video-display-symbolic"),
-    ("nightlight", "night-light-symbolic"), ("night", "night-light-symbolic"),
+    ("monitor", "video-display-symbolic"),
+    ("display", "video-display-symbolic"),
+    ("nightlight", "night-light-symbolic"),
+    ("night", "night-light-symbolic"),
     ("notification", "preferences-system-notifications-symbolic"),
     ("osd", "preferences-system-notifications-symbolic"),
     ("keyboard", "preferences-desktop-keyboard-symbolic"),
     ("update", "software-update-available-symbolic"),
-    ("disk", "drive-harddisk-symbolic"), ("speedtest", "content-loading-symbolic"),
-    ("workspace", "view-grid-symbolic"), ("window", "window-new-symbolic"),
-    ("tray", "view-app-grid-symbolic"), ("bar", "view-app-grid-symbolic"),
-    ("agent", "utilities-terminal-symbolic"), ("dev", "utilities-terminal-symbolic"),
-    ("vitals", "emblem-system-symbolic"), ("system", "emblem-system-symbolic"),
+    ("disk", "drive-harddisk-symbolic"),
+    ("speedtest", "content-loading-symbolic"),
+    ("workspace", "view-grid-symbolic"),
+    ("window", "window-new-symbolic"),
+    ("tray", "view-app-grid-symbolic"),
+    ("bar", "view-app-grid-symbolic"),
+    ("agent", "utilities-terminal-symbolic"),
+    ("dev", "utilities-terminal-symbolic"),
+    ("vitals", "emblem-system-symbolic"),
+    ("system", "emblem-system-symbolic"),
     ("radar", "weather-few-clouds-symbolic"),
 ];
 pub const GENERIC: &str = "application-x-addon-symbolic";
@@ -1544,7 +1888,10 @@ pub fn github_owner(url: &str) -> String {
     let re = RE.get_or_init(|| {
         regex::Regex::new(r"^(?:https://github\.com/|git@github\.com:)([\p{L}\p{N}_.-]+)/").unwrap()
     });
-    re.captures(url).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default()
+    re.captures(url)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default()
 }
 
 /// id -> enabled, from Omarchy's own list. An id that is not a string is
@@ -1559,37 +1906,63 @@ pub fn enabled() -> BTreeMap<String, bool> {
 /// `enabled` as the Python has it: `Err` for an exception it does not catch.
 pub fn try_enabled() -> Result<BTreeMap<String, bool>, String> {
     if crate::demo::active() {
-        return Ok(crate::demo::plugins().into_iter().map(|i| (i.id, i.enabled)).collect());
+        return Ok(crate::demo::plugins()
+            .into_iter()
+            .map(|i| (i.id, i.enabled))
+            .collect());
     }
-    let Some(items) = omarchy_list()? else { return Ok(BTreeMap::new()) };
+    let Some(items) = omarchy_list()? else {
+        return Ok(BTreeMap::new());
+    };
     let mut out: PyDict<bool> = PyDict::new();
     for i in listed_dicts(&items)? {
         let Some(pid) = i.get("id") else { continue };
         out.set(pid, i.get("enabled").is_some_and(|v| v.truthy()))?;
     }
-    Ok(out.items.into_iter().map(|(k, on)| (k.py_str(), on)).collect())
+    Ok(out
+        .items
+        .into_iter()
+        .map(|(k, on)| (k.py_str(), on))
+        .collect())
 }
 
 pub fn toggle_argv(pid: &str, on: bool) -> Vec<String> {
-    vec!["omarchy".into(), "plugin".into(),
-         (if on { "enable" } else { "disable" }).into(), pid.to_string()]
+    vec![
+        "omarchy".into(),
+        "plugin".into(),
+        (if on { "enable" } else { "disable" }).into(),
+        pid.to_string(),
+    ]
 }
 
 pub fn update_argv(pid: &str) -> Vec<String> {
-    vec!["omarchy".into(), "plugin".into(), "update".into(), pid.to_string(), "--yes".into()]
+    vec![
+        "omarchy".into(),
+        "plugin".into(),
+        "update".into(),
+        pid.to_string(),
+        "--yes".into(),
+    ]
 }
 
 /// The commit a checkout is at, "" where git cannot say.
 pub fn checkout_head(d: &Path) -> String {
     let d = d.to_string_lossy();
     let r = util::run(&["git", "-C", &d, "rev-parse", "--verify", "HEAD"], 25);
-    if r.ok() { py_strip(&r.stdout).to_string() } else { String::new() }
+    if r.ok() {
+        py_strip(&r.stdout).to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// Whether a plugin with this provenance is covered by a bulk update.
 /// `trust_key` is None for a plugin the marketplace does not list.
 pub fn in_scope(trust_key: Option<&str>, scope: &str) -> bool {
-    let allowed = SCOPES.iter().find(|(k, _l, _s)| *k == scope).and_then(|(_k, _l, s)| *s);
+    let allowed = SCOPES
+        .iter()
+        .find(|(k, _l, _s)| *k == scope)
+        .and_then(|(_k, _l, s)| *s);
     let Some(allowed) = allowed else { return true };
     trust_key.is_some_and(|t| allowed.contains(&t))
 }
@@ -1613,12 +1986,19 @@ pub struct Listing {
 /// whitespace or a control character.
 pub fn repo_key(url: &str) -> Option<String> {
     let url = url.trim();
-    if url.is_empty() || url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#') {
+    if url.is_empty()
+        || url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '#')
+    {
         return None;
     }
     let (authority, path) = match url.split_once("://") {
         Some((scheme, rest)) => {
-            if !matches!(scheme.to_ascii_lowercase().as_str(), "https" | "http" | "ssh" | "git" | "git+ssh") {
+            if !matches!(
+                scheme.to_ascii_lowercase().as_str(),
+                "https" | "http" | "ssh" | "git" | "git+ssh"
+            ) {
                 return None;
             }
             rest.split_at(rest.find('/').unwrap_or(rest.len()))
@@ -1638,18 +2018,33 @@ pub fn repo_key(url: &str) -> Option<String> {
         _ => hostport,
     };
     let mut host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
         return None;
     }
     if host == "www.github.com" {
         host = "github.com".into();
     }
     let path = path.trim_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
-    if path.is_empty() || path.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") {
+    let path = path
+        .strip_suffix(".git")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    {
         return None;
     }
-    let path = if host == "github.com" { path.to_lowercase() } else { path.to_string() };
+    let path = if host == "github.com" {
+        path.to_lowercase()
+    } else {
+        path.to_string()
+    };
     Some(format!("{host}/{path}"))
 }
 
@@ -1663,7 +2058,9 @@ pub fn same_repo(a: &str, b: &str) -> bool {
 /// checkout's `origin` is the repository the listing names. A folder only
 /// sharing a listed plugin's id is somebody else's code, and is unlisted.
 pub fn listed_trust<'a>(origin: &str, listing: Option<&'a Listing>) -> Option<&'a str> {
-    listing.filter(|l| same_repo(origin, &l.repo)).map(|l| l.key.as_str())
+    listing
+        .filter(|l| same_repo(origin, &l.repo))
+        .map(|l| l.key.as_str())
 }
 
 /// Why an update the scope covers is still held back, None when it is not.
@@ -1693,7 +2090,11 @@ pub fn pin_hold(st: &State, listing: Option<&Listing>, scope: &str) -> Option<St
     Some(format!(
         "{} (upstream {}, reviewed {})",
         crate::i18n::tr("changed since it was reviewed"),
-        if remote.is_empty() { "?".to_string() } else { short(&remote) },
+        if remote.is_empty() {
+            "?".to_string()
+        } else {
+            short(&remote)
+        },
         short(&reviewed)
     ))
 }
@@ -1708,14 +2109,24 @@ pub fn restart_argv(clear_cache: bool) -> Vec<String> {
     if clear_cache {
         script = format!("rm -rf \"{cache}/qmlcache\" \"{cache}\"/qtpipelinecache-*; ") + &script;
     }
-    vec!["setsid".into(), "-f".into(), "bash".into(), "-c".into(), script]
+    vec![
+        "setsid".into(),
+        "-f".into(),
+        "bash".into(),
+        "-c".into(),
+        script,
+    ]
 }
 
 // ---- settings ------------------------------------------------------------------
 
 /// The 1.4.0 scope file, `state_home/almanac/plugins.json`.
 pub fn _settings_path() -> PathBuf {
-    py_path(&crate::xdg::state_home().join("almanac").join("plugins.json"))
+    py_path(
+        &crate::xdg::state_home()
+            .join("almanac")
+            .join("plugins.json"),
+    )
 }
 
 /// The bulk-update scope; "all" where `try_scope` raises.
@@ -1729,7 +2140,8 @@ pub fn scope() -> String {
 pub fn try_scope() -> Result<String, String> {
     // settings.get, exactly (a str setting may hold a lone surrogate).
     let current = crate::settings::get_exact("plugin_scope")?;
-    let mut value = py_loads(&current.to_json()).map_err(|_| "ValueError: settings value".to_string())?;
+    let mut value =
+        py_loads(&current.to_json()).map_err(|_| "ValueError: settings value".to_string())?;
     let old = _settings_path();
     if old.is_file() {
         // 1.4.0 kept this in its own file: carry it over once.
@@ -1758,7 +2170,9 @@ pub fn try_scope() -> Result<String, String> {
     match value.node() {
         Node::Str(s) if SCOPES.iter().any(|(k, _l, _s)| py_str_of(k) == *s) => Ok(lossy(s)),
         Node::List(_) | Node::Dict(_) => Err(format!(
-            "TypeError: cannot use '{0}' as a set element (unhashable type: '{0}')", value.type_name())),
+            "TypeError: cannot use '{0}' as a set element (unhashable type: '{0}')",
+            value.type_name()
+        )),
         _ => Ok("all".to_string()),
     }
 }
@@ -1768,7 +2182,6 @@ pub fn set_scope(value: &str) -> Result<(), String> {
     crate::settings::set("plugin_scope", Value::String(value.to_string()))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1776,8 +2189,13 @@ mod tests {
 
     /// The tests that set environment variables run one at a time.
     fn with_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var_os(k)))
+            .collect();
         for (k, v) in vars {
             std::env::set_var(k, v);
         }
@@ -1792,7 +2210,8 @@ mod tests {
     }
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("almanac-plugins-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("almanac-plugins-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1805,7 +2224,11 @@ mod tests {
             .current_dir(cwd)
             .output()
             .unwrap();
-        assert!(st.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&st.stderr));
+        assert!(
+            st.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
     }
 
     /// PluginStates.setUp: an upstream with one commit, and a clone of it.
@@ -1824,7 +2247,10 @@ mod tests {
             git(&up, &["add", "."]);
             git(&up, &["commit", "-qm", "one"]);
             let plug = d.join("plugins").join("a.plugin");
-            git(&d, &["clone", "-q", up.to_str().unwrap(), plug.to_str().unwrap()]);
+            git(
+                &d,
+                &["clone", "-q", up.to_str().unwrap(), plug.to_str().unwrap()],
+            );
             Repos { d, up, plug }
         }
 
@@ -1873,13 +2299,23 @@ mod tests {
         let link = r.d.join("plugins").join("dev.plugin");
         std::os::unix::fs::symlink(&r.plug, &link).unwrap();
         let st = r.state(Some(Path::new(&format!("{}/", link.display()))));
-        assert_eq!((st.kind.as_str(), st.detail.as_str(), st.id.as_str()), (LOCAL, "symlink", "dev.plugin"));
+        assert_eq!(
+            (st.kind.as_str(), st.detail.as_str(), st.id.as_str()),
+            (LOCAL, "symlink", "dev.plugin")
+        );
     }
 
     #[test]
     fn paths_are_spelled_as_python_spells_them() {
-        for (raw, want) in [("./a//b/./", "a/b"), ("", "."), (".", "."), ("//x", "//x"), ("///x", "/x"),
-                            ("a/..", "a/.."), ("/", "/")] {
+        for (raw, want) in [
+            ("./a//b/./", "a/b"),
+            ("", "."),
+            (".", "."),
+            ("//x", "//x"),
+            ("///x", "/x"),
+            ("a/..", "a/.."),
+            ("/", "/"),
+        ] {
             assert_eq!(path_str(Path::new(raw)), want, "{raw:?}");
         }
         assert_eq!(py_name(Path::new("a/sub/..")), "..");
@@ -1895,7 +2331,10 @@ mod tests {
         assert_eq!(r.state(None).detail, "ahead");
         r.advance_upstream();
         let st = r.state(None);
-        assert_eq!((st.kind.as_str(), st.detail.as_str()), (LOCAL_CHANGES, "diverged"));
+        assert_eq!(
+            (st.kind.as_str(), st.detail.as_str()),
+            (LOCAL_CHANGES, "diverged")
+        );
     }
 
     #[test]
@@ -1920,7 +2359,10 @@ mod tests {
         git(&r.plug, &["checkout", "-q", "--detach"]);
         let detached = head_state(&r.plug).ok().unwrap();
         assert_eq!((detached.0.as_str(), detached.1), (head.0.as_str(), false));
-        assert_eq!(head_state_apart(&r.plug).ok().unwrap(), (head.0.clone(), false, false));
+        assert_eq!(
+            head_state_apart(&r.plug).ok().unwrap(),
+            (head.0.clone(), false, false)
+        );
         // No commits yet.
         let empty = r.d.join("plugins").join("empty.plugin");
         git(&r.d, &["init", "-q", empty.to_str().unwrap()]);
@@ -1931,7 +2373,9 @@ mod tests {
         assert_eq!(r.state(Some(&empty)).detail, "no-commits");
         assert_eq!(parse_status_v2("# branch.oid abc\n"), None);
         assert_eq!(
-            parse_status_v2("# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n"),
+            parse_status_v2(
+                "# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n"
+            ),
             Some(("abc".into(), true, false))
         );
     }
@@ -1951,7 +2395,11 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            vec![(CURRENT.to_string(), String::new()), (LOCAL.into(), "not-git".into()), (UPDATE.into(), "behind".into())]
+            vec![
+                (CURRENT.to_string(), String::new()),
+                (LOCAL.into(), "not-git".into()),
+                (UPDATE.into(), "behind".into())
+            ]
         );
         // Both fetches are kept, as one at a time kept them.
         assert!(cache.contains_key(&path_str(&a.plug)) && cache.contains_key(&path_str(&b.plug)));
@@ -1998,27 +2446,64 @@ mod tests {
             assert_eq!(repo_key(url), k, "{url}");
         }
         // Case matters off GitHub; the host's never does.
-        assert_eq!(repo_key("https://GitLab.com/O/R.git").as_deref(), Some("gitlab.com/O/R"));
-        assert!(!same_repo("https://gitlab.com/o/r", "https://gitlab.com/O/R"));
+        assert_eq!(
+            repo_key("https://GitLab.com/O/R.git").as_deref(),
+            Some("gitlab.com/O/R")
+        );
+        assert!(!same_repo(
+            "https://gitlab.com/o/r",
+            "https://gitlab.com/O/R"
+        ));
         for bad in [
-            "", "repo", "/home/me/repo", "file:///home/me/repo", "ext::sh -c x", "https://github.com",
-            "https://github.com/", "https://github.com/o/../r", "https://github.com/o//r",
-            "https://github.com/o/r?x", "https://github.com/o/r#x", "https://git hub.com/o/r",
+            "",
+            "repo",
+            "/home/me/repo",
+            "file:///home/me/repo",
+            "ext::sh -c x",
+            "https://github.com",
+            "https://github.com/",
+            "https://github.com/o/../r",
+            "https://github.com/o//r",
+            "https://github.com/o/r?x",
+            "https://github.com/o/r#x",
+            "https://git hub.com/o/r",
         ] {
             assert_eq!(repo_key(bad), None, "{bad}");
         }
-        assert!(same_repo("git@github.com:a/x.git", "https://github.com/A/X"));
-        assert!(!same_repo("https://github.com/a/x", "https://github.com/a/x2"));
-        assert!(!same_repo("https://github.com/a/x", "https://github.com/b/x"));
-        assert!(!same_repo("https://github.com/a/x", "https://github.com.evil.example/a/x"));
-        assert!(!same_repo("https://evil.example/github.com/a/x", "https://github.com/a/x"));
+        assert!(same_repo(
+            "git@github.com:a/x.git",
+            "https://github.com/A/X"
+        ));
+        assert!(!same_repo(
+            "https://github.com/a/x",
+            "https://github.com/a/x2"
+        ));
+        assert!(!same_repo(
+            "https://github.com/a/x",
+            "https://github.com/b/x"
+        ));
+        assert!(!same_repo(
+            "https://github.com/a/x",
+            "https://github.com.evil.example/a/x"
+        ));
+        assert!(!same_repo(
+            "https://evil.example/github.com/a/x",
+            "https://github.com/a/x"
+        ));
         assert!(!same_repo("", ""));
     }
 
     #[test]
     fn trust_follows_the_checkout_origin_not_the_folder_name() {
-        let l = Listing { key: "verified".into(), repo: "https://github.com/a/x".into(), validated_commit: "c".into() };
-        assert_eq!(listed_trust("git@github.com:a/x.git", Some(&l)), Some("verified"));
+        let l = Listing {
+            key: "verified".into(),
+            repo: "https://github.com/a/x".into(),
+            validated_commit: "c".into(),
+        };
+        assert_eq!(
+            listed_trust("git@github.com:a/x.git", Some(&l)),
+            Some("verified")
+        );
         assert_eq!(listed_trust("https://github.com/mallory/x", Some(&l)), None);
         assert_eq!(listed_trust("", Some(&l)), None);
         assert_eq!(listed_trust("https://github.com/a/x", None), None);
@@ -2028,24 +2513,42 @@ mod tests {
     fn verified_updates_only_to_the_reviewed_commit() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
         let other = "0123456fffffffffffffffffffffffffffffffff";
-        let l = Listing { key: "verified".into(), repo: "https://github.com/a/x".into(), validated_commit: sha.into() };
-        let st = |remote: &str| State::new("x", UPDATE, "behind", 1, "https://github.com/a/x").with_remote(remote);
+        let l = Listing {
+            key: "verified".into(),
+            repo: "https://github.com/a/x".into(),
+            validated_commit: sha.into(),
+        };
+        let st = |remote: &str| {
+            State::new("x", UPDATE, "behind", 1, "https://github.com/a/x").with_remote(remote)
+        };
         assert_eq!(pin_hold(&st(sha), Some(&l), "verified"), None);
-        assert_eq!(pin_hold(&st(&sha.to_uppercase()), Some(&l), "verified"), None);
+        assert_eq!(
+            pin_hold(&st(&sha.to_uppercase()), Some(&l), "verified"),
+            None
+        );
         let why = pin_hold(&st(other), Some(&l), "verified").expect("held");
         assert!(why.starts_with("changed since it was reviewed"), "{why}");
         assert!(why.contains("0123456"), "{why}");
         // A shared 7-character prefix is not the same commit.
-        let short = Listing { validated_commit: "0123456".into(), ..l.clone() };
+        let short = Listing {
+            validated_commit: "0123456".into(),
+            ..l.clone()
+        };
         assert!(pin_hold(&st(sha), Some(&short), "verified").is_some());
         // Other scopes take what upstream has; unlisted is the scope's call.
         assert_eq!(pin_hold(&st(other), Some(&l), "changed"), None);
         assert_eq!(pin_hold(&st(other), Some(&l), "all"), None);
         assert_eq!(pin_hold(&st(other), None, "verified"), None);
         // Nothing recorded to compare with: only a publisher's own pass.
-        let none = Listing { validated_commit: String::new(), ..l.clone() };
+        let none = Listing {
+            validated_commit: String::new(),
+            ..l.clone()
+        };
         assert!(pin_hold(&st(other), Some(&none), "verified").is_some());
-        let fp = Listing { key: "first-party".into(), ..none };
+        let fp = Listing {
+            key: "first-party".into(),
+            ..none
+        };
         assert_eq!(pin_hold(&st(other), Some(&fp), "verified"), None);
     }
 
@@ -2059,10 +2562,15 @@ mod tests {
     #[test]
     fn test_plugins_are_synthetic() {
         // DemoModeHidesTheMachine: in demo mode the fixtures answer, not omarchy.
-        with_env(&[("ALMANAC_DEMO", "1")], || {
-            assert!(!installed(true, None).is_empty());
-            assert!(!enabled().is_empty());
-        });
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::demo::TEST_DEMO.store(1, std::sync::atomic::Ordering::SeqCst);
+        let r = std::panic::catch_unwind(|| (installed(true, None), enabled()));
+        crate::demo::TEST_DEMO.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (installed, enabled) = r.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert!(!installed.is_empty());
+        assert!(!enabled.is_empty());
     }
 
     #[test]
@@ -2078,26 +2586,45 @@ mod tests {
         let d = tmpdir("page");
         let shipped = d.join("omarchy/shell/plugins/clock");
         std::fs::create_dir_all(&shipped).unwrap();
-        std::fs::write(shipped.join("manifest.json"),
-                       serde_json::json!({"id": "omarchy.clock", "description": "The time"}).to_string()).unwrap();
+        std::fs::write(
+            shipped.join("manifest.json"),
+            serde_json::json!({"id": "omarchy.clock", "description": "The time"}).to_string(),
+        )
+        .unwrap();
         let mine = d.join("config/omarchy/plugins/me.thing");
         std::fs::create_dir_all(&mine).unwrap();
-        std::fs::write(mine.join("manifest.json"),
-                       serde_json::json!({"id": "me.thing", "version": "1.0"}).to_string()).unwrap();
+        std::fs::write(
+            mine.join("manifest.json"),
+            serde_json::json!({"id": "me.thing", "version": "1.0"}).to_string(),
+        )
+        .unwrap();
         // The Python mocks subprocess.run; here a fake `omarchy` prints the list.
         let bin = d.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(d.join("list.json"), listed.to_string()).unwrap();
         let fake = bin.join("omarchy");
-        std::fs::write(&fake, format!("#!/bin/sh\ncat '{}'\n", d.join("list.json").display())).unwrap();
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\ncat '{}'\n", d.join("list.json").display()),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         let omarchy_path = d.join("omarchy");
         let config = d.join("config");
-        let found = with_env(&[("OMARCHY_PATH", omarchy_path.to_str().unwrap()),
-                               ("XDG_CONFIG_HOME", config.to_str().unwrap()),
-                               ("PATH", &path)], || installed(false, None));
+        let found = with_env(
+            &[
+                ("OMARCHY_PATH", omarchy_path.to_str().unwrap()),
+                ("XDG_CONFIG_HOME", config.to_str().unwrap()),
+                ("PATH", &path),
+            ],
+            || installed(false, None),
+        );
         let _ = std::fs::remove_dir_all(&d);
         let by_id: BTreeMap<&str, &Installed> = found.iter().map(|i| (i.id.as_str(), i)).collect();
         assert_eq!(found[0].id, "me.thing"); // yours first
@@ -2110,12 +2637,20 @@ mod tests {
     }
 
     fn plugin(pid: &str, name: &str) -> Installed {
-        Installed { id: pid.into(), name: name.into(), kinds: vec!["bar-widget".into()], ..Default::default() }
+        Installed {
+            id: pid.into(),
+            name: name.into(),
+            kinds: vec!["bar-widget".into()],
+            ..Default::default()
+        }
     }
 
     #[test]
     fn test_a_service_plugin_gets_its_vendor() {
-        assert_eq!(vendor_for(&plugin("tim.tailscale", "My Tailscale")), "tailscale.com");
+        assert_eq!(
+            vendor_for(&plugin("tim.tailscale", "My Tailscale")),
+            "tailscale.com"
+        );
     }
 
     #[test]
@@ -2145,8 +2680,14 @@ mod tests {
         assert_eq!(v.get("a").unwrap().dumps(), "0"); // a repeated key: the last value
         assert_eq!(v.get("b").unwrap().dumps(), r#""\ud800""#);
         assert!(v.get("c").unwrap().truthy()); // NaN is true
-        assert_eq!(v.get("d").unwrap().py_str(), "123456789012345678901234567890");
-        assert_eq!(v.dumps(), r#"{"a": 0, "b": "\ud800", "c": NaN, "d": 123456789012345678901234567890}"#);
+        assert_eq!(
+            v.get("d").unwrap().py_str(),
+            "123456789012345678901234567890"
+        );
+        assert_eq!(
+            v.dumps(),
+            r#"{"a": 0, "b": "\ud800", "c": NaN, "d": 123456789012345678901234567890}"#
+        );
         assert_eq!(py_loads("[1e400]").ok().unwrap().items()[0].py_str(), "inf");
         assert!(py_loads("\u{feff}{}").is_err());
         assert!(py_loads("[1,]").is_err());
@@ -2163,7 +2704,10 @@ mod tests {
         assert_eq!(py_float_str("\u{ff19}\u{ff45}\u{ff11}"), None); // fullwidth e is not a digit
         assert_eq!(crate::util::decimal_value('\u{1d7d9}'), Some(1)); // double-struck 1, after the bold digits
         assert_eq!(py_decode(b"a\r\nb\rc".to_vec()).ok().unwrap(), "a\nb\nc");
-        assert_eq!(py_decode("\u{fffd}".as_bytes().to_vec()).ok().unwrap(), "\u{fffd}");
+        assert_eq!(
+            py_decode("\u{fffd}".as_bytes().to_vec()).ok().unwrap(),
+            "\u{fffd}"
+        );
         assert_eq!(py_decode(b"x\xff".to_vec()).unwrap_err(),
                    "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 1: invalid start byte");
         assert_eq!(py_decode(b"\xe2\x82".to_vec()).unwrap_err(),

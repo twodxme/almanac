@@ -23,7 +23,9 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 /// `test_app.py` the same way.
 fn sources(under: &str) -> Vec<(PathBuf, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -73,7 +75,10 @@ fn the_template_is_current() {
     let mut inputs = Vec::new();
     for (i, (p, code)) in sources("src").into_iter().enumerate() {
         // The test module is cut off, as test_app.py is left out.
-        let f = d.path().join(format!("{i:03}-{}", p.file_name().unwrap().to_string_lossy()));
+        let f = d.path().join(format!(
+            "{i:03}-{}",
+            p.file_name().unwrap().to_string_lossy()
+        ));
         std::fs::write(&f, code).unwrap();
         inputs.push(f);
     }
@@ -91,7 +96,11 @@ fn the_template_is_current() {
         .args(&inputs)
         .output()
         .unwrap();
-    assert!(out.status.success(), "xgettext: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "xgettext: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let re = regex::Regex::new(r#"(?m)^msgid "(.+)"$"#).unwrap();
     let ids = |f: &Path| -> BTreeSet<String> {
         let text = std::fs::read_to_string(f).unwrap_or_default();
@@ -126,7 +135,14 @@ fn nothing_dims_text_twice() {
 // ---------------------------------------------------------------- VisualSystem
 
 const SCALE: [i64; 8] = [2, 4, 6, 8, 12, 16, 20, 24];
-const PILLS: [&str; 6] = ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"];
+const PILLS: [&str; 6] = [
+    "pill",
+    "pill-crit",
+    "pill-warn",
+    "pill-ok",
+    "pill-accent",
+    "pill-quiet",
+];
 
 /// test_the_table_sits_on_a_card_like_every_list: Updates, Applications and
 /// Everything used the darker view background, edge to edge, while every
@@ -150,24 +166,35 @@ fn spacing_comes_from_the_scale() {
         r"\.(?:set_)?(margin_(?:start|end|top|bottom)|spacing|child_spacing|line_spacing)\((\d+)\)",
     )
     .unwrap();
-    let boxed = regex::Regex::new(r"Box::new\(\s*(?:gtk::)?Orientation::\w+,\s*(\d+)\s*\)").unwrap();
+    let boxed =
+        regex::Regex::new(r"Box::new\(\s*(?:gtk::)?Orientation::\w+,\s*(\d+)\s*\)").unwrap();
     let mut offenders: BTreeMap<i64, Vec<String>> = BTreeMap::new();
     for (p, code) in ui_source() {
         for c in prop.captures_iter(&code) {
             let v: i64 = c[2].parse().unwrap();
             if !SCALE.contains(&v) {
-                offenders.entry(v).or_default().push(format!("{} {}", rel(&p), &c[1]));
+                offenders
+                    .entry(v)
+                    .or_default()
+                    .push(format!("{} {}", rel(&p), &c[1]));
             }
         }
         for c in boxed.captures_iter(&code) {
             let v: i64 = c[1].parse().unwrap();
             // Box::new(o, 0) is `Gtk.Box(orientation=o)`: no spacing written.
             if v != 0 && !SCALE.contains(&v) {
-                offenders.entry(v).or_default().push(format!("{} spacing", rel(&p)));
+                offenders
+                    .entry(v)
+                    .or_default()
+                    .push(format!("{} spacing", rel(&p)));
             }
         }
     }
-    assert_eq!(offenders, BTreeMap::new(), "spacing off the scale {SCALE:?}: {offenders:?}");
+    assert_eq!(
+        offenders,
+        BTreeMap::new(),
+        "spacing off the scale {SCALE:?}: {offenders:?}"
+    );
 }
 
 /// test_badges_use_one_pill_system: `app.py` + `store.py` -> every UI file
@@ -175,17 +202,33 @@ fn spacing_comes_from_the_scale() {
 #[test]
 fn badges_use_one_pill_system() {
     let retired = [
-        "crit-pill", "stale-pill", "crit-core", "store-chip", "store-installed",
-        "trust-official", "trust-ok", "trust-warn", "trust-none",
+        "crit-pill",
+        "stale-pill",
+        "crit-core",
+        "store-chip",
+        "store-installed",
+        "trust-official",
+        "trust-ok",
+        "trust-warn",
+        "trust-none",
     ];
     let mut src: String = ui_source().into_iter().map(|(_, c)| c).collect();
     for (p, c) in sources("src") {
-        if p.file_name().is_some_and(|n| n == "store.rs") && p.parent().is_some_and(|d| d.ends_with("src")) {
+        if p.file_name().is_some_and(|n| n == "store.rs")
+            && p.parent().is_some_and(|d| d.ends_with("src"))
+        {
             src.push_str(&c);
         }
     }
-    let found: Vec<&str> = retired.into_iter().filter(|n| src.contains(&format!("\"{n}\""))).collect();
-    assert_eq!(found, Vec::<&str>::new(), "retired badge classes still referenced: {found:?}");
+    let found: Vec<&str> = retired
+        .into_iter()
+        .filter(|n| src.contains(&format!("\"{n}\"")))
+        .collect();
+    assert_eq!(
+        found,
+        Vec::<&str>::new(),
+        "retired badge classes still referenced: {found:?}"
+    );
 }
 
 /// test_every_pill_class_is_defined_in_the_stylesheet, over every UI file.
@@ -194,13 +237,23 @@ fn every_pill_class_is_defined_in_the_stylesheet() {
     let re = regex::Regex::new(r#""(pill(?:-[a-z]+)?)""#).unwrap();
     let used: BTreeSet<String> = ui_source()
         .iter()
-        .flat_map(|(_, c)| re.captures_iter(c).map(|m| m[1].to_string()).collect::<Vec<_>>())
+        .flat_map(|(_, c)| {
+            re.captures_iter(c)
+                .map(|m| m[1].to_string())
+                .collect::<Vec<_>>()
+        })
         .collect();
     assert!(!used.is_empty(), "no pill classes found at all");
     for name in &used {
-        assert!(CSS.contains(&format!(".{name}")), "{name} is applied but never styled");
+        assert!(
+            CSS.contains(&format!(".{name}")),
+            "{name} is applied but never styled"
+        );
     }
-    let unknown: Vec<&String> = used.iter().filter(|n| !PILLS.contains(&n.as_str())).collect();
+    let unknown: Vec<&String> = used
+        .iter()
+        .filter(|n| !PILLS.contains(&n.as_str()))
+        .collect();
     assert!(unknown.is_empty(), "unknown pill variants: {unknown:?}");
 }
 
@@ -223,7 +276,9 @@ fn every_icon_only_button_is_named() {
     for (p, code) in ui_source() {
         let lines: Vec<&str> = code.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            let Some(m) = made.captures(line) else { continue };
+            let Some(m) = made.captures(line) else {
+                continue;
+            };
             let (var, field) = match (m.get(1), m.get(2)) {
                 (Some(v), _) => (v.as_str(), false),
                 (None, Some(v)) => (v.as_str(), true),
@@ -243,16 +298,22 @@ fn every_icon_only_button_is_named() {
                 s
             };
             let icon_only = &m[3] == "from_icon_name("
-                || (chain.contains(".icon_name(") && !chain.contains(".label(") && !chain.contains(".child("));
+                || (chain.contains(".icon_name(")
+                    && !chain.contains(".label(")
+                    && !chain.contains(".child("));
             if !icon_only || ["upd", "play", "menu"].contains(&var) {
                 continue; // named on bind
             }
             let window = lines[i..(i + 12).min(lines.len())].join("\n");
-            let near = window.contains(&format!("name(&{var}")) || window.contains("Property::Label");
+            let near =
+                window.contains(&format!("name(&{var}")) || window.contains("Property::Label");
             // Kept on the window (a field, or a `let` moved into `Inner`):
             // named where `init` configures it.
-            let anywhere = (field || code.contains(&format!("{var},")) || code.contains(&format!(": {var}")))
-                && regex::Regex::new(&format!(r"name\(&(?:[\w()]+\.)+{var}\b")).unwrap().is_match(&code);
+            let anywhere =
+                (field || code.contains(&format!("{var},")) || code.contains(&format!(": {var}")))
+                    && regex::Regex::new(&format!(r"name\(&(?:[\w()]+\.)+{var}\b"))
+                        .unwrap()
+                        .is_match(&code);
             if !near && !anywhere {
                 unnamed.push(format!("{}:{} {var}", rel(&p), i + 1));
             }
@@ -275,14 +336,20 @@ fn every_icon_name_is_in_adwaita_or_shipped_here() {
         return;
     }
     fn stems(dir: &Path, deep: bool, exts: &[&str], out: &mut BTreeSet<String>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
                 if deep {
                     stems(&p, deep, exts, out);
                 }
-            } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x)) {
+            } else if p
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| exts.contains(&x))
+            {
                 if let Some(s) = p.file_stem().and_then(|s| s.to_str()) {
                     out.insert(s.to_string());
                 }

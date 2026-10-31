@@ -82,7 +82,10 @@ pub fn lock_registry() -> Result<RegistryLock, String> {
 pub fn registry_tmp(reg: &Path) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let name = reg.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = reg
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     reg.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
 }
 
@@ -93,12 +96,19 @@ pub fn registry_tmp(reg: &Path) -> PathBuf {
 /// `Err` where the registry is JSON but not an object (Python's TypeError
 /// of `reg[key] = ...`), leaving it as it was, and where it cannot be
 /// written.
-pub fn update_registry(change: impl FnOnce(&mut Map<String, Value>) -> Result<bool, String>) -> Result<(), String> {
+pub fn update_registry(
+    change: impl FnOnce(&mut Map<String, Value>) -> Result<bool, String>,
+) -> Result<(), String> {
     let _lock = lock_registry()?;
     let mut reg = match load_registry_value() {
         Value::Object(m) => m,
         Value::Array(_) => return Err("list indices must be integers or slices, not str".into()),
-        other => return Err(format!("'{}' object does not support item assignment", py_type(&other))),
+        other => {
+            return Err(format!(
+                "'{}' object does not support item assignment",
+                py_type(&other)
+            ))
+        }
     };
     if change(&mut reg)? {
         save_registry(&reg)?;
@@ -121,7 +131,12 @@ pub const APPIMAGE_CHECK_SECONDS: f64 = 3600.0;
 pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
     let registry = match load_registry_value() {
         Value::Object(m) => m,
-        other => return Err(format!("'{}' object has no attribute 'items'", py_type(&other))),
+        other => {
+            return Err(format!(
+                "'{}' object has no attribute 'items'",
+                py_type(&other)
+            ))
+        }
     };
     let mut apps = Vec::new();
     // What each update check changed, by key: written back to the registry
@@ -132,7 +147,12 @@ pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
     for key in keys {
         let mut rec = match registry.get(&key) {
             Some(Value::Object(m)) => m.clone(),
-            Some(other) => return Err(format!("'{}' object has no attribute 'get'", py_type(other))),
+            Some(other) => {
+                return Err(format!(
+                    "'{}' object has no attribute 'get'",
+                    py_type(other)
+                ))
+            }
             None => Map::new(),
         };
         let path_s = match rec.get("path") {
@@ -179,13 +199,26 @@ pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
         let cached = match cached {
             Value::Object(m) => m,
             _ if !has_cached => Map::new(),
-            other => return Err(format!("'{}' object has no attribute 'get'", py_type(&other))),
+            other => {
+                return Err(format!(
+                    "'{}' object has no attribute 'get'",
+                    py_type(&other)
+                ))
+            }
         };
         let cget = |k: &str| -> Value {
-            if has_cached { cached.get(k).cloned().unwrap_or(json!("")) } else { json!("") }
+            if has_cached {
+                cached.get(k).cloned().unwrap_or(json!(""))
+            } else {
+                json!("")
+            }
         };
         let exists = path.exists();
-        let meta = if exists { std::fs::metadata(path).ok() } else { None };
+        let meta = if exists {
+            std::fs::metadata(path).ok()
+        } else {
+            None
+        };
         let url = match rec.get("url") {
             Some(v) if truthy(v) => v.clone(),
             _ => cget("page"),
@@ -218,7 +251,13 @@ pub fn appimages(check_updates: bool) -> Result<Vec<App>, String> {
         extra.insert("is_app".into(), json!(true));
         let field = |k: &str, d: Value| rec.get(k).cloned().unwrap_or(d);
         apps.push(
-            App { source: APPIMAGE.into(), exec_path: path_s.clone(), extra: extra.into(), ..Default::default() }.with_values(&[
+            App {
+                source: APPIMAGE.into(),
+                exec_path: path_s.clone(),
+                extra: extra.into(),
+                ..Default::default()
+            }
+            .with_values(&[
                 ("name", &field("name", json!(key))),
                 ("version", &field("version", json!("?"))),
                 ("description", &field("description", json!("AppImage"))),
@@ -253,7 +292,9 @@ mod tests {
     // ---- RegistryWrites
     /// Tests that move XDG variables run one at a time.
     fn with_state<T>(f: impl FnOnce(&Path) -> T) -> T {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());
@@ -271,7 +312,8 @@ mod tests {
             let target = tmp.join("almanac/appimages.json");
             let data = json!({"a": {"name": "a"}}).as_object().cloned().unwrap();
             save_registry(&data).unwrap();
-            let back: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+            let back: Value =
+                serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
             assert_eq!(back["a"]["name"], "a");
             // The temp file used for the swap must not be left behind.
             let tmps: Vec<_> = std::fs::read_dir(tmp.join("almanac"))
@@ -300,7 +342,10 @@ mod tests {
             })
         });
         std::thread::sleep(std::time::Duration::from_millis(300));
-        assert!(!writer.is_finished(), "a writer went ahead while the registry was locked");
+        assert!(
+            !writer.is_finished(),
+            "a writer went ahead while the registry was locked"
+        );
         // The holder's own read-modify-write.
         let mut reg = load_registry();
         reg.insert("first".into(), json!({"version": "1"}));
@@ -308,7 +353,10 @@ mod tests {
         drop(held);
         writer.join().unwrap().unwrap();
         let reg = load_registry();
-        assert!(reg.contains_key("first") && reg.contains_key("second"), "{reg:?}");
+        assert!(
+            reg.contains_key("first") && reg.contains_key("second"),
+            "{reg:?}"
+        );
         // Not JSON object: left alone, and said so.
         std::fs::write(registry(), "[1]").unwrap();
         assert!(update_registry(|_| Ok(true)).is_err());
@@ -323,7 +371,10 @@ mod tests {
             let target = tmp.join("almanac/appimages.json");
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::write(&target, "{ this is not json").unwrap();
-            assert!(load_registry().is_empty(), "a damaged registry must not take the window down");
+            assert!(
+                load_registry().is_empty(),
+                "a damaged registry must not take the window down"
+            );
         });
     }
 }

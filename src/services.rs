@@ -30,10 +30,22 @@ pub const ESSENTIAL: &[(&str, &str)] = &[
     ("xdg-desktop-portal-gtk.service", PORTAL),
     ("dbus.service", "Almost everything in the session"),
     ("dbus-broker.service", "Almost everything in the session"),
-    ("gnome-keyring-daemon.service", "Saved passwords and SSH keys"),
-    ("at-spi-dbus-bus.service", "Screen readers and accessibility tools"),
-    ("gvfs-daemon.service", "Network locations and devices in the file manager"),
-    ("hyprpolkitagent.service", "Password prompts for system changes"),
+    (
+        "gnome-keyring-daemon.service",
+        "Saved passwords and SSH keys",
+    ),
+    (
+        "at-spi-dbus-bus.service",
+        "Screen readers and accessibility tools",
+    ),
+    (
+        "gvfs-daemon.service",
+        "Network locations and devices in the file manager",
+    ),
+    (
+        "hyprpolkitagent.service",
+        "Password prompts for system changes",
+    ),
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -67,11 +79,16 @@ fn which_systemctl() -> bool {
     // shutil's _access_check: exists, os.access(F_OK | X_OK), not a directory.
     let check = |p: &Path| {
         p.exists()
-            && rustix::fs::access(p, rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK).is_ok()
+            && rustix::fs::access(p, rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK)
+                .is_ok()
             && !p.is_dir()
     };
     std::env::split_paths(&path).any(|d| {
-        let p = if d.as_os_str().is_empty() { Path::new("systemctl").to_path_buf() } else { d.join("systemctl") };
+        let p = if d.as_os_str().is_empty() {
+            Path::new("systemctl").to_path_buf()
+        } else {
+            d.join("systemctl")
+        };
         check(&p)
     })
 }
@@ -107,11 +124,14 @@ fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
         }
         argv.push(std::ffi::OsString::from_vec(b));
     }
-    let out = crate::util::run_bytes(&argv, &crate::util::RunOpts {
-        timeout: Some(std::time::Duration::from_secs(timeout)),
-        stdin: crate::util::Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = crate::util::run_bytes(
+        &argv,
+        &crate::util::RunOpts {
+            timeout: Some(std::time::Duration::from_secs(timeout)),
+            stdin: crate::util::Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     // OSError, and TimeoutExpired (run() kills and reaps the child) -> "".
     if out.failed_to_start || out.timed_out {
         return Ok(String::new());
@@ -126,7 +146,8 @@ fn run(args: &[Vec<u16>], timeout: u64) -> Result<String, String> {
 /// in from the first one that cannot be escaped.
 fn fsencode(s: &[u16]) -> Result<Vec<u8>, String> {
     let chars: Vec<Result<char, u16>> = char::decode_utf16(s.iter().copied())
-        .map(|c| c.map_err(|e| e.unpaired_surrogate())).collect();
+        .map(|c| c.map_err(|e| e.unpaired_surrogate()))
+        .collect();
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -148,11 +169,16 @@ fn fsencode(s: &[u16]) -> Result<Vec<u8>, String> {
                         Err(u) if (0xdc80..=0xdcff).contains(&u) => out.push((u & 0xff) as u8),
                         Err(u) => {
                             return Err(if end - k == 1 {
-                                format!("UnicodeEncodeError: 'utf-8' codec can't encode character \
-                                         '\\u{u:04x}' in position {k}: surrogates not allowed")
+                                format!(
+                                    "UnicodeEncodeError: 'utf-8' codec can't encode character \
+                                         '\\u{u:04x}' in position {k}: surrogates not allowed"
+                                )
                             } else {
-                                format!("UnicodeEncodeError: 'utf-8' codec can't encode characters \
-                                         in position {k}-{}: surrogates not allowed", end - 1)
+                                format!(
+                                    "UnicodeEncodeError: 'utf-8' codec can't encode characters \
+                                         in position {k}-{}: surrogates not allowed",
+                                    end - 1
+                                )
                             });
                         }
                         Ok(_) => {}
@@ -195,7 +221,9 @@ fn locale_codec() -> Codec {
         if utf8_mode.as_deref() == Some("1") {
             return Codec::Utf8;
         }
-        let name = env("LC_ALL").or_else(|| env("LC_CTYPE")).or_else(|| env("LANG"))
+        let name = env("LC_ALL")
+            .or_else(|| env("LC_CTYPE"))
+            .or_else(|| env("LANG"))
             .unwrap_or_else(|| "C".to_owned());
         let lower = name.to_ascii_lowercase();
         let charmap = if name == "C" || name == "POSIX" {
@@ -215,8 +243,13 @@ fn locale_codec() -> Codec {
         };
         match charmap.as_str() {
             "ANSI_X3.4-1968" => {
-                let coerced = env("LC_ALL").is_none() && env("PYTHONCOERCECLOCALE").as_deref() != Some("0");
-                if utf8_mode.as_deref() == Some("0") && !coerced { Codec::Ascii } else { Codec::Utf8 }
+                let coerced =
+                    env("LC_ALL").is_none() && env("PYTHONCOERCECLOCALE").as_deref() != Some("0");
+                if utf8_mode.as_deref() == Some("0") && !coerced {
+                    Codec::Ascii
+                } else {
+                    Codec::Utf8
+                }
             }
             "ISO-8859-1" => Codec::Latin1,
             _ => Codec::Utf8,
@@ -231,8 +264,11 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
         Codec::Latin1 => b.iter().map(|&c| c as char).collect(),
         Codec::Ascii => match b.iter().position(|&c| c >= 0x80) {
             Some(pos) => {
-                return Err(format!("UnicodeDecodeError: 'ascii' codec can't decode byte {:#04x} \
-                                    in position {pos}: ordinal not in range(128)", b[pos]));
+                return Err(format!(
+                    "UnicodeDecodeError: 'ascii' codec can't decode byte {:#04x} \
+                                    in position {pos}: ordinal not in range(128)",
+                    b[pos]
+                ));
             }
             None => String::from_utf8_lossy(&b).into_owned(),
         },
@@ -245,7 +281,14 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
                 let byte = bytes[pos];
                 let why = match u.error_len() {
                     None => "unexpected end of data",
-                    Some(_) if (0x80..=0xbf).contains(&byte) || byte >= 0xf5 || byte == 0xc0 || byte == 0xc1 => "invalid start byte",
+                    Some(_)
+                        if (0x80..=0xbf).contains(&byte)
+                            || byte >= 0xf5
+                            || byte == 0xc0
+                            || byte == 0xc1 =>
+                    {
+                        "invalid start byte"
+                    }
                     Some(_) => "invalid continuation byte",
                 };
                 return Err(format!("UnicodeDecodeError: 'utf-8' codec can't decode byte {byte:#04x} in position {pos}: {why}"));
@@ -256,7 +299,11 @@ fn py_decode(b: Vec<u8>) -> Result<String, String> {
 }
 
 pub fn essential_for(unit: &str) -> String {
-    ESSENTIAL.iter().find(|(u, _)| *u == unit).map(|(_, s)| (*s).to_owned()).unwrap_or_default()
+    ESSENTIAL
+        .iter()
+        .find(|(u, _)| *u == unit)
+        .map(|(_, s)| (*s).to_owned())
+        .unwrap_or_default()
 }
 
 /// Python's `str.isspace()`: Rust's White_Space plus the four ASCII
@@ -276,8 +323,18 @@ fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut it = s.char_indices().peekable();
     while let Some((i, c)) = it.next() {
-        let brk = matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e'
-                              | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let brk = matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        );
         if brk {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
@@ -363,7 +420,10 @@ impl From<()> for JErr {
 /// else at least 640; Python will not start with anything else), by default
 /// 4300. An int literal with more digits raises ValueError in json.loads.
 fn int_max_str_digits() -> usize {
-    match std::env::var("PYTHONINTMAXSTRDIGITS").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+    match std::env::var("PYTHONINTMAXSTRDIGITS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
         Some(n) if n == 0 || n >= 640 => n,
         _ => 4300,
     }
@@ -377,7 +437,8 @@ fn int_max_str_digits() -> usize {
 /// under the usual 8 MiB.
 fn json_max_depth() -> usize {
     let stack = rustix::process::getrlimit(rustix::process::Resource::Stack)
-        .current.unwrap_or(2 << 20);
+        .current
+        .unwrap_or(2 << 20);
     (stack.saturating_sub(43_900) / 160) as usize
 }
 
@@ -390,9 +451,11 @@ fn json_max_depth() -> usize {
 fn py_json_loads(s: &str) -> Result<J, JErr> {
     let max_digits = int_max_str_digits();
     let max_depth = json_max_depth();
-    let too_deep = |what: &str, depth: usize| JErr::Recursion(format!(
+    let too_deep = |what: &str, depth: usize| {
+        JErr::Recursion(format!(
         "RecursionError: Stack overflow (used {} kB) while decoding a JSON {what} from a unicode string",
-        (43_900 + depth * 160) / 1024));
+        (43_900 + depth * 160) / 1024))
+    };
     enum Frame {
         Arr(Vec<J>, bool),
         Obj(Vec<(Vec<u16>, J)>, Option<Vec<u16>>, bool),
@@ -444,8 +507,14 @@ fn py_json_loads(s: &str) -> Result<J, JErr> {
             Some(b'"') => value = Some(J::Str(py_json_string(s, &mut i)?)),
             _ => {
                 let rest = &s[i..];
-                for (word, v) in [("null", J::Null), ("true", J::Bool), ("false", J::Bool),
-                                  ("NaN", J::Float), ("Infinity", J::Float), ("-Infinity", J::Float)] {
+                for (word, v) in [
+                    ("null", J::Null),
+                    ("true", J::Bool),
+                    ("false", J::Bool),
+                    ("NaN", J::Float),
+                    ("Infinity", J::Float),
+                    ("-Infinity", J::Float),
+                ] {
                     if rest.starts_with(word) {
                         i += word.len();
                         value = Some(v);
@@ -463,7 +532,11 @@ fn py_json_loads(s: &str) -> Result<J, JErr> {
             ws(&mut i);
             let Some(top) = stack.last_mut() else {
                 // "Extra data" unless only whitespace is left.
-                return if i == b.len() { Ok(v) } else { Err(JErr::Value) };
+                return if i == b.len() {
+                    Ok(v)
+                } else {
+                    Err(JErr::Value)
+                };
             };
             match top {
                 Frame::Arr(items, keep) => {
@@ -478,7 +551,9 @@ fn py_json_loads(s: &str) -> Result<J, JErr> {
                         }
                         Some(b']') => {
                             i += 1;
-                            let Some(Frame::Arr(items, _)) = stack.pop() else { return Err(JErr::Value) };
+                            let Some(Frame::Arr(items, _)) = stack.pop() else {
+                                return Err(JErr::Value);
+                            };
                             v = J::Arr(items);
                         }
                         _ => return Err(JErr::Value),
@@ -500,7 +575,9 @@ fn py_json_loads(s: &str) -> Result<J, JErr> {
                         }
                         Some(b'}') => {
                             i += 1;
-                            let Some(Frame::Obj(items, _, _)) = stack.pop() else { return Err(JErr::Value) };
+                            let Some(Frame::Obj(items, _, _)) = stack.pop() else {
+                                return Err(JErr::Value);
+                            };
                             v = J::Obj(items);
                         }
                         _ => return Err(JErr::Value),
@@ -567,7 +644,10 @@ fn py_json_string(s: &str, i: &mut usize) -> Result<Vec<u16>, ()> {
                     b'u' => {
                         let u = hex4(*i)?;
                         *i += 4;
-                        if (0xd800..=0xdbff).contains(&u) && b.get(*i) == Some(&b'\\') && b.get(*i + 1) == Some(&b'u') {
+                        if (0xd800..=0xdbff).contains(&u)
+                            && b.get(*i) == Some(&b'\\')
+                            && b.get(*i + 1) == Some(&b'u')
+                        {
                             let lo = hex4(*i + 2)?;
                             if (0xdc00..=0xdfff).contains(&lo) {
                                 *i += 6;
@@ -666,15 +746,19 @@ type SystemctlRun<'a> = &'a dyn Fn(&[Vec<u16>]) -> Result<String, String>;
 /// tests can stand in for systemctl the way the Python tests mock them.
 /// `_run` gets its arguments as Python strings (UTF-16, lone surrogates and
 /// all); encoding them for the command line is its business, as in Python.
-fn services_with(available: bool, run: SystemctlRun<'_>)
-    -> Result<Vec<Service>, String>
-{
+fn services_with(available: bool, run: SystemctlRun<'_>) -> Result<Vec<Service>, String> {
     use std::collections::HashMap;
     if !available {
         return Ok(vec![]);
     }
-    let raw = run(&["list-unit-files", "--type=service,timer",
-                    "--state=enabled,disabled", "--no-legend", "--output=json"].map(u16s))?;
+    let raw = run(&[
+        "list-unit-files",
+        "--type=service,timer",
+        "--state=enabled,disabled",
+        "--no-legend",
+        "--output=json",
+    ]
+    .map(u16s))?;
     // json.loads(raw) if raw.strip() else []; ValueError -> [] (RecursionError
     // is not one, and raises). Iterating a dict (its keys) or a string (its
     // characters) yields no dicts, so those come out empty as well; null, a
@@ -691,7 +775,12 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
     let units: Vec<J> = match parsed {
         J::Arr(a) => a,
         J::Obj(_) | J::Str(_) => vec![],
-        other => return Err(format!("TypeError: '{}' object is not iterable", other.type_name())),
+        other => {
+            return Err(format!(
+                "TypeError: '{}' object is not iterable",
+                other.type_name()
+            ))
+        }
     };
     // names = [u["unit_file"] for u in units
     //          if isinstance(u, dict) and "@" not in u.get("unit_file", "")]
@@ -702,10 +791,18 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
             Some(J::Str(s)) => s.contains(&(b'@' as u16)),
             Some(J::Arr(items)) => items.iter().any(|x| x.is_str("@")),
             Some(d @ J::Obj(_)) => d.has_key("@"),
-            Some(other) => return Err(format!("TypeError: argument of type '{}' is not iterable", other.type_name())),
+            Some(other) => {
+                return Err(format!(
+                    "TypeError: argument of type '{}' is not iterable",
+                    other.type_name()
+                ))
+            }
         };
         if !has_at {
-            names.push(u.get("unit_file").ok_or_else(|| "KeyError: 'unit_file'".to_owned())?);
+            names.push(
+                u.get("unit_file")
+                    .ok_or_else(|| "KeyError: 'unit_file'".to_owned())?,
+            );
         }
     }
     if names.is_empty() {
@@ -719,7 +816,12 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
             Some(J::Str(n)) => {
                 states.insert(n, u.get("state").is_some_and(|s| s.is_str("enabled")));
             }
-            Some(other) => return Err(format!("TypeError: unhashable type: '{}'", other.type_name())),
+            Some(other) => {
+                return Err(format!(
+                    "TypeError: unhashable type: '{}'",
+                    other.type_name()
+                ))
+            }
             None => return Err("KeyError: 'unit_file'".to_owned()),
         }
     }
@@ -728,7 +830,9 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
     // \udc80-\udcff through as raw bytes and raises on the rest).
     let mut names16: Vec<&[u16]> = Vec::new();
     for n in &names {
-        let J::Str(units16) = n else { return Err("TypeError: name is not a string".to_owned()) };
+        let J::Str(units16) = n else {
+            return Err("TypeError: name is not a string".to_owned());
+        };
         names16.push(units16);
     }
     let mut argv: Vec<Vec<u16>> = vec![u16s("show"), u16s("--property=Id,Description,ActiveState")];
@@ -736,7 +840,8 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
     let shown = run(&argv)?;
     let mut info: HashMap<String, HashMap<String, String>> = HashMap::new();
     for block in py_strip(&shown).split("\n\n") {
-        let d: HashMap<String, String> = py_splitlines(block).into_iter()
+        let d: HashMap<String, String> = py_splitlines(block)
+            .into_iter()
             .filter_map(|line| line.split_once('='))
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
@@ -751,7 +856,11 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
         // Shown text is decoded, so it never holds a lone surrogate: a name
         // with one has no info.
         let name = lossy(key);
-        let d = if String::from_utf16(key).is_ok() { info.get(&name).unwrap_or(&empty) } else { &empty };
+        let d = if String::from_utf16(key).is_ok() {
+            info.get(&name).unwrap_or(&empty)
+        } else {
+            &empty
+        };
         let enabled = states.get(*key).copied().unwrap_or(false);
         let active = d.get("ActiveState").map(String::as_str) == Some("active");
         // Disabled yet running: something else starts it on demand (a socket,
@@ -760,28 +869,44 @@ fn services_with(available: bool, run: SystemctlRun<'_>)
         if active && !enabled {
             continue;
         }
-        let description = d.get("Description").filter(|s| !s.is_empty())
-            .cloned().unwrap_or_else(|| name.clone());
+        let description = d
+            .get("Description")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| name.clone());
         let points: Vec<u32> = char::decode_utf16(key.iter().copied())
-            .map(|c| c.map(u32::from).unwrap_or_else(|e| u32::from(e.unpaired_surrogate())))
+            .map(|c| {
+                c.map(u32::from)
+                    .unwrap_or_else(|e| u32::from(e.unpaired_surrogate()))
+            })
             .collect();
-        out.push((points, Service {
-            essential: essential_for(&name),
-            omarchy: name.starts_with("omarchy"),
-            unit: name,
-            description,
-            enabled,
-            active,
-        }));
+        out.push((
+            points,
+            Service {
+                essential: essential_for(&name),
+                omarchy: name.starts_with("omarchy"),
+                unit: name,
+                description,
+                enabled,
+                active,
+            },
+        ));
     }
-    out.sort_by(|(ka, a), (kb, b)| (!a.essential.is_empty(), ka).cmp(&(!b.essential.is_empty(), kb)));
+    out.sort_by(|(ka, a), (kb, b)| {
+        (!a.essential.is_empty(), ka).cmp(&(!b.essential.is_empty(), kb))
+    });
     Ok(out.into_iter().map(|(_, s)| s).collect())
 }
 
 /// Enable and start, or disable and stop: the switch means both.
 pub fn toggle_argv(unit: &str, on: bool) -> Vec<String> {
-    vec!["systemctl".into(), "--user".into(),
-         if on { "enable" } else { "disable" }.into(), "--now".into(), unit.into()]
+    vec![
+        "systemctl".into(),
+        "--user".into(),
+        if on { "enable" } else { "disable" }.into(),
+        "--now".into(),
+        unit.into(),
+    ]
 }
 
 /// `is_enabled()` as the Python has it: UnicodeDecodeError and
@@ -789,7 +914,6 @@ pub fn toggle_argv(unit: &str, on: bool) -> Vec<String> {
 pub fn try_is_enabled(unit: &str) -> Result<bool, String> {
     Ok(py_strip(&run(&[u16s("is-enabled"), u16s(unit)], 20)?) == "enabled")
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -799,27 +923,41 @@ mod tests {
     fn test_essential_is_by_exact_name() {
         assert!(!essential_for("wireplumber.service").is_empty());
         assert_eq!(essential_for("hyprsunset.service"), "");
-        assert_eq!(essential_for("xdg-desktop-portal-rewrite-launchers.service"), "");
+        assert_eq!(
+            essential_for("xdg-desktop-portal-rewrite-launchers.service"),
+            ""
+        );
     }
 
     #[test]
     fn test_on_demand_units_are_not_offered() {
         let files = serde_json::json!([
             {"unit_file": "mine.service", "state": "enabled"},
-            {"unit_file": "socketed.service", "state": "disabled"}]).to_string();
+            {"unit_file": "socketed.service", "state": "disabled"}])
+        .to_string();
         let shown = "Id=mine.service\nDescription=Mine\nActiveState=active\n\n\
                      Id=socketed.service\nDescription=S\nActiveState=active\n";
         let fake = |a: &[Vec<u16>]| -> Result<String, String> {
-            Ok(if a[0] == u16s("list-unit-files") { files.clone() } else { shown.to_owned() })
+            Ok(if a[0] == u16s("list-unit-files") {
+                files.clone()
+            } else {
+                shown.to_owned()
+            })
         };
-        let names: Vec<String> = services_with(true, &fake).unwrap().into_iter().map(|s| s.unit).collect();
+        let names: Vec<String> = services_with(true, &fake)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.unit)
+            .collect();
         assert_eq!(names, vec!["mine.service"]);
     }
 
     #[test]
     fn test_the_switch_means_now_and_at_login() {
-        assert_eq!(toggle_argv("x.service", false),
-                   vec!["systemctl", "--user", "disable", "--now", "x.service"]);
+        assert_eq!(
+            toggle_argv("x.service", false),
+            vec!["systemctl", "--user", "disable", "--now", "x.service"]
+        );
     }
 
     #[test]
@@ -828,12 +966,18 @@ mod tests {
         assert!(py_json_loads("[NaN, -Infinity, 1e400, 0]").is_ok());
         let deep = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
         assert!(py_json_loads(&deep(json_max_depth())).is_ok());
-        assert!(matches!(py_json_loads(&deep(json_max_depth() + 1)), Err(JErr::Recursion(_))));
+        assert!(matches!(
+            py_json_loads(&deep(json_max_depth() + 1)),
+            Err(JErr::Recursion(_))
+        ));
         assert!(py_json_loads(&"1".repeat(4300)).is_ok());
         assert_eq!(py_json_loads(&"1".repeat(4301)), Err(JErr::Value));
         assert!(py_json_loads(&format!("{}.5", "1".repeat(5000))).is_ok());
         assert_eq!(py_json_loads(r#""\ud800""#), Ok(J::Str(vec![0xd800])));
-        assert_eq!(py_json_loads(r#"{"a": 1, "a": "x"}"#).unwrap().get("a"), Some(&J::Str(vec![b'x' as u16])));
+        assert_eq!(
+            py_json_loads(r#"{"a": 1, "a": "x"}"#).unwrap().get("a"),
+            Some(&J::Str(vec![b'x' as u16]))
+        );
         assert!(py_json_loads("[1,]").is_err());
         assert!(py_json_loads("\u{feff}[]").is_err());
     }
@@ -841,13 +985,22 @@ mod tests {
     #[test]
     fn fsencode_is_surrogateescape() {
         assert_eq!(fsencode(&[0xdcff, b'a' as u16]), Ok(vec![0xff, b'a']));
-        assert!(fsencode(&[0xd800]).unwrap_err().contains("character '\\ud800' in position 0"));
-        assert!(fsencode(&[0xdcff, 0xdc7f]).unwrap_err().contains("character '\\udc7f' in position 1"));
-        assert!(fsencode(&[0xd800, 0xd801]).unwrap_err().contains("characters in position 0-1"));
+        assert!(fsencode(&[0xd800])
+            .unwrap_err()
+            .contains("character '\\ud800' in position 0"));
+        assert!(fsencode(&[0xdcff, 0xdc7f])
+            .unwrap_err()
+            .contains("character '\\udc7f' in position 1"));
+        assert!(fsencode(&[0xd800, 0xd801])
+            .unwrap_err()
+            .contains("characters in position 0-1"));
     }
 
     #[test]
     fn nul_in_argv_raises() {
-        assert_eq!(try_is_enabled("a\0b.service"), Err("ValueError: embedded null byte".to_owned()));
+        assert_eq!(
+            try_is_enabled("a\0b.service"),
+            Err("ValueError: embedded null byte".to_owned())
+        );
     }
 }

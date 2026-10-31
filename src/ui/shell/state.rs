@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::inventory;
 
 use super::helpers::truthy;
-use super::tables::{PAGE_KEYS, page_accel};
+use super::tables::{page_accel, PAGE_KEYS};
 use super::window::Win;
 
 impl Win {
@@ -35,9 +35,12 @@ impl Win {
             ));
         };
 
-        add("<Control>f", Rc::new(|w| {
-            w.search.grab_focus();
-        }));
+        add(
+            "<Control>f",
+            Rc::new(|w| {
+                w.search.grab_focus();
+            }),
+        );
         // Refresh means "re-read this page", the same as the menu item. It
         // used to always re-scan packages, whatever you were looking at.
         add("<Control>r", Rc::new(|w| w.refresh_page()));
@@ -72,7 +75,10 @@ impl Win {
     /// `_state_path`: window-state.json beside the AppImage registry.
     pub fn state_path(&self) -> PathBuf {
         let reg = inventory::registry();
-        reg.parent().map(|p| p.to_path_buf()).unwrap_or_default().join("window-state.json")
+        reg.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default()
+            .join("window-state.json")
     }
 
     /// Window size, chip and sort survive a restart -- otherwise every
@@ -87,7 +93,10 @@ impl Win {
         };
         // isinstance(x, int): an integral JSON number (a bool is an int too,
         // but never > 400).
-        let int = |k: &str| st.get(k).and_then(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)));
+        let int = |k: &str| {
+            st.get(k)
+                .and_then(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)))
+        };
         if let (Some(w), Some(h)) = (int("width"), int("height")) {
             if w > 400 && h > 300 {
                 self.window.set_default_size(w as i32, h as i32);
@@ -117,7 +126,10 @@ impl Win {
                 self.select_category(&chip);
             }
         }
-        let sort_col = st.get("sort_col").and_then(|v| v.as_str()).map(str::to_string);
+        let sort_col = st
+            .get("sort_col")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let sort_desc = truthy(st.get("sort_desc"));
         self.shell.borrow_mut().wanted_sort = Some((sort_col, sort_desc));
     }
@@ -133,7 +145,10 @@ impl Win {
         }
         let (chip, collapsed) = {
             let sh = self.shared.borrow();
-            (sh.filter_key.clone(), sh.collapsed.iter().cloned().collect::<Vec<_>>())
+            (
+                sh.filter_key.clone(),
+                sh.collapsed.iter().cloned().collect::<Vec<_>>(),
+            )
         };
         let mut st = Map::new();
         st.insert("width".into(), self.window.width().into());

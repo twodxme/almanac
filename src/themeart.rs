@@ -35,10 +35,17 @@ fn py_path(s: &[u8]) -> Vec<u8> {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = s.split(|&c| c == b'/').filter(|p| !p.is_empty() && *p != b".").collect();
+    let parts: Vec<&[u8]> = s
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
+        .collect();
     let mut out = prefix.to_vec();
     out.extend_from_slice(&parts.join(&b'/'));
-    if out.is_empty() { b".".to_vec() } else { out }
+    if out.is_empty() {
+        b".".to_vec()
+    } else {
+        out
+    }
 }
 
 /// `a / b` on pathlib paths: "." on the left adds nothing.
@@ -71,7 +78,11 @@ fn py_home(home: Option<&OsStr>) -> Vec<u8> {
         },
     };
     let n = home.iter().rposition(|&c| c != b'/').map_or(0, |i| i + 1);
-    if n == 0 { b"/".to_vec() } else { home[..n].to_vec() }
+    if n == 0 {
+        b"/".to_vec()
+    } else {
+        home[..n].to_vec()
+    }
 }
 
 /// `Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "almanac"`.
@@ -89,7 +100,10 @@ fn cache_from(xdg_cache_home: Option<&OsStr>, home: Option<&OsStr>) -> Vec<u8> {
 pub fn cache() -> PathBuf {
     static CACHE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     let c = CACHE.get_or_init(|| {
-        cache_from(std::env::var_os("XDG_CACHE_HOME").as_deref(), std::env::var_os("HOME").as_deref())
+        cache_from(
+            std::env::var_os("XDG_CACHE_HOME").as_deref(),
+            std::env::var_os("HOME").as_deref(),
+        )
     });
     to_path(c.clone())
 }
@@ -169,17 +183,35 @@ fn py_strip(s: &str) -> &str {
 /// case-ignorable, not lowercased. Found by comparing `lower()` of every
 /// code point, alone and next to a final sigma, on both sides.
 const UNICODE16_STAND_INS: &[(u32, u32, char)] = &[
-    (0x295, 0x295, 'a'), (0x1ACF, 0x1ADD, '0'), (0x1AE0, 0x1AEB, '0'), (0xA7CE, 0xA7CF, '0'),
-    (0xA7D2, 0xA7D2, '0'), (0xA7D4, 0xA7D4, '0'), (0xA7F1, 0xA7F1, '0'), (0x10EC5, 0x10EC5, '0'),
-    (0x10EFA, 0x10EFB, '0'), (0x11B60, 0x11B60, '0'), (0x11B62, 0x11B64, '0'), (0x11B66, 0x11B66, '0'),
-    (0x11DD9, 0x11DD9, '0'), (0x16EA0, 0x16EB8, '0'), (0x16EBB, 0x16ED3, '0'), (0x16FF2, 0x16FF3, '0'),
-    (0x1E6E3, 0x1E6E3, '0'), (0x1E6E6, 0x1E6E6, '0'), (0x1E6EE, 0x1E6EF, '0'), (0x1E6F5, 0x1E6F5, '0'),
+    (0x295, 0x295, 'a'),
+    (0x1ACF, 0x1ADD, '0'),
+    (0x1AE0, 0x1AEB, '0'),
+    (0xA7CE, 0xA7CF, '0'),
+    (0xA7D2, 0xA7D2, '0'),
+    (0xA7D4, 0xA7D4, '0'),
+    (0xA7F1, 0xA7F1, '0'),
+    (0x10EC5, 0x10EC5, '0'),
+    (0x10EFA, 0x10EFB, '0'),
+    (0x11B60, 0x11B60, '0'),
+    (0x11B62, 0x11B64, '0'),
+    (0x11B66, 0x11B66, '0'),
+    (0x11DD9, 0x11DD9, '0'),
+    (0x16EA0, 0x16EB8, '0'),
+    (0x16EBB, 0x16ED3, '0'),
+    (0x16FF2, 0x16FF3, '0'),
+    (0x1E6E3, 0x1E6E3, '0'),
+    (0x1E6E6, 0x1E6E6, '0'),
+    (0x1E6EE, 0x1E6EF, '0'),
+    (0x1E6F5, 0x1E6F5, '0'),
     (0x1E6FF, 0x1E6FF, '0'),
 ];
 
 fn unicode16_stand_in(c: char) -> Option<char> {
     let cp = c as u32;
-    UNICODE16_STAND_INS.iter().find(|(a, b, _)| (*a..=*b).contains(&cp)).map(|(_, _, s)| *s)
+    UNICODE16_STAND_INS
+        .iter()
+        .find(|(a, b, _)| (*a..=*b).contains(&cp))
+        .map(|(_, _, s)| *s)
 }
 
 /// `str.lower()` with Python's Unicode tables. Rust lowercases one character
@@ -188,12 +220,19 @@ fn unicode16_stand_in(c: char) -> Option<char> {
 /// (which gets the sigmas right) and each stand-in's own output is then put
 /// back as the original character, which Python leaves alone.
 fn py_lower(s: &str) -> String {
-    let subst: Vec<char> = s.chars().map(|c| unicode16_stand_in(c).unwrap_or(c)).collect();
+    let subst: Vec<char> = s
+        .chars()
+        .map(|c| unicode16_stand_in(c).unwrap_or(c))
+        .collect();
     let lowered: String = subst.iter().collect::<String>().to_lowercase();
     let mut rest = lowered.chars();
     let mut out = String::with_capacity(lowered.len());
     for (orig, sc) in s.chars().zip(subst) {
-        let n = if sc == '\u{3a3}' { 1 } else { sc.to_lowercase().count() };
+        let n = if sc == '\u{3a3}' {
+            1
+        } else {
+            sc.to_lowercase().count()
+        };
         let piece: String = rest.by_ref().take(n).collect();
         if orig != sc {
             out.push(orig);
@@ -273,7 +312,9 @@ mod tomllib {
             self.b.get(pos).copied()
         }
         fn starts(&self, pos: usize, s: &str) -> bool {
-            self.b.get(pos..).is_some_and(|r| r.starts_with(s.as_bytes()))
+            self.b
+                .get(pos..)
+                .is_some_and(|r| r.starts_with(s.as_bytes()))
         }
     }
 
@@ -362,23 +403,34 @@ mod tomllib {
             }
             let mut cont = &self.flags;
             for k in &key[..key.len() - 1] {
-                let Some(inner) = cont.get(k) else { return Ok(false) };
+                let Some(inner) = cont.get(k) else {
+                    return Ok(false);
+                };
                 if inner.recursive_flags & flag != 0 {
                     return Ok(true);
                 }
                 cont = &inner.nested;
             }
-            Ok(cont.get(&key[key.len() - 1]).is_some_and(|n| (n.flags | n.recursive_flags) & flag != 0))
+            Ok(cont
+                .get(&key[key.len() - 1])
+                .is_some_and(|n| (n.flags | n.recursive_flags) & flag != 0))
         }
     }
 
     /// `NestedDict.get_or_create_nest`. KeyError and IndexError (an empty
     /// array) both end the parse, so both are just errors here.
-    fn get_or_create_nest<'t>(cx: &Cx, dict: &'t mut Table, key: &[String], access_lists: bool) -> R<&'t mut Table> {
+    fn get_or_create_nest<'t>(
+        cx: &Cx,
+        dict: &'t mut Table,
+        key: &[String],
+        access_lists: bool,
+    ) -> R<&'t mut Table> {
         let _f = cx.frame()?;
         let mut cont = dict;
         for k in key {
-            let mut v = cont.entry(k.clone()).or_insert_with(|| Val::Table(Table::new()));
+            let mut v = cont
+                .entry(k.clone())
+                .or_insert_with(|| Val::Table(Table::new()));
             if access_lists {
                 if let Val::Array(a) = v {
                     v = a.last_mut().ok_or("list index out of range")?;
@@ -431,14 +483,21 @@ mod tomllib {
         // The spec allows converting "\r\n" to "\n", even in string
         // literals. Let's do so to simplify parsing.
         let src = s.replace("\r\n", "\n");
-        let cx = Cx { src: &src, b: src.as_bytes(), depth: Cell::new(BASE_FRAMES) };
+        let cx = Cx {
+            src: &src,
+            b: src.as_bytes(),
+            depth: Cell::new(BASE_FRAMES),
+        };
         let _f = cx.frame()?;
         let mut out = {
             // Output(), which makes a NestedDict() and a Flags()
             let _f = cx.frame()?;
             drop(cx.frame()?);
             drop(cx.frame()?);
-            Output { data: Table::new(), flags: Flags::default() }
+            Output {
+                data: Table::new(),
+                flags: Flags::default(),
+            }
         };
         let mut header: Key = Vec::new();
         drop(cx.frame()?); // make_safe_parse_float
@@ -500,7 +559,13 @@ mod tomllib {
         Ok(pos)
     }
 
-    fn skip_until(cx: &Cx, pos: usize, expect: &str, error_on: fn(u8) -> bool, error_on_eof: bool) -> R<usize> {
+    fn skip_until(
+        cx: &Cx,
+        pos: usize,
+        expect: &str,
+        error_on: fn(u8) -> bool,
+        error_on_eof: bool,
+    ) -> R<usize> {
         let _f = cx.frame()?;
         let new_pos = match cx.src[pos..].find(expect) {
             Some(i) => pos + i,
@@ -544,7 +609,8 @@ mod tomllib {
             return Err(format!("Cannot declare {key:?} twice"));
         }
         out.flags.set(cx, &key, EXPLICIT_NEST, false)?;
-        get_or_create_nest(cx, &mut out.data, &key, true).map_err(|_| "Cannot overwrite a value")?;
+        get_or_create_nest(cx, &mut out.data, &key, true)
+            .map_err(|_| "Cannot overwrite a value")?;
 
         if !cx.starts(pos, "]") {
             return Err("Expected ']' at the end of a table declaration".into());
@@ -592,10 +658,13 @@ mod tomllib {
         }
 
         if out.flags.is_(cx, &abs_key_parent, FROZEN)? {
-            return Err(format!("Cannot mutate immutable namespace {abs_key_parent:?}"));
+            return Err(format!(
+                "Cannot mutate immutable namespace {abs_key_parent:?}"
+            ));
         }
 
-        let nest = get_or_create_nest(cx, &mut out.data, &abs_key_parent, true).map_err(|_| "Cannot overwrite a value")?;
+        let nest = get_or_create_nest(cx, &mut out.data, &abs_key_parent, true)
+            .map_err(|_| "Cannot overwrite a value")?;
         if nest.contains_key(key_stem) {
             return Err("Cannot overwrite a value".into());
         }
@@ -635,7 +704,9 @@ mod tomllib {
             pos = p;
             key.push(key_part);
             if key.len() > MAX_KEY_PARTS {
-                return Err(format!("TOML key has more than the allowed {MAX_KEY_PARTS} parts"));
+                return Err(format!(
+                    "TOML key has more than the allowed {MAX_KEY_PARTS} parts"
+                ));
             }
             pos = skip_chars(cx, pos, is_ws)?;
         }
@@ -707,7 +778,8 @@ mod tomllib {
             if flags.is_(cx, &key, FROZEN)? {
                 return Err(format!("Cannot mutate immutable namespace {key:?}"));
             }
-            let nest = get_or_create_nest(cx, &mut nested_dict, key_parent, false).map_err(|_| "Cannot overwrite a value")?;
+            let nest = get_or_create_nest(cx, &mut nested_dict, key_parent, false)
+                .map_err(|_| "Cannot overwrite a value")?;
             if nest.contains_key(key_stem) {
                 return Err(format!("Duplicate inline table key {key_stem:?}"));
             }
@@ -768,10 +840,16 @@ mod tomllib {
 
     fn parse_hex_char(cx: &Cx, pos: usize, hex_len: usize) -> R<(usize, String)> {
         let _f = cx.frame()?;
-        let hex = cx.b.get(pos..pos + hex_len).filter(|h| h.iter().all(u8::is_ascii_hexdigit));
-        let Some(hex) = hex else { return Err("Invalid hex value".into()) };
+        let hex =
+            cx.b.get(pos..pos + hex_len)
+                .filter(|h| h.iter().all(u8::is_ascii_hexdigit));
+        let Some(hex) = hex else {
+            return Err("Invalid hex value".into());
+        };
         let pos = pos + hex_len;
-        let hex_int = hex.iter().fold(0u32, |n, &d| n * 16 + (d as char).to_digit(16).unwrap_or(0));
+        let hex_int = hex
+            .iter()
+            .fold(0u32, |n, &d| n * 16 + (d as char).to_digit(16).unwrap_or(0));
         drop(cx.frame()?); // is_unicode_scalar_value
         match char::from_u32(hex_int) {
             Some(c) => Ok((pos, c.to_string())),
@@ -819,11 +897,17 @@ mod tomllib {
 
     fn parse_basic_str(cx: &Cx, mut pos: usize, multiline: bool) -> R<(usize, String)> {
         let _f = cx.frame()?;
-        let error_on = if multiline { illegal_multiline } else { illegal_basic };
+        let error_on = if multiline {
+            illegal_multiline
+        } else {
+            illegal_basic
+        };
         let mut result = String::new();
         let mut start_pos = pos;
         loop {
-            let Some(char) = cx.at(pos) else { return Err("Unterminated string".into()) };
+            let Some(char) = cx.at(pos) else {
+                return Err("Unterminated string".into());
+            };
             if char == b'"' {
                 if !multiline {
                     result.push_str(&cx.src[start_pos..pos]);
@@ -867,11 +951,11 @@ mod tomllib {
         RE.get_or_init(|| {
             re(concat!(
                 r"\A(?:0(?:x[0-9A-Fa-f](?:_?[0-9A-Fa-f])*", // hex
-                r"|b[01](?:_?[01])*",                        // bin
-                r"|o[0-7](?:_?[0-7])*)",                     // oct
-                r"|[+-]?(?:0|[1-9](?:_?[0-9])*)",            // dec, integer part
-                r"(?P<floatpart>(?:\.[0-9](?:_?[0-9])*)?",   // optional fractional part
-                r"(?:[eE][+-]?[0-9](?:_?[0-9])*)?))",        // optional exponent part
+                r"|b[01](?:_?[01])*",                       // bin
+                r"|o[0-7](?:_?[0-7])*)",                    // oct
+                r"|[+-]?(?:0|[1-9](?:_?[0-9])*)",           // dec, integer part
+                r"(?P<floatpart>(?:\.[0-9](?:_?[0-9])*)?",  // optional fractional part
+                r"(?:[eE][+-]?[0-9](?:_?[0-9])*)?))",       // optional exponent part
             ))
         })
     }
@@ -895,7 +979,10 @@ mod tomllib {
     /// year 0 or a day the month does not have.
     fn match_to_datetime(cx: &Cx, m: &regex::Captures) -> R<()> {
         let _f = cx.frame()?;
-        let num = |i: usize| m.get(i).map_or(0, |g| g.as_str().parse::<u32>().unwrap_or(0));
+        let num = |i: usize| {
+            m.get(i)
+                .map_or(0, |g| g.as_str().parse::<u32>().unwrap_or(0))
+        };
         let (year, month, day) = (num(1), num(2), num(3));
         let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
         let days = match month {
@@ -921,8 +1008,11 @@ mod tomllib {
         let text = m.get(0).map_or("", |g| g.as_str());
         let float = m.name("floatpart").is_some_and(|g| !g.as_str().is_empty());
         let decimal = !text.starts_with("0x") && !text.starts_with("0b") && !text.starts_with("0o");
-        if !float && decimal && text.bytes().filter(u8::is_ascii_digit).count() > INT_MAX_STR_DIGITS {
-            return Err(format!("Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion"));
+        if !float && decimal && text.bytes().filter(u8::is_ascii_digit).count() > INT_MAX_STR_DIGITS
+        {
+            return Err(format!(
+                "Exceeds the limit ({INT_MAX_STR_DIGITS} digits) for integer string conversion"
+            ));
         }
         Ok(())
     }
@@ -994,7 +1084,10 @@ mod tomllib {
         if cx.starts(pos, "inf") || cx.starts(pos, "nan") {
             return Ok((pos + 3, Val::Other));
         }
-        if ["-inf", "+inf", "-nan", "+nan"].iter().any(|s| cx.starts(pos, s)) {
+        if ["-inf", "+inf", "-nan", "+nan"]
+            .iter()
+            .any(|s| cx.starts(pos, s))
+        {
             return Ok((pos + 4, Val::Other));
         }
 
@@ -1018,7 +1111,10 @@ impl Env {
         Env(std::env::vars_os().collect())
     }
     fn get(&self, name: &str) -> Option<&OsStr> {
-        self.0.iter().find(|(k, _)| k.as_os_str() == OsStr::new(name)).map(|(_, v)| v.as_os_str())
+        self.0
+            .iter()
+            .find(|(k, _)| k.as_os_str() == OsStr::new(name))
+            .map(|(_, v)| v.as_os_str())
     }
 }
 
@@ -1032,7 +1128,8 @@ fn getproxies_environment(env: &Env) -> std::collections::HashMap<String, String
         let name = name.to_string_lossy();
         let chars: Vec<char> = name.chars().collect();
         // fast screen underscore position before more expensive case-folding
-        if chars.len() > 5 && chars[chars.len() - 6] == '_'
+        if chars.len() > 5
+            && chars[chars.len() - 6] == '_'
             && py_lower(&chars[chars.len() - 5..].iter().collect::<String>()) == "proxy"
         {
             let value = value.to_string_lossy().into_owned();
@@ -1064,9 +1161,14 @@ fn getproxies_environment(env: &Env) -> std::collections::HashMap<String, String
 }
 
 /// `urllib.request.proxy_bypass_environment`: is `host` on no_proxy?
-fn proxy_bypass_environment(host: &str, proxies: &std::collections::HashMap<String, String>) -> bool {
+fn proxy_bypass_environment(
+    host: &str,
+    proxies: &std::collections::HashMap<String, String>,
+) -> bool {
     // don't bypass, if no_proxy isn't specified
-    let Some(no_proxy) = proxies.get("no") else { return false };
+    let Some(no_proxy) = proxies.get("no") else {
+        return false;
+    };
     // '*' is special case for always bypass
     if no_proxy == "*" {
         return true;
@@ -1074,7 +1176,9 @@ fn proxy_bypass_environment(host: &str, proxies: &std::collections::HashMap<Stri
     let host = py_lower(host);
     // strip port off host (`_splitport`: the last ':' followed only by digits)
     let hostonly = match host.rfind(':') {
-        Some(i) if i + 1 < host.len() && host[i + 1..].bytes().all(|c| c.is_ascii_digit()) => &host[..i],
+        Some(i) if i + 1 < host.len() && host[i + 1..].bytes().all(|c| c.is_ascii_digit()) => {
+            &host[..i]
+        }
         _ => host.as_str(),
     };
     // check if the host ends with any of the DNS suffixes
@@ -1144,7 +1248,10 @@ fn py_int(s: &str) -> Option<i64> {
         Some(b'+') => (false, &t[1..]),
         _ => (false, t),
     };
-    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__")
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
         || !digits.bytes().all(|c| c.is_ascii_digit() || c == b'_')
     {
         return None;
@@ -1169,8 +1276,13 @@ struct Tunnel {
 /// whose default port is HTTPSConnection's 443 whatever the proxy's scheme.
 /// urllib always tunnels https through CONNECT, so the proxy's own scheme
 /// does not matter.
-fn https_route(proxies: &std::collections::HashMap<String, String>, host: &str) -> Result<Option<Tunnel>, String> {
-    let Some(proxy) = proxies.get("https") else { return Ok(None) };
+fn https_route(
+    proxies: &std::collections::HashMap<String, String>,
+    host: &str,
+) -> Result<Option<Tunnel>, String> {
+    let Some(proxy) = proxies.get("https") else {
+        return Ok(None);
+    };
     // _parse_proxy: _splittype, then the authority
     let r_scheme = match proxy.find([':', '/']) {
         Some(i) if i > 0 && proxy.as_bytes()[i] == b':' => &proxy[i + 1..],
@@ -1205,9 +1317,10 @@ fn https_route(proxies: &std::collections::HashMap<String, String>, host: &str) 
     }
 
     let auth = match (user, password) {
-        (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => {
-            Some(format!("Basic {}", b64(format!("{}:{}", py_unquote(u), py_unquote(p)).as_bytes())))
-        }
+        (Some(u), Some(p)) if !u.is_empty() && !p.is_empty() => Some(format!(
+            "Basic {}",
+            b64(format!("{}:{}", py_unquote(u), py_unquote(p)).as_bytes())
+        )),
         _ => None,
     };
     let hostport = py_unquote(hostport);
@@ -1228,14 +1341,21 @@ fn https_route(proxies: &std::collections::HashMap<String, String>, host: &str) 
     if h.len() >= 2 && h.starts_with('[') && h.ends_with(']') {
         h = &h[1..h.len() - 1];
     }
-    Ok(Some(Tunnel { host: h.to_string(), port, auth }))
+    Ok(Some(Tunnel {
+        host: h.to_string(),
+        port,
+        auth,
+    }))
 }
 
 fn b64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in data.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
@@ -1267,12 +1387,22 @@ fn openssl_default_roots(env: &Env) -> Vec<ureq::tls::Certificate<'static>> {
         out.extend(certs);
     }
     let mut roots = Vec::new();
-    let file = env.get("SSL_CERT_FILE").unwrap_or(OsStr::new("/etc/ssl/cert.pem"));
+    let file = env
+        .get("SSL_CERT_FILE")
+        .unwrap_or(OsStr::new("/etc/ssl/cert.pem"));
     load(Path::new(file), &mut roots);
-    let dirs = env.get("SSL_CERT_DIR").unwrap_or(OsStr::new("/etc/ssl/certs"));
+    let dirs = env
+        .get("SSL_CERT_DIR")
+        .unwrap_or(OsStr::new("/etc/ssl/certs"));
     let hashed = regex::bytes::Regex::new(r"\A[0-9a-f]{8}\.[0-9]+\z").unwrap();
-    for dir in dirs.as_bytes().split(|&c| c == b':').filter(|d| !d.is_empty()) {
-        let Ok(entries) = std::fs::read_dir(OsStr::from_bytes(dir)) else { continue };
+    for dir in dirs
+        .as_bytes()
+        .split(|&c| c == b':')
+        .filter(|d| !d.is_empty())
+    {
+        let Ok(entries) = std::fs::read_dir(OsStr::from_bytes(dir)) else {
+            continue;
+        };
         let mut names: Vec<PathBuf> = entries
             .flatten()
             .filter(|e| hashed.is_match(e.file_name().as_bytes()))
@@ -1287,7 +1417,9 @@ fn openssl_default_roots(env: &Env) -> Vec<ureq::tls::Certificate<'static>> {
 }
 
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
-use ureq::unversioned::transport::{Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, Transport};
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, Transport,
+};
 
 /// A TCP socket with Python's socket timeout: every send and every recv
 /// gets its own 20 seconds, whatever phase of the request it belongs to,
@@ -1299,13 +1431,17 @@ struct PyTransport {
 
 impl std::fmt::Debug for PyTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PyTransport").field("addr", &self.stream.peer_addr().ok()).finish()
+        f.debug_struct("PyTransport")
+            .field("addr", &self.stream.peer_addr().ok())
+            .finish()
     }
 }
 
 fn io_err(e: std::io::Error, timeout: &NextTimeout) -> ureq::Error {
     match e.kind() {
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => ureq::Error::Timeout(timeout.reason),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            ureq::Error::Timeout(timeout.reason)
+        }
         _ => e.into(),
     }
 }
@@ -1319,7 +1455,9 @@ impl Transport for PyTransport {
         use std::io::Write;
         self.stream.set_write_timeout(Some(TIMEOUT))?;
         let output = &self.buffers.output()[..amount];
-        self.stream.write_all(output).map_err(|e| io_err(e, &timeout))
+        self.stream
+            .write_all(output)
+            .map_err(|e| io_err(e, &timeout))
     }
 
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
@@ -1345,7 +1483,9 @@ impl Transport for PyTransport {
 
 /// `socket.create_connection(address, timeout=20)`: each address in turn,
 /// each with the full 20 seconds; the last error if none answers.
-fn create_connection(addrs: impl IntoIterator<Item = std::net::SocketAddr>) -> std::io::Result<std::net::TcpStream> {
+fn create_connection(
+    addrs: impl IntoIterator<Item = std::net::SocketAddr>,
+) -> std::io::Result<std::net::TcpStream> {
     let mut err = None;
     for a in addrs {
         match std::net::TcpStream::connect_timeout(&a, TIMEOUT) {
@@ -1372,18 +1512,29 @@ struct UrllibConnector {
     proxies: std::sync::Arc<std::collections::HashMap<String, String>>,
 }
 
-fn route(proxies: &std::collections::HashMap<String, String>, uri: &ureq::http::Uri) -> Result<Option<Tunnel>, ureq::Error> {
+fn route(
+    proxies: &std::collections::HashMap<String, String>,
+    uri: &ureq::http::Uri,
+) -> Result<Option<Tunnel>, ureq::Error> {
     if uri.scheme_str() != Some("https") {
         return Ok(None);
     }
-    https_route(proxies, uri.host().unwrap_or("")).map_err(|e| ureq::Error::Io(std::io::Error::other(e)))
+    https_route(proxies, uri.host().unwrap_or(""))
+        .map_err(|e| ureq::Error::Io(std::io::Error::other(e)))
 }
 
 impl Connector<()> for UrllibConnector {
     type Out = PyTransport;
 
-    fn connect(&self, details: &ConnectionDetails, _chained: Option<()>) -> Result<Option<PyTransport>, ureq::Error> {
-        let buffers = LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size());
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        _chained: Option<()>,
+    ) -> Result<Option<PyTransport>, ureq::Error> {
+        let buffers = LazyBuffers::new(
+            details.config.input_buffer_size(),
+            details.config.output_buffer_size(),
+        );
         let Some(tunnel) = route(&self.proxies, details.uri)? else {
             let stream = create_connection(details.addrs.iter().copied())?;
             return Ok(Some(PyTransport { stream, buffers }));
@@ -1411,7 +1562,9 @@ impl Connector<()> for UrllibConnector {
         {
             use std::io::Write;
             t.stream.set_write_timeout(Some(TIMEOUT))?;
-            t.stream.write_all(req.as_bytes()).map_err(|e| io_err(e, &timeout))?;
+            t.stream
+                .write_all(req.as_bytes())
+                .map_err(|e| io_err(e, &timeout))?;
         }
 
         // The status line, then header lines until a blank one (or the end).
@@ -1422,7 +1575,9 @@ impl Connector<()> for UrllibConnector {
                 let line = input[..=nl].to_vec();
                 t.buffers.input_consume(nl + 1);
                 if line.len() > 65536 {
-                    return Err(ureq::Error::Io(std::io::Error::other("got more than 65536 bytes when reading header line")));
+                    return Err(ureq::Error::Io(std::io::Error::other(
+                        "got more than 65536 bytes when reading header line",
+                    )));
                 }
                 if lines == 0 {
                     // _read_status, and the CONNECT must answer 200
@@ -1430,22 +1585,33 @@ impl Connector<()> for UrllibConnector {
                     let mut parts = text.split_whitespace();
                     let version = parts.next().unwrap_or("");
                     let status = parts.next().and_then(py_int);
-                    if !version.starts_with("HTTP/") || !status.is_some_and(|s| (100..=999).contains(&s)) {
-                        return Err(ureq::Error::Io(std::io::Error::other(format!("BadStatusLine: {text:?}"))));
+                    if !version.starts_with("HTTP/")
+                        || !status.is_some_and(|s| (100..=999).contains(&s))
+                    {
+                        return Err(ureq::Error::Io(std::io::Error::other(format!(
+                            "BadStatusLine: {text:?}"
+                        ))));
                     }
                     if status != Some(200) {
-                        return Err(ureq::Error::ConnectProxyFailed(format!("Tunnel connection failed: {}", text.trim())));
+                        return Err(ureq::Error::ConnectProxyFailed(format!(
+                            "Tunnel connection failed: {}",
+                            text.trim()
+                        )));
                     }
                 } else if line == b"\r\n" || line == b"\n" {
                     break;
                 } else if lines > 100 {
-                    return Err(ureq::Error::Io(std::io::Error::other("got more than 100 headers")));
+                    return Err(ureq::Error::Io(std::io::Error::other(
+                        "got more than 100 headers",
+                    )));
                 }
                 lines += 1;
                 continue;
             }
             if input.len() > 65536 {
-                return Err(ureq::Error::Io(std::io::Error::other("header line too long")));
+                return Err(ureq::Error::Io(std::io::Error::other(
+                    "header line too long",
+                )));
             }
             if !t.await_input(timeout)? {
                 if lines == 0 {
@@ -1468,7 +1634,12 @@ struct UrllibResolver {
 }
 
 impl Resolver for UrllibResolver {
-    fn resolve(&self, uri: &ureq::http::Uri, config: &ureq::config::Config, timeout: NextTimeout) -> Result<ResolvedSocketAddrs, ureq::Error> {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
         if route(&self.proxies, uri)?.is_some() {
             let mut v = self.empty();
             v.push(std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
@@ -1488,13 +1659,25 @@ fn urlopen_read(url: &str, env: &Env) -> Result<Vec<u8>, String> {
         .build();
     // No ureq timeouts and no ureq proxy: the transport times each socket
     // operation, and the connector does urllib's proxying.
-    let config = ureq::Agent::config_builder().proxy(None).tls_config(tls).build();
-    let connector = UrllibConnector { proxies: proxies.clone() }
-        .chain(ureq::unversioned::transport::RustlsConnector::default());
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .tls_config(tls)
+        .build();
+    let connector = UrllibConnector {
+        proxies: proxies.clone(),
+    }
+    .chain(ureq::unversioned::transport::RustlsConnector::default());
     let agent = ureq::Agent::with_parts(config, connector, UrllibResolver { proxies });
-    let r = agent.get(url).header("User-Agent", UA).call().map_err(|e| e.to_string())?;
+    let r = agent
+        .get(url)
+        .header("User-Agent", UA)
+        .call()
+        .map_err(|e| e.to_string())?;
     let mut body = Vec::new();
-    r.into_body().into_reader().read_to_end(&mut body).map_err(|e| e.to_string())?;
+    r.into_body()
+        .into_reader()
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
     Ok(body)
 }
 
@@ -1508,7 +1691,9 @@ fn fetch_palette_env(repo: &str, env: &Env) -> Palette {
     if url.is_empty() {
         return Palette::new();
     }
-    let raw = match urlopen_read(&url, env).and_then(|body| tomllib::loads(&String::from_utf8_lossy(&body))) {
+    let raw = match urlopen_read(&url, env)
+        .and_then(|body| tomllib::loads(&String::from_utf8_lossy(&body)))
+    {
         Ok(t) => t,
         Err(_) => return Palette::new(),
     };
@@ -1529,7 +1714,10 @@ fn fetch_palette_env(repo: &str, env: &Env) -> Palette {
 pub fn art_path(repo: &str) -> PathBuf {
     use sha1::{Digest, Sha1};
     let digest = hex::encode(Sha1::digest(repo.as_bytes()));
-    to_path(py_join(art().as_os_str().as_bytes(), format!("{}.png", &digest[..16]).as_bytes()))
+    to_path(py_join(
+        art().as_os_str().as_bytes(),
+        format!("{}.png", &digest[..16]).as_bytes(),
+    ))
 }
 
 fn _rounded(ctx: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
@@ -1567,13 +1755,22 @@ pub fn render(palette: &Palette, dest: &Path) -> Result<Option<PathBuf>, String>
         default.to_string()
     };
 
-    let bg      = _rgb(&pick(&["background"], "#1c1e24"), GREY)?;
+    let bg = _rgb(&pick(&["background"], "#1c1e24"), GREY)?;
     let bg_dark = _rgb(&pick(&["dark_background", "background"], "#17191f"), GREY)?;
-    let bg_dkr  = _rgb(&pick(&["darker_background", "dark_background"], "#111318"), GREY)?;
-    let bg_lit  = _rgb(&pick(&["lighter_background", "background"], "#2d3038"), GREY)?;
-    let fg      = _rgb(&pick(&["foreground"], "#f2f3f5"), GREY)?;
-    let muted   = _rgb(&pick(&["muted", "dark_foreground", "foreground"], "#adb0b9"), GREY)?;
-    let accent  = _rgb(&pick(&["accent", "blue"], "#78b4ff"), GREY)?;
+    let bg_dkr = _rgb(
+        &pick(&["darker_background", "dark_background"], "#111318"),
+        GREY,
+    )?;
+    let bg_lit = _rgb(
+        &pick(&["lighter_background", "background"], "#2d3038"),
+        GREY,
+    )?;
+    let fg = _rgb(&pick(&["foreground"], "#f2f3f5"), GREY)?;
+    let muted = _rgb(
+        &pick(&["muted", "dark_foreground", "foreground"], "#adb0b9"),
+        GREY,
+    )?;
+    let accent = _rgb(&pick(&["accent", "blue"], "#78b4ff"), GREY)?;
 
     let rgb = |ctx: &cairo::Context, c: Rgb| ctx.set_source_rgb(c.0, c.1, c.2);
     let (wf, hf) = (W as f64, H as f64);
@@ -1602,7 +1799,14 @@ pub fn render(palette: &Palette, dest: &Path) -> Result<Option<PathBuf>, String>
             // Right-hand indicators
             for i in 0..3 {
                 rgb(&ctx, muted);
-                _rounded(&ctx, wf - 30.0 - i as f64 * 26.0, bar_h / 2.0 - 3.0, 16.0, 6.0, 3.0);
+                _rounded(
+                    &ctx,
+                    wf - 30.0 - i as f64 * 26.0,
+                    bar_h / 2.0 - 3.0,
+                    16.0,
+                    6.0,
+                    3.0,
+                );
                 ctx.fill()?;
             }
 
@@ -1623,14 +1827,27 @@ pub fn render(palette: &Palette, dest: &Path) -> Result<Option<PathBuf>, String>
             ctx.restore()?;
             for i in 0..3 {
                 rgb(&ctx, muted);
-                ctx.arc(wx + 14.0 + i as f64 * 13.0, wy + 12.0, 3.2, 0.0, 2.0 * std::f64::consts::PI);
+                ctx.arc(
+                    wx + 14.0 + i as f64 * 13.0,
+                    wy + 12.0,
+                    3.2,
+                    0.0,
+                    2.0 * std::f64::consts::PI,
+                );
                 ctx.fill()?;
             }
 
             // Text lines, long then short, the shape of a paragraph
             for (i, frac) in [0.74, 0.56, 0.66, 0.38].iter().enumerate() {
                 rgb(&ctx, if i == 0 { fg } else { muted });
-                _rounded(&ctx, wx + 16.0, wy + 42.0 + i as f64 * 15.0, (ww - 32.0) * frac, 7.0, 3.5);
+                _rounded(
+                    &ctx,
+                    wx + 16.0,
+                    wy + 42.0 + i as f64 * 15.0,
+                    (ww - 32.0) * frac,
+                    7.0,
+                    3.5,
+                );
                 ctx.fill()?;
             }
 
@@ -1677,7 +1894,10 @@ pub fn render(palette: &Palette, dest: &Path) -> Result<Option<PathBuf>, String>
 /// A cached preview for a theme repository, drawing it if needed.
 pub fn thumbnail(repo: &str) -> Option<PathBuf> {
     let dest = art_path(repo);
-    if std::fs::metadata(&dest).map(|m| m.len() > 0).unwrap_or(false) {
+    if std::fs::metadata(&dest)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+    {
         return Some(dest);
     }
     // Python lets render's exception through here too, but it cannot happen:
@@ -1685,14 +1905,16 @@ pub fn thumbnail(repo: &str) -> Option<PathBuf> {
     render(&fetch_palette(repo), &dest).ok().flatten()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn palette_url_needs_owner_and_name() {
-        assert_eq!(palette_url("https://github.com/a/b"), "https://raw.githubusercontent.com/a/b/HEAD/colors.toml");
+        assert_eq!(
+            palette_url("https://github.com/a/b"),
+            "https://raw.githubusercontent.com/a/b/HEAD/colors.toml"
+        );
         assert_eq!(palette_url("https://github.com/a"), "");
         assert_eq!(palette_url(""), "");
     }
@@ -1704,7 +1926,10 @@ mod tests {
         assert_eq!(_rgb("nope", GREY), Ok(GREY));
         assert_eq!(_rgb("", GREY), Ok(GREY));
         assert!(_rgb("#abcdef\n", GREY).is_ok());
-        assert_eq!(_rgb("#abc\n", GREY), Err("invalid literal for int() with base 16: ''".to_string()));
+        assert_eq!(
+            _rgb("#abc\n", GREY),
+            Err("invalid literal for int() with base 16: ''".to_string())
+        );
     }
 
     #[test]
@@ -1727,8 +1952,17 @@ mod tests {
 
     #[test]
     fn paths_normalise_like_pathlib() {
-        for (raw, want) in [("//a//b/", "//a/b"), ("///a", "/a"), ("a/./b/.", "a/b"), ("./a", "a"),
-                            (".", "."), ("", "."), ("/", "/"), ("//", "//"), ("a/../b", "a/../b")] {
+        for (raw, want) in [
+            ("//a//b/", "//a/b"),
+            ("///a", "/a"),
+            ("a/./b/.", "a/b"),
+            ("./a", "a"),
+            (".", "."),
+            ("", "."),
+            ("/", "/"),
+            ("//", "//"),
+            ("a/../b", "a/../b"),
+        ] {
             assert_eq!(py_path(raw.as_bytes()), want.as_bytes(), "{raw:?}");
         }
         assert_eq!(py_join(b".", b"almanac"), b"almanac");
@@ -1739,7 +1973,9 @@ mod tests {
     #[test]
     fn cache_dir_follows_pathlib() {
         let os = |s: &[u8]| OsStr::from_bytes(s).to_os_string();
-        let c = |x: Option<&[u8]>, h: Option<&[u8]>| cache_from(x.map(os).as_deref(), h.map(os).as_deref());
+        let c = |x: Option<&[u8]>, h: Option<&[u8]>| {
+            cache_from(x.map(os).as_deref(), h.map(os).as_deref())
+        };
         // Values from Python 3.14 with the same environment.
         assert_eq!(c(None, Some(b"")), b"/.cache/almanac");
         assert_eq!(c(None, Some(b"//")), b"/.cache/almanac");
@@ -1809,18 +2045,30 @@ mod tests {
         let nest = |n: usize| format!("x = {}{}", "[".repeat(n), "]".repeat(n));
         assert!(ok(&nest(492)));
         assert!(!ok(&nest(493)));
-        let t = tomllib::loads("mode = \"Dark\"\naccent = '#fff'\nn = 1\n[t]\nred = \"#f00\"").unwrap();
+        let t =
+            tomllib::loads("mode = \"Dark\"\naccent = '#fff'\nn = 1\n[t]\nred = \"#f00\"").unwrap();
         assert_eq!(t.keys().collect::<Vec<_>>(), ["mode", "accent", "n", "t"]);
     }
 
     #[test]
     fn proxies_follow_urllib() {
-        let env = |pairs: &[(&str, &str)]| Env(pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect());
-        let p = getproxies_environment(&env(&[("http_proxy", "http://h:1"), ("ALL_PROXY", "http://a:1")]));
+        let env = |pairs: &[(&str, &str)]| {
+            Env(pairs
+                .iter()
+                .map(|(k, v)| ((*k).into(), (*v).into()))
+                .collect())
+        };
+        let p = getproxies_environment(&env(&[
+            ("http_proxy", "http://h:1"),
+            ("ALL_PROXY", "http://a:1"),
+        ]));
         assert_eq!(https_route(&p, "raw.githubusercontent.com"), Ok(None));
         let p = getproxies_environment(&env(&[("HTTPS_PROXY", "http://h:1"), ("https_proxy", "")]));
         assert_eq!(p.get("https"), None);
-        let p = getproxies_environment(&env(&[("https_proxy", "http://h:1"), ("HTTPS_PROXY", "http://x:2")]));
+        let p = getproxies_environment(&env(&[
+            ("https_proxy", "http://h:1"),
+            ("HTTPS_PROXY", "http://x:2"),
+        ]));
         assert_eq!(p.get("https").map(String::as_str), Some("http://h:1"));
         let route = |proxy: &str, no: &str| {
             let mut m = std::collections::HashMap::new();
@@ -1830,13 +2078,22 @@ mod tests {
             }
             https_route(&m, "raw.githubusercontent.com")
         };
-        let t = |host: &str, port: u16, auth: Option<&str>| Ok(Some(Tunnel { host: host.into(), port, auth: auth.map(String::from) }));
+        let t = |host: &str, port: u16, auth: Option<&str>| {
+            Ok(Some(Tunnel {
+                host: host.into(),
+                port,
+                auth: auth.map(String::from),
+            }))
+        };
         assert_eq!(route("http://p:3128", ""), t("p", 3128, None));
         assert_eq!(route("p:3128", ""), t("p", 3128, None));
         assert_eq!(route("http://p", ""), t("p", 443, None));
         assert_eq!(route("http://p:", ""), t("p", 443, None));
         assert_eq!(route("socks5://[::1]:1080/x", ""), t("::1", 1080, None));
-        assert_eq!(route("http://u:p%40ss@p:8", ""), t("p", 8, Some("Basic dTpwQHNz")));
+        assert_eq!(
+            route("http://u:p%40ss@p:8", ""),
+            t("p", 8, Some("Basic dTpwQHNz"))
+        );
         assert_eq!(route("http://u@p:8", ""), t("p", 8, None));
         assert_eq!(route("http://p:8", "githubusercontent.com"), Ok(None));
         assert_eq!(route("http://p:8", ".GitHubUserContent.com, x"), Ok(None));
@@ -1858,8 +2115,17 @@ mod tests {
 
     #[test]
     fn roots_follow_openssl_paths() {
-        let env = |pairs: &[(&str, &str)]| Env(pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect());
-        assert!(openssl_default_roots(&env(&[("SSL_CERT_FILE", "/dev/null"), ("SSL_CERT_DIR", "/nonexistent")])).is_empty());
+        let env = |pairs: &[(&str, &str)]| {
+            Env(pairs
+                .iter()
+                .map(|(k, v)| ((*k).into(), (*v).into()))
+                .collect())
+        };
+        assert!(openssl_default_roots(&env(&[
+            ("SSL_CERT_FILE", "/dev/null"),
+            ("SSL_CERT_DIR", "/nonexistent")
+        ]))
+        .is_empty());
         if Path::new("/etc/ssl/cert.pem").exists() {
             assert!(!openssl_default_roots(&env(&[("SSL_CERT_DIR", "/nonexistent")])).is_empty());
         }
@@ -1868,10 +2134,22 @@ mod tests {
     #[test]
     fn lossy_utf8_matches_python_replace() {
         // Counts of U+FFFD from Python's decode("utf-8", "replace").
-        for (bytes, want) in [(&b"\xf0\x80\x80"[..], 3), (b"\xe2\x82", 1), (b"\xed\xa0\x80", 3),
-                              (b"\xc0\xaf", 2), (b"\xf4\x90\x80\x80", 4), (b"a\xffb", 1),
-                              (b"\xe2\x82\xe2\x82\xac", 1), (b"\xf8\x88\x80\x80\x80", 5), (b"\xf0\x9f\x98", 1)] {
-            assert_eq!(String::from_utf8_lossy(bytes).matches('\u{fffd}').count(), want, "{bytes:?}");
+        for (bytes, want) in [
+            (&b"\xf0\x80\x80"[..], 3),
+            (b"\xe2\x82", 1),
+            (b"\xed\xa0\x80", 3),
+            (b"\xc0\xaf", 2),
+            (b"\xf4\x90\x80\x80", 4),
+            (b"a\xffb", 1),
+            (b"\xe2\x82\xe2\x82\xac", 1),
+            (b"\xf8\x88\x80\x80\x80", 5),
+            (b"\xf0\x9f\x98", 1),
+        ] {
+            assert_eq!(
+                String::from_utf8_lossy(bytes).matches('\u{fffd}').count(),
+                want,
+                "{bytes:?}"
+            );
         }
     }
 }

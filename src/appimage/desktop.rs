@@ -19,7 +19,9 @@ fn join_os(dir: &std::ffi::OsStr, name: &std::ffi::OsStr) -> std::ffi::OsString 
 }
 
 /// `os.scandir(path)`: (name, path) of each entry, in directory order.
-fn scandir(path: &std::ffi::OsStr) -> std::io::Result<Vec<(String, std::ffi::OsString, std::fs::DirEntry)>> {
+fn scandir(
+    path: &std::ffi::OsStr,
+) -> std::io::Result<Vec<(String, std::ffi::OsString, std::fs::DirEntry)>> {
     let rd = std::fs::read_dir(path)?;
     Ok(rd
         .filter_map(Result::ok)
@@ -36,7 +38,13 @@ fn has_magic(s: &str) -> bool {
 
 /// One step of pathlib's globber (`glob._GlobberBase.selector`), applied to
 /// `parts[i..]` from `path` (raw text ending in '/' where more follows).
-fn glob_select(parts: &[String], i: usize, path: std::ffi::OsString, exists: bool, out: &mut Vec<std::ffi::OsString>) {
+fn glob_select(
+    parts: &[String],
+    i: usize,
+    path: std::ffi::OsString,
+    exists: bool,
+    out: &mut Vec<std::ffi::OsString>,
+) {
     let n = parts.len();
     if i == n {
         // select_exists
@@ -104,7 +112,10 @@ fn glob_select(parts: &[String], i: usize, path: std::ffi::OsString, exists: boo
             if part == "*" || fnmatch(&name, part) {
                 if dir_only {
                     // DirEntry.is_dir() follows a symlink.
-                    if !std::fs::metadata(&entry_path).map(|m| m.is_dir()).unwrap_or(false) {
+                    if !std::fs::metadata(&entry_path)
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
                     let mut ep = entry_path;
@@ -123,8 +134,11 @@ fn glob_select(parts: &[String], i: usize, path: std::ffi::OsString, exists: boo
 /// other; '**' recurses without following symlinks, wildcards match hidden
 /// names too.
 fn py_glob(root: &Path, pattern: &str) -> Vec<PathBuf> {
-    let mut parts: Vec<String> =
-        pattern.split('/').filter(|x| !x.is_empty() && *x != ".").map(String::from).collect();
+    let mut parts: Vec<String> = pattern
+        .split('/')
+        .filter(|x| !x.is_empty() && *x != ".")
+        .map(String::from)
+        .collect();
     if parts.is_empty() || pattern.starts_with('/') {
         return Vec::new(); // the Python raises; no caller passes such a pattern
     }
@@ -142,7 +156,11 @@ fn py_glob(root: &Path, pattern: &str) -> Vec<PathBuf> {
 /// the permission bits.
 fn copy2(src: &Path, dst: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let dst = if dst.is_dir() { dst.join(src.file_name().unwrap_or_default()) } else { dst.to_path_buf() };
+    let dst = if dst.is_dir() {
+        dst.join(src.file_name().unwrap_or_default())
+    } else {
+        dst.to_path_buf()
+    };
     // copyfile: the destination keeps its own mode until copystat.
     {
         let mut from = std::fs::File::open(src)?;
@@ -156,12 +174,21 @@ fn copy2(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     let st = rustix::fs::stat(src)?;
     let times = rustix::fs::Timestamps {
-        last_access: rustix::fs::Timespec { tv_sec: st.st_atime as _, tv_nsec: st.st_atime_nsec as _ },
-        last_modification: rustix::fs::Timespec { tv_sec: st.st_mtime as _, tv_nsec: st.st_mtime_nsec as _ },
+        last_access: rustix::fs::Timespec {
+            tv_sec: st.st_atime as _,
+            tv_nsec: st.st_atime_nsec as _,
+        },
+        last_modification: rustix::fs::Timespec {
+            tv_sec: st.st_mtime as _,
+            tv_nsec: st.st_mtime_nsec as _,
+        },
     };
     rustix::fs::utimensat(rustix::fs::CWD, &dst, &times, rustix::fs::AtFlags::empty())?;
     copy_xattr(src, &dst)?;
-    std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(st.st_mode as u32 & 0o7777))?;
+    std::fs::set_permissions(
+        &dst,
+        std::fs::Permissions::from_mode(st.st_mode as u32 & 0o7777),
+    )?;
     Ok(())
 }
 
@@ -171,8 +198,8 @@ fn copy2(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// 64 KiB, also the kernel's own limits): past that Python raises ERANGE too.
 /// Names are passed through as bytes, as `os.fsdecode` / `fsencode` do.
 fn copy_xattr(src: &Path, dst: &Path) -> std::io::Result<()> {
-    use std::os::unix::ffi::OsStrExt;
     use rustix::io::Errno;
+    use std::os::unix::ffi::OsStrExt;
     let mut list = vec![0u8; 65536];
     let n = match rustix::fs::listxattr(src, &mut list[..]) {
         Ok(n) => n,
@@ -182,11 +209,20 @@ fn copy_xattr(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut value = vec![0u8; 65536];
     for name in list[..n].split(|&b| b == 0).filter(|s| !s.is_empty()) {
         let name = std::ffi::OsStr::from_bytes(name);
-        let r = rustix::fs::getxattr(src, name, &mut value[..])
-            .and_then(|len| rustix::fs::setxattr(dst, name, &value[..len], rustix::fs::XattrFlags::empty()));
+        let r = rustix::fs::getxattr(src, name, &mut value[..]).and_then(|len| {
+            rustix::fs::setxattr(dst, name, &value[..len], rustix::fs::XattrFlags::empty())
+        });
         match r {
             Ok(()) => {}
-            Err(e) if [Errno::PERM, Errno::NOTSUP, Errno::NODATA, Errno::INVAL, Errno::ACCESS].contains(&e) => {}
+            Err(e)
+                if [
+                    Errno::PERM,
+                    Errno::NOTSUP,
+                    Errno::NODATA,
+                    Errno::INVAL,
+                    Errno::ACCESS,
+                ]
+                .contains(&e) => {}
             Err(e) => return Err(e.into()),
         }
     }
@@ -220,7 +256,10 @@ impl TempTree {
                 Err(e) => return Err(e),
             }
         }
-        Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "No usable temporary directory name found"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "No usable temporary directory name found",
+        ))
     }
 
     fn path(&self) -> &Path {
@@ -253,7 +292,8 @@ fn rmtree_writable(p: &Path) -> std::io::Result<()> {
             if m.is_dir() {
                 let mode = m.permissions().mode();
                 if mode & 0o700 != 0o700 {
-                    let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(mode | 0o700));
+                    let _ =
+                        std::fs::set_permissions(d, std::fs::Permissions::from_mode(mode | 0o700));
                 }
                 if let Ok(rd) = std::fs::read_dir(d) {
                     for e in rd.filter_map(Result::ok) {
@@ -295,7 +335,10 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
 
     let tmp = TempTree::new_in(&py_parent(appimage_path)).map_err(io)?;
     let inside = || -> Result<bool, String> {
-        let argv = [app_os.as_os_str(), std::ffi::OsStr::new("--appimage-extract")];
+        let argv = [
+            app_os.as_os_str(),
+            std::ffi::OsStr::new("--appimage-extract"),
+        ];
         if run_bytes(&argv, 180, Some(tmp.path())).is_none() {
             return Ok(false);
         }
@@ -307,7 +350,9 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
 
         let icon_name = format!("almanac-{name}");
         for size in ["512x512", "256x256", "128x128", "64x64", "48x48"] {
-            if let Some(src) = py_glob(&root, &format!("usr/share/icons/hicolor/{size}/apps/*.png")).first() {
+            if let Some(src) =
+                py_glob(&root, &format!("usr/share/icons/hicolor/{size}/apps/*.png")).first()
+            {
                 let d = icons_dir.join(size).join("apps");
                 std::fs::create_dir_all(&d).map_err(io)?;
                 copy2(src, &d.join(format!("{icon_name}.png"))).map_err(io)?;
@@ -315,14 +360,19 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
         }
 
         let raw = std::fs::read(desktop).map_err(io)?;
-        let text = String::from_utf8_lossy(&raw).replace("\r\n", "\n").replace('\r', "\n");
+        let text = String::from_utf8_lossy(&raw)
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
         let (lines, launches) = entry_lines(&text, &app_str, &icon_name);
         let unencodable = launches && !app_utf8;
         let entry = apps_dir.join(format!("almanac-{name}.desktop"));
         if unencodable {
             // open(mode="w") has created the file before the write fails.
             std::fs::File::create(&entry).map_err(io)?;
-            return Err("UnicodeEncodeError: 'utf-8' codec can't encode characters: surrogates not allowed".into());
+            return Err(
+                "UnicodeEncodeError: 'utf-8' codec can't encode characters: surrogates not allowed"
+                    .into(),
+            );
         }
         crate::util::atomic_write(entry, lines.join("\n") + "\n").map_err(io)?;
         Ok(true)
@@ -337,7 +387,12 @@ pub fn install_desktop_entry(appimage_path: &Path, name: &str) -> Result<bool, S
     let arg = std::ffi::OsStr::new;
     for cmd in [
         vec![arg("update-desktop-database"), apps_dir.as_os_str()],
-        vec![arg("gtk-update-icon-cache"), arg("-f"), arg("-t"), icons_dir.as_os_str()],
+        vec![
+            arg("gtk-update-icon-cache"),
+            arg("-f"),
+            arg("-t"),
+            icons_dir.as_os_str(),
+        ],
     ] {
         let _ = run_bytes(&cmd, 30, None);
     }
@@ -362,7 +417,8 @@ fn entry_lines(text: &str, app: &str, icon_name: &str) -> (Vec<String>, bool) {
             // Preserve any field codes (%F, %U) the entry declared.
             let tail = line.split_once('=').map(|x| x.1).unwrap_or("");
             let codes: Vec<&str> = py_split(tail).filter(|t| t.starts_with('%')).collect();
-            lines.push(py_strip(&format!("Exec={} {}", exec_arg(app), codes.join(" "))).to_string());
+            lines
+                .push(py_strip(&format!("Exec={} {}", exec_arg(app), codes.join(" "))).to_string());
         } else if line.starts_with("Icon=") {
             lines.push(format!("Icon={icon_name}"));
         } else if line.starts_with("TryExec=") {
@@ -424,9 +480,14 @@ pub fn remove_desktop_entry(name: &str) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("OSError: {e}")),
     };
-    let apps = xdg::data_home().join("applications").join(format!("almanac-{name}.desktop"));
+    let apps = xdg::data_home()
+        .join("applications")
+        .join(format!("almanac-{name}.desktop"));
     unlink(&apps)?;
-    for png in py_glob(&xdg::data_home().join("icons/hicolor"), &format!("*/apps/almanac-{name}.png")) {
+    for png in py_glob(
+        &xdg::data_home().join("icons/hicolor"),
+        &format!("*/apps/almanac-{name}.png"),
+    ) {
         unlink(&png)?;
     }
     Ok(())
@@ -446,7 +507,10 @@ mod tests {
         let dst = tmp.path().join("b.png");
         copy2(&src, &dst).unwrap();
         assert_eq!(std::fs::read(&dst).unwrap(), b"PNG");
-        let (a, b) = (std::fs::metadata(&src).unwrap(), std::fs::metadata(&dst).unwrap());
+        let (a, b) = (
+            std::fs::metadata(&src).unwrap(),
+            std::fs::metadata(&dst).unwrap(),
+        );
         assert_eq!(b.permissions().mode() & 0o777, 0o444);
         assert_eq!(a.modified().unwrap(), b.modified().unwrap());
     }
@@ -467,16 +531,34 @@ mod tests {
     #[test]
     fn test_glob_splits_the_pattern_on_slashes() {
         let tmp = tempfile::tempdir().unwrap();
-        for rel in ["48x48/apps/almanac-x/y.png", "48x48/apps/almanac-x/z.png", ".h/apps/almanac-t.png", "f/almanac-t.png"] {
+        for rel in [
+            "48x48/apps/almanac-x/y.png",
+            "48x48/apps/almanac-x/z.png",
+            ".h/apps/almanac-t.png",
+            "f/almanac-t.png",
+        ] {
             let p = tmp.path().join(rel);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(&p, b"").unwrap();
         }
         let rel = |v: Vec<PathBuf>| -> Vec<String> {
-            v.iter().map(|p| p.strip_prefix(tmp.path()).unwrap().to_string_lossy().into_owned()).collect()
+            v.iter()
+                .map(|p| {
+                    p.strip_prefix(tmp.path())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
         };
-        assert_eq!(rel(py_glob(tmp.path(), "*/apps/almanac-x/y.png")), ["48x48/apps/almanac-x/y.png"]);
-        assert_eq!(rel(py_glob(tmp.path(), "*/apps/almanac-t.png")), [".h/apps/almanac-t.png"]);
+        assert_eq!(
+            rel(py_glob(tmp.path(), "*/apps/almanac-x/y.png")),
+            ["48x48/apps/almanac-x/y.png"]
+        );
+        assert_eq!(
+            rel(py_glob(tmp.path(), "*/apps/almanac-t.png")),
+            [".h/apps/almanac-t.png"]
+        );
         let mut all = rel(py_glob(tmp.path(), "**/*.png"));
         all.sort();
         assert_eq!(all.len(), 4);
@@ -486,7 +568,8 @@ mod tests {
     /// reads the Exec line back to exactly the path, as one argument.
     #[test]
     fn test_exec_is_quoted_for_the_desktop_entry() {
-        let shipped = "[Desktop Entry]\nName=X\nExec=AppRun --no-sandbox %U\nTryExec=AppRun\nIcon=x\n";
+        let shipped =
+            "[Desktop Entry]\nName=X\nExec=AppRun --no-sandbox %U\nTryExec=AppRun\nIcon=x\n";
         for app in [
             "/home/u/.local/state/almanac/apps/My App.AppImage",
             "/a/100%.AppImage",
@@ -497,12 +580,16 @@ mod tests {
             assert!(launches);
             let exec = lines.iter().find_map(|l| l.strip_prefix("Exec=")).unwrap();
             assert!(exec.ends_with(" %U"), "{exec}");
-            let text = format!("[Desktop Entry]\nType=Application\nName=X\n{}\n", lines[2..].join("\n"));
+            let text = format!(
+                "[Desktop Entry]\nType=Application\nName=X\n{}\n",
+                lines[2..].join("\n")
+            );
             let dir = tempfile::tempdir().unwrap();
             let file = dir.path().join("x.desktop");
             std::fs::write(&file, text).unwrap();
             let kf = gtk::glib::KeyFile::new();
-            kf.load_from_file(&file, gtk::glib::KeyFileFlags::NONE).unwrap();
+            kf.load_from_file(&file, gtk::glib::KeyFileFlags::NONE)
+                .unwrap();
             // The string value, then the spec's argument quoting.
             let value = kf.string("Desktop Entry", "Exec").unwrap();
             let argv = gtk::glib::shell_parse_argv(value.replace("%%", "%").as_str()).unwrap();

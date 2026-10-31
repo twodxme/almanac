@@ -3,7 +3,7 @@
 # is packaging/aur/almanac.
 pkgname=almanac-git
 _pkgname=almanac
-pkgver=2.1.7.r0
+pkgver=2.2.0.r0
 pkgrel=1
 pkgdesc="See everything installed, where it came from, and what needs you"
 arch=('x86_64' 'aarch64')
@@ -25,6 +25,7 @@ optdepends=(
   'mise: version-managed AI agent CLIs'
   'github-cli: raises the GitHub API ceiling from 60/h to 5000/h'
   'webp-pixbuf-loader: marketplace card artwork'
+  'python: the scheduled update (its settings and the Arch news check)'
 )
 makedepends=('cargo' 'gettext')
 makedepends+=('git')
@@ -33,7 +34,7 @@ checkdepends=('git')
 # bitcode the Rust linker (lld) cannot read: undefined ring_core_* symbols.
 # The crate's own LTO (profile.release, lto = "thin") still applies.
 options=('!lto')
-provides=("$_pkgname")
+provides=("$_pkgname=$pkgver")
 conflicts=("$_pkgname")
 source=("git+$url.git")
 sha256sums=('SKIP')
@@ -77,6 +78,13 @@ package() {
   # The scheduled update's non-pacman half, which omarchy-auto-update calls.
   install -Dm755 target/release/almanac-autorun \
     "$pkgdir/usr/lib/$_pkgname/almanac-autorun"
+  # The scheduled update itself, and the user units that run it. Shipped
+  # off: user units in /usr/lib do nothing until switched on in
+  # Preferences (systemctl --user enable --now omarchy-auto-update.timer).
+  install -Dm755 packaging/omarchy-auto-update \
+    "$pkgdir/usr/lib/$_pkgname/omarchy-auto-update"
+  install -Dm644 packaging/omarchy-auto-update.service \
+    packaging/omarchy-auto-update.timer -t "$pkgdir/usr/lib/systemd/user/"
 
   # Almanac's own symbolic glyphs, in hicolor where the icon theme finds them.
   install -Dm644 icons/*.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/actions/"
@@ -89,8 +97,8 @@ package() {
     msgfmt -o "$pkgdir/usr/share/locale/$lang/LC_MESSAGES/almanac.mo" "$po"
   done
 
-  install -Dm644 docs/almanac.desktop \
-    "$pkgdir/usr/share/applications/$_pkgname.desktop"
+  install -Dm644 docs/io.github.twodxme.Almanac.desktop \
+    "$pkgdir/usr/share/applications/io.github.twodxme.Almanac.desktop"
   install -Dm644 docs/io.github.twodxme.Almanac.metainfo.xml \
     "$pkgdir/usr/share/metainfo/io.github.twodxme.Almanac.metainfo.xml"
   install -Dm644 docs/io.github.twodxme.Almanac.svg \

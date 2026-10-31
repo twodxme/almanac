@@ -18,7 +18,10 @@ pub(super) fn extra_str(app: &App, key: &str) -> String {
 
 /// The TypeError subprocess raises for an argv item that is not a path.
 pub(super) fn not_a_path(v: &Value) -> String {
-    format!("TypeError: expected str, bytes or os.PathLike object, not {}", py_type(v))
+    format!(
+        "TypeError: expected str, bytes or os.PathLike object, not {}",
+        py_type(v)
+    )
 }
 
 /// Python truthiness of a JSON value.
@@ -48,7 +51,11 @@ pub(super) fn py_type(v: &Value) -> &'static str {
 
 /// Python's `repr()` of a str.
 pub(super) fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for c in s.chars() {
@@ -94,7 +101,10 @@ pub(super) fn py_str(v: &Value) -> String {
 
 /// `str(Path(s))`: "" is ".", and "." components and trailing slashes go.
 pub(super) fn py_path(s: &str) -> PathBuf {
-    let p: PathBuf = Path::new(s).components().filter(|c| *c != Component::CurDir).collect();
+    let p: PathBuf = Path::new(s)
+        .components()
+        .filter(|c| *c != Component::CurDir)
+        .collect();
     if p.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
@@ -111,7 +121,10 @@ pub(super) fn path_repr(p: &Path) -> String {
 pub(super) fn strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match e.raw_os_error() {
-        Some(n) => text.strip_suffix(&format!(" (os error {n})")).unwrap_or(&text).to_string(),
+        Some(n) => text
+            .strip_suffix(&format!(" (os error {n})"))
+            .unwrap_or(&text)
+            .to_string(),
         None => text,
     }
 }
@@ -119,7 +132,11 @@ pub(super) fn strerror(e: &std::io::Error) -> String {
 /// `str(OSError)`: `[Errno 13] Permission denied: '/path'`.
 pub(super) fn py_oserror(e: &std::io::Error, path: &Path) -> String {
     match e.raw_os_error() {
-        Some(n) => format!("[Errno {n}] {}: {}", strerror(e), py_str_repr(&path.to_string_lossy())),
+        Some(n) => format!(
+            "[Errno {n}] {}: {}",
+            strerror(e),
+            py_str_repr(&path.to_string_lossy())
+        ),
         None => e.to_string(),
     }
 }
@@ -127,8 +144,12 @@ pub(super) fn py_oserror(e: &std::io::Error, path: &Path) -> String {
 /// `str(OSError)` with a second filename: `[Errno 28] ...: 'a' -> 'b'`.
 pub(super) fn py_oserror2(e: &std::io::Error, a: &Path, b: &Path) -> String {
     match e.raw_os_error() {
-        Some(n) => format!("[Errno {n}] {}: {} -> {}", strerror(e),
-                           py_str_repr(&a.to_string_lossy()), py_str_repr(&b.to_string_lossy())),
+        Some(n) => format!(
+            "[Errno {n}] {}: {} -> {}",
+            strerror(e),
+            py_str_repr(&a.to_string_lossy()),
+            py_str_repr(&b.to_string_lossy())
+        ),
         None => e.to_string(),
     }
 }
@@ -159,8 +180,9 @@ pub(super) fn py_strip(s: &str) -> &str {
 
 /// `s.splitlines()[0]` of a non-empty string.
 pub(super) fn py_first_line(s: &str) -> &str {
-    const BREAKS: [char; 10] = ['\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}',
-                                '\u{2028}', '\u{2029}'];
+    const BREAKS: [char; 10] = [
+        '\n', '\r', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}',
+    ];
     s.split(BREAKS).next().unwrap_or(s)
 }
 
@@ -170,14 +192,27 @@ pub(super) fn utf8_error(bytes: &[u8], e: &std::str::Utf8Error) -> String {
     let (count, reason) = match e.error_len() {
         Some(n) => {
             let start_ok = matches!(bytes[pos], 0xC2..=0xF4);
-            (n, if start_ok { "invalid continuation byte" } else { "invalid start byte" })
+            (
+                n,
+                if start_ok {
+                    "invalid continuation byte"
+                } else {
+                    "invalid start byte"
+                },
+            )
         }
         None => (bytes.len() - pos, "unexpected end of data"),
     };
     if count == 1 {
-        format!("'utf-8' codec can't decode byte 0x{:02x} in position {pos}: {reason}", bytes[pos])
+        format!(
+            "'utf-8' codec can't decode byte 0x{:02x} in position {pos}: {reason}",
+            bytes[pos]
+        )
     } else {
-        format!("'utf-8' codec can't decode bytes in position {pos}-{}: {reason}", pos + count - 1)
+        format!(
+            "'utf-8' codec can't decode bytes in position {pos}-{}: {reason}",
+            pos + count - 1
+        )
     }
 }
 
@@ -245,11 +280,17 @@ mod tests {
         let b: &[u8] = &[b'a', b'b', 0xe2, 0x82];
         #[allow(invalid_from_utf8)] // bad UTF-8 on purpose: the error is what is tested
         let e = std::str::from_utf8(b).unwrap_err();
-        assert_eq!(utf8_error(b, &e), "'utf-8' codec can't decode bytes in position 2-3: unexpected end of data");
+        assert_eq!(
+            utf8_error(b, &e),
+            "'utf-8' codec can't decode bytes in position 2-3: unexpected end of data"
+        );
         let b: &[u8] = &[0xff];
         #[allow(invalid_from_utf8)] // bad UTF-8 on purpose: the error is what is tested
         let e = std::str::from_utf8(b).unwrap_err();
-        assert_eq!(utf8_error(b, &e), "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte");
+        assert_eq!(
+            utf8_error(b, &e),
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        );
         assert_eq!(py_str(&serde_json::json!(true)), "True");
         assert_eq!(py_str(&serde_json::json!([1, "a"])), "[1, 'a']");
         assert_eq!(py_path("./a//b/"), PathBuf::from("a/b"));

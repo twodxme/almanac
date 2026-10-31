@@ -16,7 +16,9 @@ use gtk::{gdk, glib};
 use crate::i18n::tr;
 use crate::store as store_mod;
 use crate::store::Plugin;
-use crate::ui::shell::{compact, exc_str, page_spec, sorts_discover, spawn_bg, tex_bytes, PluginItem, Win, INSTALL_ICON};
+use crate::ui::shell::{
+    compact, exc_str, page_spec, sorts_discover, spawn_bg, tex_bytes, PluginItem, Win, INSTALL_ICON,
+};
 
 use gtk::gio;
 
@@ -65,10 +67,29 @@ impl Results {
         self.idx.is_empty()
     }
 
+    /// Let go of the list, if it is `plugins` (so it can be changed in
+    /// place); `put_plugins` gives it back. Whether it was let go.
+    pub fn take_plugins_if(&mut self, plugins: &Arc<Vec<Plugin>>) -> bool {
+        if !Arc::ptr_eq(&self.plugins, plugins) {
+            return false;
+        }
+        self.plugins = Arc::default();
+        true
+    }
+
+    pub fn put_plugins(&mut self, plugins: Arc<Vec<Plugin>>) {
+        self.plugins = plugins;
+    }
+
     /// Results `from..to` (clamped), as copies for the model.
     fn page(&self, from: usize, to: usize) -> Vec<Plugin> {
         let to = to.min(self.idx.len());
-        self.idx.get(from..to).unwrap_or_default().iter().map(|&i| self.plugins[i].clone()).collect()
+        self.idx
+            .get(from..to)
+            .unwrap_or_default()
+            .iter()
+            .map(|&i| self.plugins[i].clone())
+            .collect()
     }
 }
 
@@ -117,7 +138,10 @@ fn pool_of(plugins: &[Plugin], page: &str) -> Vec<Plugin> {
 /// keystroke, without copying the catalogue to read it.
 fn pool_refs<'a>(plugins: &'a [Plugin], page: &str) -> Vec<&'a Plugin> {
     let themes = page == "themes";
-    plugins.iter().filter(|p| (p.install_kind == "theme") == themes).collect()
+    plugins
+        .iter()
+        .filter(|p| (p.install_kind == "theme") == themes)
+        .collect()
 }
 
 /// `f"{n:,}"`: thousands separated by commas.
@@ -241,7 +265,13 @@ impl Win {
 
     /// `getattr(self, "_plugins", None) or []`
     fn store_plugins(&self) -> Ref<'_, [Plugin]> {
-        Ref::map(self.shared.borrow(), |sh| if sh.plugins_none { &[][..] } else { &sh.plugins[..] })
+        Ref::map(self.shared.borrow(), |sh| {
+            if sh.plugins_none {
+                &[][..]
+            } else {
+                &sh.plugins[..]
+            }
+        })
     }
 
     // ---- the plugin marketplace -------------------------------------------
@@ -278,7 +308,10 @@ impl Win {
         });
         bar.append(&Win::labelled("Category", &store_cat));
 
-        let sort_labels: Vec<&str> = store_mod::SORTS.iter().map(|(_k, label, _f)| *label).collect();
+        let sort_labels: Vec<&str> = store_mod::SORTS
+            .iter()
+            .map(|(_k, label, _f)| *label)
+            .collect();
         let store_sort = gtk::DropDown::from_strings(&sort_labels);
         store_sort.set_tooltip_text(Some(&tr("Sort by")));
         let w = self.downgrade();
@@ -448,6 +481,7 @@ impl Win {
         scroller.set_child(Some(&store_grid));
         scroller.set_margin_start(12);
         scroller.set_margin_end(12);
+        scroller.set_margin_top(crate::ui::shell::PAGE_MARGIN);
         scroller.set_margin_bottom(12);
         // Cards arrive a page at a time as you reach the end of the list.
         // GridView recycles the widgets, but building 5,600 PluginItems on
@@ -489,8 +523,10 @@ impl Win {
         let store_offline = Win::status_page(
             "network-offline-symbolic",
             &tr("The catalogue could not be loaded"),
-            &tr("Almanac could not reach the marketplaces. It will use the last copy it has as \
-                 soon as one exists."),
+            &tr(
+                "Almanac could not reach the marketplaces. It will use the last copy it has as \
+                 soon as one exists.",
+            ),
             Some(retry.upcast_ref()),
         );
         store_stack.add_named(&store_empty, Some("empty"));
@@ -563,15 +599,18 @@ impl Win {
             sh.pinning = true;
         }
         let cats = store_mod::categories(&pool);
-        let cat_keys: Vec<String> =
-            std::iter::once(String::new()).chain(cats.iter().map(|(c, _n)| c.clone())).collect();
+        let cat_keys: Vec<String> = std::iter::once(String::new())
+            .chain(cats.iter().map(|(c, _n)| c.clone()))
+            .collect();
         // Setting a model resets the selection; keep the chosen category.
         let want = {
             let mut sh = self.shared.borrow_mut();
             sh.store_cats = cat_keys.clone();
             sh.store_cat_key.clone()
         };
-        let Some(store_cat) = self.store_dropdown("store_cat") else { return };
+        let Some(store_cat) = self.store_dropdown("store_cat") else {
+            return;
+        };
         let labels: Vec<String> = std::iter::once("All categories".to_string())
             .chain(cats.iter().map(|(c, n)| format!("{c} ({n})")))
             .collect();
@@ -588,13 +627,16 @@ impl Win {
                 return;
             }
         };
-        self.store.borrow_mut().store_trusts =
-            std::iter::once(String::new()).chain(trusts.iter().map(|(k, _l, _n)| k.clone())).collect();
+        self.store.borrow_mut().store_trusts = std::iter::once(String::new())
+            .chain(trusts.iter().map(|(k, _l, _n)| k.clone()))
+            .collect();
         let labels: Vec<String> = std::iter::once("Any provenance".to_string())
             .chain(trusts.iter().map(|(_k, lbl, n)| format!("{lbl} ({n})")))
             .collect();
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let Some(store_trust) = self.store_dropdown("store_trust") else { return };
+        let Some(store_trust) = self.store_dropdown("store_trust") else {
+            return;
+        };
         store_trust.set_model(Some(&gtk::StringList::new(&labels)));
 
         let non_themes: Vec<Plugin> = self
@@ -611,7 +653,9 @@ impl Win {
             .chain(markets.iter().map(|(_mid, nm, n)| format!("{nm} ({n})")))
             .collect();
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-        let Some(store_market) = self.store_dropdown("store_market") else { return };
+        let Some(store_market) = self.store_dropdown("store_market") else {
+            return;
+        };
         store_market.set_model(Some(&gtk::StringList::new(&labels)));
         self.shared.borrow_mut().pinning = false;
     }
@@ -632,10 +676,16 @@ impl Win {
         let model = self.shared.borrow().store_model.clone();
         let shown = model.n_items() as usize;
         let results = self.store.borrow().store_results.len();
-        let noun = if page == "themes" { "themes" } else { "plugins" };
+        let noun = if page == "themes" {
+            "themes"
+        } else {
+            "plugins"
+        };
 
         // A pinned marketplace is the page, not a filter the user applied.
-        let pinned = page_spec(&page).and_then(|s| s.market).is_some_and(|m| !m.is_empty());
+        let pinned = page_spec(&page)
+            .and_then(|s| s.market)
+            .is_some_and(|m| !m.is_empty());
         let cat_key = self.shared.borrow().store_cat_key.clone();
         // `or` stops at the first truthy operand, so a widget is only read
         // (and only missed) when the ones before it said "not narrowed".
@@ -643,19 +693,27 @@ impl Win {
             if !self.search.text().trim().is_empty() || !cat_key.is_empty() {
                 break 'narrowed true;
             }
-            let Some(verified) = self.store_toggle("store_verified") else { return };
+            let Some(verified) = self.store_toggle("store_verified") else {
+                return;
+            };
             if verified.is_active() {
                 break 'narrowed true;
             }
-            let Some(installed) = self.store_toggle("store_installed") else { return };
+            let Some(installed) = self.store_toggle("store_installed") else {
+                return;
+            };
             if installed.is_active() {
                 break 'narrowed true;
             }
-            let Some(trust) = self.store_dropdown("store_trust") else { return };
+            let Some(trust) = self.store_dropdown("store_trust") else {
+                return;
+            };
             if trust.selected() > 0 {
                 break 'narrowed true;
             }
-            let Some(market) = self.store_dropdown("store_market") else { return };
+            let Some(market) = self.store_dropdown("store_market") else {
+                return;
+            };
             market.selected() > 0 && !pinned
         };
 
@@ -671,7 +729,10 @@ impl Win {
         } else if narrowed {
             self.summarize(&format!("{results} of {total} {noun}"), Some(&page));
         } else if page == "themes" {
-            self.summarize(&format!("{total} Omarchy themes · {installed} installed"), Some(&page));
+            self.summarize(
+                &format!("{total} Omarchy themes · {installed} installed"),
+                Some(&page),
+            );
         } else {
             let markets = match store_mod::try_enabled_markets() {
                 Ok(markets) => markets,
@@ -715,7 +776,10 @@ impl Win {
         // chooses columns from natural width, so a 16:9 screenshot in a card
         // meant it laid out one column however narrow the card was told to be.
         // A non-propagating ScrolledWindow is the standard way to cut that.
-        let art_clamp = gtk::ScrolledWindow::builder().hexpand(true).vexpand(true).build();
+        let art_clamp = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .build();
         art_clamp.set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
         art_clamp.set_propagate_natural_width(false);
         art_clamp.set_propagate_natural_height(false);
@@ -738,11 +802,17 @@ impl Win {
             .build();
 
         let top = gtk::Box::builder().spacing(4).build();
-        let name = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::End).build();
+        let name = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
         name.set_max_width_chars(22);
         name.add_css_class("store-name");
         name.set_hexpand(true);
-        let check = gtk::Image::builder().icon_name("object-select-symbolic").pixel_size(12).build();
+        let check = gtk::Image::builder()
+            .icon_name("object-select-symbolic")
+            .pixel_size(12)
+            .build();
         check.add_css_class("store-verified");
         check.set_tooltip_text(Some(&tr("Source reviewed by the marketplace")));
         let spacer = gtk::Box::builder().hexpand(true).build();
@@ -758,7 +828,10 @@ impl Win {
         top.append(&installed);
         body.append(&top);
 
-        let sub = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::End).build();
+        let sub = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
         sub.set_max_width_chars(24);
         sub.add_css_class("caption");
         sub.add_css_class("dim-label");
@@ -768,11 +841,15 @@ impl Win {
         // from. The author line above it is self-declared in the plugin's own
         // manifest and proves nothing by itself.
         let prov = gtk::Box::builder().spacing(4).build();
-        let prov_icon =
-            gtk::Image::builder().icon_name("folder-remote-symbolic").pixel_size(11).build();
+        let prov_icon = gtk::Image::builder()
+            .icon_name("folder-remote-symbolic")
+            .pixel_size(11)
+            .build();
         prov_icon.add_css_class("dim-label");
-        let prov_text =
-            gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).build();
+        let prov_text = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(pango::EllipsizeMode::Middle)
+            .build();
         prov_text.set_max_width_chars(26);
         prov_text.add_css_class("caption");
         prov_text.add_css_class("dim-label");
@@ -797,12 +874,18 @@ impl Win {
         body.append(&desc);
 
         let bottom = gtk::Box::builder().spacing(6).margin_top(4).build();
-        let cat = gtk::Label::builder().ellipsize(pango::EllipsizeMode::End).build();
+        let cat = gtk::Label::builder()
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
         cat.set_max_width_chars(11);
         cat.add_css_class("pill");
-        let trust = gtk::Label::builder().ellipsize(pango::EllipsizeMode::End).build();
+        let trust = gtk::Label::builder()
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
         trust.set_max_width_chars(18);
-        let stars = gtk::Label::builder().ellipsize(pango::EllipsizeMode::End).build();
+        let stars = gtk::Label::builder()
+            .ellipsize(pango::EllipsizeMode::End)
+            .build();
         stars.set_max_width_chars(8);
         stars.add_css_class("store-stars");
         stars.add_css_class("dim-label");
@@ -838,18 +921,26 @@ impl Win {
             prov: prov_text,
             prov_row: prov,
         };
-        self.store
-            .borrow_mut()
-            .cards
-            .insert(item.clone(), CardSlot { parts, handler: None, token: 0 });
+        self.store.borrow_mut().cards.insert(
+            item.clone(),
+            CardSlot {
+                parts,
+                handler: None,
+                token: 0,
+            },
+        );
     }
 
     pub fn card_bind(&self, item: &gtk::ListItem) {
         let Some(row) = item.item() else { return };
-        let Some(p) = PluginItem::of(&row).map(|it| it.plugin.clone()) else { return };
+        let Some(p) = PluginItem::of(&row).map(|it| it.plugin.clone()) else {
+            return;
+        };
         let (w, token) = {
             let mut st = self.store.borrow_mut();
-            let Some(slot) = st.cards.get_mut(item) else { return };
+            let Some(slot) = st.cards.get_mut(item) else {
+                return;
+            };
             slot.token += 1;
             (slot.parts.clone(), slot.token)
         };
@@ -860,9 +951,12 @@ impl Win {
         // Installed and switched off reads "Off": answers "is it running?"
         // without putting a control on a card meant for browsing.
         let off = p.installed && p.install_kind == "plugin" && !p.enabled;
-        w.installed.set_text(&if off { tr("Off") } else { tr("Installed") });
-        w.installed.remove_css_class(if !off { "pill-quiet" } else { "pill-ok" });
-        w.installed.add_css_class(if off { "pill-quiet" } else { "pill-ok" });
+        w.installed
+            .set_text(&if off { tr("Off") } else { tr("Installed") });
+        w.installed
+            .remove_css_class(if !off { "pill-quiet" } else { "pill-ok" });
+        w.installed
+            .add_css_class(if off { "pill-quiet" } else { "pill-ok" });
         // What a listing property raises ends this bind, logged.
         let subtitle = match p.try_subtitle() {
             Ok(subtitle) => subtitle,
@@ -872,18 +966,29 @@ impl Win {
             }
         };
         w.sub.set_text(&subtitle);
-        w.desc.set_text(if !p.description.is_empty() { &p.description } else { &p.install_note });
+        w.desc.set_text(if !p.description.is_empty() {
+            &p.description
+        } else {
+            &p.install_note
+        });
         w.cat.set_text(&p.category);
-        w.stars.set_text(&if p.stars != 0 { format!("★ {}", compact(p.stars)) } else { String::new() });
+        w.stars.set_text(&if p.stars != 0 {
+            format!("★ {}", compact(p.stars))
+        } else {
+            String::new()
+        });
         w.stars.set_tooltip_text(Some(&if p.stars != 0 {
             format!("{} stars", thousands(p.stars))
         } else {
             String::new()
         }));
-        w.name.set_tooltip_text(Some(&format!("{} · {}", p.name, p.category)));
+        w.name
+            .set_tooltip_text(Some(&format!("{} · {}", p.name, p.category)));
 
         // Provenance
-        let props = p.try_trust().and_then(|t| Ok((t, p.try_publisher()?, p.try_market_name_text()?)));
+        let props = p
+            .try_trust()
+            .and_then(|t| Ok((t, p.try_publisher()?, p.try_market_name_text()?)));
         let (t, publisher, market_name) = match props {
             Ok(props) => props,
             Err(e) => {
@@ -936,7 +1041,12 @@ impl Win {
 
         // Primary action
         let btn = &w.action;
-        let old_handler = self.store.borrow_mut().cards.get_mut(item).and_then(|s| s.handler.take());
+        let old_handler = self
+            .store
+            .borrow_mut()
+            .cards
+            .get_mut(item)
+            .and_then(|s| s.handler.take());
         if let Some(id) = old_handler {
             btn.disconnect(id);
         }
@@ -987,7 +1097,11 @@ impl Win {
             btn.set_icon_name(INSTALL_ICON);
             btn.set_sensitive(true);
             btn.add_css_class("suggested-action"); // filled: the main action
-            let setup = if p.needs_setup { tr(" — setup follows") } else { String::new() };
+            let setup = if p.needs_setup {
+                tr(" — setup follows")
+            } else {
+                String::new()
+            };
             let how = if !p.install_cmd.is_empty() {
                 format!("\n{}", p.install_cmd)
             } else if !p.asset_name.is_empty() {
@@ -996,7 +1110,10 @@ impl Win {
                 String::new()
             };
             btn.set_tooltip_text(Some(&format!("Install {}{}{}", p.name, setup, how)));
-            btn.update_property(&[gtk::accessible::Property::Label(&format!("Install {}", p.name))]);
+            btn.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Install {}",
+                p.name
+            ))]);
             btn.connect_clicked(move |_b| {
                 if let Some(w) = ws.upgrade() {
                     w.on_plugin_install(&pl);
@@ -1031,7 +1148,9 @@ impl Win {
     pub fn card_unbind(&self, item: &gtk::ListItem) {
         let (action, handler) = {
             let mut st = self.store.borrow_mut();
-            let Some(slot) = st.cards.get_mut(item) else { return };
+            let Some(slot) = st.cards.get_mut(item) else {
+                return;
+            };
             slot.token += 1; // cancels any in-flight image load
             (slot.parts.action.clone(), slot.handler.take())
         };
@@ -1080,14 +1199,20 @@ impl Win {
 
     /// What `texture` decoded before for this file and width, if anything.
     pub fn texture_cached(&self, path: &Path, max_width: i32) -> Option<gdk::Texture> {
-        self.shared.borrow_mut().tex_cache.get(&format!("{}@{}", path.display(), max_width))
+        self.shared
+            .borrow_mut()
+            .tex_cache
+            .get(&format!("{}@{}", path.display(), max_width))
     }
 
     /// Keep a texture decoded elsewhere (see `decode_texture`) for `texture`.
     pub fn texture_keep(&self, path: &Path, max_width: i32, tex: &gdk::Texture) {
         let bytes = tex_bytes(tex);
         let key = format!("{}@{}", path.display(), max_width);
-        self.shared.borrow_mut().tex_cache.insert(key, tex.clone(), bytes);
+        self.shared
+            .borrow_mut()
+            .tex_cache
+            .insert(key, tex.clone(), bytes);
     }
 
     /// A centred square crop, scaled -- so a 1600px-wide screenshot makes
@@ -1107,11 +1232,19 @@ impl Win {
         if edge <= 0 {
             return None;
         }
-        let pb = pb.new_subpixbuf((pb.width() - edge) / 2, (pb.height() - edge) / 2, edge, edge);
+        let pb = pb.new_subpixbuf(
+            (pb.width() - edge) / 2,
+            (pb.height() - edge) / 2,
+            edge,
+            edge,
+        );
         let pb = pb.scale_simple(side, side, gdk_pixbuf::InterpType::Bilinear)?;
         let tex = memory_texture(&pb, side, side)?;
         let bytes = tex_bytes(&tex);
-        self.shared.borrow_mut().tex_cache.insert(key, tex.clone(), bytes);
+        self.shared
+            .borrow_mut()
+            .tex_cache
+            .insert(key, tex.clone(), bytes);
         Some(tex)
     }
 
@@ -1124,7 +1257,9 @@ impl Win {
                 _ => return,
             }
         };
-        let Some(tex) = self.texture(path, Win::CARD_ART_WIDTH) else { return };
+        let Some(tex) = self.texture(path, Win::CARD_ART_WIDTH) else {
+            return;
+        };
         parts.initials.set_visible(false);
         parts.pic.set_paintable(Some(&tex));
         parts.art.set_visible(true);
@@ -1199,7 +1334,11 @@ impl Win {
             return glib::ControlFlow::Break;
         };
         let sel = store_sort.selected() as usize;
-        let sort = if sel < store_mod::SORTS.len() { store_mod::SORTS[sel].0 } else { "popular" };
+        let sort = if sel < store_mod::SORTS.len() {
+            store_mod::SORTS[sel].0
+        } else {
+            "popular"
+        };
 
         // Arguments in the order the Python evaluates them. The pool is
         // borrowed below, once no more widgets are read.
@@ -1219,20 +1358,35 @@ impl Win {
             return glib::ControlFlow::Break;
         };
         let market = pick_key(&self.shared.borrow().store_markets, store_market.selected());
-        let (installed_only, verified_only) = (store_installed.is_active(), store_verified.is_active());
+        let (installed_only, verified_only) =
+            (store_installed.is_active(), store_verified.is_active());
         let results = {
             let plugins = {
                 let sh = self.shared.borrow();
-                if sh.plugins_none { Arc::default() } else { sh.plugins.clone() }
+                if sh.plugins_none {
+                    Arc::default()
+                } else {
+                    sh.plugins.clone()
+                }
             };
             // The pool by position in the catalogue, so the results can
             // name entries rather than copy them.
             let themes = page == "themes";
-            let at: Vec<usize> =
-                (0..plugins.len()).filter(|&i| (plugins[i].install_kind == "theme") == themes).collect();
+            let at: Vec<usize> = (0..plugins.len())
+                .filter(|&i| (plugins[i].install_kind == "theme") == themes)
+                .collect();
             let pool: Vec<&Plugin> = at.iter().map(|&i| &plugins[i]).collect();
-            let idx = store_mod::try_browse_refs(&pool, &query, &category, sort, installed_only, verified_only, &market, &trust)
-                .map(|idx| idx.into_iter().map(|i| at[i]).collect::<Vec<usize>>());
+            let idx = store_mod::try_browse_refs(
+                &pool,
+                &query,
+                &category,
+                sort,
+                installed_only,
+                verified_only,
+                &market,
+                &trust,
+            )
+            .map(|idx| idx.into_iter().map(|i| at[i]).collect::<Vec<usize>>());
             drop(pool);
             idx.map(|idx| Results { plugins, idx })
         };
@@ -1318,7 +1472,10 @@ impl Win {
     pub fn store_packages(&self) {
         let query = self.search.text().trim().to_string();
         if query.chars().count() < 2 {
-            self.say(&tr("Type at least two characters to search repos and the AUR"), 5);
+            self.say(
+                &tr("Type at least two characters to search repos and the AUR"),
+                5,
+            );
             return;
         }
         self.content_stack.set_visible_child_name("list");
@@ -1345,9 +1502,17 @@ mod tests {
 
     #[test]
     fn results_name_catalogue_entries_and_copy_only_a_page() {
-        let plugins: Vec<Plugin> = (0..5).map(|i| Plugin { id: format!("p{i}"), ..Plugin::default() }).collect();
+        let plugins: Vec<Plugin> = (0..5)
+            .map(|i| Plugin {
+                id: format!("p{i}"),
+                ..Plugin::default()
+            })
+            .collect();
         let plugins = Arc::new(plugins);
-        let r = Results { plugins: plugins.clone(), idx: vec![4, 0, 2] };
+        let r = Results {
+            plugins: plugins.clone(),
+            idx: vec![4, 0, 2],
+        };
         assert_eq!(Arc::strong_count(&plugins), 2, "shared, not copied");
         let ids = |v: Vec<Plugin>| v.into_iter().map(|p| p.id).collect::<Vec<_>>();
         assert_eq!(ids(r.page(0, 2)), ["p4", "p0"]);
@@ -1360,7 +1525,10 @@ mod tests {
     fn source() -> String {
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/", file!()))
             .unwrap_or_default();
-        text.split("#[cfg(test)]").next().unwrap_or_default().to_string()
+        text.split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .to_string()
     }
 
     fn css() -> &'static str {
@@ -1387,9 +1555,11 @@ mod tests {
         // `_store_pool(win)` with `win._page = "discover"`, and `"themes"`.
         assert_eq!(pool_of(&all, &pool_page(None, "discover")), vec![p.clone()]);
         assert_eq!(pool_of(&all, &pool_page(Some(""), "discover")), vec![p]);
-        assert_eq!(pool_of(&all, &pool_page(Some("themes"), "discover")), vec![theme]);
+        assert_eq!(
+            pool_of(&all, &pool_page(Some("themes"), "discover")),
+            vec![theme]
+        );
     }
-
 
     #[test]
     fn star_tooltips_group_thousands() {
@@ -1443,15 +1613,28 @@ mod tests {
     /// VisualSystem.test_every_pill_class_is_defined_in_the_stylesheet.
     #[test]
     fn every_pill_class_is_defined_in_the_stylesheet() {
-        let pills: BTreeSet<&str> =
-            ["pill", "pill-crit", "pill-warn", "pill-ok", "pill-accent", "pill-quiet"].into();
+        let pills: BTreeSet<&str> = [
+            "pill",
+            "pill-crit",
+            "pill-warn",
+            "pill-ok",
+            "pill-accent",
+            "pill-quiet",
+        ]
+        .into();
         let src = source();
         let re = regex::Regex::new(r#""(pill(?:-[a-z]+)?)""#).unwrap();
         let used: BTreeSet<String> = re.captures_iter(&src).map(|c| c[1].to_string()).collect();
         assert!(!used.is_empty(), "no pill classes found at all");
         for name in &used {
-            assert!(css().contains(&format!(".{name}")), "{name} is applied but never styled");
-            assert!(pills.contains(name.as_str()), "unknown pill variant: {name}");
+            assert!(
+                css().contains(&format!(".{name}")),
+                "{name} is applied but never styled"
+            );
+            assert!(
+                pills.contains(name.as_str()),
+                "unknown pill variant: {name}"
+            );
         }
     }
 
@@ -1459,26 +1642,51 @@ mod tests {
     #[test]
     fn badges_use_one_pill_system() {
         let retired = [
-            "crit-pill", "stale-pill", "crit-core", "store-chip", "store-installed",
-            "trust-official", "trust-ok", "trust-warn", "trust-none",
+            "crit-pill",
+            "stale-pill",
+            "crit-core",
+            "store-chip",
+            "store-installed",
+            "trust-official",
+            "trust-ok",
+            "trust-warn",
+            "trust-none",
         ];
         let src = source();
-        let found: Vec<&str> =
-            retired.iter().copied().filter(|n| src.contains(&format!("\"{n}\""))).collect();
-        assert!(found.is_empty(), "retired badge classes still referenced: {found:?}");
+        let found: Vec<&str> = retired
+            .iter()
+            .copied()
+            .filter(|n| src.contains(&format!("\"{n}\"")))
+            .collect();
+        assert!(
+            found.is_empty(),
+            "retired badge classes still referenced: {found:?}"
+        );
     }
 
     /// Every class the cards put on a widget is styled.
     #[test]
     fn every_card_class_is_in_the_stylesheet() {
         for class in [
-            "store-card", "store-shot", "store-initials", "store-name", "store-verified",
-            "store-prov", "store-stars", "acc-none",
+            "store-card",
+            "store-shot",
+            "store-initials",
+            "store-name",
+            "store-verified",
+            "store-prov",
+            "store-stars",
+            "acc-none",
         ] {
-            assert!(css().contains(&format!(".{class}")), "{class} is never styled");
+            assert!(
+                css().contains(&format!(".{class}")),
+                "{class} is never styled"
+            );
         }
         for (name, _) in store_mod::ACCENTS {
-            assert!(css().contains(&format!(".acc-{name}")), "acc-{name} is never styled");
+            assert!(
+                css().contains(&format!(".acc-{name}")),
+                "acc-{name} is never styled"
+            );
         }
     }
 
@@ -1517,7 +1725,9 @@ mod tests {
             return; // Adwaita icon theme not installed
         }
         fn stems(dir: &Path, out: &mut BTreeSet<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -1529,7 +1739,10 @@ mod tests {
         }
         let mut have = BTreeSet::new();
         stems(adwaita, &mut have);
-        stems(&Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"), &mut have);
+        stems(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("icons"),
+            &mut have,
+        );
         let re = regex::Regex::new(r#""([a-z0-9-]+-symbolic)""#).unwrap();
         let src = source();
         let missing: Vec<String> = re

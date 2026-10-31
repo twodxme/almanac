@@ -14,7 +14,10 @@ pub fn restart_argv() -> Result<Vec<String>, String> {
 ///
 /// The launcher looked for is `~/.local/bin/almanac`.
 pub(super) fn restart_argv_or(running: Vec<String>) -> Result<Vec<String>, String> {
-    let launcher = py_path_join(&py_home()?, &format!(".local/bin/{}", crate::watcher::command_name()));
+    let launcher = py_path_join(
+        &py_home()?,
+        &format!(".local/bin/{}", crate::watcher::command_name()),
+    );
     if Path::new(&launcher).exists() {
         return Ok(vec![launcher.to_string_lossy().into_owned()]);
     }
@@ -68,15 +71,24 @@ pub(super) fn spawn_new_session(argv: &[String]) -> Result<(), ()> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
 
-    let Some(prog) = argv.first() else { return Err(()) };
-    let devnull = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null").map_err(drop)?;
+    let Some(prog) = argv.first() else {
+        return Err(());
+    };
+    let devnull = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+        .map_err(drop)?;
     let mut actions = PosixSpawnFileActions::init().map_err(drop)?;
     actions.add_dup2(devnull.as_raw_fd(), 1).map_err(drop)?;
     actions.add_dup2(devnull.as_raw_fd(), 2).map_err(drop)?;
     // close_fds=True. glibc ignores a close of a descriptor that is already
     // gone by spawn time (the directory handle of this very listing).
     let mut open_fds: Vec<i32> = std::fs::read_dir("/proc/self/fd")
-        .map(|dir| dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok()).collect())
+        .map(|dir| {
+            dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+                .collect()
+        })
         .unwrap_or_default();
     open_fds.sort_unstable();
     for fd in open_fds.into_iter().filter(|&fd| fd > 2) {
@@ -90,7 +102,11 @@ pub(super) fn spawn_new_session(argv: &[String]) -> Result<(), ()> {
     let flags = PosixSpawnFlags::POSIX_SPAWN_SETSIGDEF
         | PosixSpawnFlags::from_bits_retain(libc::c_int::from(libc::POSIX_SPAWN_SETSID));
     attr.set_flags(flags).map_err(drop)?;
-    let args: Vec<CString> = argv.iter().map(|a| CString::new(a.as_bytes())).collect::<Result<_, _>>().map_err(drop)?;
+    let args: Vec<CString> = argv
+        .iter()
+        .map(|a| CString::new(a.as_bytes()))
+        .collect::<Result<_, _>>()
+        .map_err(drop)?;
     let env: Vec<CString> = std::env::vars_os()
         .map(|(k, v)| {
             let mut kv = k.into_vec();
@@ -130,11 +146,16 @@ mod tests {
     fn restart_starts_the_child_in_a_new_session() {
         // Fields after "(comm)": state ppid pgrp session ...
         let session = |stat: &str| -> String {
-            stat.rsplit_once(") ").map(|(_, r)| r.split_whitespace().nth(3).unwrap_or("").to_string()).unwrap_or_default()
+            stat.rsplit_once(") ")
+                .map(|(_, r)| r.split_whitespace().nth(3).unwrap_or("").to_string())
+                .unwrap_or_default()
         };
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("stat");
-        let script = format!("cat /proc/self/stat > '{}.tmp' && mv '{0}.tmp' '{0}'", out.display());
+        let script = format!(
+            "cat /proc/self/stat > '{}.tmp' && mv '{0}.tmp' '{0}'",
+            out.display()
+        );
         spawn_new_session(&["/bin/sh".to_string(), "-c".to_string(), script]).unwrap();
         for _ in 0..500 {
             if out.exists() {

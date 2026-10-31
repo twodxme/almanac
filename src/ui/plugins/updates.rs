@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 
 use crate::i18n::tr;
-use crate::{plugins as plugins_mod, store as store_mod, tasks, verify};
 use crate::ui::actions::Judge;
-use crate::ui::shell::{Win, spawn_bg};
+use crate::ui::shell::{spawn_bg, Win};
 use crate::verify::{Outcome, ProbeValue, TryProbe};
+use crate::{plugins as plugins_mod, store as store_mod, tasks, verify};
 
 use super::pyisms::{py_repr, py_splitlines, run_checked, uncaught, uncaught_err};
 
@@ -38,8 +38,18 @@ pub struct UpdatePlan {
 /// bulk update plans from. `have` is the catalog already loaded, if any.
 pub(in crate::ui) fn plugin_update_states(
     have: Vec<crate::store::Plugin>,
-) -> Result<(Vec<plugins_mod::State>, BTreeMap<String, plugins_mod::Listing>), String> {
-    let plugins = if have.is_empty() { store_mod::try_catalog(false)? } else { have };
+) -> Result<
+    (
+        Vec<plugins_mod::State>,
+        BTreeMap<String, plugins_mod::Listing>,
+    ),
+    String,
+> {
+    let plugins = if have.is_empty() {
+        store_mod::try_catalog(false)?
+    } else {
+        have
+    };
     let mut trust: BTreeMap<String, plugins_mod::Listing> = BTreeMap::new();
     for p in &plugins {
         trust.insert(p.id.clone(), p.try_listing()?);
@@ -80,13 +90,18 @@ pub(in crate::ui) fn plugin_step(pid: String, pin: Option<String>) -> tasks::Ste
         )
         .map_err(|e| crate::ui::shell::exc_str(&e))?;
         if !now.updatable() {
-            let why = now.try_describe().map_err(|e| crate::ui::shell::exc_str(&e))?;
+            let why = now
+                .try_describe()
+                .map_err(|e| crate::ui::shell::exc_str(&e))?;
             log(&format!("{pid}: skipped — {why}"));
             return Err(format!("{pid} changed since the check"));
         }
         if let Some(pin) = &pin {
             if !now.remote.eq_ignore_ascii_case(pin) {
-                log(&format!("{pid}: skipped — {}", tr("changed since it was reviewed")));
+                log(&format!(
+                    "{pid}: skipped — {}",
+                    tr("changed since it was reviewed")
+                ));
                 return Err(format!("{pid} changed since the check"));
             }
         }
@@ -106,7 +121,10 @@ pub(in crate::ui) fn plugin_step(pid: String, pin: Option<String>) -> tasks::Ste
             // the one reviewed.
             let head = plugins_mod::checkout_head(&plugins_mod::plugins_dir().join(&pid));
             if !head.eq_ignore_ascii_case(pin) {
-                log(&format!("{pid}: {}", tr("updated past the reviewed commit — upstream changed during the update")));
+                log(&format!(
+                    "{pid}: {}",
+                    tr("updated past the reviewed commit — upstream changed during the update")
+                ));
                 return Err(format!("{pid} is not at the reviewed commit"));
             }
         }
@@ -118,7 +136,11 @@ pub(in crate::ui) fn plugin_step(pid: String, pin: Option<String>) -> tasks::Ste
 /// Its listing counts only when the checkout's origin is the repository the
 /// listing names -- a folder that only shares a listed id is unlisted -- and
 /// under "Verified only" upstream must still be at the reviewed commit.
-fn held_reason(s: &plugins_mod::State, listing: Option<&plugins_mod::Listing>, scope: &str) -> Option<String> {
+fn held_reason(
+    s: &plugins_mod::State,
+    listing: Option<&plugins_mod::Listing>,
+    scope: &str,
+) -> Option<String> {
     let key = plugins_mod::listed_trust(&s.url, listing);
     if !plugins_mod::in_scope(key, scope) {
         return Some(match (listing, key) {
@@ -145,7 +167,9 @@ pub fn plan_plugin_updates(
         let listing = trust.get(&s.id);
         match held_reason(s, listing, scope) {
             None => {
-                if scope == "verified" && listing.is_some_and(|l| !l.validated_commit.trim().is_empty()) {
+                if scope == "verified"
+                    && listing.is_some_and(|l| !l.validated_commit.trim().is_empty())
+                {
                     pins.insert(s.id.clone(), s.remote.clone());
                 }
                 ready.push(s.clone());
@@ -168,8 +192,10 @@ pub fn plan_plugin_updates(
         .find(|(k, _l, _s)| *k == scope)
         .map(|(_k, l, _s)| (*l).to_string());
     let label = scope_label.as_deref().unwrap_or("");
-    let mut lines: Vec<String> =
-        ready.iter().map(|s| format!("{:<40} {} commit(s)", s.id, s.behind)).collect();
+    let mut lines: Vec<String> = ready
+        .iter()
+        .map(|s| format!("{:<40} {} commit(s)", s.id, s.behind))
+        .collect();
     if !held.is_empty() {
         lines.push(String::new());
         lines.push(format!("Held back (outside “{label}”):"));
@@ -191,7 +217,16 @@ pub fn plan_plugin_updates(
             }
         }
     }
-    UpdatePlan { ready, held, held_why, pins, blocked, scope_label, lines, raised }
+    UpdatePlan {
+        ready,
+        held,
+        held_why,
+        pins,
+        blocked,
+        scope_label,
+        lines,
+        raised,
+    }
 }
 
 impl Win {
@@ -244,10 +279,14 @@ impl Win {
         let ready = plan.ready.clone();
         let pins = plan.pins.clone();
 
-
         let heads: Vec<(String, String)> = ready
             .iter()
-            .map(|s| (s.id.clone(), plugins_mod::plugins_dir().join(&s.id).display().to_string()))
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    plugins_mod::plugins_dir().join(&s.id).display().to_string(),
+                )
+            })
             .collect();
 
         let w = self.downgrade();
@@ -312,14 +351,25 @@ impl Win {
                 });
                 let steps: Vec<tasks::Step> = ready
                     .iter()
-                    .map(|s| tasks::Step::call(format!("Updating {}", s.id), plugin_step(s.id.clone(), pins.get(&s.id).cloned())))
+                    .map(|s| {
+                        tasks::Step::call(
+                            format!("Updating {}", s.id),
+                            plugin_step(s.id.clone(), pins.get(&s.id).cloned()),
+                        )
+                    })
                     .collect();
                 let wr = w.downgrade();
-                w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
-                    if let Some(w) = wr.upgrade() {
-                        tasks::run(&w.window, &tr("Updating plugins"), steps, Some(on_done));
-                    }
-                });
+                w.checked(
+                    Some(probe),
+                    judge,
+                    Some(then),
+                    uncaught_err,
+                    move |on_done| {
+                        if let Some(w) = wr.upgrade() {
+                            w.run_task(&tr("Updating plugins"), steps, Some(on_done));
+                        }
+                    },
+                );
             },
         );
     }
@@ -339,17 +389,35 @@ mod tests {
         ];
         let trust: BTreeMap<String, plugins_mod::Listing> = [(
             "a".to_string(),
-            plugins_mod::Listing { key: "official".into(), repo: "https://github.com/o/a".into(), ..Default::default() },
+            plugins_mod::Listing {
+                key: "official".into(),
+                repo: "https://github.com/o/a".into(),
+                ..Default::default()
+            },
         )]
         .into();
         let plan = plan_plugin_updates(&states, &trust, "verified");
-        assert_eq!(plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["a"]);
-        assert_eq!(plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b"]);
-        assert_eq!(plan.blocked.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["c"]);
+        assert_eq!(
+            plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
+        assert_eq!(
+            plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert_eq!(
+            plan.blocked
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c"]
+        );
         assert_eq!(plan.scope_label.as_deref(), Some("Verified only"));
         assert_eq!(plan.lines[0], format!("{:<40} 2 commit(s)", "a"));
         assert_eq!(plan.lines[0].len(), 40 + " 2 commit(s)".len());
-        assert!(plan.lines.contains(&"Held back (outside “Verified only”):".to_string()));
+        assert!(plan
+            .lines
+            .contains(&"Held back (outside “Verified only”):".to_string()));
         assert!(plan.lines.contains(&"  b — not listed".to_string()));
         assert!(plan.lines.contains(&"Not updated (needs you):".to_string()));
         assert!(plan.lines.contains(&"  c — Has local edits".to_string()));
@@ -357,7 +425,10 @@ mod tests {
         assert_eq!(all.ready.len(), 2);
         assert!(all.held.is_empty());
         // `dict(...)[scope]` raises for a scope SCOPES does not list.
-        assert_eq!(plan_plugin_updates(&states, &trust, "nonsense").scope_label, None);
+        assert_eq!(
+            plan_plugin_updates(&states, &trust, "nonsense").scope_label,
+            None
+        );
     }
 
     #[test]
@@ -387,16 +458,35 @@ mod tests {
         ]
         .into();
         let plan = plan_plugin_updates(&states, &trust, "verified");
-        assert_eq!(plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["same"]);
+        assert_eq!(
+            plan.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["same"]
+        );
         assert_eq!(plan.pins.get("same").map(String::as_str), Some(sha));
-        assert_eq!(plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["impostor", "moved"]);
+        assert_eq!(
+            plan.held.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["impostor", "moved"]
+        );
         assert_eq!(plan.held_why[0], "not the listed repository");
-        assert!(plan.held_why[1].starts_with("changed since it was reviewed"), "{}", plan.held_why[1]);
-        assert!(plan.lines.contains(&"  impostor — not the listed repository".to_string()));
+        assert!(
+            plan.held_why[1].starts_with("changed since it was reviewed"),
+            "{}",
+            plan.held_why[1]
+        );
+        assert!(plan
+            .lines
+            .contains(&"  impostor — not the listed repository".to_string()));
         // "Verified, and changed since review" takes the newer commits and
         // pins nothing; the impostor is still not the listing.
         let changed = plan_plugin_updates(&states, &trust, "changed");
-        assert_eq!(changed.ready.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["same", "moved"]);
+        assert_eq!(
+            changed
+                .ready
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            ["same", "moved"]
+        );
         assert!(changed.pins.is_empty());
         // "All plugins" asks nothing of provenance.
         assert_eq!(plan_plugin_updates(&states, &trust, "all").ready.len(), 3);

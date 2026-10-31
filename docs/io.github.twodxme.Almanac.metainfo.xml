@@ -2,7 +2,7 @@
 <!-- AppStream metadata: what software centres read to describe Almanac. -->
 <component type="desktop-application">
   <id>io.github.twodxme.Almanac</id>
-  <launchable type="desktop-id">almanac.desktop</launchable>
+  <launchable type="desktop-id">io.github.twodxme.Almanac.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
 
@@ -96,6 +96,35 @@
   </requires>
 
   <releases>
+    <release version="2.2.0" date="2026-10-30">
+      <description>
+        <p>Arch news, a checked Update all, a scheduled update in the
+        package, and a History page that shows what each action did.</p>
+        <ul>
+          <li>Arch news appears in the app. Update all asks about unread
+          posts first, and the scheduled update holds while one is unread.</li>
+          <li>After Update all, Almanac checks what changed: what is still
+          waiting, services that failed, programs that need a rebuild, and a
+          restart the new kernel needs. It offers to repair what it can.</li>
+          <li>The scheduled update ships in the package. It fails safe when it
+          cannot tell what is pending, and leaves AUR packages to a person.</li>
+          <li>History opens each action to what it did. Almanac's own log
+          expires after 30 days and can be cleared.</li>
+          <li>Health checks run side by side, each with a time limit. A check
+          that could not run says so instead of passing, and a fix that could
+          not be checked is not called resolved.</li>
+          <li>Health stays on the disk it starts on, so network mounts are
+          not walked.</li>
+          <li>The Close button on task dialogs works again.</li>
+          <li>The package cache estimate no longer counts anything twice.</li>
+          <li>Starting up and scanning are faster, and the catalogue takes
+          less memory.</li>
+          <li>Every page shares one layout, and severity labels line up.</li>
+          <li>Demo mode changes nothing on the machine.</li>
+          <li>The desktop file is named after the app id.</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.7" date="2026-10-24">
       <description>
         <p>Fixes from a full audit of the app.</p>

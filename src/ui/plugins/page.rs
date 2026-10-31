@@ -6,14 +6,16 @@ use std::collections::BTreeMap;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use crate::{history, inventory, plugins as plugins_mod, shortcuts, store as store_mod, tasks, util};
 use crate::i18n::tr;
 use crate::ui::actions::Judge;
-use crate::ui::shell::{SwitchGuard, WeakWin, Win, name, spawn_bg};
+use crate::ui::shell::{name, spawn_bg, SwitchGuard, WeakWin, Win};
 use crate::verify::{Outcome, ProbeValue, TryProbe};
+use crate::{
+    history, inventory, plugins as plugins_mod, shortcuts, store as store_mod, tasks, util,
+};
 
-use super::LogoChoice;
 use super::pyisms::{py_splitlines, py_strip, run_checked, truthy, uncaught, uncaught_err};
+use super::LogoChoice;
 
 /// `_PLUGIN_STATE_PILLS`: a plugin state key -> (pill label, css class).
 pub const PLUGIN_STATE_PILLS: &[(&str, (&str, &str))] = &[
@@ -28,7 +30,10 @@ pub const PLUGIN_STATE_PILLS: &[(&str, (&str, &str))] = &[
 
 /// `key in _PLUGIN_STATE_PILLS` / `_PLUGIN_STATE_PILLS[key]`.
 pub fn plugin_state_pill(key: &str) -> Option<(&'static str, &'static str)> {
-    PLUGIN_STATE_PILLS.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    PLUGIN_STATE_PILLS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| *v)
 }
 
 /// The pill key for a plugin state, as `_plugin_row` picks it: the kind for
@@ -47,9 +52,14 @@ pub fn plugin_matches(i: &plugins_mod::Installed, text: &str) -> bool {
     if q.is_empty() {
         return true;
     }
-    let hay = [i.id.as_str(), i.name.as_str(), i.description.as_str(), &i.kinds.join(" ")]
-        .join(" ")
-        .to_lowercase();
+    let hay = [
+        i.id.as_str(),
+        i.name.as_str(),
+        i.description.as_str(),
+        &i.kinds.join(" "),
+    ]
+    .join(" ")
+    .to_lowercase();
     hay.contains(&q)
 }
 
@@ -146,8 +156,16 @@ fn foreign_cache_error(
         V::Null | V::Object(_) => return None,
     };
     if truthy {
-        let reached = found.iter().filter_map(|i| i.state.as_ref()).any(reached_remote);
-        reached.then(|| ("AttributeError", format!("'{tname}' object has no attribute 'get'")))
+        let reached = found
+            .iter()
+            .filter_map(|i| i.state.as_ref())
+            .any(reached_remote);
+        reached.then(|| {
+            (
+                "AttributeError",
+                format!("'{tname}' object has no attribute 'get'"),
+            )
+        })
     } else if !scratch.is_empty() {
         let msg = if tname == "list" {
             "list indices must be integers or slices, not str".to_string()
@@ -171,6 +189,16 @@ fn plugin_switch_shared(
     guard: &SwitchGuard,
     i: std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
 ) -> glib::Propagation {
+    if w.upgrade().is_some_and(|w| w.demo_refuses()) {
+        // Back where it was, once this handler has returned.
+        let (sw, g) = (switch.downgrade(), guard.clone());
+        glib::idle_add_local_once(move || {
+            if let Some(sw) = sw.upgrade() {
+                g.set(&sw, !on);
+            }
+        });
+        return glib::Propagation::Stop;
+    }
     switch.set_sensitive(false);
 
     let id = i.borrow().id.clone();
@@ -219,15 +247,27 @@ fn plugin_switch_shared(
             if let Some(w) = &win {
                 w.say(&format!("{nm} {word}"), 5);
             }
-            if let Err(e) = history::record_checked(history::ALMANAC, &format!("{nm} switched {word}"), "", "", &[]) {
+            if let Err(e) = history::record_checked(
+                history::ALMANAC,
+                &format!("{nm} switched {word}"),
+                "",
+                "",
+                &[],
+            ) {
                 return uncaught_err(&e);
             }
         } else {
             let body = match &r {
                 Ok(r) => {
-                    let text = if r.stderr.is_empty() { &r.stdout } else { &r.stderr };
+                    let text = if r.stderr.is_empty() {
+                        &r.stdout
+                    } else {
+                        &r.stderr
+                    };
                     let why: Vec<&str> = py_splitlines(py_strip(text));
-                    why.last().map(|s| s.to_string()).unwrap_or_else(|| tr("Omarchy did not change it"))
+                    why.last()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| tr("Omarchy did not change it"))
                 }
                 // Could not start, or timed out: the error says which.
                 Err(e) => e.clone(),
@@ -238,12 +278,14 @@ fn plugin_switch_shared(
         }
         if let Some(w) = &win {
             // `if getattr(self, "_plugins", None): annotate(self._plugins)`;
-            // what annotate raises ends this idle callback, logged.
-            let mut shared = w.shared.borrow_mut();
-            if !shared.plugins_none && !shared.plugins.is_empty() {
-                if let Err(e) = store_mod::try_annotate(std::sync::Arc::<Vec<_>>::make_mut(&mut shared.plugins)) {
-                    eprintln!("almanac: {e}");
-                }
+            // what annotate raises is logged. Read off the main thread: it
+            // runs `omarchy plugin list`.
+            let wanted = {
+                let shared = w.shared.borrow();
+                !shared.plugins_none && !shared.plugins.is_empty()
+            };
+            if wanted {
+                w.annotate_plugins_then(|_| {});
             }
         }
     };
@@ -254,18 +296,7 @@ fn plugin_switch_shared(
 impl Win {
     /// Every plugin on the system, with a switch each. See plugins.py.
     pub fn build_plugins_page(&self) -> gtk::Widget {
-        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let plugins_body = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder().vexpand(true).build();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&plugins_body));
-        page.append(&scroller);
+        let (page, plugins_body) = crate::ui::shell::page_body();
         {
             let mut st = self.plugins.borrow_mut();
             st.plugins_body = Some(plugins_body);
@@ -301,7 +332,11 @@ impl Win {
                         // "Reading plugins…".
                         let mut scratch = plugins_mod::FetchCache::new();
                         let found = plugins_mod::try_installed(true, Some(&mut scratch));
-                        if let Some(exc) = found.as_ref().ok().and_then(|f| foreign_cache_error(other, f, &scratch)) {
+                        if let Some(exc) = found
+                            .as_ref()
+                            .ok()
+                            .and_then(|f| foreign_cache_error(other, f, &scratch))
+                        {
                             uncaught(exc.0, &exc.1);
                             return None;
                         }
@@ -316,7 +351,11 @@ impl Win {
                     }
                 };
                 // `except Exception: trust = {}`
-                let catalog = if have.is_empty() { store_mod::try_catalog(false) } else { Ok(std::sync::Arc::unwrap_or_clone(have)) };
+                let catalog = if have.is_empty() {
+                    store_mod::try_catalog(false)
+                } else {
+                    Ok(std::sync::Arc::unwrap_or_clone(have))
+                };
                 let trust: BTreeMap<String, store_mod::Plugin> = match catalog {
                     Ok(catalog) => catalog.into_iter().map(|c| (c.id.clone(), c)).collect(),
                     Err(_) => BTreeMap::new(),
@@ -338,13 +377,18 @@ impl Win {
                             }
                         };
                     if panel {
-                        keys.insert(i.id.clone(), shortcuts::current(&i.id, Some(&raw)).unwrap_or_default());
+                        keys.insert(
+                            i.id.clone(),
+                            shortcuts::current(&i.id, Some(&raw)).unwrap_or_default(),
+                        );
                     }
                 }
                 Some((found, trust, keys))
             },
             move |res| {
-                let Some((found, trust, keys)) = res else { return };
+                let Some((found, trust, keys)) = res else {
+                    return;
+                };
                 if let Some(w) = w.upgrade() {
                     w.plugins_show(found, trust, keys);
                 }
@@ -358,7 +402,9 @@ impl Win {
         trust: BTreeMap<String, store_mod::Plugin>,
         keys: BTreeMap<String, String>,
     ) {
-        let Some(body) = self.plugins.borrow().plugins_body.clone() else { return };
+        let Some(body) = self.plugins.borrow().plugins_body.clone() else {
+            return;
+        };
         while let Some(child) = body.first_child() {
             body.remove(&child);
         }
@@ -375,8 +421,10 @@ impl Win {
             ),
             (
                 tr("Built in"),
-                tr("Ship with Omarchy and update with it. They can be switched \
-                    on and off."),
+                tr(
+                    "Ship with Omarchy and update with it. They can be switched \
+                    on and off.",
+                ),
                 &builtin,
             ),
         ] {
@@ -414,11 +462,18 @@ impl Win {
                 None,
             ));
         }
-        let updates = mine.iter().filter(|i| i.state.as_ref().is_some_and(|s| s.updatable())).count();
+        let updates = mine
+            .iter()
+            .filter(|i| i.state.as_ref().is_some_and(|s| s.updatable()))
+            .count();
         self.shared.borrow_mut().plugin_updates = updates;
         let on = found.iter().filter(|i| i.enabled).count();
         let text = format!("{} plugins · {on} on", found.len())
-            + &if updates != 0 { format!(" · {updates} with updates") } else { String::new() };
+            + &if updates != 0 {
+                format!(" · {updates} with updates")
+            } else {
+                String::new()
+            };
         self.summarize(&text, Some("plugins"));
         self.plugins_filter(&self.search.text());
         self.sync_primary();
@@ -438,8 +493,18 @@ impl Win {
         trust: Option<&store_mod::Trust>,
         shortcut: &str,
         listing: Option<&store_mod::Plugin>,
-    ) -> Result<(adw::ActionRow, std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>), String> {
-        let subtitle = if i.description.is_empty() { &i.id } else { &i.description };
+    ) -> Result<
+        (
+            adw::ActionRow,
+            std::rc::Rc<std::cell::RefCell<plugins_mod::Installed>>,
+        ),
+        String,
+    > {
+        let subtitle = if i.description.is_empty() {
+            &i.id
+        } else {
+            &i.description
+        };
         let row: adw::ActionRow = Win::plain(&i.name, subtitle);
         row.set_title_lines(1);
         row.set_subtitle_lines(1);
@@ -449,14 +514,24 @@ impl Win {
         let st = i.state.as_ref();
         let key = plugin_state_key(st);
         if let Some((label, css)) = plugin_state_pill(&key) {
-            let pill = gtk::Label::builder().label(tr(label)).valign(gtk::Align::Center).build();
+            let pill = gtk::Label::builder()
+                .label(tr(label))
+                .valign(gtk::Align::Center)
+                .build();
             pill.add_css_class(css);
-            pill.set_tooltip_text(Some(&st.map(|s| s.try_describe()).transpose()?.unwrap_or_default()));
+            pill.set_tooltip_text(Some(
+                &st.map(|s| s.try_describe())
+                    .transpose()?
+                    .unwrap_or_default(),
+            ));
             row.add_suffix(&pill);
         }
         if let Some(trust) = trust {
             if !i.built_in {
-                let chip = gtk::Label::builder().label(&trust.label).valign(gtk::Align::Center).build();
+                let chip = gtk::Label::builder()
+                    .label(&trust.label)
+                    .valign(gtk::Align::Center)
+                    .build();
                 chip.add_css_class(&trust.css);
                 chip.set_tooltip_text(Some(&trust.why));
                 row.add_suffix(&chip);
@@ -505,7 +580,9 @@ impl Win {
         let ic = shared.clone();
         let guard = SwitchGuard::default();
         let g = guard.clone();
-        guard.connect(&switch, move |sw, on| plugin_switch_shared(&w, sw, on, &g, ic.clone()));
+        guard.connect(&switch, move |sw, on| {
+            plugin_switch_shared(&w, sw, on, &g, ic.clone())
+        });
         row.add_suffix(&switch);
         row.set_activatable_widget(Some(&switch));
         Ok((row, shared))
@@ -549,7 +626,11 @@ impl Win {
             move |path: Option<std::path::PathBuf>, cover: bool| {
                 let Some(path) = path else { return };
                 let Some(w) = w.upgrade() else { return };
-                let tex = if cover { w.square(&path, 72) } else { w.texture(&path, 72) };
+                let tex = if cover {
+                    w.square(&path, 72)
+                } else {
+                    w.texture(&path, 72)
+                };
                 let Some(tex) = tex else { return };
                 if let Some(first) = frame.first_child() {
                     frame.remove(&first);
@@ -603,11 +684,13 @@ impl Win {
             LogoChoice::Avatar { key, url } => fetch(key, url, String::new())?,
             LogoChoice::Symbol { .. } => {}
             LogoChoice::Art { .. } => {
-                let Some(listing) = listing else { return Ok(frame) };
+                let Some(listing) = listing else {
+                    return Ok(frame);
+                };
                 let cached = store_mod::thumb_path(listing, false);
-            let present = cached
-                .as_ref()
-                .is_some_and(|c| c.exists() && std::fs::metadata(c).map(|m| m.len() != 0).unwrap_or(false));
+                let present = cached.as_ref().is_some_and(|c| {
+                    c.exists() && std::fs::metadata(c).map(|m| m.len() != 0).unwrap_or(false)
+                });
                 if present {
                     show(cached, true);
                 } else {
@@ -626,12 +709,19 @@ impl Win {
     /// The mark `plugin_logo` puts beside a plugin, decided without a
     /// window: the vendor's logo, the marketplace art, the author's avatar
     /// (only where no system icon says more), or the system icon alone.
-    pub fn plugin_logo_choice(i: &plugins_mod::Installed, listing: Option<&store_mod::Plugin>) -> LogoChoice {
+    pub fn plugin_logo_choice(
+        i: &plugins_mod::Installed,
+        listing: Option<&store_mod::Plugin>,
+    ) -> LogoChoice {
         let symbol = plugins_mod::symbol_for(i);
         let domain = plugins_mod::vendor_for(i);
-        let owner = plugins_mod::github_owner(i.state.as_ref().map(|s| s.url.as_str()).unwrap_or(""));
+        let owner =
+            plugins_mod::github_owner(i.state.as_ref().map(|s| s.url.as_str()).unwrap_or(""));
         if !domain.is_empty() {
-            LogoChoice::Vendor { key: domain.clone(), domain }
+            LogoChoice::Vendor {
+                key: domain.clone(),
+                domain,
+            }
         } else if let Some(listing) = listing.filter(|l| !l.thumb.is_empty()) {
             LogoChoice::Art {
                 thumb: store_mod::thumb_path(listing, false)
@@ -639,7 +729,10 @@ impl Win {
                     .unwrap_or_default(),
             }
         } else if symbol == plugins_mod::GENERIC && !owner.is_empty() {
-            LogoChoice::Avatar { key: format!("github-{owner}"), url: crate::icons::github_avatar(&owner) }
+            LogoChoice::Avatar {
+                key: format!("github-{owner}"),
+                url: crate::icons::github_avatar(&owner),
+            }
         } else {
             LogoChoice::Symbol { name: symbol }
         }
@@ -694,7 +787,7 @@ impl Win {
             self.edit_shortcut(&i.id, &i.name);
         } else if action == "folder" && i.folder.is_some() {
             if let Some(folder) = &i.folder {
-                self.open_url(&format!("file://{}", folder.display()));
+                self.open_path(folder);
             }
         } else if action == "page" && st.as_ref().is_some_and(|s| !s.url.is_empty()) {
             let url = st.as_ref().map(|s| s.url.clone()).unwrap_or_default();
@@ -702,25 +795,44 @@ impl Win {
             self.open_url(if page.is_empty() { &url } else { &page });
         } else if action == "update" && i.folder.is_some() {
             let mut extra = serde_json::Map::new();
-            let folder = i.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_default();
+            let folder = i
+                .folder
+                .as_ref()
+                .map(|f| f.display().to_string())
+                .unwrap_or_default();
             extra.insert("repo".into(), folder.into());
             extra.insert("plugin_id".into(), i.id.clone().into());
-            extra.insert("plugin_state".into(), st.as_ref().map(|s| s.kind.clone()).unwrap_or_default().into());
+            extra.insert(
+                "plugin_state".into(),
+                st.as_ref()
+                    .map(|s| s.kind.clone())
+                    .unwrap_or_default()
+                    .into(),
+            );
             let detail = match st.as_ref().map(|s| s.try_describe()).transpose() {
                 Ok(detail) => detail.unwrap_or_default(),
                 Err(e) => return uncaught_err(&e),
             };
             extra.insert("plugin_detail".into(), detail.into());
             let app = inventory::App {
-                update: st.as_ref().map(|s| format!("{} commits", s.behind)).unwrap_or_default(),
+                update: st
+                    .as_ref()
+                    .map(|s| format!("{} commits", s.behind))
+                    .unwrap_or_default(),
                 extra: extra.into(),
                 ..inventory::App::new(&i.id, &i.version, inventory::LOCAL)
             };
             self.on_git_pull(&app);
         } else if action == "remove" {
-            let argv: Vec<String> =
-                ["omarchy", "plugin", "remove", &i.id, "--yes"].iter().map(|s| s.to_string()).collect();
-            let folder = i.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_else(|| "None".into());
+            let argv: Vec<String> = ["omarchy", "plugin", "remove", &i.id, "--yes"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let folder = i
+                .folder
+                .as_ref()
+                .map(|f| f.display().to_string())
+                .unwrap_or_else(|| "None".into());
             let w = self.downgrade();
             tasks::confirm(
                 &self.window,
@@ -734,14 +846,20 @@ impl Win {
                     let Some(w) = w.upgrade() else { return };
                     let id = i.id.clone();
                     let probe: TryProbe = std::sync::Arc::new(move || {
-                        Ok(Some(ProbeValue::Bool(plugins_mod::try_enabled()?.contains_key(&id))))
+                        Ok(Some(ProbeValue::Bool(
+                            plugins_mod::try_enabled()?.contains_key(&id),
+                        )))
                     });
                     let nm = i.name.clone();
                     let judge: Judge = Box::new(move |_b, a| {
                         let a = truthy(&a);
                         Outcome::new(
                             Some(!a),
-                            if !a { format!("{nm} removed") } else { format!("{nm} is still installed") },
+                            if !a {
+                                format!("{nm} removed")
+                            } else {
+                                format!("{nm} is still installed")
+                            },
                         )
                     });
                     let wt = w.downgrade();
@@ -757,11 +875,17 @@ impl Win {
                         Win::forget_shortcut(&i.id),
                     ];
                     let title = format!("Removing {}", i.name);
-                    w.checked(Some(probe), judge, Some(then), uncaught_err, move |on_done| {
-                        if let Some(w) = wr.upgrade() {
-                            tasks::run(&w.window, &title, steps, Some(on_done));
-                        }
-                    });
+                    w.checked(
+                        Some(probe),
+                        judge,
+                        Some(then),
+                        uncaught_err,
+                        move |on_done| {
+                            if let Some(w) = wr.upgrade() {
+                                w.run_task(&title, steps, Some(on_done));
+                            }
+                        },
+                    );
                 },
             );
         }
@@ -776,23 +900,61 @@ mod tests {
     #[test]
     fn plugin_logo_choice_vendor_art_avatar_symbol() {
         let state = |url: &str| {
-            Some(plugins_mod::State::new("p", plugins_mod::CURRENT, "", 0, url))
+            Some(plugins_mod::State::new(
+                "p",
+                plugins_mod::CURRENT,
+                "",
+                0,
+                url,
+            ))
         };
-        let mut i = plugins_mod::Installed { id: "tim.tailscale".into(), name: "My Tailscale".into(), ..Default::default() };
+        let mut i = plugins_mod::Installed {
+            id: "tim.tailscale".into(),
+            name: "My Tailscale".into(),
+            ..Default::default()
+        };
         assert_eq!(
             Win::plugin_logo_choice(&i, None),
-            LogoChoice::Vendor { key: "tailscale.com".into(), domain: "tailscale.com".into() }
+            LogoChoice::Vendor {
+                key: "tailscale.com".into(),
+                domain: "tailscale.com".into()
+            }
         );
-        i = plugins_mod::Installed { id: "a.thing".into(), name: "Thing".into(), state: state("https://github.com/someone/thing"), ..Default::default() };
+        i = plugins_mod::Installed {
+            id: "a.thing".into(),
+            name: "Thing".into(),
+            state: state("https://github.com/someone/thing"),
+            ..Default::default()
+        };
         assert_eq!(
             Win::plugin_logo_choice(&i, None),
-            LogoChoice::Avatar { key: "github-someone".into(), url: "https://github.com/someone.png?size=128".into() }
+            LogoChoice::Avatar {
+                key: "github-someone".into(),
+                url: "https://github.com/someone.png?size=128".into()
+            }
         );
-        let listing = store_mod::Plugin { id: "a.thing".into(), thumb: "img/t.webp".into(), ..Default::default() };
-        assert!(matches!(Win::plugin_logo_choice(&i, Some(&listing)), LogoChoice::Art { .. }));
+        let listing = store_mod::Plugin {
+            id: "a.thing".into(),
+            thumb: "img/t.webp".into(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            Win::plugin_logo_choice(&i, Some(&listing)),
+            LogoChoice::Art { .. }
+        ));
         // A system icon that says what it does wins over the author's face.
-        i = plugins_mod::Installed { id: "lxp.vitals".into(), name: "Vitals".into(), state: state("https://github.com/lxp/vitals"), ..Default::default() };
-        assert_eq!(Win::plugin_logo_choice(&i, None), LogoChoice::Symbol { name: "emblem-system-symbolic".into() });
+        i = plugins_mod::Installed {
+            id: "lxp.vitals".into(),
+            name: "Vitals".into(),
+            state: state("https://github.com/lxp/vitals"),
+            ..Default::default()
+        };
+        assert_eq!(
+            Win::plugin_logo_choice(&i, None),
+            LogoChoice::Symbol {
+                name: "emblem-system-symbolic".into()
+            }
+        );
     }
 
     fn log_into(lines: &Mutex<Vec<String>>) -> impl Fn(&str) + Send + Sync + '_ {
@@ -811,11 +973,17 @@ mod tests {
             &|| true,
             &|_p| Ok("SUPER + ALT + V".to_string()),
             &|p, c| {
-                calls.lock().unwrap().push((p.to_string(), c.map(str::to_string)));
+                calls
+                    .lock()
+                    .unwrap()
+                    .push((p.to_string(), c.map(str::to_string)));
                 Ok("removed".to_string())
             },
         );
-        assert_eq!(*calls.lock().unwrap(), vec![("lxp.vitals".to_string(), None)]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![("lxp.vitals".to_string(), None)]
+        );
     }
 
     // PluginRemovalAndRecheck.test_a_shortcut_that_cannot_be_removed_does_not_fail_the_removal
@@ -836,11 +1004,19 @@ mod tests {
 
     #[test]
     fn forget_shortcut_step_label() {
-        assert_eq!(Win::forget_shortcut("x").label, "Removing its keyboard shortcut");
+        assert_eq!(
+            Win::forget_shortcut("x").label,
+            "Removing its keyboard shortcut"
+        );
     }
 
     #[test]
     fn a_plugins_cache_that_is_not_a_dict_fails_like_python() {
+        // Demo mode answers before the cache is looked at: held so a test
+        // switching it on meanwhile cannot change the answer.
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let reached = plugins_mod::Installed {
             state: Some(plugins_mod::State::new("a", "update", "behind", 1, "u")),
             ..Default::default()
@@ -853,25 +1029,58 @@ mod tests {
         let mut wrote = plugins_mod::FetchCache::new();
         wrote.insert("/p".into(), serde_json::json!({}));
         assert_eq!(
-            foreign_cache_error(&serde_json::json!([1]), std::slice::from_ref(&reached), &empty),
-            Some(("AttributeError", "'list' object has no attribute 'get'".to_string()))
+            foreign_cache_error(
+                &serde_json::json!([1]),
+                std::slice::from_ref(&reached),
+                &empty
+            ),
+            Some((
+                "AttributeError",
+                "'list' object has no attribute 'get'".to_string()
+            ))
         );
-        assert_eq!(foreign_cache_error(&serde_json::json!("x"), std::slice::from_ref(&local), &empty), None);
-        assert_eq!(foreign_cache_error(&serde_json::json!([]), std::slice::from_ref(&reached), &empty), None);
+        assert_eq!(
+            foreign_cache_error(
+                &serde_json::json!("x"),
+                std::slice::from_ref(&local),
+                &empty
+            ),
+            None
+        );
+        assert_eq!(
+            foreign_cache_error(
+                &serde_json::json!([]),
+                std::slice::from_ref(&reached),
+                &empty
+            ),
+            None
+        );
         assert_eq!(
             foreign_cache_error(&serde_json::json!(0), &[], &wrote),
-            Some(("TypeError", "'int' object does not support item assignment".to_string()))
+            Some((
+                "TypeError",
+                "'int' object does not support item assignment".to_string()
+            ))
         );
         assert_eq!(
             foreign_cache_error(&serde_json::json!([]), &[], &wrote),
-            Some(("TypeError", "list indices must be integers or slices, not str".to_string()))
+            Some((
+                "TypeError",
+                "list indices must be integers or slices, not str".to_string()
+            ))
         );
     }
 
     #[test]
     fn state_pills() {
-        assert_eq!(plugin_state_pill("update"), Some(("Update waiting", "pill-accent")));
-        assert_eq!(plugin_state_pill("symlink"), Some(("Development link", "pill-quiet")));
+        assert_eq!(
+            plugin_state_pill("update"),
+            Some(("Update waiting", "pill-accent"))
+        );
+        assert_eq!(
+            plugin_state_pill("symlink"),
+            Some(("Development link", "pill-quiet"))
+        );
         assert_eq!(plugin_state_pill("current"), None);
         let st = plugins_mod::State::new("a", "update", "3 commits", 3, "");
         assert_eq!(plugin_state_key(Some(&st)), "update");
@@ -902,18 +1111,38 @@ mod tests {
             id: "x".into(),
             kinds: vec!["panel".into()],
             folder: Some("/tmp/x".into()),
-            state: Some(plugins_mod::State::new("x", "update", "", 2, "https://github.com/a/x")),
+            state: Some(plugins_mod::State::new(
+                "x",
+                "update",
+                "",
+                2,
+                "https://github.com/a/x",
+            )),
             ..Default::default()
         };
-        let acts: Vec<&str> = plugin_menu(&i, true).expect("menu").iter().map(|(_l, a)| *a).collect();
+        let acts: Vec<&str> = plugin_menu(&i, true)
+            .expect("menu")
+            .iter()
+            .map(|(_l, a)| *a)
+            .collect();
         assert_eq!(acts, ["update", "shortcut", "folder", "page", "remove"]);
         i.built_in = true;
         i.folder = None;
         i.state = None;
         assert!(plugin_menu(&i, true).expect("menu").is_empty());
         // Local edits with upstream commits waiting can still be updated.
-        i.state = Some(plugins_mod::State::new("x", "local-changes", "modified", 1, ""));
-        let acts: Vec<&str> = plugin_menu(&i, false).expect("menu").iter().map(|(_l, a)| *a).collect();
+        i.state = Some(plugins_mod::State::new(
+            "x",
+            "local-changes",
+            "modified",
+            1,
+            "",
+        ));
+        let acts: Vec<&str> = plugin_menu(&i, false)
+            .expect("menu")
+            .iter()
+            .map(|(_l, a)| *a)
+            .collect();
         assert_eq!(acts, ["update"]);
     }
 

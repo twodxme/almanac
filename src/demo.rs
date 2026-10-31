@@ -17,12 +17,19 @@
 //! screenshot can show a security update, a routine update, something several
 //! majors behind, and something perfectly current.
 
-
 use serde_json::{json, Map, Value};
 
 /// True when `ALMANAC_DEMO` is set to anything but "", "0" or "false".
 pub fn active() -> bool {
-    let Some(v) = std::env::var_os("ALMANAC_DEMO") else { return false };
+    #[cfg(test)]
+    match TEST_DEMO.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+    let Some(v) = std::env::var_os("ALMANAC_DEMO") else {
+        return false;
+    };
     // Python decodes a value that is not UTF-8 with surrogateescape: never
     // "", "0" or "false" after strip(), so demo mode is on.
     let Some(v) = v.to_str() else { return true };
@@ -31,99 +38,341 @@ pub fn active() -> bool {
     !matches!(v, "" | "0" | "false")
 }
 
+/// Tests switch demo mode here rather than with ALMANAC_DEMO: changing the
+/// environment while another test's thread is in C code that reads it
+/// (GLib, the C library's time zone) is undefined behaviour, and crashed a
+/// parallel run. 0 reads the environment, 1 is on, 2 is off. Set it under
+/// `util::TEST_ENV`, and put it back to 0.
+#[cfg(test)]
+pub static TEST_DEMO: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 pub const HOME: &str = "/home/user";
 
 /// (name, version, update, source, description, size_mb, extra)
-type DemoPackage = (&'static str, &'static str, &'static str, &'static str, &'static str, f64,
-                    &'static [(&'static str, &'static str)]);
+type DemoPackage = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    f64,
+    &'static [(&'static str, &'static str)],
+);
 
 const _PACKAGES: &[DemoPackage] = &[
-    ("chromium", "151.0.7620.9-1", "152.0.7700.1-1", "repo",
-     "A web browser built for speed, simplicity, and security", 312.4,
-     &[("critical", "security")]),
-    ("openssh", "10.2p1-1", "10.3p1-1", "repo",
-     "Premier connectivity tool for remote login with the SSH protocol", 7.1,
-     &[("critical", "security")]),
-    ("linux", "6.18.3.arch1-1", "6.18.5.arch1-1", "repo",
-     "The Linux kernel and modules", 148.0, &[("critical", "core")]),
-    ("mesa", "25.3.1-1", "25.3.2-1", "repo",
-     "An open-source implementation of the OpenGL specification", 94.6,
-     &[("critical", "core")]),
-    ("firefox", "147.0-1", "148.0-1", "repo",
-     "Standalone web browser from mozilla.org", 268.2, &[]),
-    ("git", "2.52.0-1", "", "repo",
-     "The fast distributed version control system", 28.4, &[]),
-    ("ripgrep", "14.1.1-1", "", "repo",
-     "A search tool that combines the usability of ag with the raw speed of grep",
-     5.2, &[]),
-    ("fd", "10.3.0-1", "10.4.0-1", "repo",
-     "Simple, fast and user-friendly alternative to find", 3.1, &[]),
-    ("bat", "0.26.1-2", "", "repo",
-     "Cat clone with syntax highlighting and git integration", 6.0, &[]),
-    ("htop", "3.4.1-1", "", "repo", "Interactive process viewer", 0.4, &[]),
-    ("neovim", "0.11.4-1", "0.12.0-1", "repo",
-     "Fork of Vim aiming to improve extensibility and usability", 32.8, &[]),
-    ("tmux", "3.6-1", "", "repo",
-     "A terminal multiplexer", 1.2, &[]),
-    ("jq", "1.8.1-1", "", "repo",
-     "Command-line JSON processor", 1.1, &[]),
-    ("ffmpeg", "8.0-3", "8.0-4", "repo",
-     "Complete solution to record, convert and stream audio and video", 42.7, &[]),
-    ("imagemagick", "7.1.2.8-1", "", "repo",
-     "An image viewing and manipulation program", 24.1, &[]),
-    ("wl-clipboard", "2.2.1-3", "", "repo",
-     "Command-line copy/paste utilities for Wayland", 0.2, &[]),
-    ("starship", "1.24.0-1", "1.25.0-1", "aur",
-     "The cross-shell prompt for astronauts", 9.8, &[]),
-    ("lazygit", "0.58.0-1", "", "aur",
-     "Simple terminal UI for git commands", 18.3, &[]),
-    ("zoxide", "0.9.9-1", "", "aur",
-     "A smarter cd command inspired by z and autojump", 2.4, &[]),
-    ("btop", "1.4.5-1", "1.4.6-1", "aur",
-     "A monitor of system resources, bpytop ported to C++", 3.9, &[]),
+    (
+        "chromium",
+        "151.0.7620.9-1",
+        "152.0.7700.1-1",
+        "repo",
+        "A web browser built for speed, simplicity, and security",
+        312.4,
+        &[("critical", "security")],
+    ),
+    (
+        "openssh",
+        "10.2p1-1",
+        "10.3p1-1",
+        "repo",
+        "Premier connectivity tool for remote login with the SSH protocol",
+        7.1,
+        &[("critical", "security")],
+    ),
+    (
+        "linux",
+        "6.18.3.arch1-1",
+        "6.18.5.arch1-1",
+        "repo",
+        "The Linux kernel and modules",
+        148.0,
+        &[("critical", "core")],
+    ),
+    (
+        "mesa",
+        "25.3.1-1",
+        "25.3.2-1",
+        "repo",
+        "An open-source implementation of the OpenGL specification",
+        94.6,
+        &[("critical", "core")],
+    ),
+    (
+        "firefox",
+        "147.0-1",
+        "148.0-1",
+        "repo",
+        "Standalone web browser from mozilla.org",
+        268.2,
+        &[],
+    ),
+    (
+        "git",
+        "2.52.0-1",
+        "",
+        "repo",
+        "The fast distributed version control system",
+        28.4,
+        &[],
+    ),
+    (
+        "ripgrep",
+        "14.1.1-1",
+        "",
+        "repo",
+        "A search tool that combines the usability of ag with the raw speed of grep",
+        5.2,
+        &[],
+    ),
+    (
+        "fd",
+        "10.3.0-1",
+        "10.4.0-1",
+        "repo",
+        "Simple, fast and user-friendly alternative to find",
+        3.1,
+        &[],
+    ),
+    (
+        "bat",
+        "0.26.1-2",
+        "",
+        "repo",
+        "Cat clone with syntax highlighting and git integration",
+        6.0,
+        &[],
+    ),
+    (
+        "htop",
+        "3.4.1-1",
+        "",
+        "repo",
+        "Interactive process viewer",
+        0.4,
+        &[],
+    ),
+    (
+        "neovim",
+        "0.11.4-1",
+        "0.12.0-1",
+        "repo",
+        "Fork of Vim aiming to improve extensibility and usability",
+        32.8,
+        &[],
+    ),
+    (
+        "tmux",
+        "3.6-1",
+        "",
+        "repo",
+        "A terminal multiplexer",
+        1.2,
+        &[],
+    ),
+    (
+        "jq",
+        "1.8.1-1",
+        "",
+        "repo",
+        "Command-line JSON processor",
+        1.1,
+        &[],
+    ),
+    (
+        "ffmpeg",
+        "8.0-3",
+        "8.0-4",
+        "repo",
+        "Complete solution to record, convert and stream audio and video",
+        42.7,
+        &[],
+    ),
+    (
+        "imagemagick",
+        "7.1.2.8-1",
+        "",
+        "repo",
+        "An image viewing and manipulation program",
+        24.1,
+        &[],
+    ),
+    (
+        "wl-clipboard",
+        "2.2.1-3",
+        "",
+        "repo",
+        "Command-line copy/paste utilities for Wayland",
+        0.2,
+        &[],
+    ),
+    (
+        "starship",
+        "1.24.0-1",
+        "1.25.0-1",
+        "aur",
+        "The cross-shell prompt for astronauts",
+        9.8,
+        &[],
+    ),
+    (
+        "lazygit",
+        "0.58.0-1",
+        "",
+        "aur",
+        "Simple terminal UI for git commands",
+        18.3,
+        &[],
+    ),
+    (
+        "zoxide",
+        "0.9.9-1",
+        "",
+        "aur",
+        "A smarter cd command inspired by z and autojump",
+        2.4,
+        &[],
+    ),
+    (
+        "btop",
+        "1.4.5-1",
+        "1.4.6-1",
+        "aur",
+        "A monitor of system resources, bpytop ported to C++",
+        3.9,
+        &[],
+    ),
 ];
 
 const _APPIMAGES: &[(&str, &str, &str, &str, f64)] = &[
-    ("Inkscape", "1.4.2", "1.5.0", "Vector graphics editor", 142.0),
-    ("Obsidian", "1.9.14", "", "Knowledge base that works on local Markdown", 118.5),
+    (
+        "Inkscape",
+        "1.4.2",
+        "1.5.0",
+        "Vector graphics editor",
+        142.0,
+    ),
+    (
+        "Obsidian",
+        "1.9.14",
+        "",
+        "Knowledge base that works on local Markdown",
+        118.5,
+    ),
 ];
 
-const _FLATPAKS: &[(&str, &str, &str, &str, &str, f64)] = &[
-    ("Blender", "4.5.3", "", "org.blender.Blender",
-     "Free and open source 3D creation suite", 1180.0),
-];
+const _FLATPAKS: &[(&str, &str, &str, &str, &str, f64)] = &[(
+    "Blender",
+    "4.5.3",
+    "",
+    "org.blender.Blender",
+    "Free and open source 3D creation suite",
+    1180.0,
+)];
 
 const _LOCAL: &[(&str, &str, i64, bool, &str)] = &[
-    ("example.bar-clock", "2.1.0", 0, false,
-     "A clock for the bar, built from a local checkout"),
-    ("example.weather", "1.4.2", 23, false,
-     "Current conditions and the next few hours, in the bar"),
-    ("example.scratchpad", "0.9.1", 7, true,
-     "A scratch buffer that follows you between workspaces"),
+    (
+        "example.bar-clock",
+        "2.1.0",
+        0,
+        false,
+        "A clock for the bar, built from a local checkout",
+    ),
+    (
+        "example.weather",
+        "1.4.2",
+        23,
+        false,
+        "Current conditions and the next few hours, in the bar",
+    ),
+    (
+        "example.scratchpad",
+        "0.9.1",
+        7,
+        true,
+        "A scratch buffer that follows you between workspaces",
+    ),
 ];
 
 // (display name, binary, installed, latest, manager, domain)
 const _AGENTS: &[(&str, &str, &str, &str, &str, &str)] = &[
-    ("Claude Code", "claude", "2.1.301", "2.1.344", "mise", "claude.com"),
-    ("Codex CLI", "codex", "0.162.1", "0.166.0", "mise", "openai.com"),
-    ("Gemini CLI", "gemini", "0.64.0", "0.64.0", "self", "gemini.google.com"),
-    ("opencode", "opencode", "1.19.3", "1.19.3", "self", "opencode.ai"),
-    ("GitHub Copilot CLI", "copilot", "1.0.98", "1.0.98", "self", "github.com"),
+    (
+        "Claude Code",
+        "claude",
+        "2.1.301",
+        "2.1.344",
+        "mise",
+        "claude.com",
+    ),
+    (
+        "Codex CLI",
+        "codex",
+        "0.162.1",
+        "0.166.0",
+        "mise",
+        "openai.com",
+    ),
+    (
+        "Gemini CLI",
+        "gemini",
+        "0.64.0",
+        "0.64.0",
+        "self",
+        "gemini.google.com",
+    ),
+    (
+        "opencode",
+        "opencode",
+        "1.19.3",
+        "1.19.3",
+        "self",
+        "opencode.ai",
+    ),
+    (
+        "GitHub Copilot CLI",
+        "copilot",
+        "1.0.98",
+        "1.0.98",
+        "self",
+        "github.com",
+    ),
 ];
 
 const _MCP: &[(&str, &str, &str, &str)] = &[
-    ("Documentation", "https://mcp.example.com/docs", "connected", "ok"),
-    ("Issue tracker", "https://mcp.example.com/issues", "connected", "ok"),
-    ("Design system", "https://mcp.example.com/design", "connected", "ok"),
-    ("Analytics", "https://mcp.example.com/analytics",
-     "needs authentication", "info"),
+    (
+        "Documentation",
+        "https://mcp.example.com/docs",
+        "connected",
+        "ok",
+    ),
+    (
+        "Issue tracker",
+        "https://mcp.example.com/issues",
+        "connected",
+        "ok",
+    ),
+    (
+        "Design system",
+        "https://mcp.example.com/design",
+        "connected",
+        "ok",
+    ),
+    (
+        "Analytics",
+        "https://mcp.example.com/analytics",
+        "needs authentication",
+        "info",
+    ),
 ];
 
 const _SKILLS: &[(&str, &str)] = &[
-    ("release-notes", "Draft release notes from the commits since the last tag"),
-    ("review-checklist", "The team's review conventions, loaded on demand"),
+    (
+        "release-notes",
+        "Draft release notes from the commits since the last tag",
+    ),
+    (
+        "review-checklist",
+        "The team's review conventions, loaded on demand",
+    ),
 ];
-
 
 fn s(v: &str) -> String {
     v.to_string()
@@ -137,14 +386,22 @@ pub fn packages() -> Vec<crate::inventory::App> {
     use crate::inventory;
     let mut out = Vec::new();
     for &(name, version, update, source, desc, size, extra) in _PACKAGES {
-        let mut e: Map<String, Value> =
-            extra.iter().map(|(k, v)| (k.to_string(), json!(v))).collect();
+        let mut e: Map<String, Value> = extra
+            .iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
         e.insert(s("size"), json!(format!("{size:.2} MiB")));
-        e.insert(s("is_app"), json!(["chromium", "firefox", "neovim"].contains(&name)));
+        e.insert(
+            s("is_app"),
+            json!(["chromium", "firefox", "neovim"].contains(&name)),
+        );
         e.insert(s("url"), json!(format!("https://example.org/{name}")));
         e.insert(s("installed"), json!("1mo ago"));
         if !update.is_empty() {
-            e.insert(s("behind"), json!(inventory::versions_behind(version, update)));
+            e.insert(
+                s("behind"),
+                json!(inventory::versions_behind(version, update)),
+            );
         }
         out.push(inventory::App {
             name: s(name),
@@ -171,7 +428,10 @@ pub fn appimages() -> Vec<crate::inventory::App> {
         extra.insert(s("present"), json!(true));
         extra.insert(s("url"), json!(format!("https://example.org/{lower}")));
         if !update.is_empty() {
-            extra.insert(s("behind"), json!(inventory::versions_behind(version, update)));
+            extra.insert(
+                s("behind"),
+                json!(inventory::versions_behind(version, update)),
+            );
             extra.insert(s("download"), json!("https://example.org/download"));
         }
         out.push(inventory::App {
@@ -214,11 +474,17 @@ pub fn local_builds() -> Vec<crate::inventory::App> {
     let mut out = Vec::new();
     for &(name, version, behind, dirty, desc) in _LOCAL {
         let mut extra = Map::new();
-        extra.insert(s("repo"), json!(format!("{HOME}/.config/omarchy/plugins/{name}")));
+        extra.insert(
+            s("repo"),
+            json!(format!("{HOME}/.config/omarchy/plugins/{name}")),
+        );
         extra.insert(s("git_behind"), json!(behind));
         extra.insert(s("git_dirty"), json!(dirty));
         extra.insert(s("git_subject"), json!("Tidy up the panel layout"));
-        extra.insert(s("url"), json!(format!("https://github.com/example/{name}")));
+        extra.insert(
+            s("url"),
+            json!(format!("https://github.com/example/{name}")),
+        );
         out.push(inventory::App {
             name: s(name),
             version: s(version),
@@ -246,7 +512,11 @@ pub fn agents() -> Vec<crate::inventory::App> {
         extra.insert(s("url"), json!(format!("https://{domain}")));
         extra.insert(
             s("update_cmd"),
-            if manager == "mise" { json!(["mise", "upgrade", binary]) } else { json!([binary, "update"]) },
+            if manager == "mise" {
+                json!(["mise", "upgrade", binary])
+            } else {
+                json!([binary, "update"])
+            },
         );
         extra.insert(
             s("behind"),
@@ -420,7 +690,11 @@ pub fn ai_groups() -> Vec<(String, String, Vec<crate::ai::Entry>)> {
     let mut harnesses = Vec::new();
     for &(name, binary, version, latest, manager, domain) in _AGENTS {
         let update = if latest != version { latest } else { "" };
-        let behind = if !update.is_empty() { "2 minor behind" } else { "current" };
+        let behind = if !update.is_empty() {
+            "2 minor behind"
+        } else {
+            "current"
+        };
         harnesses.push(Entry {
             kind: s(ai::HARNESS),
             name: s(name),
@@ -433,7 +707,11 @@ pub fn ai_groups() -> Vec<(String, String, Vec<crate::ai::Entry>)> {
             icon_domain: s(domain),
             fallback_icon: s("utilities-terminal-symbolic"),
             action_label: s(if !update.is_empty() { "Update" } else { "" }),
-            action: if !update.is_empty() { Some(strs(&["mise", "upgrade", binary])) } else { None },
+            action: if !update.is_empty() {
+                Some(strs(&["mise", "upgrade", binary]))
+            } else {
+                None
+            },
             url: format!("https://{domain}"),
             ..Default::default()
         });
@@ -500,7 +778,13 @@ pub fn ai_groups() -> Vec<(String, String, Vec<crate::ai::Entry>)> {
     data.insert("Hooks", hooks);
     specs
         .into_iter()
-        .map(|(title, desc, _fn)| (s(title), s(desc), data.get(title).cloned().unwrap_or_default()))
+        .map(|(title, desc, _fn)| {
+            (
+                s(title),
+                s(desc),
+                data.get(title).cloned().unwrap_or_default(),
+            )
+        })
         .collect()
 }
 
@@ -617,13 +901,22 @@ mod tz {
         }
         let (mut v, mut over) = (0u64, false);
         while at(s, i).is_ascii_digit() {
-            match v.checked_mul(10).and_then(|x| x.checked_add(u64::from(at(s, i) - b'0'))) {
+            match v
+                .checked_mul(10)
+                .and_then(|x| x.checked_add(u64::from(at(s, i) - b'0')))
+            {
                 Some(x) => v = x,
                 None => over = true,
             }
             i += 1;
         }
-        let v = if over { u64::MAX } else if neg { v.wrapping_neg() } else { v };
+        let v = if over {
+            u64::MAX
+        } else if neg {
+            v.wrapping_neg()
+        } else {
+            v
+        };
         Some((v as u16, i))
     }
 
@@ -693,7 +986,9 @@ mod tz {
         if got > 0 {
             // compute_offset() clamps each field.
             r[which].offset = sign
-                * (i64::from(ss.min(59)) + i64::from(mm.min(59)) * 60 + i64::from(hh.min(24)) * 3600);
+                * (i64::from(ss.min(59))
+                    + i64::from(mm.min(59)) * 60
+                    + i64::from(hh.min(24)) * 3600);
         } else if which == 0 {
             // Standard time defaults to offset zero.
             r[0].offset = 0;
@@ -725,7 +1020,9 @@ mod tz {
             }
             let mut d = 0u64;
             while at(s, j).is_ascii_digit() {
-                d = d.saturating_mul(10).saturating_add(u64::from(at(s, j) - b'0'));
+                d = d
+                    .saturating_mul(10)
+                    .saturating_add(u64::from(at(s, j) - b'0'));
                 j += 1;
             }
             if d > 365 || (tzr.kind == Kind::J1 && d == 0) {
@@ -734,7 +1031,8 @@ mod tz {
             tzr.d = d as u16;
         } else if c == b'M' {
             tzr.kind = Kind::M;
-            let (got, [m, n, d], consumed) = scan3(s, j + 1, [0, b'.', b'.'], [tzr.m, tzr.n, tzr.d]);
+            let (got, [m, n, d], consumed) =
+                scan3(s, j + 1, [0, b'.', b'.'], [tzr.m, tzr.n, tzr.d]);
             (tzr.m, tzr.n, tzr.d) = (m, n, d);
             if got != 3 || !(1..=12).contains(&m) || !(1..=5).contains(&n) || d > 6 {
                 return false;
@@ -859,7 +1157,11 @@ mod tz {
         let c0 = compute_change(&p.rules[0], year);
         let c1 = compute_change(&p.rules[1], year);
         // The southern hemisphere's DST ends in the next year.
-        let isdst = if c0 > c1 { t < c1 || t >= c0 } else { t >= c0 && t < c1 };
+        let isdst = if c0 > c1 {
+            t < c1 || t >= c0
+        } else {
+            t >= c0 && t < c1
+        };
         Some((p.rules[usize::from(isdst)].offset, isdst))
     }
 
@@ -921,7 +1223,11 @@ mod tz {
             });
         }
         p += timecnt * width;
-        let idxs: Vec<usize> = data.get(p..p + timecnt)?.iter().map(|&b| usize::from(b)).collect();
+        let idxs: Vec<usize> = data
+            .get(p..p + timecnt)?
+            .iter()
+            .map(|&b| usize::from(b))
+            .collect();
         if idxs.iter().any(|&i| i >= typecnt) {
             return None;
         }
@@ -951,7 +1257,12 @@ mod tz {
             }
             _ => None,
         };
-        Some(TzFile { transitions, idxs, types, spec })
+        Some(TzFile {
+            transitions,
+            idxs,
+            types,
+            spec,
+        })
     }
 
     fn read_named(name: &[u8]) -> Option<TzFile> {
@@ -1011,8 +1322,16 @@ mod tz {
             isdst = tt.isdst;
         }
         f.types.truncate(2);
-        f.types[0] = TType { offset: stdoff, isdst: false, ..f.types[0] };
-        f.types[1] = TType { offset: dstoff, isdst: true, ..f.types[1] };
+        f.types[0] = TType {
+            offset: stdoff,
+            isdst: false,
+            ..f.types[0]
+        };
+        f.types[1] = TType {
+            offset: dstoff,
+            isdst: true,
+            ..f.types[1]
+        };
         Some(f)
     }
 
@@ -1060,7 +1379,8 @@ mod tz {
     pub(super) fn localtime(t: i64) -> Option<(i64, bool)> {
         use std::os::unix::ffi::OsStrExt;
         static ZONE: OnceLock<Zone> = OnceLock::new();
-        ZONE.get_or_init(|| load(std::env::var_os("TZ").as_deref().map(|v| v.as_bytes()))).at(t)
+        ZONE.get_or_init(|| load(std::env::var_os("TZ").as_deref().map(|v| v.as_bytes())))
+            .at(t)
     }
 }
 
@@ -1079,7 +1399,11 @@ static MKTIME_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI6
 pub(crate) fn mktime(date: chrono::NaiveDate, hour: u32, minute: u32) -> Result<i64, String> {
     use std::sync::atomic::Ordering;
     let overflow = || "OverflowError: mktime argument out of range".to_string();
-    let n = date.and_hms_opt(hour, minute, 0).ok_or_else(overflow)?.and_utc().timestamp();
+    let n = date
+        .and_hms_opt(hour, minute, 0)
+        .ok_or_else(overflow)?
+        .and_utc()
+        .timestamp();
     let t0 = n + MKTIME_OFFSET.load(Ordering::Relaxed);
     let (mut t, mut t1, mut t2) = (t0, t0, t0);
     // tm_isdst of the previous probe.
@@ -1167,7 +1491,8 @@ pub fn history_at(now: f64) -> Result<Vec<crate::history::Day>, String> {
     let day = 86400.0;
 
     // time.localtime(ts) (floored to a time_t), then the local date.
-    let local_date = |ts: f64| -> Result<NaiveDate, String> { Ok(localtime_wall(time_t(ts)?)?.date()) };
+    let local_date =
+        |ts: f64| -> Result<NaiveDate, String> { Ok(localtime_wall(time_t(ts)?)?.date()) };
 
     let at = |days_ago: i64, hour: u32, minute: u32| -> Result<f64, String> {
         let d = local_date(now - days_ago as f64 * day)?;
@@ -1180,29 +1505,136 @@ pub fn history_at(now: f64) -> Result<Vec<crate::history::Day>, String> {
 
     let mut events = vec![
         ev(at(0, 9, 14)?, h::ALMANAC, "fd 10.3.0-1 → 10.4.0-1", "", &[]),
-        ev(at(0, 9, 13)?, h::PACKAGES, "Updated fd", "",
-           &["upgraded fd (10.3.0-1 -> 10.4.0-1)"]),
-        ev(at(0, 9, 13)?, h::SNAPSHOT, "Snapshot taken",
-           "“Almanac: before updating fd”", &[]),
-        ev(at(1, 18, 2)?, h::ALMANAC, "File types changed hands", "",
-           &["Inkscape now opens .svg — before: Image Viewer"]),
-        ev(at(1, 17, 40)?, h::ALMANAC, "Installed inkscape 1.4.2",
-           "AppImage from https://github.com/example/inkscape · \
-            checksum verified", &[]),
-        ev(at(2, 21, 7)?, h::ALMANAC, "omarchy/shell.json restored",
-           "From shell.json.bak.1; the defaults were kept", &[]),
-        ev(at(2, 21, 5)?, h::RESET, "omarchy/shell.json replaced",
-           "Your previous version was kept as a backup", &[]),
-        ev(at(3, 10, 30)?, h::PACKAGES,
-           "Updated 14 packages · installed 2 packages", "",
-           &["upgraded firefox (147.0-1 -> 148.0-1)",
-             "upgraded mesa (25.3.1-1 -> 25.3.2-1)",
-             "installed wl-clipboard (2.2.1-3)"]),
-        ev(at(3, 10, 28)?, h::SNAPSHOT, "Snapshot taken", "“4.0.4-1”", &[]),
+        ev(
+            at(0, 9, 13)?,
+            h::PACKAGES,
+            "Updated fd",
+            "",
+            &["upgraded fd (10.3.0-1 -> 10.4.0-1)"],
+        ),
+        ev(
+            at(0, 9, 13)?,
+            h::SNAPSHOT,
+            "Snapshot taken",
+            "“Almanac: before updating fd”",
+            &[],
+        ),
+        ev(
+            at(1, 18, 2)?,
+            h::ALMANAC,
+            "File types changed hands",
+            "",
+            &["Inkscape now opens .svg — before: Image Viewer"],
+        ),
+        ev(
+            at(1, 17, 40)?,
+            h::ALMANAC,
+            "Installed inkscape 1.4.2",
+            "AppImage from https://github.com/example/inkscape · \
+            checksum verified",
+            &[],
+        ),
+        ev(
+            at(2, 21, 7)?,
+            h::ALMANAC,
+            "omarchy/shell.json restored",
+            "From shell.json.bak.1; the defaults were kept",
+            &[],
+        ),
+        ev(
+            at(2, 21, 5)?,
+            h::RESET,
+            "omarchy/shell.json replaced",
+            "Your previous version was kept as a backup",
+            &[],
+        ),
+        ev(
+            at(3, 10, 30)?,
+            h::PACKAGES,
+            "Updated 14 packages · installed 2 packages",
+            "",
+            &[
+                "upgraded firefox (147.0-1 -> 148.0-1)",
+                "upgraded mesa (25.3.1-1 -> 25.3.2-1)",
+                "installed wl-clipboard (2.2.1-3)",
+            ],
+        ),
+        ev(
+            at(3, 10, 28)?,
+            h::SNAPSHOT,
+            "Snapshot taken",
+            "“4.0.4-1”",
+            &[],
+        ),
     ];
+    // What Almanac recorded of its own actions, as History shows it opened.
+    let run = |argv: &str, exit: Option<i32>, secs: f64| h::CommandRun {
+        argv: s(argv),
+        exit,
+        secs: Some(secs),
+    };
+    let check = |name: &str, ok: Option<bool>, detail: &str| h::CheckResult {
+        name: s(name),
+        ok,
+        detail: s(detail),
+    };
+    events[0].action = Some(h::ActionLog {
+        commands: vec![run(
+            "/usr/bin/pkexec --keep-cwd /usr/bin/pacman -S --noconfirm fd",
+            Some(0),
+            4.2,
+        )],
+        changes: vec![h::Change {
+            name: s("fd"),
+            from: s("10.3.0-1"),
+            to: s("10.4.0-1"),
+        }],
+        checks: vec![check("fd", Some(true), "pacman reports 10.4.0-1 installed")],
+        snapshot: Some(s("412")),
+        duration_secs: Some(11.0),
+        ..Default::default()
+    });
+    let mut cleanup = ev(
+        at(0, 8, 40)?,
+        h::ALMANAC,
+        "Package cache: resolved — freed 1.2 GB",
+        "Trim to 2 versions · Vacuum to 500 MB",
+        &[],
+    );
+    cleanup.action = Some(h::ActionLog {
+        commands: vec![
+            run(
+                "/usr/bin/pkexec --keep-cwd /usr/bin/paccache -rk2",
+                Some(0),
+                3.1,
+            ),
+            run(
+                "/usr/bin/pkexec --keep-cwd /usr/bin/journalctl --vacuum-size=500M",
+                None,
+                1.4,
+            ),
+        ],
+        checks: vec![
+            check(
+                "Package cache",
+                Some(true),
+                "Package cache: resolved — freed 1.2 GB",
+            ),
+            check(
+                "Journal size",
+                None,
+                "Journal size: done, but the check could not be run again",
+            ),
+        ],
+        freed_bytes: Some(1_288_490_189),
+        duration_secs: Some(6.0),
+        ..Default::default()
+    });
+    events.push(cleanup);
     // Stable, like Python's sorted(reverse=True): equal times keep their order.
     events.sort_by(|a, b| b.ts.partial_cmp(&a.ts).unwrap_or(std::cmp::Ordering::Equal));
-    let mut by_day: std::collections::BTreeMap<NaiveDate, Vec<Event>> = std::collections::BTreeMap::new();
+    let mut by_day: std::collections::BTreeMap<NaiveDate, Vec<Event>> =
+        std::collections::BTreeMap::new();
     for e in events {
         // datetime.fromtimestamp(e.ts).date()
         by_day.entry(fromtimestamp_date(e.ts)?).or_default().push(e);
@@ -1212,7 +1644,11 @@ pub fn history_at(now: f64) -> Result<Vec<crate::history::Day>, String> {
         .rev()
         .map(|(d, evs)| {
             let snapshot = evs.iter().any(|e| e.kind == h::SNAPSHOT);
-            Day { day: d, events: evs, snapshot }
+            Day {
+                day: d,
+                events: evs,
+                snapshot,
+            }
         })
         .collect())
 }
@@ -1220,14 +1656,29 @@ pub fn history_at(now: f64) -> Result<Vec<crate::history::Day>, String> {
 /// A believable plugin list, so the Plugins page shows no one's own.
 pub fn plugins() -> Vec<crate::plugins::Installed> {
     use crate::plugins::{self as p, Installed, State};
-    let up = State::new("example.weather", p::UPDATE, "behind", 23,
-                        "https://github.com/example/weather");
+    let up = State::new(
+        "example.weather",
+        p::UPDATE,
+        "behind",
+        23,
+        "https://github.com/example/weather",
+    );
     // No address: a real account's avatar must not appear in a screenshot.
     let edits = State::new("example.scratchpad", p::LOCAL_CHANGES, "modified", 7, "");
-    let current = State::new("example.bar-clock", p::CURRENT, "", 0,
-                             "https://github.com/example/bar-clock");
+    let current = State::new(
+        "example.bar-clock",
+        p::CURRENT,
+        "",
+        0,
+        "https://github.com/example/bar-clock",
+    );
     let dev = State::new("example.devtool", p::LOCAL, "symlink", 0, "");
-    let row = |id: &str, name: &str, desc: &str, version: &str, kinds: &[&str], enabled: bool,
+    let row = |id: &str,
+               name: &str,
+               desc: &str,
+               version: &str,
+               kinds: &[&str],
+               enabled: bool,
                state: State| Installed {
         id: s(id),
         name: s(name),
@@ -1239,21 +1690,82 @@ pub fn plugins() -> Vec<crate::plugins::Installed> {
         ..Default::default()
     };
     let mut rows = vec![
-        row("example.weather", "Weather", "Current conditions and the \
-             next few hours, in the bar", "1.4.2", &["bar-widget"], true, up),
-        row("example.scratchpad", "Scratchpad", "A scratch buffer that \
-             follows you between workspaces", "0.9.1", &["panel"], true, edits),
-        row("example.bar-clock", "Bar clock", "A clock for the bar",
-            "2.1.0", &["bar-widget"], false, current),
-        row("example.devtool", "Plugin I am writing", "Linked from a \
-             workspace", "0.1.0", &["panel"], true, dev),
+        row(
+            "example.weather",
+            "Weather",
+            "Current conditions and the \
+             next few hours, in the bar",
+            "1.4.2",
+            &["bar-widget"],
+            true,
+            up,
+        ),
+        row(
+            "example.scratchpad",
+            "Scratchpad",
+            "A scratch buffer that \
+             follows you between workspaces",
+            "0.9.1",
+            &["panel"],
+            true,
+            edits,
+        ),
+        row(
+            "example.bar-clock",
+            "Bar clock",
+            "A clock for the bar",
+            "2.1.0",
+            &["bar-widget"],
+            false,
+            current,
+        ),
+        row(
+            "example.devtool",
+            "Plugin I am writing",
+            "Linked from a \
+             workspace",
+            "0.1.0",
+            &["panel"],
+            true,
+            dev,
+        ),
     ];
     let builtin: &[(&str, &str, &str, &[&str], bool)] = &[
-        ("omarchy.clock", "Clock", "The time and date", &["bar-widget"], true),
-        ("omarchy.bluetooth", "Bluetooth", "Devices and pairing", &["bar-widget"], true),
-        ("omarchy.network", "Network", "Wi-Fi and wired", &["bar-widget"], true),
-        ("omarchy.battery", "Battery", "Charge and power profile", &["bar-widget"], true),
-        ("omarchy.weather", "Weather", "Forecast in the bar", &["bar-widget"], false),
+        (
+            "omarchy.clock",
+            "Clock",
+            "The time and date",
+            &["bar-widget"],
+            true,
+        ),
+        (
+            "omarchy.bluetooth",
+            "Bluetooth",
+            "Devices and pairing",
+            &["bar-widget"],
+            true,
+        ),
+        (
+            "omarchy.network",
+            "Network",
+            "Wi-Fi and wired",
+            &["bar-widget"],
+            true,
+        ),
+        (
+            "omarchy.battery",
+            "Battery",
+            "Charge and power profile",
+            &["bar-widget"],
+            true,
+        ),
+        (
+            "omarchy.weather",
+            "Weather",
+            "Forecast in the bar",
+            &["bar-widget"],
+            false,
+        ),
         ("omarchy.bar", "Bar", "The bar itself", &["bar"], true),
     ];
     for &(pid, name, desc, kinds, on) in builtin {
@@ -1275,9 +1787,24 @@ pub fn plugins() -> Vec<crate::plugins::Installed> {
 pub fn startup_apps() -> Vec<crate::autostart::Entry> {
     use crate::autostart::Entry;
     let rows: &[(&str, &str, &str, bool)] = &[
-        ("Password manager", "Unlocks with the session", "dialog-password-symbolic", true),
-        ("Input method", "Typing in other scripts", "preferences-desktop-keyboard-symbolic", false),
-        ("Print queue", "Shows printer jobs", "printer-symbolic", false),
+        (
+            "Password manager",
+            "Unlocks with the session",
+            "dialog-password-symbolic",
+            true,
+        ),
+        (
+            "Input method",
+            "Typing in other scripts",
+            "preferences-desktop-keyboard-symbolic",
+            false,
+        ),
+        (
+            "Print queue",
+            "Shows printer jobs",
+            "printer-symbolic",
+            false,
+        ),
     ];
     rows.iter()
         .map(|&(n, c, i, on)| Entry {
@@ -1340,8 +1867,18 @@ fn _picks(
         }
     }
     let figures = [
-        Signals { stars_today: 48, downloads: 1312, downloads_today: true, comments: 37, ..Default::default() },
-        Signals { stars_today: 21, comments: 12, ..Default::default() },
+        Signals {
+            stars_today: 48,
+            downloads: 1312,
+            downloads_today: true,
+            comments: 37,
+            ..Default::default()
+        },
+        Signals {
+            stars_today: 21,
+            comments: 12,
+            ..Default::default()
+        },
     ];
     chosen
         .into_iter()
@@ -1349,7 +1886,12 @@ fn _picks(
         .enumerate()
         .map(|(i, (p, sg))| {
             let reasons = pk::reasons(p, &sg);
-            Pick { plugin: p.clone(), signals: sg, score: 1.0 - i as f64 / 10.0, reasons }
+            Pick {
+                plugin: p.clone(),
+                signals: sg,
+                score: 1.0 - i as f64 / 10.0,
+                reasons,
+            }
         })
         .collect()
 }
@@ -1377,10 +1919,20 @@ mod tests {
     #[test]
     fn active_reads_the_variable() {
         // Only this test touches ALMANAC_DEMO in this module.
-        let _env = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os("ALMANAC_DEMO");
-        for (v, want) in [("", false), ("0", false), ("false", false), (" 1 ", true), ("yes", true),
-                          ("\x1c", false), (" \x1d0\x1e ", false), ("\u{85}", false)] {
+        for (v, want) in [
+            ("", false),
+            ("0", false),
+            ("false", false),
+            (" 1 ", true),
+            ("yes", true),
+            ("\x1c", false),
+            (" \x1d0\x1e ", false),
+            ("\u{85}", false),
+        ] {
             std::env::set_var("ALMANAC_DEMO", v);
             assert_eq!(active(), want, "{v:?}");
         }
@@ -1405,8 +1957,15 @@ mod tests {
     fn zone_is_resolved_like_glibc() {
         let at = |tz: Option<&str>, t: i64| tz::load(tz.map(str::as_bytes)).at(t);
         let (winter, summer) = (1_800_000_000, 1_782_000_000); // 2027-01-15, 2026-06-21
-        // An unknown name is UTC to glibc (chrono would use /etc/localtime).
-        for name in ["Europe/Nowhere", "foo", "Bogus/Zone", "", ":", "/etc/passwd"] {
+                                                               // An unknown name is UTC to glibc (chrono would use /etc/localtime).
+        for name in [
+            "Europe/Nowhere",
+            "foo",
+            "Bogus/Zone",
+            "",
+            ":",
+            "/etc/passwd",
+        ] {
             assert_eq!(at(Some(name), winter), Some((0, false)), "{name:?}");
         }
         assert_eq!(at(Some("EST5"), summer), Some((-18000, false)));
@@ -1416,10 +1975,19 @@ mod tests {
         assert_eq!(at(rule, summer), Some((3600, true)));
         assert_eq!(at(rule, winter), Some((0, false)));
         if std::path::Path::new("/usr/share/zoneinfo/America/Los_Angeles").exists() {
-            assert_eq!(at(Some("America/Los_Angeles"), winter), Some((-28800, false)));
-            assert_eq!(at(Some(":America/Los_Angeles"), summer), Some((-25200, true)));
+            assert_eq!(
+                at(Some("America/Los_Angeles"), winter),
+                Some((-28800, false))
+            );
+            assert_eq!(
+                at(Some(":America/Los_Angeles"), summer),
+                Some((-25200, true))
+            );
             // Past the file's last transition: its footer's rules.
-            assert_eq!(at(Some("America/Los_Angeles"), 4_118_000_000), Some((-25200, true)));
+            assert_eq!(
+                at(Some("America/Los_Angeles"), 4_118_000_000),
+                Some((-25200, true))
+            );
         }
     }
 

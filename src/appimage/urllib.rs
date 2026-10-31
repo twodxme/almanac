@@ -63,7 +63,10 @@ fn py_int(s: &str, base: u32, ascii_ws: bool) -> Option<i128> {
             continue;
         }
         let d = c.to_digit(base)?;
-        val = val.saturating_mul(i128::from(base)).saturating_add(i128::from(d)).min(1 << 100);
+        val = val
+            .saturating_mul(i128::from(base))
+            .saturating_add(i128::from(d))
+            .min(1 << 100);
         digits += 1;
         last_us = false;
     }
@@ -93,7 +96,10 @@ fn py_split(s: &str, maxsplit: usize) -> Vec<&str> {
 fn py_capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
-        Some(f) => f.to_uppercase().chain(c.flat_map(char::to_lowercase)).collect(),
+        Some(f) => f
+            .to_uppercase()
+            .chain(c.flat_map(char::to_lowercase))
+            .collect(),
         None => String::new(),
     }
 }
@@ -120,8 +126,13 @@ fn percent_decode(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if s[i] == b'%' && s.get(i + 1).is_some_and(u8::is_ascii_hexdigit) && s.get(i + 2).is_some_and(u8::is_ascii_hexdigit) {
-            let h = std::str::from_utf8(&s[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+        if s[i] == b'%'
+            && s.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && s.get(i + 2).is_some_and(u8::is_ascii_hexdigit)
+        {
+            let h = std::str::from_utf8(&s[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
             if let Some(h) = h {
                 out.push(h);
                 i += 3;
@@ -180,7 +191,11 @@ fn _splithost(url: &str) -> (Option<String>, String) {
     };
     let end = r.find(['/', '#', '?']).unwrap_or(r.len());
     let path = &r[end..];
-    let path = if !path.is_empty() && !path.starts_with('/') { format!("/{path}") } else { path.to_string() };
+    let path = if !path.is_empty() && !path.starts_with('/') {
+        format!("/{path}")
+    } else {
+        path.to_string()
+    };
     (Some(r[..end].to_string()), path)
 }
 
@@ -213,24 +228,48 @@ struct Split {
 }
 
 const USES_RELATIVE: &[&str] = &[
-    "", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp",
-    "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss",
+    "", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms",
+    "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss",
 ];
 const USES_NETLOC: &[&str] = &[
-    "", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews",
-    "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss",
+    "",
+    "ftp",
+    "http",
+    "gopher",
+    "nntp",
+    "telnet",
+    "imap",
+    "wais",
+    "file",
+    "mms",
+    "https",
+    "shttp",
+    "snews",
+    "prospero",
+    "rtsp",
+    "rtsps",
+    "rtspu",
+    "rsync",
+    "svn",
+    "svn+ssh",
+    "sftp",
+    "nfs",
+    "git",
+    "git+ssh",
+    "ws",
+    "wss",
     "itms-services",
 ];
 const USES_PARAMS: &[&str] = &[
-    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms",
-    "sftp", "tel",
+    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu",
+    "sip", "sips", "mms", "sftp", "tel",
 ];
 
 /// Characters whose NFKC form holds one of `/?#@:` (`_checknetloc`).
 const NFKC_DELIMS: &[char] = &[
-    '\u{2047}', '\u{2048}', '\u{2049}', '\u{2100}', '\u{2101}', '\u{2105}', '\u{2106}', '\u{2a74}', '\u{fe13}',
-    '\u{fe16}', '\u{fe55}', '\u{fe56}', '\u{fe5f}', '\u{fe6b}', '\u{ff03}', '\u{ff0f}', '\u{ff1a}', '\u{ff1f}',
-    '\u{ff20}',
+    '\u{2047}', '\u{2048}', '\u{2049}', '\u{2100}', '\u{2101}', '\u{2105}', '\u{2106}', '\u{2a74}',
+    '\u{fe13}', '\u{fe16}', '\u{fe55}', '\u{fe56}', '\u{fe5f}', '\u{fe6b}', '\u{ff03}', '\u{ff0f}',
+    '\u{ff1a}', '\u{ff1f}', '\u{ff20}',
 ];
 
 fn _check_bracketed_host(hostname: &str) -> Result<(), String> {
@@ -239,7 +278,11 @@ fn _check_bracketed_host(hostname: &str) -> Result<(), String> {
         // \A[vV][a-fA-F0-9]+\..+\z
         let r = &hostname[1..];
         let hex = r.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(r.len());
-        if hex == 0 || !r[hex..].starts_with('.') || r[hex + 1..].is_empty() || r[hex + 1..].contains('\n') {
+        if hex == 0
+            || !r[hex..].starts_with('.')
+            || r[hex + 1..].is_empty()
+            || r[hex + 1..].contains('\n')
+        {
             return bad();
         }
         return Ok(());
@@ -251,7 +294,9 @@ fn _check_bracketed_host(hostname: &str) -> Result<(), String> {
         Some((a, s)) => (a, Some(s)),
         None => (hostname, None),
     };
-    if scope.is_some_and(|s| s.is_empty() || s.contains('%')) || addr.parse::<std::net::Ipv6Addr>().is_err() {
+    if scope.is_some_and(|s| s.is_empty() || s.contains('%'))
+        || addr.parse::<std::net::Ipv6Addr>().is_err()
+    {
         return bad();
     }
     Ok(())
@@ -259,14 +304,20 @@ fn _check_bracketed_host(hostname: &str) -> Result<(), String> {
 
 /// `urllib.parse._urlsplit`.
 fn _urlsplit(url: &str, allow_fragments: bool) -> Result<Split, String> {
-    let url: String = url.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
+    let url: String = url
+        .trim_start_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+        .collect();
     let mut sp = Split::default();
     let mut rest = url.as_str();
     if let Some(i) = rest.find(':') {
         let first = rest.chars().next().unwrap_or(' ');
         if i > 0
             && first.is_ascii_alphabetic()
-            && rest[..i].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest[..i]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         {
             sp.scheme = Some(rest[..i].to_ascii_lowercase());
             rest = &rest[i + 1..];
@@ -311,15 +362,27 @@ fn _urlsplit(url: &str, allow_fragments: bool) -> Result<Split, String> {
     }
     sp.path = path;
     if let Some(n) = &sp.netloc {
-        if !n.is_ascii() && n.chars().filter(|c| !matches!(c, '@' | ':' | '#' | '?')).any(|c| NFKC_DELIMS.contains(&c)) {
-            return Err("ValueError: netloc contains invalid characters under NFKC normalization".into());
+        if !n.is_ascii()
+            && n.chars()
+                .filter(|c| !matches!(c, '@' | ':' | '#' | '?'))
+                .any(|c| NFKC_DELIMS.contains(&c))
+        {
+            return Err(
+                "ValueError: netloc contains invalid characters under NFKC normalization".into(),
+            );
         }
     }
     Ok(sp)
 }
 
 /// `urllib.parse._urlunsplit`.
-fn _urlunsplit(scheme: Option<&str>, netloc: Option<&str>, url: &str, query: Option<&str>, fragment: Option<&str>) -> String {
+fn _urlunsplit(
+    scheme: Option<&str>,
+    netloc: Option<&str>,
+    url: &str,
+    query: Option<&str>,
+    fragment: Option<&str>,
+) -> String {
     let mut url = url.to_string();
     if let Some(n) = netloc {
         if !url.is_empty() && !url.starts_with('/') {
@@ -357,20 +420,40 @@ fn urlparse(url: &str) -> Result<[String; 6], String> {
             path.truncate(i);
         }
     }
-    Ok([scheme, sp.netloc.unwrap_or_default(), path, params, sp.query.unwrap_or_default(), sp.fragment.unwrap_or_default()])
+    Ok([
+        scheme,
+        sp.netloc.unwrap_or_default(),
+        path,
+        params,
+        sp.query.unwrap_or_default(),
+        sp.fragment.unwrap_or_default(),
+    ])
 }
 
 /// `urlunparse(parts)`.
 fn urlunparse(p: &[String; 6]) -> String {
     let [scheme, netloc, url, params, query, fragment] = p;
     let netloc = if netloc.is_empty() {
-        (!scheme.is_empty() && USES_NETLOC.contains(&scheme.as_str()) && (url.is_empty() || url.starts_with('/'))).then_some("")
+        (!scheme.is_empty()
+            && USES_NETLOC.contains(&scheme.as_str())
+            && (url.is_empty() || url.starts_with('/')))
+        .then_some("")
     } else {
         Some(netloc.as_str())
     };
-    let url = if params.is_empty() { url.clone() } else { format!("{url};{params}") };
+    let url = if params.is_empty() {
+        url.clone()
+    } else {
+        format!("{url};{params}")
+    };
     let opt = |s: &String| (!s.is_empty()).then(|| s.clone());
-    _urlunsplit(opt(scheme).as_deref(), netloc, &url, opt(query).as_deref(), opt(fragment).as_deref())
+    _urlunsplit(
+        opt(scheme).as_deref(),
+        netloc,
+        &url,
+        opt(query).as_deref(),
+        opt(fragment).as_deref(),
+    )
 }
 
 /// `urllib.parse.urljoin(base, url)`.
@@ -391,7 +474,13 @@ fn urljoin(base: &str, url: &str) -> Result<String, String> {
     let mut netloc = u.netloc.clone();
     if s.is_empty() || USES_NETLOC.contains(&s.as_str()) {
         if netloc.as_deref().is_some_and(|n| !n.is_empty()) {
-            return Ok(_urlunsplit(scheme.as_deref(), netloc.as_deref(), &u.path, u.query.as_deref(), u.fragment.as_deref()));
+            return Ok(_urlunsplit(
+                scheme.as_deref(),
+                netloc.as_deref(),
+                &u.path,
+                u.query.as_deref(),
+                u.fragment.as_deref(),
+            ));
         }
         netloc = b.netloc.clone();
     }
@@ -403,7 +492,13 @@ fn urljoin(base: &str, url: &str) -> Result<String, String> {
                 fragment = b.fragment.clone();
             }
         }
-        return Ok(_urlunsplit(scheme.as_deref(), netloc.as_deref(), &b.path, query.as_deref(), fragment.as_deref()));
+        return Ok(_urlunsplit(
+            scheme.as_deref(),
+            netloc.as_deref(),
+            &b.path,
+            query.as_deref(),
+            fragment.as_deref(),
+        ));
     }
     let mut base_parts: Vec<&str> = b.path.split('/').collect();
     if base_parts.last() != Some(&"") {
@@ -420,7 +515,11 @@ fn urljoin(base: &str, url: &str) -> Result<String, String> {
         // the resolved_path
         if s.len() > 2 {
             let last = s.len() - 1;
-            let mid: Vec<&str> = s[1..last].iter().copied().filter(|x| !x.is_empty()).collect();
+            let mid: Vec<&str> = s[1..last]
+                .iter()
+                .copied()
+                .filter(|x| !x.is_empty())
+                .collect();
             let mut t = vec![s[0]];
             t.extend(mid);
             t.push(s[last]);
@@ -442,8 +541,18 @@ fn urljoin(base: &str, url: &str) -> Result<String, String> {
         resolved.push("");
     }
     let joined = resolved.join("/");
-    let path = if joined.is_empty() { "/".to_string() } else { joined };
-    Ok(_urlunsplit(scheme.as_deref(), netloc.as_deref(), &path, query.as_deref(), fragment.as_deref()))
+    let path = if joined.is_empty() {
+        "/".to_string()
+    } else {
+        joined
+    };
+    Ok(_urlunsplit(
+        scheme.as_deref(),
+        netloc.as_deref(),
+        &path,
+        query.as_deref(),
+        fragment.as_deref(),
+    ))
 }
 
 /// `quote(url, encoding="iso-8859-1", safe=string.punctuation)`.
@@ -466,7 +575,11 @@ fn quote_redirect(url: &str) -> Result<String, String> {
 /// The `idna` codec (IDNA 2003). Non-ASCII labels go through UTS 46, which
 /// maps them the same way for ordinary names.
 fn idna_encode(host: &str) -> Result<String, String> {
-    let err = |r: &str| Err(format!("UnicodeEncodeError: 'idna' codec can't encode: {r}"));
+    let err = |r: &str| {
+        Err(format!(
+            "UnicodeEncodeError: 'idna' codec can't encode: {r}"
+        ))
+    };
     if host.is_empty() {
         return Ok(String::new());
     }
@@ -480,14 +593,20 @@ fn idna_encode(host: &str) -> Result<String, String> {
         }
         return Ok(host.to_string());
     }
-    let mut labels: Vec<&str> = host.split(['.', '\u{3002}', '\u{ff0e}', '\u{ff61}']).collect();
+    let mut labels: Vec<&str> = host
+        .split(['.', '\u{3002}', '\u{ff0e}', '\u{ff61}'])
+        .collect();
     let trailing = labels.last() == Some(&"");
     if trailing {
         labels.pop();
     }
     let mut out = Vec::new();
     for label in labels {
-        let ascii = if label.is_ascii() { label.to_string() } else { url::quirks::domain_to_ascii(label) };
+        let ascii = if label.is_ascii() {
+            label.to_string()
+        } else {
+            url::quirks::domain_to_ascii(label)
+        };
         if ascii.is_empty() {
             return err("label empty");
         }
@@ -507,7 +626,10 @@ pub(super) fn b64encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in data.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |a, (i, &b)| a | (u32::from(b) << (16 - 8 * i)));
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |a, (i, &b)| a | (u32::from(b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char);
@@ -526,14 +648,22 @@ pub(super) fn b64encode(data: &[u8]) -> String {
 /// fallback: `all_proxy` only ever serves an `all:` URL.
 fn getproxies_environment() -> Vec<(String, String)> {
     let env: Vec<(String, String)> = std::env::vars_os()
-        .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
         .collect();
     let mut proxies: Vec<(String, String)> = Vec::new();
     let mut environment = Vec::new();
     for (name, value) in &env {
         let chars: Vec<char> = name.chars().collect();
         let n = chars.len();
-        if n > 5 && chars[n - 6] == '_' && chars[n - 5..].iter().collect::<String>().to_lowercase() == "proxy" {
+        if n > 5
+            && chars[n - 6] == '_'
+            && chars[n - 5..].iter().collect::<String>().to_lowercase() == "proxy"
+        {
             let proxy_name = chars[..n - 6].iter().collect::<String>().to_lowercase();
             if !value.is_empty() {
                 dict_set(&mut proxies, &proxy_name, value.clone());
@@ -599,16 +729,24 @@ fn _parse_proxy(proxy: &str) -> Result<ProxyParts, String> {
         (None, proxy.to_string())
     } else {
         if !r_scheme.starts_with("//") {
-            return Err(format!("ValueError: proxy URL with no authority: {proxy:?}"));
+            return Err(format!(
+                "ValueError: proxy URL with no authority: {proxy:?}"
+            ));
         }
         let end = match r_scheme.find('@') {
             Some(at) => r_scheme[at..].find('/').map(|j| at + j),
             None => r_scheme[2..].find('/').map(|j| 2 + j),
         };
-        (scheme, r_scheme[2..end.unwrap_or(r_scheme.len()).max(2)].to_string())
+        (
+            scheme,
+            r_scheme[2..end.unwrap_or(r_scheme.len()).max(2)].to_string(),
+        )
     };
     let (userinfo, hostport) = match authority.rfind('@') {
-        Some(i) => (Some(authority[..i].to_string()), authority[i + 1..].to_string()),
+        Some(i) => (
+            Some(authority[..i].to_string()),
+            authority[i + 1..].to_string(),
+        ),
         None => (None, authority.clone()),
     };
     let (user, password) = match userinfo {
@@ -642,7 +780,12 @@ struct Req {
 impl Req {
     /// `Request(url, headers=...)`; `origin` false where the caller passes
     /// `origin_req_host` (so the URL is not run through `urlparse`).
-    fn new(url: &str, headers: &[(String, String)], origin: bool, timeout: Duration) -> Result<Req, String> {
+    fn new(
+        url: &str,
+        headers: &[(String, String)],
+        origin: bool,
+        timeout: Duration,
+    ) -> Result<Req, String> {
         let (full, fragment) = _splittag(&unwrap_url(url));
         let (typ, rest) = _splittype(&full);
         let Some(typ) = typ else {
@@ -750,14 +893,20 @@ struct Conn {
 
 fn io_err(e: std::io::Error) -> String {
     match e.kind() {
-        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => "TimeoutError: timed out".into(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+            "TimeoutError: timed out".into()
+        }
         _ => format!("OSError: {e}"),
     }
 }
 
 impl Conn {
     fn new(sock: Sock) -> Conn {
-        Conn { sock, buf: Vec::new(), pos: 0 }
+        Conn {
+            sock,
+            buf: Vec::new(),
+            pos: 0,
+        }
     }
 
     /// One more read from the socket; false at EOF.
@@ -816,7 +965,10 @@ impl Conn {
     }
 
     fn send(&mut self, data: &[u8]) -> Result<(), String> {
-        self.sock.write_all(data).and_then(|_| self.sock.flush()).map_err(io_err)
+        self.sock
+            .write_all(data)
+            .and_then(|_| self.sock.flush())
+            .map_err(io_err)
     }
 }
 
@@ -827,8 +979,15 @@ fn create_connection(host: &str, port: i128, timeout: Duration) -> Result<TcpStr
     if !(0..=65535).contains(&port) {
         return Err("OverflowError: getsockaddrarg: port must be 0-65535.".into());
     }
-    let h = if host.is_ascii() { host.to_string() } else { idna_encode(host)? };
-    let addrs: Vec<_> = (h.as_str(), port as u16).to_socket_addrs().map_err(|e| format!("socket.gaierror: {e}"))?.collect();
+    let h = if host.is_ascii() {
+        host.to_string()
+    } else {
+        idna_encode(host)?
+    };
+    let addrs: Vec<_> = (h.as_str(), port as u16)
+        .to_socket_addrs()
+        .map_err(|e| format!("socket.gaierror: {e}"))?
+        .collect();
     let mut last = "OSError: getaddrinfo returns an empty list".to_string();
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, timeout) {
@@ -854,9 +1013,12 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
         let mut roots = rustls::RootCertStore::empty();
         roots.add_parsable_certificates(anchors.clone());
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-            .build()
-            .map_err(|e| format!("ssl.SSLError: {e}"))?;
+        let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|e| format!("ssl.SSLError: {e}"))?;
         let mut cfg = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .map_err(|e| format!("ssl.SSLError: {e}"))?
@@ -888,14 +1050,26 @@ impl rustls::client::danger::ServerCertVerifier for TrustStore {
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        let err = match self.inner.verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now) {
+        let err = match self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        ) {
             Ok(v) => return Ok(v),
             Err(e) => e,
         };
-        if !self.anchors.iter().any(|a| a.as_ref() == end_entity.as_ref()) {
+        if !self
+            .anchors
+            .iter()
+            .any(|a| a.as_ref() == end_entity.as_ref())
+        {
             return Err(err);
         }
-        let Some((issuer, subject, not_before, not_after)) = cert_names_and_validity(end_entity.as_ref()) else {
+        let Some((issuer, subject, not_before, not_after)) =
+            cert_names_and_validity(end_entity.as_ref())
+        else {
             return Err(err);
         };
         let t = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
@@ -1001,7 +1175,9 @@ fn system_certs() -> Vec<rustls::pki_types::CertificateDer<'static>> {
     // A capath is looked up by subject hash: <8 hex digits>.<n>.
     let dirs = std::env::var_os("SSL_CERT_DIR").unwrap_or_else(|| "/etc/ssl/certs".into());
     for dir in dirs.as_bytes().split(|&b| b == b':') {
-        let Ok(rd) = std::fs::read_dir(Path::new(std::ffi::OsStr::from_bytes(dir))) else { continue };
+        let Ok(rd) = std::fs::read_dir(Path::new(std::ffi::OsStr::from_bytes(dir))) else {
+            continue;
+        };
         for e in rd.flatten() {
             let name = e.file_name();
             let n = name.as_bytes();
@@ -1023,10 +1199,12 @@ fn wrap_tls(tcp: TcpStream, server_hostname: &str) -> Result<Sock, String> {
     let cfg = tls_config()?;
     let name = rustls::pki_types::ServerName::try_from(idna_encode(server_hostname)?)
         .map_err(|e| format!("ValueError: {e}"))?;
-    let mut tls = rustls::ClientConnection::new(cfg, name).map_err(|e| format!("ssl.SSLError: {e}"))?;
+    let mut tls =
+        rustls::ClientConnection::new(cfg, name).map_err(|e| format!("ssl.SSLError: {e}"))?;
     let mut tcp = tcp;
     while tls.is_handshaking() {
-        tls.complete_io(&mut tcp).map_err(|e| format!("ssl.SSLError: {e}"))?;
+        tls.complete_io(&mut tcp)
+            .map_err(|e| format!("ssl.SSLError: {e}"))?;
     }
     Ok(Sock::Tls(Box::new(rustls::StreamOwned::new(tls, tcp))))
 }
@@ -1113,15 +1291,25 @@ fn parse_headers(raw: &[u8]) -> Vec<(String, String)> {
         if line.starts_with("From ") || line.starts_with([' ', '\t']) {
             return true;
         }
-        let name_end = line.find(|c: char| !matches!(c, '\x21'..='\x39' | '\x3b'..='\x7e')).unwrap_or(line.len());
+        let name_end = line
+            .find(|c: char| !matches!(c, '\x21'..='\x39' | '\x3b'..='\x7e'))
+            .unwrap_or(line.len());
         line[name_end..].starts_with(':')
     };
-    let lines: Vec<&str> = split_keepends(&text).into_iter().take_while(|l| is_header(l)).collect();
+    let lines: Vec<&str> = split_keepends(&text)
+        .into_iter()
+        .take_while(|l| is_header(l))
+        .collect();
     let source_parse = |lines: &[&str]| {
         let (name, value) = lines[0].split_once(':').unwrap_or((lines[0], ""));
         let mut v = value.to_string();
         v.extend(lines[1..].iter().copied());
-        (name.to_string(), v.trim_start_matches([' ', '\t', '\r', '\n']).trim_end_matches(['\r', '\n']).to_string())
+        (
+            name.to_string(),
+            v.trim_start_matches([' ', '\t', '\r', '\n'])
+                .trim_end_matches(['\r', '\n'])
+                .to_string(),
+        )
     };
     let mut out = Vec::new();
     let mut last: Vec<&str> = Vec::new();
@@ -1155,7 +1343,9 @@ fn parse_headers(raw: &[u8]) -> Vec<(String, String)> {
 
 /// `msg.get(name)`: the first, by name in any case.
 fn header_get(h: &[(String, String)], name: &str) -> Option<String> {
-    h.iter().find(|(k, _)| k.to_lowercase() == name).map(|(_, v)| v.clone())
+    h.iter()
+        .find(|(k, _)| k.to_lowercase() == name)
+        .map(|(_, v)| v.clone())
 }
 
 /// `http.client.HTTPResponse`.
@@ -1189,7 +1379,8 @@ impl HttpResp {
             return Err(format!("UnknownProtocol: {version}"));
         }
         let headers = parse_headers(&read_header_lines(&mut conn)?);
-        let chunked = header_get(&headers, "transfer-encoding").is_some_and(|t| t.to_lowercase() == "chunked");
+        let chunked = header_get(&headers, "transfer-encoding")
+            .is_some_and(|t| t.to_lowercase() == "chunked");
         let mut length = None;
         if let Some(l) = header_get(&headers, "content-length").filter(|l| !l.is_empty()) {
             if !chunked {
@@ -1199,7 +1390,15 @@ impl HttpResp {
         if status == 204 || status == 304 || (100..200).contains(&status) {
             length = Some(0);
         }
-        Ok(HttpResp { conn, status, headers, chunked, chunk_left: None, length, closed: false })
+        Ok(HttpResp {
+            conn,
+            status,
+            headers,
+            chunked,
+            chunk_left: None,
+            length,
+            closed: false,
+        })
     }
 
     /// `_safe_read(n)`: exactly n bytes, or IncompleteRead. A negative n
@@ -1248,7 +1447,9 @@ impl HttpResp {
                     }
                     trailers += 1;
                     if trailers > MAXHEADERS {
-                        return Err(format!("HTTPException: got more than {MAXHEADERS} trailers"));
+                        return Err(format!(
+                            "HTTPException: got more than {MAXHEADERS} trailers"
+                        ));
                     }
                 }
                 // we read everything; close the "file"
@@ -1349,13 +1550,19 @@ fn get_hostport(host: &str, default_port: i128) -> Result<(String, i128), String
         }
         _ => (host, default_port),
     };
-    let h = if h.starts_with('[') && h.ends_with(']') && h.len() >= 2 { &h[1..h.len() - 1] } else { h };
+    let h = if h.starts_with('[') && h.ends_with(']') && h.len() >= 2 {
+        &h[1..h.len() - 1]
+    } else {
+        h
+    };
     Ok((h.to_string(), port))
 }
 
 fn check_url_chars(s: &str) -> Result<(), String> {
     if s.chars().any(|c| c <= ' ' || c == '\x7f') {
-        return Err(format!("InvalidURL: URL can't contain control characters. {s:?}"));
+        return Err(format!(
+            "InvalidURL: URL can't contain control characters. {s:?}"
+        ));
     }
     Ok(())
 }
@@ -1366,14 +1573,21 @@ fn putheader(out: &mut Vec<u8>, name: &str, value: Option<&str>) -> Result<(), S
         return Err("TypeError: header value is None".into());
     };
     let legal_name = name.is_ascii()
-        && name.chars().next().is_some_and(|c| c != ':' && !c.is_ascii_whitespace() && c != '\x0b')
-        && name.chars().skip(1).all(|c| !matches!(c, ':' | '\r' | '\n'));
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c != ':' && !c.is_ascii_whitespace() && c != '\x0b')
+        && name
+            .chars()
+            .skip(1)
+            .all(|c| !matches!(c, ':' | '\r' | '\n'));
     if !legal_name {
         return Err(format!("ValueError: Invalid header name {name:?}"));
     }
     let mut v = Vec::new();
     for c in value.chars() {
-        let b = u8::try_from(u32::from(c)).map_err(|_| "UnicodeEncodeError: 'latin-1' codec can't encode".to_string())?;
+        let b = u8::try_from(u32::from(c))
+            .map_err(|_| "UnicodeEncodeError: 'latin-1' codec can't encode".to_string())?;
         v.push(b);
     }
     // \n(?![ \t])|\r(?![ \t\n])
@@ -1406,7 +1620,11 @@ fn do_request_(req: &mut Req) -> Result<(), String> {
         dict_set(&mut req.unredirected, "Host", sel_host);
     }
     if !req.has_header("User-agent") {
-        dict_set(&mut req.unredirected, "User-agent", Some("Python-urllib/3.14".to_string()));
+        dict_set(
+            &mut req.unredirected,
+            "User-agent",
+            Some("Python-urllib/3.14".to_string()),
+        );
     }
     Ok(())
 }
@@ -1436,20 +1654,30 @@ fn do_open(req: &mut Req, https: bool) -> Result<Resp, String> {
             tunnel_headers.push(("Proxy-Authorization".into(), v.unwrap_or_default()));
         }
         let (t_host, t_port) = get_hostport(&th, default_port)?;
-        if !tunnel_headers.iter().any(|(k, _)| k.to_lowercase() == "host") {
+        if !tunnel_headers
+            .iter()
+            .any(|(k, _)| k.to_lowercase() == "host")
+        {
             tunnel_headers.push(("Host".into(), format!("{}:{t_port}", idna_encode(&t_host)?)));
         }
         tunnel = Some((t_host, t_port, tunnel_headers));
     }
 
     // putrequest + putheader: everything is checked before connecting.
-    let url = if req.selector.is_empty() { "/" } else { req.selector.as_str() };
+    let url = if req.selector.is_empty() {
+        "/"
+    } else {
+        req.selector.as_str()
+    };
     check_url_chars(url)?;
     if !url.is_ascii() {
         return Err("UnicodeEncodeError: 'ascii' codec can't encode the request line".into());
     }
     let mut out = format!("GET {url} HTTP/1.1\r\n").into_bytes();
-    if !headers.iter().any(|(k, _)| k.to_lowercase() == "accept-encoding") {
+    if !headers
+        .iter()
+        .any(|(k, _)| k.to_lowercase() == "accept-encoding")
+    {
         putheader(&mut out, "Accept-Encoding", Some("identity"))?;
     }
     for (k, v) in &headers {
@@ -1461,7 +1689,9 @@ fn do_open(req: &mut Req, https: bool) -> Result<Resp, String> {
     let mut sni = h_host.clone();
     let tcp = match &tunnel {
         Some((t_host, t_port, tunnel_headers)) => {
-            check_url_chars(t_host).map_err(|_| "ValueError: Tunnel host can't contain control characters".to_string())?;
+            check_url_chars(t_host).map_err(|_| {
+                "ValueError: Tunnel host can't contain control characters".to_string()
+            })?;
             let mut target = idna_encode(t_host)?;
             if target.contains(':') && !target.starts_with('[') {
                 target = format!("[{target}]");
@@ -1476,7 +1706,10 @@ fn do_open(req: &mut Req, https: bool) -> Result<Resp, String> {
             let (_, code, message) = read_status(&mut c)?;
             read_header_lines(&mut c)?;
             if code != 200 {
-                return Err(format!("OSError: Tunnel connection failed: {code} {}", py_strip(&message)));
+                return Err(format!(
+                    "OSError: Tunnel connection failed: {code} {}",
+                    py_strip(&message)
+                ));
             }
             sni = t_host.clone();
             match c.sock {
@@ -1486,7 +1719,11 @@ fn do_open(req: &mut Req, https: bool) -> Result<Resp, String> {
         }
         None => tcp,
     };
-    let sock = if https { wrap_tls(tcp, &sni)? } else { Sock::Tcp(tcp) };
+    let sock = if https {
+        wrap_tls(tcp, &sni)?
+    } else {
+        Sock::Tcp(tcp)
+    };
     let mut conn = Conn::new(sock);
     conn.send(&out)?;
     Ok(Resp::Http(Box::new(HttpResp::begin(conn)?)))
@@ -1497,12 +1734,23 @@ fn proxy_open(req: &mut Req, proxy: &str, depth: usize) -> Result<Option<Resp>, 
     let orig_type = req.typ.clone();
     let (ptype, user, password, hostport) = _parse_proxy(proxy)?;
     let ptype = ptype.unwrap_or_else(|| orig_type.clone());
-    if req.host.as_deref().is_some_and(|h| !h.is_empty() && proxy_bypass(h)) {
+    if req
+        .host
+        .as_deref()
+        .is_some_and(|h| !h.is_empty() && proxy_bypass(h))
+    {
         return Ok(None);
     }
-    if let (Some(u), Some(p)) = (user.filter(|u| !u.is_empty()), password.filter(|p| !p.is_empty())) {
+    if let (Some(u), Some(p)) = (
+        user.filter(|u| !u.is_empty()),
+        password.filter(|p| !p.is_empty()),
+    ) {
         let creds = b64encode(format!("{}:{}", unquote(&u), unquote(&p)).as_bytes());
-        dict_set(&mut req.headers, "Proxy-authorization", format!("Basic {creds}"));
+        dict_set(
+            &mut req.headers,
+            "Proxy-authorization",
+            format!("Basic {creds}"),
+        );
     }
     req.set_proxy(unquote(&hostport), ptype.clone());
     if orig_type == ptype || orig_type == "https" {
@@ -1542,7 +1790,8 @@ fn http_error(req: Req, resp: Resp, code: i128, depth: usize) -> Result<Resp, St
     if !matches!(code, 301 | 302 | 303 | 307 | 308) {
         return http_error();
     }
-    let Some(newurl) = header_get(&h.headers, "location").or_else(|| header_get(&h.headers, "uri")) else {
+    let Some(newurl) = header_get(&h.headers, "location").or_else(|| header_get(&h.headers, "uri"))
+    else {
         return http_error();
     };
     let mut parts = urlparse(&newurl)?;
@@ -1555,7 +1804,9 @@ fn http_error(req: Req, resp: Resp, code: i128, depth: usize) -> Result<Resp, St
     let newurl = quote_redirect(&urlunparse(&parts))?;
     let newurl = urljoin(&req.full_url(), &newurl)?;
     if !redirect_allowed(&req.typ, &newurl)? {
-        return Err(format!("HTTPError: HTTP Error {code}: refusing a redirect from https to {newurl}"));
+        return Err(format!(
+            "HTTPError: HTTP Error {code}: refusing a redirect from https to {newurl}"
+        ));
     }
     let headers: Vec<(String, String)> = req
         .headers
@@ -1602,7 +1853,12 @@ fn open(mut req: Req, depth: usize) -> Result<Resp, String> {
         // HTTPErrorProcessor
         let code = match &resp {
             Resp::Http(h) => h.status,
-            Resp::Local => return Err("TypeError: '<=' not supported between instances of 'int' and 'NoneType'".into()),
+            Resp::Local => {
+                return Err(
+                    "TypeError: '<=' not supported between instances of 'int' and 'NoneType'"
+                        .into(),
+                )
+            }
         };
         if !(200..300).contains(&code) {
             return http_error(req, resp, code, depth);
@@ -1610,7 +1866,6 @@ fn open(mut req: Req, depth: usize) -> Result<Resp, String> {
     }
     Ok(resp)
 }
-
 
 /// What urllib fixes when it builds its opener, on the first `urlopen` of
 /// the process: the proxy table and the HTTPS context.
@@ -1627,7 +1882,11 @@ pub(super) fn check_request(full_url: &str) -> Result<(), String> {
 
 /// `urlopen(Request(url, headers=UA), timeout=...)` for an http(s) URL:
 /// the response's body and `Content-Length` header.
-pub(super) fn open_http(url: &str, ua: (&str, &str), timeout: Duration) -> Result<(Box<dyn Read + Send>, Option<String>), String> {
+pub(super) fn open_http(
+    url: &str,
+    ua: (&str, &str),
+    timeout: Duration,
+) -> Result<(Box<dyn Read + Send>, Option<String>), String> {
     let headers = [(ua.0.to_string(), ua.1.to_string())];
     let req = Req::new(url, &headers, true, timeout)?;
     match open(req, 0)? {
@@ -1635,7 +1894,9 @@ pub(super) fn open_http(url: &str, ua: (&str, &str), timeout: Duration) -> Resul
             let length = header_get(&r.headers, "content-length");
             Ok((Box::new(Body(r)), length))
         }
-        Resp::Local => Err("TypeError: '<=' not supported between instances of 'int' and 'NoneType'".into()),
+        Resp::Local => {
+            Err("TypeError: '<=' not supported between instances of 'int' and 'NoneType'".into())
+        }
     }
 }
 

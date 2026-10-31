@@ -28,13 +28,17 @@ pub(super) fn release_notes_here(root: &Path) -> Result<Option<(String, String)>
     ];
     for path in &paths {
         // except (OSError, ET.ParseError): continue
-        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
         let doc = match et::parse(&bytes) {
             Ok(doc) => doc,
             Err(et::Error::Parse) => continue,
             Err(et::Error::Raise(e)) => return Err(e),
         };
-        let Some(release) = doc.find2("releases", "release") else { continue };
+        let Some(release) = doc.find2("releases", "release") else {
+            continue;
+        };
         let Some(desc) = release.find("description") else {
             return Ok(None);
         };

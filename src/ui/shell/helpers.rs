@@ -120,7 +120,10 @@ pub const FALLBACK_ICON: &[(&str, &str)] = &[
 
 /// `_FALLBACK_ICON.get(source)`.
 pub fn fallback_icon(source: &str) -> Option<&'static str> {
-    FALLBACK_ICON.iter().find(|(k, _)| *k == source).map(|(_, v)| *v)
+    FALLBACK_ICON
+        .iter()
+        .find(|(k, _)| *k == source)
+        .map(|(_, v)| *v)
 }
 
 /// Epoch -> "3d ago". An age answers "is this stale?"; a timestamp doesn't.
@@ -161,7 +164,14 @@ pub fn primary_category(cats: &str) -> String {
     }
     let parts: Vec<&str> = cats.split(';').filter(|c| !c.is_empty()).collect();
     const GENERIC: &[&str] = &[
-        "Application", "Utility", "System", "Settings", "GTK", "Qt", "GNOME", "KDE",
+        "Application",
+        "Utility",
+        "System",
+        "Settings",
+        "GTK",
+        "Qt",
+        "GNOME",
+        "KDE",
         "ConsoleOnly",
     ];
     for c in &parts {
@@ -201,7 +211,10 @@ pub fn reverse_text(a: &str, b: &str) -> Ordering {
 /// else is lowered as `str::to_lowercase` does it, final sigma included.
 pub fn lower_cmp(a: &str, b: &str) -> Ordering {
     if a.is_ascii() && b.is_ascii() {
-        return a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
+        return a
+            .bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()));
     }
     a.to_lowercase().cmp(&b.to_lowercase())
 }
@@ -210,7 +223,10 @@ pub fn lower_cmp(a: &str, b: &str) -> Ordering {
 pub fn version_text(it: &AppItem) -> String {
     if it.git_behind != 0 {
         let suffix = if it.git_dirty { " · local edits" } else { "" };
-        return format!("{} · {} commits behind{}", it.app.version, it.git_behind, suffix);
+        return format!(
+            "{} · {} commits behind{}",
+            it.app.version, it.git_behind, suffix
+        );
     }
     if !it.has_update {
         return it.app.version.clone();
@@ -292,7 +308,8 @@ pub fn exc_str(e: &str) -> String {
     match e.split_once(": ") {
         Some((t, m))
             if t.ends_with("Error")
-                && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
+                && t.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') =>
         {
             m.to_string()
         }
@@ -316,24 +333,88 @@ pub fn exc_str(e: &str) -> String {
 /// like this one. Reserved, not used.
 const BG_STACK: usize = 8 << 20;
 
+/// What a panic says: its message, or "" for a payload that is not text
+/// (as `str(exc)` of a bare exception).
+pub fn panic_text(err: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// A window's handler for failed background work (see `on_bg_failure`).
+type BgFailed = Box<dyn Fn(&str)>;
+
+thread_local! {
+    /// What the window does when background work handed to [`spawn_bg`]
+    /// panics: its `done` cannot be called without a value, so this stands
+    /// in for it (the window clears its busy state and says so).
+    static BG_FAILED: std::cell::RefCell<Option<BgFailed>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set what [`spawn_bg`] does on the main thread when its work panics.
+pub fn on_bg_failure(f: impl Fn(&str) + 'static) {
+    BG_FAILED.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+}
+
+fn bg_failed(msg: &str) {
+    eprintln!("almanac: background work failed: {msg}");
+    // Taken out while it runs, so a handler that starts more work (and has
+    // it fail) cannot borrow it twice.
+    let handler = BG_FAILED.with(|h| h.borrow_mut().take());
+    if let Some(f) = handler {
+        f(msg);
+        BG_FAILED.with(|h| {
+            let mut slot = h.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(f);
+            }
+        });
+    }
+}
+
 /// `threading.Thread(target=work) + GLib.idle_add(done, result)`: run `work`
-/// off the main thread, then `done` with its result on the main thread. If
-/// `work` panics, `done` is not called (as a Python thread that raised never
-/// reached its idle_add).
+/// off the main thread, then `done` with its result on the main thread.
+///
+/// If `work` panics there is no result for `done`; the window's failure
+/// handler ([`on_bg_failure`]) runs instead, so a page that set itself busy
+/// for the work is not left spinning forever with nothing said. Work whose
+/// caller has its own way to report a failure uses [`spawn_bg_checked`].
 pub fn spawn_bg<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(T) + 'static,
 ) {
-    // On a stack of its own, so its size does not hang on `ulimit -s` (the
-    // pool thread's, and an overflow there aborts the app).
-    let handle = gio::spawn_blocking(move || crate::util::with_stack(BG_STACK, work));
-    glib::spawn_future_local(async move {
-        if let Ok(value) = handle.await {
-            done(value);
-        }
+    spawn_bg_checked(work, move |result| match result {
+        Ok(value) => done(value),
+        Err(msg) => bg_failed(&msg),
     });
 }
 
+/// [`spawn_bg`], with `done` always called: `Err` with the panic's message
+/// when `work` panicked.
+pub fn spawn_bg_checked<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(Result<T, String>) + 'static,
+) {
+    // On a stack of its own, so its size does not hang on `ulimit -s` (the
+    // pool thread's, and an overflow there aborts the app).
+    let handle = gio::spawn_blocking(move || {
+        crate::util::with_stack(BG_STACK, move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                .map_err(|e| panic_text(&*e))
+        })
+    });
+    glib::spawn_future_local(async move {
+        let result = match handle.await {
+            Ok(result) => result,
+            Err(e) => Err(panic_text(&*e)),
+        };
+        done(result);
+    });
+}
 
 /// `self._thumb_pool.submit(work)` + `GLib.idle_add(done, result)`: like
 /// `spawn_bg`, but on the window's small image pool, so 5,600 cards cannot
@@ -356,8 +437,9 @@ pub fn thumb_bg<T: Send + 'static>(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
         glib::MainContext::default().invoke(move || {
             let done = done.into_inner();
-            if let Ok(value) = result {
-                done(value);
+            match result {
+                Ok(value) => done(value),
+                Err(e) => bg_failed(&panic_text(&*e)),
             }
         });
     });
@@ -382,7 +464,9 @@ mod tests {
         if !(set("WAYLAND_DISPLAY") || set("DISPLAY") || broadway) {
             return;
         }
-        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(()))) || gdk::Display::default().is_none() {
+        if !matches!(std::panic::catch_unwind(adw::init), Ok(Ok(())))
+            || gdk::Display::default().is_none()
+        {
             return;
         }
         let sw = gtk::Switch::new();
@@ -404,15 +488,80 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
+    /// Work that panics still reaches the main thread: `spawn_bg_checked`'s
+    /// `done` gets the panic as `Err`, and `spawn_bg` runs the window's
+    /// failure handler in place of a `done` it has no value for -- before,
+    /// both were skipped and a busy page spun forever.
+    #[test]
+    fn background_work_that_panics_still_reports_back() {
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let g = got.clone();
+            spawn_bg_checked(
+                || -> i32 { panic!("boom") },
+                move |r| g.borrow_mut().push(format!("{r:?}")),
+            );
+            let g = got.clone();
+            spawn_bg_checked(|| 7, move |r| g.borrow_mut().push(format!("{r:?}")));
+            let g = got.clone();
+            on_bg_failure(move |msg| g.borrow_mut().push(format!("failed: {msg}")));
+            let g = got.clone();
+            spawn_bg(
+                || -> i32 { panic!("bang") },
+                move |v| g.borrow_mut().push(format!("done {v}")),
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while got.borrow().len() < 3 && std::time::Instant::now() < deadline {
+                ctx.iteration(true);
+            }
+            let mut got = got.borrow().clone();
+            got.sort();
+            assert_eq!(got, ["Err(\"boom\")", "Ok(7)", "failed: bang"]);
+        })
+        .expect("a fresh main context");
+    }
+
     #[test]
     fn lower_cmp_orders_as_lowering_first_does() {
         let words = [
-            "", "a", "A", "ab", "aB", "Ab", "b", "B", "_x", "[x", "Zed", "zed", "zeta", "Émile", "émile", "eMile",
-            "ΟΔΟΣ", "οδος", "οδοσ", "İstanbul", "istanbul", "ß", "SS", "ss", "Ä", "a\u{308}", "日本", "Z9", "z10",
+            "",
+            "a",
+            "A",
+            "ab",
+            "aB",
+            "Ab",
+            "b",
+            "B",
+            "_x",
+            "[x",
+            "Zed",
+            "zed",
+            "zeta",
+            "Émile",
+            "émile",
+            "eMile",
+            "ΟΔΟΣ",
+            "οδος",
+            "οδοσ",
+            "İstanbul",
+            "istanbul",
+            "ß",
+            "SS",
+            "ss",
+            "Ä",
+            "a\u{308}",
+            "日本",
+            "Z9",
+            "z10",
         ];
         for a in words {
             for b in words {
-                assert_eq!(lower_cmp(a, b), a.to_lowercase().cmp(&b.to_lowercase()), "{a:?} vs {b:?}");
+                assert_eq!(
+                    lower_cmp(a, b),
+                    a.to_lowercase().cmp(&b.to_lowercase()),
+                    "{a:?} vs {b:?}"
+                );
             }
         }
     }
@@ -420,7 +569,10 @@ mod tests {
     /// test_star_counts_fit_a_chip
     #[test]
     fn star_counts_fit_a_chip() {
-        let got: Vec<String> = [198, 2151, 2000, 15419, 66175].iter().map(|n| compact(*n)).collect();
+        let got: Vec<String> = [198, 2151, 2000, 15419, 66175]
+            .iter()
+            .map(|n| compact(*n))
+            .collect();
         assert_eq!(got, ["198", "2.2k", "2k", "15k", "66k"]);
     }
 

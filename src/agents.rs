@@ -55,7 +55,13 @@ pub fn cache() -> PathBuf {
         }
     };
     let mut p = pure_path(&base);
-    p = if p == b"." { b"almanac".to_vec() } else if p.ends_with(b"/") { [p, b"almanac".to_vec()].concat() } else { [p, b"/almanac".to_vec()].concat() };
+    p = if p == b"." {
+        b"almanac".to_vec()
+    } else if p.ends_with(b"/") {
+        [p, b"almanac".to_vec()].concat()
+    } else {
+        [p, b"/almanac".to_vec()].concat()
+    };
     PathBuf::from(std::ffi::OsStr::from_bytes(&p))
 }
 
@@ -77,7 +83,11 @@ fn py_home() -> Vec<u8> {
     while end > 0 && home[end - 1] == b'/' {
         end -= 1;
     }
-    if end == 0 { b"/".to_vec() } else { home[..end].to_vec() }
+    if end == 0 {
+        b"/".to_vec()
+    } else {
+        home[..end].to_vec()
+    }
 }
 
 /// How a `PurePosixPath` spells a path: a root of "/" (or exactly "//", which
@@ -91,10 +101,17 @@ fn pure_path(p: &[u8]) -> Vec<u8> {
     } else {
         b""
     };
-    let parts: Vec<&[u8]> = p.split(|&c| c == b'/').filter(|s| !s.is_empty() && *s != b".").collect();
+    let parts: Vec<&[u8]> = p
+        .split(|&c| c == b'/')
+        .filter(|s| !s.is_empty() && *s != b".")
+        .collect();
     let mut out = root.to_vec();
     out.extend_from_slice(&parts.join(&b'/'));
-    if out.is_empty() { b".".to_vec() } else { out }
+    if out.is_empty() {
+        b".".to_vec()
+    } else {
+        out
+    }
 }
 
 /// `LATEST_CACHE`: `CACHE / "agent-latest.json"`.
@@ -125,7 +142,15 @@ pub struct Spec {
     pub note: String,
 }
 
-fn spec(id: &str, name: &str, repo: &str, home: &str, domain: &str, self_update: &[&str], note: &str) -> Spec {
+fn spec(
+    id: &str,
+    name: &str,
+    repo: &str,
+    home: &str,
+    domain: &str,
+    self_update: &[&str],
+    note: &str,
+) -> Spec {
     Spec {
         id: id.into(),
         name: name.into(),
@@ -139,33 +164,114 @@ fn spec(id: &str, name: &str, repo: &str, home: &str, domain: &str, self_update:
 
 pub static KNOWN: LazyLock<Vec<Spec>> = LazyLock::new(|| {
     vec![
-        spec("claude", "Claude Code", "anthropics/claude-code",
-             "https://claude.com/claude-code", "claude.com", &["claude", "update"], ""),
-        spec("codex", "Codex CLI", "openai/codex",
-             "https://github.com/openai/codex", "openai.com", &[], ""),
-        spec("gemini", "Gemini CLI", "google-gemini/gemini-cli",
-             "https://github.com/google-gemini/gemini-cli", "gemini.google.com", &[], ""),
-        spec("opencode", "opencode", "anomalyco/opencode",
-             "https://opencode.ai", "opencode.ai", &["opencode", "upgrade"], ""),
-        spec("copilot", "GitHub Copilot CLI", "github/copilot-cli",
-             "https://github.com/github/copilot-cli", "github.com",
-             &["copilot", "update"], ""),
-        spec("cursor-agent", "Cursor Agent", "", "https://cursor.com/cli",
-             "cursor.com", &["cursor-agent", "update"],
-             "Versions are dated builds, not semantic versions."),
-        spec("crush", "Crush", "charmbracelet/crush",
-             "https://github.com/charmbracelet/crush", "charm.sh", &[], ""),
-        spec("goose", "Goose", "block/goose",
-             "https://block.github.io/goose/", "block.xyz", &[], ""),
-        spec("aider", "Aider", "Aider-AI/aider", "https://aider.chat",
-             "aider.chat",
-             &["python", "-m", "pip", "install", "--upgrade", "aider-chat"], ""),
-        spec("qwen", "Qwen Code", "QwenLM/qwen-code",
-             "https://github.com/QwenLM/qwen-code", "qwen.ai", &[], ""),
-        spec("amp", "Amp", "", "https://ampcode.com", "ampcode.com",
-             &["amp", "update"], ""),
-        spec("droid", "Factory Droid", "", "https://factory.ai", "factory.ai",
-             &["droid", "update"], ""),
+        spec(
+            "claude",
+            "Claude Code",
+            "anthropics/claude-code",
+            "https://claude.com/claude-code",
+            "claude.com",
+            &["claude", "update"],
+            "",
+        ),
+        spec(
+            "codex",
+            "Codex CLI",
+            "openai/codex",
+            "https://github.com/openai/codex",
+            "openai.com",
+            &[],
+            "",
+        ),
+        spec(
+            "gemini",
+            "Gemini CLI",
+            "google-gemini/gemini-cli",
+            "https://github.com/google-gemini/gemini-cli",
+            "gemini.google.com",
+            &[],
+            "",
+        ),
+        spec(
+            "opencode",
+            "opencode",
+            "anomalyco/opencode",
+            "https://opencode.ai",
+            "opencode.ai",
+            &["opencode", "upgrade"],
+            "",
+        ),
+        spec(
+            "copilot",
+            "GitHub Copilot CLI",
+            "github/copilot-cli",
+            "https://github.com/github/copilot-cli",
+            "github.com",
+            &["copilot", "update"],
+            "",
+        ),
+        spec(
+            "cursor-agent",
+            "Cursor Agent",
+            "",
+            "https://cursor.com/cli",
+            "cursor.com",
+            &["cursor-agent", "update"],
+            "Versions are dated builds, not semantic versions.",
+        ),
+        spec(
+            "crush",
+            "Crush",
+            "charmbracelet/crush",
+            "https://github.com/charmbracelet/crush",
+            "charm.sh",
+            &[],
+            "",
+        ),
+        spec(
+            "goose",
+            "Goose",
+            "block/goose",
+            "https://block.github.io/goose/",
+            "block.xyz",
+            &[],
+            "",
+        ),
+        spec(
+            "aider",
+            "Aider",
+            "Aider-AI/aider",
+            "https://aider.chat",
+            "aider.chat",
+            &["python", "-m", "pip", "install", "--upgrade", "aider-chat"],
+            "",
+        ),
+        spec(
+            "qwen",
+            "Qwen Code",
+            "QwenLM/qwen-code",
+            "https://github.com/QwenLM/qwen-code",
+            "qwen.ai",
+            &[],
+            "",
+        ),
+        spec(
+            "amp",
+            "Amp",
+            "",
+            "https://ampcode.com",
+            "ampcode.com",
+            &["amp", "update"],
+            "",
+        ),
+        spec(
+            "droid",
+            "Factory Droid",
+            "",
+            "https://factory.ai",
+            "factory.ai",
+            &["droid", "update"],
+            "",
+        ),
     ]
 });
 
@@ -248,13 +354,20 @@ impl Py {
     fn get(&self, key: &str) -> Result<Option<&Py>, String> {
         match self {
             Py::Dict(items) => Ok(dict_get(items, &Py::s(key))),
-            other => Err(format!("AttributeError: '{}' object has no attribute 'get'", other.type_name())),
+            other => Err(format!(
+                "AttributeError: '{}' object has no attribute 'get'",
+                other.type_name()
+            )),
         }
     }
 
     /// `x or default`.
     fn or(&self, default: Py) -> Py {
-        if self.truthy() { self.clone() } else { default }
+        if self.truthy() {
+            self.clone()
+        } else {
+            default
+        }
     }
 
     /// The value as the parity hook reports it. JSON numbers beyond i64/u64
@@ -271,14 +384,22 @@ impl Py {
                 } else if let Ok(u) = s.parse::<u64>() {
                     Value::from(u)
                 } else {
-                    s.parse::<f64>().ok().and_then(serde_json::Number::from_f64).map(Value::Number).unwrap_or(Value::Null)
+                    s.parse::<f64>()
+                        .ok()
+                        .and_then(serde_json::Number::from_f64)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null)
                 }
             }
-            Py::Float(f) => serde_json::Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null),
+            Py::Float(f) => serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
             Py::Str(s) => Value::String(s.clone()),
             Py::WStr(s) => Value::String(lossy(s)),
             Py::List(l) => Value::Array(l.iter().map(Py::to_value).collect()),
-            Py::Dict(d) => Value::Object(d.iter().map(|(k, v)| (k.py_str(), v.to_value())).collect()),
+            Py::Dict(d) => {
+                Value::Object(d.iter().map(|(k, v)| (k.py_str(), v.to_value())).collect())
+            }
         }
     }
 
@@ -296,7 +417,11 @@ impl Py {
             }
             Value::String(s) => Py::Str(s.clone()),
             Value::Array(a) => Py::List(a.iter().map(Py::from_value).collect()),
-            Value::Object(m) => Py::Dict(m.iter().map(|(k, v)| (Py::Str(k.clone()), Py::from_value(v))).collect()),
+            Value::Object(m) => Py::Dict(
+                m.iter()
+                    .map(|(k, v)| (Py::Str(k.clone()), Py::from_value(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -317,14 +442,26 @@ impl Py {
             Py::Bool(false) => "False".into(),
             Py::Int(s) => s.clone(),
             Py::Float(f) if f.is_nan() => "nan".into(),
-            Py::Float(f) if f.is_infinite() => if *f > 0.0 { "inf".into() } else { "-inf".into() },
+            Py::Float(f) if f.is_infinite() => {
+                if *f > 0.0 {
+                    "inf".into()
+                } else {
+                    "-inf".into()
+                }
+            }
             Py::Float(f) => util::py_float_repr(*f),
             Py::Str(s) => repr_str(&s.chars().map(|c| c as u32).collect::<Vec<_>>()),
             Py::WStr(s) => repr_str(s),
-            Py::List(l) => format!("[{}]", l.iter().map(Py::py_repr).collect::<Vec<_>>().join(", ")),
+            Py::List(l) => format!(
+                "[{}]",
+                l.iter().map(Py::py_repr).collect::<Vec<_>>().join(", ")
+            ),
             Py::Dict(d) => format!(
                 "{{{}}}",
-                d.iter().map(|(k, v)| format!("{}: {}", k.py_repr(), v.py_repr())).collect::<Vec<_>>().join(", ")
+                d.iter()
+                    .map(|(k, v)| format!("{}: {}", k.py_repr(), v.py_repr()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         }
     }
@@ -332,12 +469,18 @@ impl Py {
 
 /// A str's code points as a Rust `String`, a lone surrogate as U+FFFD.
 fn lossy(cps: &[u32]) -> String {
-    cps.iter().map(|&c| char::from_u32(c).unwrap_or('\u{fffd}')).collect()
+    cps.iter()
+        .map(|&c| char::from_u32(c).unwrap_or('\u{fffd}'))
+        .collect()
 }
 
 /// A str from code points: a `Str` unless one is a lone surrogate.
 fn py_str_of(cps: Vec<u32>) -> Py {
-    match cps.iter().map(|&c| char::from_u32(c)).collect::<Option<String>>() {
+    match cps
+        .iter()
+        .map(|&c| char::from_u32(c))
+        .collect::<Option<String>>()
+    {
         Some(s) => Py::Str(s),
         None => Py::WStr(cps),
     }
@@ -360,7 +503,9 @@ fn repr_str(cps: &[u32]) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            Some(c) if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            Some(c) if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             Some(c) => out.push(c),
         }
     }
@@ -433,12 +578,17 @@ fn py_dict(v: &Py) -> Result<Vec<(Py, Py)>, String> {
         return Ok(d.clone());
     }
     let Some(items) = py_iter(v) else {
-        return Err(format!("TypeError: '{}' object is not iterable", v.type_name()));
+        return Err(format!(
+            "TypeError: '{}' object is not iterable",
+            v.type_name()
+        ));
     };
     let mut out = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let Some(pair) = py_iter(item) else {
-            return Err(format!("TypeError: cannot convert dictionary update sequence element #{i} to a sequence"));
+            return Err(format!(
+                "TypeError: cannot convert dictionary update sequence element #{i} to a sequence"
+            ));
         };
         if pair.len() != 2 {
             return Err(format!(
@@ -447,7 +597,10 @@ fn py_dict(v: &Py) -> Result<Vec<(Py, Py)>, String> {
             ));
         }
         let mut pair = pair.into_iter();
-        let (k, v) = (pair.next().unwrap_or(Py::None), pair.next().unwrap_or(Py::None));
+        let (k, v) = (
+            pair.next().unwrap_or(Py::None),
+            pair.next().unwrap_or(Py::None),
+        );
         if matches!(k, Py::List(_) | Py::Dict(_)) {
             return Err(format!("TypeError: unhashable type: '{}'", k.type_name()));
         }
@@ -466,22 +619,32 @@ fn py_contains(haystack: &Py, needle: &str) -> Result<bool, String> {
             let n: Vec<u32> = needle.chars().map(|c| c as u32).collect();
             Ok(n.is_empty() || s.windows(n.len()).any(|w| w == n.as_slice()))
         }
-        other => Err(format!("TypeError: argument of type '{}' is not iterable", other.type_name())),
+        other => Err(format!(
+            "TypeError: argument of type '{}' is not iterable",
+            other.type_name()
+        )),
     }
 }
 
 /// `a, b = x`.
 fn unpack2(v: &Py) -> Result<(Py, Py), String> {
     let Some(items) = py_iter(v) else {
-        return Err(format!("TypeError: cannot unpack non-iterable {} object", v.type_name()));
+        return Err(format!(
+            "TypeError: cannot unpack non-iterable {} object",
+            v.type_name()
+        ));
     };
     match items.len() {
         2 => {
             let mut it = items.into_iter();
             Ok((it.next().unwrap_or(Py::None), it.next().unwrap_or(Py::None)))
         }
-        n if n > 2 => Err(format!("ValueError: too many values to unpack (expected 2, got {n})")),
-        n => Err(format!("ValueError: not enough values to unpack (expected 2, got {n})")),
+        n if n > 2 => Err(format!(
+            "ValueError: too many values to unpack (expected 2, got {n})"
+        )),
+        n => Err(format!(
+            "ValueError: not enough values to unpack (expected 2, got {n})"
+        )),
     }
 }
 
@@ -494,7 +657,10 @@ fn py_float_of(v: &Py) -> Result<f64, String> {
             _ => Err("OverflowError: int too large to convert to float".into()),
         },
         Py::Float(f) => Ok(*f),
-        other => Err(format!("TypeError: unsupported operand type(s) for -: 'float' and '{}'", other.type_name())),
+        other => Err(format!(
+            "TypeError: unsupported operand type(s) for -: 'float' and '{}'",
+            other.type_name()
+        )),
     }
 }
 
@@ -532,7 +698,9 @@ thread_local! {
 }
 
 fn py_main_thread() -> bool {
-    PY_MAIN.with(|c| c.get()).unwrap_or_else(|| std::thread::current().name() == Some("main"))
+    PY_MAIN
+        .with(|c| c.get())
+        .unwrap_or_else(|| std::thread::current().name() == Some("main"))
 }
 
 /// Stack for the threads that hold the caches' values: enough to drop,
@@ -570,7 +738,11 @@ fn deep_as<R: Send>(main: bool, f: impl FnOnce() -> R + Send) -> R {
 /// recursively: call it on a [`deep`] thread.
 fn json_loads(text: &str) -> Result<Py, JsonError> {
     use crate::util::pyjson;
-    let limit = if py_main_thread() { MAX_DEPTH_MAIN } else { MAX_DEPTH_THREAD };
+    let limit = if py_main_thread() {
+        MAX_DEPTH_MAIN
+    } else {
+        MAX_DEPTH_THREAD
+    };
     pyjson::loads(text, pyjson::Limit::containers(limit)).map_err(|e| match e {
         pyjson::Error::Value(m) => JsonError::Value(format!("JSONDecodeError: {m}")),
         pyjson::Error::Recursion(is_obj) => {
@@ -736,7 +908,9 @@ fn decode_text(bytes: &[u8]) -> Result<String, String> {
 /// `json.loads(path.read_text())`: None for what the callers' `except
 /// (OSError, ValueError)` swallows, Err for the RecursionError it does not.
 fn read_json_file(path: &std::path::Path) -> Result<Option<Py>, String> {
-    let Some(text) = read_text(path) else { return Ok(None) };
+    let Some(text) = read_text(path) else {
+        return Ok(None);
+    };
     match json_loads(&text) {
         Ok(v) => Ok(Some(v)),
         Err(JsonError::Value(_)) => Ok(None),
@@ -772,11 +946,14 @@ fn write_json_file(path: &std::path::Path, v: &Py) {
 /// output open times out like any other (`util::run_bytes` sees to both).
 fn run_raw(argv: &[&str], timeout_secs: u64) -> Option<(Vec<u8>, Vec<u8>)> {
     use crate::util::{run_bytes, RunOpts, Stdin};
-    let out = run_bytes(argv, &RunOpts {
-        timeout: Some(std::time::Duration::from_secs(timeout_secs)),
-        stdin: Stdin::Inherit,
-        ..Default::default()
-    });
+    let out = run_bytes(
+        argv,
+        &RunOpts {
+            timeout: Some(std::time::Duration::from_secs(timeout_secs)),
+            stdin: Stdin::Inherit,
+            ..Default::default()
+        },
+    );
     (!out.failed_to_start && !out.timed_out).then_some((out.stdout, out.stderr))
 }
 
@@ -799,7 +976,11 @@ pub fn which(cmd: &str) -> Option<String> {
         if !head.bytes().all(|c| c == b'/') {
             head = head.trim_end_matches('/');
         }
-        let name = if head.ends_with('/') { format!("{head}{tail}") } else { format!("{head}/{tail}") };
+        let name = if head.ends_with('/') {
+            format!("{head}{tail}")
+        } else {
+            format!("{head}/{tail}")
+        };
         return access_check(&name).then_some(name);
     }
     let path = match std::env::var_os("PATH") {
@@ -832,7 +1013,11 @@ pub fn which(cmd: &str) -> Option<String> {
 /// it: `..` is applied to the path resolved so far, missing parts are kept.
 /// Err only when the working directory cannot be read (an OSError).
 pub fn realpath(filename: &str) -> Result<String, String> {
-    let mut rest: Vec<Option<String>> = filename.split('/').rev().map(|s| Some(s.to_string())).collect();
+    let mut rest: Vec<Option<String>> = filename
+        .split('/')
+        .rev()
+        .map(|s| Some(s.to_string()))
+        .collect();
     let mut part_count = rest.len();
     let mut path = if filename.starts_with('/') {
         "/".to_string()
@@ -862,7 +1047,11 @@ pub fn realpath(filename: &str) -> Result<String, String> {
             };
             continue;
         }
-        let newpath = if path == "/" { format!("/{name}") } else { format!("{path}/{name}") };
+        let newpath = if path == "/" {
+            format!("/{name}")
+        } else {
+            format!("{path}/{name}")
+        };
         match std::fs::symlink_metadata(&newpath) {
             Ok(m) if m.file_type().is_symlink() => {}
             _ => {
@@ -888,7 +1077,11 @@ pub fn realpath(filename: &str) -> Result<String, String> {
         seen.insert(newpath.clone(), None);
         rest.push(Some(newpath));
         rest.push(None);
-        let parts: Vec<Option<String>> = target.split('/').rev().map(|s| Some(s.to_string())).collect();
+        let parts: Vec<Option<String>> = target
+            .split('/')
+            .rev()
+            .map(|s| Some(s.to_string()))
+            .collect();
         part_count += parts.len();
         rest.extend(parts);
     }
@@ -910,7 +1103,9 @@ pub fn binary_id(path: &str) -> Result<String, String> {
     if path.contains('\0') {
         return Err("ValueError: lstat: embedded null character in path".into());
     }
-    let Ok(real) = realpath(path) else { return Ok(String::new()) };
+    let Ok(real) = realpath(path) else {
+        return Ok(String::new());
+    };
     Ok(match std::fs::metadata(real) {
         // int(st.st_mtime) truncates toward zero, as `as i64` on the float does.
         Ok(st) => {
@@ -943,7 +1138,11 @@ fn cached_version_here(binary: &str, path: &str) -> Result<Py, String> {
     }
     let version = try_version_of(binary)?;
     if let Py::Dict(items) = &mut store {
-        dict_set(items, Py::s(binary), Py::List(vec![Py::Str(key), Py::s(&version)]));
+        dict_set(
+            items,
+            Py::s(binary),
+            Py::List(vec![Py::Str(key), Py::s(&version)]),
+        );
     }
     write_json_file(&version_cache(), &store);
     Ok(Py::Str(version))
@@ -1040,7 +1239,9 @@ impl<T: Clone> Default for SingleFlight<T> {
 
 impl<T: Clone> SingleFlight<T> {
     pub const fn new() -> Self {
-        SingleFlight { inflight: std::sync::Mutex::new(None) }
+        SingleFlight {
+            inflight: std::sync::Mutex::new(None),
+        }
     }
 
     pub fn run(&self, f: impl FnOnce() -> T) -> T {
@@ -1050,7 +1251,10 @@ impl<T: Clone> SingleFlight<T> {
             match &*g {
                 Some(flight) => (flight.clone(), false),
                 None => {
-                    let flight = Arc::new(Flight { answer: Mutex::new(None), landed: Condvar::new() });
+                    let flight = Arc::new(Flight {
+                        answer: Mutex::new(None),
+                        landed: Condvar::new(),
+                    });
                     *g = Some(flight.clone());
                     (flight, true)
                 }
@@ -1059,7 +1263,10 @@ impl<T: Clone> SingleFlight<T> {
         if !leads {
             let mut answer = flight.answer.lock().unwrap_or_else(|e| e.into_inner());
             while answer.is_none() {
-                answer = flight.landed.wait(answer).unwrap_or_else(|e| e.into_inner());
+                answer = flight
+                    .landed
+                    .wait(answer)
+                    .unwrap_or_else(|e| e.into_inner());
             }
             if let Some(Some(v)) = answer.as_ref() {
                 return v.clone();
@@ -1087,12 +1294,17 @@ fn mise_installed_here() -> Result<Vec<(String, Py)>, String> {
         return Ok(Vec::new());
     };
     // text=True decodes stderr too; its UnicodeDecodeError is a ValueError.
-    let (Ok(text), Ok(_)) = (decode_text(&stdout), decode_text(&stderr)) else { return Ok(Vec::new()) };
+    let (Ok(text), Ok(_)) = (decode_text(&stdout), decode_text(&stderr)) else {
+        return Ok(Vec::new());
+    };
     let Some(raw) = loads_output(&text)? else {
         return Ok(Vec::new());
     };
     let Py::Dict(raw) = raw else {
-        return Err(format!("AttributeError: '{}' object has no attribute 'items'", raw.type_name()));
+        return Err(format!(
+            "AttributeError: '{}' object has no attribute 'items'",
+            raw.type_name()
+        ));
     };
     let mut data = Vec::new();
     for (tool, entries) in raw {
@@ -1103,7 +1315,9 @@ fn mise_installed_here() -> Result<Vec<(String, Py)>, String> {
         for e in &entries {
             if let Py::Dict(fields) = e {
                 if dict_get(fields, &Py::s("active")).is_some_and(Py::truthy) {
-                    let version = dict_get(fields, &Py::s("version")).cloned().unwrap_or_default();
+                    let version = dict_get(fields, &Py::s("version"))
+                        .cloned()
+                        .unwrap_or_default();
                     data.push((tool.py_str(), version));
                     break;
                 }
@@ -1136,7 +1350,11 @@ fn mise_outdated_here(ttl: u64) -> Result<Py, String> {
     if let Some(blob) = read_json_file(&mise_cache())? {
         let at = blob.get("at")?.cloned().unwrap_or(Py::Int("0".into()));
         if util::now() - py_float_of(&at)? < ttl as f64 {
-            return Ok(blob.get("data")?.cloned().unwrap_or(Py::None).or(Py::Dict(Vec::new())));
+            return Ok(blob
+                .get("data")?
+                .cloned()
+                .unwrap_or(Py::None)
+                .or(Py::Dict(Vec::new())));
         }
     }
     MISE_OUTDATED.run(|| {
@@ -1150,7 +1368,10 @@ fn mise_outdated_here(ttl: u64) -> Result<Py, String> {
         let Some(data) = loads_output(&text)? else {
             return Ok(Py::Dict(Vec::new()));
         };
-        let blob = Py::Dict(vec![(Py::s("at"), Py::Float(util::now())), (Py::s("data"), data.clone())]);
+        let blob = Py::Dict(vec![
+            (Py::s("at"), Py::Float(util::now())),
+            (Py::s("data"), data.clone()),
+        ]);
         write_json_file(&mise_cache(), &blob);
         Ok(data)
     })
@@ -1168,7 +1389,10 @@ fn load_latest_here() -> Result<Py, String> {
     if let Some(blob) = read_json_file(&latest_cache())? {
         let at = blob.get("at")?.cloned().unwrap_or(Py::Int("0".into()));
         if util::now() - py_float_of(&at)? < TTL as f64 {
-            return Ok(blob.get("versions")?.cloned().unwrap_or(Py::Dict(Vec::new())));
+            return Ok(blob
+                .get("versions")?
+                .cloned()
+                .unwrap_or(Py::Dict(Vec::new())));
         }
     }
     Ok(Py::Dict(Vec::new()))
@@ -1179,7 +1403,10 @@ pub fn save_latest(versions: &Py) {
 }
 
 fn save_latest_here(versions: &Py) {
-    let blob = Py::Dict(vec![(Py::s("at"), Py::Float(util::now())), (Py::s("versions"), versions.clone())]);
+    let blob = Py::Dict(vec![
+        (Py::s("at"), Py::Float(util::now())),
+        (Py::s("versions"), versions.clone()),
+    ]);
     write_json_file(&latest_cache(), &blob);
 }
 
@@ -1193,13 +1420,21 @@ fn save_latest_here(versions: &Py) {
 pub fn github_latest(repo: &str) -> Result<(String, Py), String> {
     // What ghcache.get_json raises (a broken cache or rate file) raises
     // out of here too.
-    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?.map(|v| Py::from_value(&v));
+    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?
+        .map(|v| Py::from_value(&v));
     let Some(d @ Py::Dict(_)) = d else {
         return Ok((String::new(), Py::s("")));
     };
-    let tag = d.get("tag_name")?.cloned().unwrap_or(Py::None).or(Py::s(""));
+    let tag = d
+        .get("tag_name")?
+        .cloned()
+        .unwrap_or(Py::None)
+        .or(Py::s(""));
     let Py::Str(tag) = tag else {
-        return Err(format!("TypeError: expected string or bytes-like object, got '{}'", tag.type_name()));
+        return Err(format!(
+            "TypeError: expected string or bytes-like object, got '{}'",
+            tag.type_name()
+        ));
     };
     let version = match VERSION.find(&tag) {
         Some(m) => m.as_str().to_string(),
@@ -1211,7 +1446,11 @@ pub fn github_latest(repo: &str) -> Result<(String, Py), String> {
 /// `pool.map(f, items)` on `workers` threads, results in input order.
 /// The workers are Python worker threads (see [`deep`]); an item no worker
 /// got to (one could not be started) is done here.
-pub(crate) fn pool_map<T: Sync, R: Send>(items: &[T], workers: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn pool_map<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     let next = AtomicUsize::new(0);
@@ -1231,7 +1470,11 @@ pub(crate) fn pool_map<T: Sync, R: Send>(items: &[T], workers: usize, f: impl Fn
         }
     });
     let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
-    results.into_iter().zip(items).map(|(r, item)| r.unwrap_or_else(|| f(item))).collect()
+    results
+        .into_iter()
+        .zip(items)
+        .map(|(r, item)| r.unwrap_or_else(|| f(item)))
+        .collect()
 }
 
 /// A scoped thread standing in for a Python worker thread, with a
@@ -1240,10 +1483,12 @@ fn worker<'scope, 'env, R: Send + 'scope>(
     s: &'scope std::thread::Scope<'scope, 'env>,
     f: impl FnOnce() -> R + Send + 'scope,
 ) -> std::io::Result<std::thread::ScopedJoinHandle<'scope, R>> {
-    std::thread::Builder::new().stack_size(DEEP_STACK).spawn_scoped(s, move || {
-        PY_MAIN.with(|c| c.set(Some(false)));
-        f()
-    })
+    std::thread::Builder::new()
+        .stack_size(DEEP_STACK)
+        .spawn_scoped(s, move || {
+            PY_MAIN.with(|c| c.set(Some(false)));
+            f()
+        })
 }
 
 /// `inventory.App.version` is a `String`; the Python stores whatever the
@@ -1294,8 +1539,10 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
     use crate::inventory;
     use serde_json::{json, Value};
 
-    let present: Vec<(&Spec, String)> =
-        KNOWN.iter().filter_map(|spec| which(&spec.id).map(|p| (spec, p))).collect();
+    let present: Vec<(&Spec, String)> = KNOWN
+        .iter()
+        .filter_map(|spec| which(&spec.id).map(|p| (spec, p)))
+        .collect();
     if present.is_empty() {
         return Ok(Vec::new());
     }
@@ -1304,8 +1551,11 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
     // cache cannot tell them apart; mise answers for its own tools instead.
     let mise_have = try_mise_installed()?;
     let have = |id: &str| mise_have.iter().find(|(k, _)| k == id).map(|(_, v)| v);
-    let unmanaged: Vec<(&Spec, String)> =
-        present.iter().filter(|(spec, _)| have(&spec.id).is_none()).cloned().collect();
+    let unmanaged: Vec<(&Spec, String)> = present
+        .iter()
+        .filter(|(spec, _)| have(&spec.id).is_none())
+        .cloned()
+        .collect();
     let (found, mise) = std::thread::scope(|s| {
         let mise_future = check_updates.then(|| worker(s, || mise_outdated(TTL)).ok());
         let found = pool_map(&unmanaged, 8, |(spec, path)| cached_version(&spec.id, path));
@@ -1323,15 +1573,22 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
     }
     let mise = mise?;
 
-    let cached = if check_updates { load_latest()? } else { Py::Dict(Vec::new()) };
+    let cached = if check_updates {
+        load_latest()?
+    } else {
+        Py::Dict(Vec::new())
+    };
     let mut fetched = py_dict(&cached)?;
     let mut added = false;
     let mut out = Vec::new();
 
     for (spec, path) in &present {
         let real = realpath(path)?;
-        let mut current =
-            versions.iter().find(|(k, _)| *k == spec.id).map(|(_, v)| v.clone()).unwrap_or(Py::s(""));
+        let mut current = versions
+            .iter()
+            .find(|(k, _)| *k == spec.id)
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Py::s(""));
 
         // Who owns the update. Asked of mise, because a shimmed binary
         // resolves to the mise executable itself and tells you nothing.
@@ -1342,14 +1599,30 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
         if managed_by_mise {
             manager = "mise";
             update_cmd = vec!["mise".to_string(), "upgrade".to_string(), spec.id.clone()];
-            let info = mise.get(&spec.id)?.cloned().unwrap_or(Py::None).or(Py::Dict(Vec::new()));
-            latest = info.get("latest")?.cloned().unwrap_or(Py::None).or(Py::s(""));
-            release_url = info.get("release_url")?.cloned().unwrap_or(Py::None).or(Py::s(""));
+            let info = mise
+                .get(&spec.id)?
+                .cloned()
+                .unwrap_or(Py::None)
+                .or(Py::Dict(Vec::new()));
+            latest = info
+                .get("latest")?
+                .cloned()
+                .unwrap_or(Py::None)
+                .or(Py::s(""));
+            release_url = info
+                .get("release_url")?
+                .cloned()
+                .unwrap_or(Py::None)
+                .or(Py::s(""));
             // The active version from `mise ls`, read live -- the cached
             // `mise outdated` entry still names whatever was installed before
             // the last upgrade. `claude --version` can be an older linked build.
             let live = have(&spec.id).cloned().unwrap_or(Py::None);
-            current = live.or(info.get("current")?.cloned().unwrap_or(Py::None).or(current));
+            current = live.or(info
+                .get("current")?
+                .cloned()
+                .unwrap_or(Py::None)
+                .or(current));
         } else {
             manager = "self";
             update_cmd = spec.self_update.clone();
@@ -1363,7 +1636,11 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
                 } else {
                     let (l, u) = github_latest(&spec.repo)?;
                     if !l.is_empty() {
-                        dict_set(&mut fetched, Py::s(&spec.repo), Py::List(vec![Py::s(&l), u.clone()]));
+                        dict_set(
+                            &mut fetched,
+                            Py::s(&spec.repo),
+                            Py::List(vec![Py::s(&l), u.clone()]),
+                        );
                         added = true;
                     }
                     (latest, release_url) = (Py::Str(l), u);
@@ -1400,15 +1677,18 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
         extra.insert("real_path".into(), json!(real));
 
         let raw = current.or(Py::s("unknown"));
-        out.push((App {
-            name: spec.name.clone(),
-            version: app_version(&raw),
-            source: AGENT.into(),
-            description: format!("AI coding agent · managed by {manager}"),
-            update,
-            exec_path: path.clone(),
-            extra: extra.into(),
-        }, raw));
+        out.push((
+            App {
+                name: spec.name.clone(),
+                version: app_version(&raw),
+                source: AGENT.into(),
+                description: format!("AI coding agent · managed by {manager}"),
+                update,
+                exec_path: path.clone(),
+                extra: extra.into(),
+            },
+            raw,
+        ));
     }
 
     // `fetched != cached`: a copy of a dict differs only by what was added;
@@ -1442,7 +1722,11 @@ fn mise_tools_here(check_updates: bool) -> Result<RawApps, String> {
     if have.is_empty() {
         return Ok(Vec::new());
     }
-    let outdated = if check_updates { mise_outdated(TTL)? } else { Py::Dict(Vec::new()) };
+    let outdated = if check_updates {
+        mise_outdated(TTL)?
+    } else {
+        Py::Dict(Vec::new())
+    };
     mise_tools_from_here(&have, &outdated)
 }
 
@@ -1470,15 +1754,31 @@ fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps,
         if BY_ID.contains_key(tool) {
             continue; // already reported as an agent
         }
-        let info = outdated.get(tool)?.cloned().unwrap_or(Py::None).or(Py::Dict(Vec::new()));
-        let latest = info.get("latest")?.cloned().unwrap_or(Py::None).or(Py::s(""));
-        let update = if latest.truthy() && newer_py(&latest, version)? { as_text(&latest) } else { String::new() };
+        let info = outdated
+            .get(tool)?
+            .cloned()
+            .unwrap_or(Py::None)
+            .or(Py::Dict(Vec::new()));
+        let latest = info
+            .get("latest")?
+            .cloned()
+            .unwrap_or(Py::None)
+            .or(Py::s(""));
+        let update = if latest.truthy() && newer_py(&latest, version)? {
+            as_text(&latest)
+        } else {
+            String::new()
+        };
         let (name, domain) = TOOL_DOMAINS
             .iter()
             .find(|(k, _)| k == tool)
             .map(|(_, (n, d))| (n.to_string(), d.to_string()))
             .unwrap_or_else(|| (tool.clone(), String::new()));
-        let fallback = if domain.is_empty() { String::new() } else { format!("https://{domain}") };
+        let fallback = if domain.is_empty() {
+            String::new()
+        } else {
+            format!("https://{domain}")
+        };
         let url = url_value(info.get("release_url")?.unwrap_or(&Py::None), &fallback);
         let behind = if !update.is_empty() {
             inventory::versions_behind(&as_text(version), &update)
@@ -1493,15 +1793,18 @@ fn mise_tools_from_here(have: &[(String, Py)], outdated: &Py) -> Result<RawApps,
         extra.insert("url".into(), url);
         extra.insert("behind".into(), json!([behind.0, behind.1]));
         extra.insert("is_app".into(), Value::Bool(false));
-        out.push((App {
-            name,
-            version: app_version(version),
-            source: inventory::TOOL.into(),
-            description: "Developer tool · managed by mise".into(),
-            update,
-            exec_path: which(tool).unwrap_or_default(),
-            extra: extra.into(),
-        }, version.clone()));
+        out.push((
+            App {
+                name,
+                version: app_version(version),
+                source: inventory::TOOL.into(),
+                description: "Developer tool · managed by mise".into(),
+                update,
+                exec_path: which(tool).unwrap_or_default(),
+                extra: extra.into(),
+            },
+            version.clone(),
+        ));
     }
     Ok(out)
 }
@@ -1546,17 +1849,27 @@ pub fn try_release_notes(repo: &str, limit: i64) -> Result<String, String> {
     }
     // What ghcache.get_json raises (a broken cache or rate file) raises
     // out of here too.
-    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?.map(|v| Py::from_value(&v));
+    let d = crate::ghcache::try_latest_release(repo, crate::ghcache::DEFAULT_TTL)?
+        .map(|v| Py::from_value(&v));
     let mut body = match &d {
         Some(d @ Py::Dict(_)) => match d.get("body")?.cloned().unwrap_or(Py::None).or(Py::s("")) {
             Py::Str(s) => py_strip(&s).to_string(),
-            other => return Err(format!("AttributeError: '{}' object has no attribute 'strip'", other.type_name())),
+            other => {
+                return Err(format!(
+                    "AttributeError: '{}' object has no attribute 'strip'",
+                    other.type_name()
+                ))
+            }
         },
         _ => String::new(),
     };
     let n = body.chars().count() as i64;
     if n > limit {
-        let end = if limit >= 0 { limit.min(n) } else { (n + limit).max(0) };
+        let end = if limit >= 0 {
+            limit.min(n)
+        } else {
+            (n + limit).max(0)
+        };
         let cut: String = body.chars().take(end as usize).collect();
         let head = match cut.rfind('\n') {
             Some(i) => cut[..i].to_string(),
@@ -1621,7 +1934,12 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
             Py::Str(s) => s,
             // A surrogate is no digit: U+FFFD in its place finds the same runs.
             Py::WStr(s) => lossy(&s),
-            other => return Err(format!("TypeError: expected string or bytes-like object, got '{}'", other.type_name())),
+            other => {
+                return Err(format!(
+                    "TypeError: expected string or bytes-like object, got '{}'",
+                    other.type_name()
+                ))
+            }
         };
         let mut parts = Vec::new();
         for m in DIGITS.find_iter(&text).take(4) {
@@ -1634,7 +1952,10 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
             let ds: Vec<u8> = m.as_str().chars().map(digit_value).collect();
             let start = ds.iter().position(|&d| d != 0).unwrap_or(ds.len());
             let digits = ds[start..].to_vec();
-            parts.push(BigUint { len: digits.len(), digits });
+            parts.push(BigUint {
+                len: digits.len(),
+                digits,
+            });
         }
         Ok(parts)
     }
@@ -1645,7 +1966,6 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
     }
     Ok(a > b)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1691,7 +2011,8 @@ mod tests {
     // UpdatesClearAfterUpdating
     #[test]
     fn test_mise_compares_the_live_version_not_the_cached_one() {
-        let stale = Py::from_value(&serde_json::json!({"uv": {"current": "0.12.13", "latest": "0.13.1"}}));
+        let stale =
+            Py::from_value(&serde_json::json!({"uv": {"current": "0.12.13", "latest": "0.13.1"}}));
         let have = vec![("uv".to_string(), Py::s("0.13.1"))];
         let tools = mise_tools_from(&have, &stale).unwrap();
         assert_eq!(tools.len(), 1);
@@ -1711,7 +2032,9 @@ mod tests {
     // Settings (setUp points XDG_STATE_HOME at a temp dir)
     #[test]
     fn test_major_releases_are_held_only_while_set() {
-        let _g = crate::util::TEST_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = crate::util::TEST_ENV
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let old = std::env::var_os("XDG_STATE_HOME");
         std::env::set_var("XDG_STATE_HOME", tmp.path());
@@ -1741,12 +2064,15 @@ mod tests {
     fn json_round_trips_like_python() {
         let text = r#"{"zz": [1, 123456789012345678901234, 2.50, 1e5, -0, NaN, -Infinity], "a": {"ü": null}, "zz": true}"#;
         let v = json_loads(text).unwrap();
+        assert_eq!(json_dumps(&v), r#"{"zz": true, "a": {"\u00fc": null}}"#);
+        let v = json_loads(
+            r#"[123456789012345678901234, 2.50, 1e5, -0, NaN, -Infinity, 1e-7, "\ud83d\ude00"]"#,
+        )
+        .unwrap();
         assert_eq!(
             json_dumps(&v),
-            r#"{"zz": true, "a": {"\u00fc": null}}"#
+            r#"[123456789012345678901234, 2.5, 100000.0, 0, NaN, -Infinity, 1e-07, "\ud83d\ude00"]"#
         );
-        let v = json_loads(r#"[123456789012345678901234, 2.50, 1e5, -0, NaN, -Infinity, 1e-7, "\ud83d\ude00"]"#).unwrap();
-        assert_eq!(json_dumps(&v), r#"[123456789012345678901234, 2.5, 100000.0, 0, NaN, -Infinity, 1e-07, "\ud83d\ude00"]"#);
         assert!(json_loads("[1,]").is_err());
         assert!(json_loads("01").is_err());
         assert!(json_loads(&"9".repeat(4301)).is_err());
@@ -1769,7 +2095,10 @@ mod tests {
     #[test]
     fn lone_surrogates_round_trip() {
         let v = json_loads(r#"{"other": ["1:2", "a\ud800b"], "\udc00": 1, "ok": "😀"}"#).unwrap();
-        assert_eq!(json_dumps(&v), r#"{"other": ["1:2", "a\ud800b"], "\udc00": 1, "ok": "\ud83d\ude00"}"#);
+        assert_eq!(
+            json_dumps(&v),
+            r#"{"other": ["1:2", "a\ud800b"], "\udc00": 1, "ok": "\ud83d\ude00"}"#
+        );
         let Py::Dict(d) = &v else { panic!() };
         assert!(matches!(&d[1].0, Py::WStr(c) if c == &vec![0xdc00]));
         assert!(matches!(&d[2].1, Py::Str(_)));
@@ -1827,7 +2156,10 @@ mod tests {
         assert!(t.elapsed() < std::time::Duration::from_secs(3));
         let (out, _) = run_raw(&["sh", "-c", "echo 1.2.3"], 5).unwrap();
         assert_eq!(out, b"1.2.3\n");
-        assert_eq!(try_version_of("ls\0x"), Err("ValueError: embedded null byte".into()));
+        assert_eq!(
+            try_version_of("ls\0x"),
+            Err("ValueError: embedded null byte".into())
+        );
         assert!(binary_id("/usr/bin/ls\0x").is_err());
     }
 }
