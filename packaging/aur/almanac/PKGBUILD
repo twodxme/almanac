@@ -35,7 +35,7 @@ checkdepends=('git')
 options=('!lto')
 conflicts=('almanac-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('908918378a738ee32646a4b08f4aec7f2e95dde7c66080201789a4239b556b85')
+sha256sums=('e45a062aecf35d6ca7b688dd107d369456fbe74118360013dce00b26e1a65010')
 
 prepare() {
   cd "$srcdir/$pkgname-$pkgver"
