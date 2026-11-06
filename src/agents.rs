@@ -1551,6 +1551,25 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
     // cache cannot tell them apart; mise answers for its own tools instead.
     let mise_have = try_mise_installed()?;
     let have = |id: &str| mise_have.iter().find(|(k, _)| k == id).map(|(_, v)| v);
+
+    // A shim left behind for a tool mise no longer has active (dropped from
+    // its config, old installs still on disk) runs nothing: asked for its
+    // version it prints mise's "No version is set" error, whose
+    // `mise use -g tool@0.64.0` hint reads as a version -- an update row the
+    // updater can never clear. Not installed, so not listed.
+    let mise_real = which("mise").and_then(|m| realpath(&m).ok());
+    let present: Vec<(&Spec, String)> = present
+        .into_iter()
+        .filter(|(spec, path)| {
+            have(&spec.id).is_some()
+                || mise_real
+                    .as_deref()
+                    .is_none_or(|mise| !is_dead_mise_shim(&spec.id, path, mise))
+        })
+        .collect();
+    if present.is_empty() {
+        return Ok(Vec::new());
+    }
     let unmanaged: Vec<(&Spec, String)> = present
         .iter()
         .filter(|(spec, _)| have(&spec.id).is_none())
@@ -1697,6 +1716,24 @@ fn detect_here(check_updates: bool) -> Result<RawApps, String> {
         save_latest(&Py::Dict(fetched));
     }
     Ok(out)
+}
+
+/// Whether `path` is a mise shim (it resolves to `mise`, the real path of
+/// the mise executable) through which `id` runs nothing: `mise which id`
+/// fails when no version of it is active. A path that is not a shim, or a
+/// mise that cannot be asked, is never called dead.
+fn is_dead_mise_shim(id: &str, path: &str, mise: &str) -> bool {
+    if realpath(path).ok().as_deref() != Some(mise) {
+        return false;
+    }
+    let out = crate::util::run_bytes(
+        &[mise, "which", id],
+        &crate::util::RunOpts {
+            timeout: Some(std::time::Duration::from_secs(20)),
+            ..Default::default()
+        },
+    );
+    matches!(out.code, Some(c) if c != 0)
 }
 
 /// [`try_detect`] with what the Python raises swallowed: no agents. Only
@@ -1970,6 +2007,44 @@ fn newer_py(latest: &Py, current: &Py) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shim_with_no_active_version_is_dead() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        // A stand-in mise: `which gemini` fails, `which claude` answers.
+        let mise = tmp.path().join("mise");
+        std::fs::write(
+            &mise,
+            "#!/bin/sh\n[ \"$2\" = claude ] && { echo /x/claude; exit 0; }\n\
+             echo 'mise ERROR No version is set for shim: gemini' >&2\n\
+             echo 'mise use -g gemini@0.64.0' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let shims = tmp.path().join("shims");
+        std::fs::create_dir(&shims).unwrap();
+        for name in ["gemini", "claude"] {
+            symlink(&mise, shims.join(name)).unwrap();
+        }
+        let other = tmp.path().join("other");
+        std::fs::write(&other, "x").unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let mise_real = realpath(&s(&mise)).unwrap();
+
+        assert!(is_dead_mise_shim(
+            "gemini",
+            &s(&shims.join("gemini")),
+            &mise_real
+        ));
+        assert!(!is_dead_mise_shim(
+            "claude",
+            &s(&shims.join("claude")),
+            &mise_real
+        ));
+        // Not a shim: never asked, never dead.
+        assert!(!is_dead_mise_shim("gemini", &s(&other), &mise_real));
+    }
 
     #[test]
     fn single_flight_shares_one_run_among_concurrent_callers() {
