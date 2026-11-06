@@ -96,6 +96,14 @@
   </requires>
 
   <releases>
+    <release version="2.2.5" date="2026-11-06">
+      <description>
+        <p>A coding agent that mise no longer has active is no longer listed
+        with an update the updater can never install. Its leftover command
+        only printed mise's error, and a version in that error read as the
+        installed one.</p>
+      </description>
+    </release>
     <release version="2.2.4" date="2026-10-31">
       <description>
         <p>Almanac lists itself once. Installed as a package it showed up as
