@@ -2,3 +2,4 @@ target/
 *.bak.*
 locale/
 __pycache__/
+.superpowers/
