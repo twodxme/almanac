@@ -149,24 +149,38 @@ impl Drop for Pty {
     fn drop(&mut self) {
         // Closing the master hangs the terminal up on the child's session.
         self.master = None;
-        if self.status.is_some() {
-            return;
-        }
-        let deadline = Instant::now() + REAP_GRACE;
-        while Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_)) | Err(_)) {
+        if self.status.is_none() {
+            let deadline = Instant::now() + REAP_GRACE;
+            let mut gone = false;
+            while Instant::now() < deadline {
+                if matches!(self.child.try_wait(), Ok(Some(_)) | Err(_)) {
+                    gone = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if !gone {
+                // The hangup did not end it.
+                self.kill_group();
+                let _ = self.child.kill();
+                let _ = self.child.wait();
                 return;
             }
-            std::thread::sleep(Duration::from_millis(20));
         }
-        // The hangup did not end it. The session leader is its own process
-        // group, so this also takes down a grandchild that ignores SIGHUP
-        // (it could otherwise outlive Almanac holding the update lock).
+        // The leader is gone, but a descendant that ignores SIGHUP may not
+        // be, and could outlive Almanac holding the update lock. The leader
+        // is its own process group, so one SIGKILL takes them all; the group
+        // id stays reserved while any member lives, and ESRCH means none do.
+        self.kill_group();
+    }
+}
+
+impl Pty {
+    /// SIGKILL every process in the child's group.
+    fn kill_group(&self) {
         if let Some(pgid) = rustix::process::Pid::from_raw(self.pid as i32) {
             let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -282,5 +296,39 @@ mod tests {
     fn a_missing_program_is_an_error() {
         assert!(Pty::spawn(&argv(&["/no/such/program"]), &[]).is_err());
         assert!(Pty::spawn(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn a_descendant_that_ignores_the_hangup_is_killed_when_the_leader_dies_of_it() {
+        let pty = Pty::spawn(
+            &argv(&["sh", "-c", "(trap '' HUP; exec sleep 30) & echo kid:$!; wait"]),
+            &[],
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let kid = loop {
+            let _ = pty.read_available(&mut out);
+            let text = String::from_utf8_lossy(&out).into_owned();
+            if let Some(n) = text.split("kid:").nth(1).and_then(|r| r.split_whitespace().next()) {
+                if let Ok(n) = n.parse::<i32>() {
+                    break n;
+                }
+            }
+            assert!(Instant::now() < deadline, "{text:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let kid = rustix::process::Pid::from_raw(kid).unwrap();
+        let started = Instant::now();
+        drop(pty);
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while rustix::process::test_kill_process(kid).is_ok() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            rustix::process::test_kill_process(kid),
+            Err(rustix::io::Errno::SRCH)
+        );
     }
 }
