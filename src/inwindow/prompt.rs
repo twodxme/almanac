@@ -28,7 +28,7 @@ pub struct Answer {
 }
 
 static PASSWORD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)password[^:]*:\s*$").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)^(?:\[sudo\] )?password(?: for \S+)?:\s*$").unwrap());
 static YES_NO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*\[(?:Y/n|y/N|y/n)\]\??\s*$").unwrap());
 static SELECTION: LazyLock<Regex> =
@@ -39,10 +39,18 @@ fn answer(label: &str, send: &[u8], is_reboot_yes: bool) -> Answer {
     Answer { label: label.to_string(), send: send.to_vec(), is_reboot_yes }
 }
 
+static REBOOT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)reboot|restart|shut ?down|power off").unwrap());
+
 fn mentions_reboot(text: &str) -> bool {
-    text.to_lowercase().contains("reboot")
+    REBOOT.is_match(text)
 }
 
+/// Contract: the line-prompts (`[Y/n]`, `[y/N]`, selection, password) are
+/// only "waiting" while they are the unterminated final segment; once a
+/// newline or carriage return follows (the answer was sent), they are not
+/// detected. gum confirm redraws in place and is always detected while its
+/// choices are the last thing drawn; the caller tracks whether it was answered.
 pub fn detect(tail: &str) -> Option<Prompt> {
     let cleaned = clean_output(tail);
     let mut segments: Vec<&str> = cleaned
@@ -65,6 +73,11 @@ pub fn detect(tail: &str) -> Option<Prompt> {
             text: text.to_string(),
             answers: vec![answer("Yes", b"y", reboot), answer("No", b"n", false)],
         });
+    }
+    let terminated = cleaned.ends_with('\n')
+        || tail.trim_end_matches([' ', '\t']).ends_with(['\r', '\n']);
+    if terminated {
+        return None;
     }
     if PASSWORD.is_match(last) {
         return Some(Prompt::Password { prompt: last.to_string() });
@@ -160,6 +173,56 @@ mod tests {
         assert!(!answers[1].is_reboot_yes);
         let (_, answers) = question(detect("Reboot to apply? [Y/n] "));
         assert!(answers[0].is_reboot_yes);
+    }
+
+    #[test]
+    fn restart_and_power_prompts_are_reboots() {
+        for q in ["Restart to apply updates?", "Shut down now?", "Power off now?"] {
+            let (_, answers) = question(detect(&gum(q)));
+            assert!(answers[0].is_reboot_yes, "{q}");
+        }
+        let (_, answers) = question(detect("Restart now? [Y/n] "));
+        assert!(answers[0].is_reboot_yes);
+    }
+
+    #[test]
+    fn the_real_omarchy_reboot_prompts() {
+        for q in [
+            "Linux kernel has been updated. Reboot?",
+            "Updates require reboot. Ready?",
+            "Hyprland has been updated. Reboot?",
+        ] {
+            let (text, answers) = question(detect(&gum(q)));
+            assert_eq!(text, q);
+            assert!(answers[0].is_reboot_yes, "{q}");
+            assert!(!answers[1].is_reboot_yes, "{q}");
+        }
+    }
+
+    #[test]
+    fn a_non_reboot_gum_confirm_marks_nothing() {
+        let (_, answers) = question(detect(&gum("Continue with the update?")));
+        assert!(answers.iter().all(|a| !a.is_reboot_yes));
+    }
+
+    #[test]
+    fn an_answered_line_prompt_is_not_a_prompt() {
+        assert_eq!(detect("Enter a selection (default=all): \r\n"), None);
+        assert_eq!(detect("[sudo] password for tim: \r\n"), None);
+        assert_eq!(detect("[sudo] password for tim: \n"), None);
+        assert_eq!(detect(":: Proceed? [Y/n] \r\n"), None);
+    }
+
+    #[test]
+    fn plain_lines_ending_in_question_or_colon_are_not_prompts() {
+        assert_eq!(detect("Checking keyring?"), None);
+        assert_eq!(detect("Downloading:"), None);
+        assert_eq!(detect("Checking keyring?\n"), None);
+    }
+
+    #[test]
+    fn a_bare_password_prompt_matches() {
+        assert!(matches!(detect("Password: "), Some(Prompt::Password { .. })));
     }
 
     #[test]
