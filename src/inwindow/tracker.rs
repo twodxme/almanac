@@ -214,6 +214,8 @@ impl Tracker {
                         self.t.steps[i].1 = StepState::Done {
                             detail: String::new(),
                         };
+                        let id = self.t.steps[i].0;
+                        self.close_rows(id);
                     }
                 }
                 // Only move forward: an earlier step's process after a later
@@ -248,19 +250,21 @@ impl Tracker {
         let tail = std::mem::take(&mut self.pending);
         self.segment(&tail);
         if code == 0 {
-            for (_, s) in &mut self.t.steps {
-                if matches!(s, StepState::Running { .. } | StepState::Waiting) {
+            // Exit 0 means omarchy update finished all its own steps, sampled
+            // or not. "Other apps" runs after it, in Almanac: not ours to close.
+            let mut closed = Vec::new();
+            for (id, s) in &mut self.t.steps {
+                if *id != StepId::OtherApps
+                    && matches!(s, StepState::Running { .. } | StepState::Waiting)
+                {
                     *s = StepState::Done {
                         detail: String::new(),
                     };
+                    closed.push(*id);
                 }
             }
-            for r in &mut self.t.apps {
-                if matches!(r.state, AppState::Installing | AppState::Downloading) {
-                    r.state = AppState::Done {
-                        version: r.to.clone(),
-                    };
-                }
+            for id in closed {
+                self.close_rows(id);
             }
             self.t.generic = false;
         } else if !self.t.failed() {
@@ -296,9 +300,24 @@ impl Tracker {
             };
             self.t.generic = false;
         }
+        // Only the failing step's rows: other steps' rows are what they were.
         for r in &mut self.t.apps {
-            if matches!(r.state, AppState::Installing | AppState::Downloading) {
+            if r.step == id && matches!(r.state, AppState::Installing | AppState::Downloading) {
                 r.state = AppState::Failed;
+            }
+        }
+    }
+
+    /// A step is over: its rows that were under way are done.
+    fn close_rows(&mut self, id: StepId) {
+        for (i, r) in self.t.apps.iter_mut().enumerate() {
+            if r.step == id && matches!(r.state, AppState::Installing | AppState::Downloading) {
+                r.state = AppState::Done {
+                    version: r.to.clone(),
+                };
+                if self.open_row == Some(i) {
+                    self.open_row = None;
+                }
             }
         }
     }
@@ -730,11 +749,63 @@ mod tests {
         let mut t = Tracker::new(Timeline::new(&apps5(), true));
         t.on_procs(&s(&["omarchy-update-boot"]));
         t.on_exit(0);
-        assert!(t
-            .timeline()
-            .steps
-            .iter()
-            .all(|(_, st)| matches!(st, StepState::Done { .. })));
+        for (id, st) in &t.timeline().steps {
+            if *id == StepId::OtherApps {
+                assert_eq!(*st, StepState::Waiting, "Almanac runs it after the exit");
+            } else {
+                assert!(matches!(st, StepState::Done { .. }), "{id:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_finished_step_closes_its_last_row() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_output("(5/5) upgrading b\n");
+        assert_eq!(row(&t, "b"), AppState::Installing);
+        t.on_procs(&s(&["omarchy-migrate"]));
+        assert!(done(&t, StepId::SystemPackages));
+        assert_eq!(
+            row(&t, "b"),
+            AppState::Done {
+                version: "2".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_later_failure_leaves_installed_rows_alone() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_output("(1/5) upgrading cursor\n(2/5) upgrading mise\n");
+        t.on_procs(&s(&["omarchy-migrate"]));
+        t.on_exit(1);
+        assert!(matches!(
+            state(&t, StepId::Migrations),
+            StepState::Failed { .. }
+        ));
+        assert_eq!(
+            row(&t, "mise"),
+            AppState::Done {
+                version: "2.0".into()
+            }
+        );
+        assert_eq!(
+            row(&t, "cursor"),
+            AppState::Done {
+                version: "1.2".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_failure_fails_only_its_own_steps_open_row() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_output("(1/5) upgrading cursor\n");
+        t.on_output("error: failed to commit transaction (x)\n");
+        assert_eq!(row(&t, "cursor"), AppState::Failed);
     }
 
     #[test]
