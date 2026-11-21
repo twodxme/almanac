@@ -462,6 +462,13 @@ impl UpdateRun {
         }
     }
 
+    /// Ctrl-C on the update's terminal: what Stop and Quit send. Whatever was
+    /// on screen is no longer answered.
+    pub fn interrupt(&mut self) -> Result<(), String> {
+        self.open = None;
+        self.write(b"\x03")
+    }
+
     /// Send one of the open question's answers. Anything else, and any answer
     /// that agrees to a reboot, is refused and nothing is sent.
     pub fn answer(&mut self, a: &Answer) -> Result<(), String> {
@@ -581,6 +588,26 @@ wait
             assert!(matches!(r.state, AppState::Done { .. }), "{} is {:?}", r.name, r.state);
         }
         assert!(events.iter().any(|e| matches!(e, Event::Changed)));
+    }
+
+    /// Stop (a reboot-only question, Quit): Ctrl-C on the terminal ends the
+    /// program in the foreground, as it would in a terminal window.
+    #[test]
+    fn interrupt_stops_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = script(dir.path(), "echo started\nsleep 30\necho not-reached");
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        let mut sent = false;
+        let events = drive(&mut run, |e, run| {
+            if !sent && matches!(e, Event::Changed) && run.log_tail().contains("started") {
+                run.interrupt().unwrap();
+                sent = true;
+            }
+        });
+        assert!(sent);
+        assert_ne!(finished_code(&events), 0);
+        assert!(!run.log_tail().contains("not-reached"));
+        assert!(run.interrupt().is_err(), "nothing to interrupt once it ended");
     }
 
     #[test]

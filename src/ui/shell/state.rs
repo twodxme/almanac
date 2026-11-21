@@ -15,7 +15,7 @@ use super::tables::{page_accel, PAGE_KEYS};
 use super::window::Win;
 
 impl Win {
-    /// `_install_shortcuts`: Ctrl+F, Ctrl+R/F5, Ctrl+U, Ctrl+W, Ctrl+comma,
+    /// `_install_shortcuts`: Ctrl+F, Ctrl+R/F5, Ctrl+U, Ctrl+W, Ctrl+Q, Ctrl+comma,
     /// Escape, and Ctrl+1…Ctrl+0 for `PAGE_KEYS`.
     pub fn install_shortcuts(&self) {
         let controller = gtk::ShortcutController::new();
@@ -47,6 +47,7 @@ impl Win {
         add("F5", Rc::new(|w| w.refresh_page()));
         add("<Control>u", Rc::new(|w| w.on_update_all()));
         add("<Control>w", Rc::new(|w| w.window.close()));
+        add("<Control>q", Rc::new(|w| w.on_quit()));
         add("<Control>comma", Rc::new(|w| w.on_preferences())); // the GNOME convention
         add("Escape", Rc::new(|w| w.clear_search()));
 

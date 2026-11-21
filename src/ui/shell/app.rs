@@ -216,9 +216,16 @@ impl AlmanacApp {
         win.window.present();
     }
 
-    /// `_on_close`: save the window state; let the close proceed.
+    /// `_on_close`: save the window state; let the close proceed. While an
+    /// update runs in the window, the window hides instead and Almanac
+    /// keeps going until it is over (`update_all::to_background`).
     pub fn on_close(win: &Win) -> glib::Propagation {
-        win.on_close()
+        let close = win.on_close();
+        if crate::ui::update_all::update_running() {
+            win.to_background();
+            return glib::Propagation::Stop;
+        }
+        close
     }
 }
 

@@ -26,6 +26,7 @@ use crate::postupdate::{
 };
 use crate::tasks::{self, Step, StepAction};
 use crate::ui::shell::{spawn_bg, Win};
+use crate::ui::update_view::UpdateView;
 use crate::verify::Outcome;
 
 /// One Update all, from the click to its history entry.
@@ -43,6 +44,16 @@ pub struct Run {
     pub record: RunRecord,
     /// held while the run is on: a second Update all is refused meanwhile
     pub busy: Option<crate::ui::update_all::Busy>,
+    /// the system half ran in the window, not in a terminal
+    pub in_window: bool,
+    /// the window's update view: the report takes its place there rather
+    /// than opening a dialog of its own
+    pub view: Option<UpdateView>,
+    /// the system half failed in a way trying again may get past
+    pub retry_offered: bool,
+    /// Try again was asked for: Update all starts again once this run's
+    /// history entry is written
+    pub then_retry: bool,
 }
 
 pub type SharedRun = Rc<RefCell<Run>>;
@@ -60,6 +71,10 @@ impl Run {
             report: Report::default(),
             record: RunRecord::default(),
             busy: None,
+            in_window: false,
+            view: None,
+            retry_offered: false,
+            then_retry: false,
         }))
     }
 }
@@ -112,6 +127,11 @@ impl Win {
     /// The checks are in: a toast when all passed, else the report.
     pub(in crate::ui) fn surface_update(&self, run: SharedRun) {
         let report = run.borrow().report.clone();
+        // The history entry keeps the checks (and `passed` reads them).
+        run.borrow_mut().record.report = Some(report.clone());
+        if run.borrow().view.is_some() {
+            self.in_window_over(&crate::ui::update_all::finished_note(&report));
+        }
         if report.passed() {
             self.passed(run, &report.summary());
         } else {
@@ -145,14 +165,16 @@ impl Win {
             tr("These need a person; the log shows what happened.")
         };
 
+        let heading = if first {
+            tr("The update needs a look")
+        } else {
+            tr("Not everything is right yet")
+        };
+        let view = run.borrow().view.clone();
         let list = Win::note_list();
         let dialog = adw::AlertDialog::builder()
-            .heading(if first {
-                tr("The update needs a look")
-            } else {
-                tr("Not everything is right yet")
-            })
-            .body(body)
+            .heading(&heading)
+            .body(&body)
             .build();
         dialog.set_body_use_markup(false);
         for c in report
@@ -185,8 +207,12 @@ impl Win {
                     .valign(gtk::Align::Center)
                     .build();
                 let (w, d) = (self.downgrade(), dialog.downgrade());
+                let vd = view.as_ref().map(|v| v.dialog().downgrade());
                 open.connect_clicked(move |_| {
                     if let Some(d) = d.upgrade() {
+                        d.close();
+                    }
+                    if let Some(d) = vd.as_ref().and_then(|d| d.upgrade()) {
                         d.close();
                     }
                     if let Some(win) = w.upgrade() {
@@ -204,11 +230,6 @@ impl Win {
                 &lines.join("\n"),
             ));
         }
-        let scroll = gtk::ScrolledWindow::new();
-        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroll.set_propagate_natural_height(true);
-        scroll.set_max_content_height(380);
-        scroll.set_child(Some(&list));
         let show_log = gtk::Button::builder()
             .label(tr("Show log"))
             .halign(gtk::Align::Start)
@@ -221,6 +242,47 @@ impl Win {
                 win.show_update_log(&log);
             }
         });
+        if let Some(view) = view {
+            // In the window: the report takes the timeline's place, and
+            // closing that dialog ends the run (`own_view`).
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            content.append(&list);
+            content.append(&show_log);
+            let mut buttons = vec![close_button(&view)];
+            if first && run.borrow().retry_offered {
+                let again = gtk::Button::with_label(&tr("Try again"));
+                let (r, d) = (Rc::downgrade(&run), view.dialog().downgrade());
+                again.connect_clicked(move |_| {
+                    if let Some(run) = r.upgrade() {
+                        run.borrow_mut().then_retry = true;
+                    }
+                    if let Some(d) = d.upgrade() {
+                        d.close();
+                    }
+                });
+                buttons.push(again);
+            }
+            if fixable {
+                let fix = gtk::Button::with_label(&tr("Fix"));
+                fix.add_css_class("suggested-action");
+                // Weakly: the view's dialog holds the run until it closes.
+                let (w, r) = (self.downgrade(), Rc::downgrade(&run));
+                fix.connect_clicked(move |b| {
+                    b.set_sensitive(false);
+                    if let (Some(win), Some(run)) = (w.upgrade(), r.upgrade()) {
+                        win.run_update_repairs(run, repairs.clone(), report.clone());
+                    }
+                });
+                buttons.push(fix);
+            }
+            report_in_view(&view, &heading, &body, Some(content.upcast()), buttons);
+            return;
+        }
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroll.set_propagate_natural_height(true);
+        scroll.set_max_content_height(380);
+        scroll.set_child(Some(&list));
         let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
         content.append(&scroll);
         content.append(&show_log);
@@ -355,6 +417,47 @@ impl Win {
                 &names,
             )
         };
+        let view = run.borrow().view.clone();
+        if let Some(view) = view {
+            let mut buttons = Vec::new();
+            if let Some(steps) = steps {
+                let tidy = gtk::Button::with_label(&tr("Tidy up"));
+                let (w, d) = (self.downgrade(), view.dialog().downgrade());
+                let once = Cell::new(Some(steps));
+                tidy.connect_clicked(move |_| {
+                    if let Some(d) = d.upgrade() {
+                        d.close();
+                    }
+                    if let (Some(win), Some(steps)) = (w.upgrade(), once.take()) {
+                        win.tidy_up(steps);
+                    }
+                });
+                buttons.push(tidy);
+            }
+            let close = close_button(&view);
+            close.add_css_class("suggested-action");
+            buttons.push(close);
+            let show_log = gtk::Button::builder()
+                .label(tr("Show log"))
+                .halign(gtk::Align::Start)
+                .build();
+            show_log.add_css_class("flat");
+            let log = log_shown(&run.borrow().report.log, true);
+            let w = self.downgrade();
+            show_log.connect_clicked(move |_| {
+                if let Some(win) = w.upgrade() {
+                    win.show_update_log(&log);
+                }
+            });
+            report_in_view(
+                &view,
+                &tr("Update finished"),
+                message,
+                Some(show_log.upcast()),
+                buttons,
+            );
+            return;
+        }
         self.finish_update(run);
         let Some(steps) = steps else {
             return self.say(message, 8);
@@ -456,6 +559,67 @@ impl Win {
         }
         // The run is over: Update all can start again.
         run.borrow_mut().busy = None;
+    }
+}
+
+/// A button that closes the update view, which ends the run.
+fn close_button(view: &UpdateView) -> gtk::Button {
+    let close = gtk::Button::with_label(&tr("Close"));
+    let d = view.dialog().downgrade();
+    close.connect_clicked(move |_| {
+        if let Some(d) = d.upgrade() {
+            d.close();
+        }
+    });
+    close
+}
+
+/// The report in the update view, in the timeline's place: the same
+/// heading, then what there is to say, then its buttons at the end.
+fn report_in_view(
+    view: &UpdateView,
+    heading: &str,
+    body: &str,
+    content: Option<gtk::Widget>,
+    buttons: Vec<gtk::Button>,
+) {
+    let page = adw::PreferencesPage::new();
+    let hero = adw::PreferencesGroup::new();
+    let head = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    for (text, class) in [(heading, "title-2"), (body, "dim-label")] {
+        let l = gtk::Label::builder()
+            .label(text)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .build();
+        l.add_css_class(class);
+        head.append(&l);
+    }
+    hero.add(&head);
+    page.add(&hero);
+    if let Some(c) = content {
+        let group = adw::PreferencesGroup::new();
+        group.add(&c);
+        page.add(&group);
+    }
+    let group = adw::PreferencesGroup::new();
+    let row = gtk::Box::builder()
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    for b in &buttons {
+        row.append(b);
+    }
+    group.add(&row);
+    page.add(&group);
+    view.replace_with_report(page.upcast());
+    view.dialog().set_can_close(true);
+    if let Some(b) = buttons.last() {
+        b.grab_focus();
     }
 }
 

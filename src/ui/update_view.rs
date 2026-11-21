@@ -34,6 +34,20 @@ fn all_done(t: &Timeline) -> bool {
     !t.steps.is_empty() && t.steps.iter().all(|(_, s)| matches!(s, StepState::Done { .. }))
 }
 
+/// A step's name, translated. Each is a literal so it reaches the
+/// translation template; in English it is `StepId::label`.
+pub fn step_label(id: StepId) -> String {
+    match id {
+        StepId::Snapshot => tr("Snapshot"),
+        StepId::SigningKeys => tr("Signing keys"),
+        StepId::SystemPackages => tr("System packages"),
+        StepId::Migrations => tr("Omarchy migrations"),
+        StepId::AurAndTools => tr("AUR and tools"),
+        StepId::Checking => tr("Checking everything works"),
+        StepId::OtherApps => tr("Other apps"),
+    }
+}
+
 /// The heading: what the update is doing, or how it ended.
 pub fn title(t: &Timeline) -> String {
     if let Some((_, changed)) = failure(t) {
@@ -55,7 +69,7 @@ pub fn title(t: &Timeline) -> String {
 /// (what it changed is said once, on the failure card).
 pub fn subtitle(t: &Timeline) -> String {
     if let Some((id, _)) = failure(t) {
-        return tr("Stopped at: {step}").replace("{step}", &tr(id.label()));
+        return tr("Stopped at: {step}").replace("{step}", &step_label(id));
     }
     if t.generic {
         return tr("Updating…");
@@ -450,7 +464,7 @@ impl UpdateView {
         self.0.apps.borrow_mut().clear();
         let mut steps = Vec::new();
         for (id, _) in &t.steps {
-            let row = Win::note_row("radio-symbolic", &tr(id.label()), "");
+            let row = Win::note_row("radio-symbolic", &step_label(*id), "");
             // Nothing in the list is clicked; focus belongs to the buttons.
             row.set_focusable(false);
             // note_row's prefix is the image; the spinner sits beside it and
@@ -620,6 +634,11 @@ impl UpdateView {
             b.add_css_class("suggested-action");
             b.connect_clicked(move |_| on_fix());
             buttons.append(&b);
+            // The way on takes the keyboard: the card was just rebuilt, and
+            // whatever had focus before may be gone with it.
+            b.connect_map(|b| {
+                b.grab_focus();
+            });
         }
         ui.failure.append(&buttons);
         ui.failure.set_visible(true);
@@ -1100,6 +1119,28 @@ mod tests {
 
     fn running() -> StepState {
         StepState::Running { detail: String::new() }
+    }
+
+    /// Step names reach the translation template: each is a literal `tr`
+    /// here (xgettext cannot see through `tr(id.label())`), in English the
+    /// tracker's own label.
+    #[test]
+    fn step_names_are_translatable_literals() {
+        let src = include_str!("update_view.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap_or(src);
+        for id in [
+            StepId::Snapshot,
+            StepId::SigningKeys,
+            StepId::SystemPackages,
+            StepId::Migrations,
+            StepId::AurAndTools,
+            StepId::Checking,
+            StepId::OtherApps,
+        ] {
+            assert_eq!(step_label(id), id.label());
+            assert!(code.contains(&format!("tr(\"{}\")", id.label())), "{id:?}");
+        }
+        assert!(!code.contains("tr(id.label())"));
     }
 
     #[test]
