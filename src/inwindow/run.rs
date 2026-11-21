@@ -17,7 +17,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::procs::session_commands;
+use super::procs;
 use super::prompt::{self, Answer, Prompt};
 use super::pty::Pty;
 use super::tracker::{Timeline, Tracker};
@@ -25,7 +25,8 @@ use crate::postupdate::clean_output;
 
 /// How long the output must be quiet before the tail is checked for a prompt.
 const PROMPT_IDLE: Duration = Duration::from_millis(400);
-/// How often /proc is read for the running programs.
+/// How often /proc is read for the running programs (only the update's own
+/// processes: a few small files).
 const SCAN_EVERY: Duration = Duration::from_millis(250);
 /// Lines of output kept in memory (the log file keeps everything).
 const TAIL_LINES: usize = 2000;
@@ -39,6 +40,10 @@ const RESTART_NOTE: &str =
 /// Variables that change how the update treats questions and pacman; only
 /// Almanac decides them, never the environment it was started from.
 const STRIPPED_ENV: [&str; 2] = ["OMARCHY_UPDATE_UNATTENDED", "OMARCHY_ALLOW_DIRECT_PACMAN"];
+/// The terminal type the update is given, whatever Almanac was started
+/// with (from the launcher, usually none): its programs then draw the one
+/// screen the prompt detector knows.
+const TERM: &str = "xterm-256color";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -52,9 +57,33 @@ pub enum Event {
     Finished { code: i32 },
 }
 
+/// Why a password was not typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasswordError {
+    /// no password request is open
+    NotAsked,
+    /// the terminal echoes, so typing would show it
+    WouldEcho,
+    /// the terminal could not be asked, or written to
+    Terminal(String),
+}
+
+impl std::fmt::Display for PasswordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PasswordError::NotAsked => f.write_str("No password is being asked for."),
+            PasswordError::WouldEcho => {
+                f.write_str("The terminal would show the password; not sending it.")
+            }
+            PasswordError::Terminal(e) => write!(f, "The password was not sent: {e}"),
+        }
+    }
+}
+
 pub struct UpdateRun {
     pty: Option<Pty>,
-    sid: u32,
+    /// the spawned process: the update is it and its descendants
+    pid: u32,
     tracker: Tracker,
     log: File,
     /// Complete lines, newest last.
@@ -152,18 +181,20 @@ impl UpdateRun {
 
     fn start_inner(
         argv: Vec<String>,
-        env: Vec<(String, String)>,
+        caller_env: Vec<(String, String)>,
         strip: &[&str],
         pretend_inherited: &[(String, String)],
         timeline: Timeline,
         log_path: PathBuf,
     ) -> Result<UpdateRun, String> {
         let log = open_log(&log_path)?;
+        let mut env = vec![("TERM".to_string(), TERM.to_string())];
+        env.extend(caller_env);
         let pty = Pty::spawn_with(&argv, &env, strip, pretend_inherited)?;
-        let sid = pty.pid;
+        let pid = pty.pid;
         Ok(UpdateRun {
             pty: Some(pty),
-            sid,
+            pid,
             tracker: Tracker::new(timeline),
             log,
             tail: VecDeque::new(),
@@ -185,8 +216,8 @@ impl UpdateRun {
         self.tracker.timeline()
     }
 
-    pub fn sid(&self) -> u32 {
-        self.sid
+    pub fn pid(&self) -> u32 {
+        self.pid
     }
 
     pub fn is_running(&self) -> bool {
@@ -249,7 +280,9 @@ impl UpdateRun {
         events
     }
 
-    /// Read the session's programs (at most every 250 ms unless `force`).
+    /// Read the update's programs (at most every 250 ms unless `force`):
+    /// the spawned process and its descendants, whatever session or
+    /// terminal they moved to.
     fn refresh_commands(&mut self, now: Instant, force: bool) -> bool {
         if !force
             && self
@@ -259,7 +292,12 @@ impl UpdateRun {
             return false;
         }
         self.last_scan = Some(now);
-        let commands = session_commands(Path::new("/proc"), self.sid);
+        let root = Path::new("/proc");
+        let tree = procs::tree(root, self.pid);
+        if let Some(pty) = self.pty.as_mut() {
+            pty.track(&tree);
+        }
+        let commands = procs::commands_of(root, &tree);
         if commands == self.commands {
             return false;
         }
@@ -443,20 +481,22 @@ impl UpdateRun {
     /// Type the password (`Some`) or cancel the request with Ctrl-C (`None`).
     /// Only while a password request is open; a secret only while the
     /// terminal does not echo. The secret lives only for this call.
-    pub fn answer_password(&mut self, secret: Option<&str>) -> Result<(), String> {
+    pub fn answer_password(&mut self, secret: Option<&str>) -> Result<(), PasswordError> {
         if !matches!(self.open, Some(Prompt::Password { .. })) {
-            return Err("No password is being asked for.".into());
+            return Err(PasswordError::NotAsked);
         }
         match secret {
             Some(s) => {
-                let pty = self.pty.as_ref().ok_or("the update is not running")?;
-                if pty.echo_on()? {
-                    return Err("The terminal would show the password; not sending it.".into());
+                let pty = self.pty.as_ref().ok_or(PasswordError::NotAsked)?;
+                // A cheap guard (see `Pty::echo_on`): sudo's own echo-off on
+                // the terminal it reads from is the one that counts.
+                if pty.echo_on().map_err(PasswordError::Terminal)? {
+                    return Err(PasswordError::WouldEcho);
                 }
                 let mut line = Vec::with_capacity(s.len() + 1);
                 line.extend_from_slice(s.as_bytes());
                 line.push(b'\n');
-                let r = pty.write_all(&line);
+                let r = pty.write_all(&line).map_err(PasswordError::Terminal);
                 wipe(&mut line);
                 self.open = None;
                 self.awaiting_verdict = true;
@@ -464,7 +504,7 @@ impl UpdateRun {
             }
             None => {
                 self.open = None;
-                self.write(b"\x03")
+                self.write(b"\x03").map_err(PasswordError::Terminal)
             }
         }
     }
@@ -495,7 +535,7 @@ impl UpdateRun {
 mod tests {
     use super::*;
     use std::path::Path;
-    use crate::inwindow::tracker::{AppState, StepState};
+    use crate::inwindow::tracker::{AppState, StepId, StepState};
     use std::time::Duration;
 
     fn timeline() -> Timeline {
@@ -749,6 +789,104 @@ kill $sleep_pid 2>/dev/null
 if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
 "#;
 
+    /// `body` the way the real `omarchy update` runs it: the script re-execs
+    /// itself under `script -qefc` (omarchy-update:56-59), which puts the
+    /// work on a new terminal in a new session, away from ours.
+    fn under_script(dir: &Path, body: &str) -> Vec<String> {
+        let log = dir.join("omarchy-update.log");
+        script(
+            dir,
+            &format!(
+                "if [[ -z ${{FAKE_LOGGED:-}} ]]; then\n\
+                 script_command=\"bash $(printf '%q' \"$0\")\"\n\
+                 exec env FAKE_LOGGED=1 script -qefc \"$script_command\" {}\n\
+                 fi\n{body}",
+                log.display()
+            ),
+        )
+    }
+
+    /// The steps tick from the processes of the real layout, and the reboot
+    /// question (in French, so its wording says nothing) is declined because
+    /// `omarchy-update-restart` is seen running.
+    #[test]
+    fn under_script_the_steps_tick_and_the_restart_question_is_declined() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!(
+            "{STEPS}\n{}",
+            GUM_REBOOT.replace("read -r -n1 ans", "read -r -t 10 -n1 ans")
+        );
+        let argv = under_script(dir.path(), &body);
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        let mut seen_running: Vec<StepId> = Vec::new();
+        let events = drive(&mut run, |e, run| {
+            if matches!(e, Event::Changed) {
+                if let Some(c) = run.timeline().current() {
+                    if !seen_running.contains(&c) {
+                        seen_running.push(c);
+                    }
+                }
+            }
+        });
+        assert_eq!(finished_code(&events), 0, "{}", run.log_tail());
+        for id in [
+            StepId::Snapshot,
+            StepId::SigningKeys,
+            StepId::SystemPackages,
+            StepId::Migrations,
+            StepId::AurAndTools,
+            StepId::Checking,
+        ] {
+            assert!(seen_running.contains(&id), "{id:?} never ran: {seen_running:?}");
+        }
+        assert!(run.log_tail().contains("declined"), "{}", run.log_tail());
+        assert!(!run.log_tail().contains("REBOOTING"));
+        assert!(run.timeline().restart_note.is_some());
+        assert!(!events.iter().any(|e| matches!(e, Event::Question(_))));
+    }
+
+    /// Whether `pid` is still a live process (a zombie counts as gone).
+    fn alive(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|s| s.rsplit_once(')').map(|(_, r)| r.trim_start().starts_with('Z')))
+            .is_some_and(|zombie| !zombie)
+    }
+
+    /// Let go of mid-run (Quit), nothing of the update stays behind: not
+    /// the work on `script`'s terminal, which ignores the hangup.
+    #[test]
+    fn dropping_a_run_under_script_leaves_no_descendant_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "trap '' HUP\n(exec -a omarchy-update-system-pkgs sleep 30) &\necho kid:$!\nsleep 30";
+        let argv = under_script(dir.path(), body);
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let kid = loop {
+            run.poll();
+            let tail = run.log_tail();
+            let found = tail
+                .split("kid:")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+                .and_then(|n| n.parse::<i32>().ok());
+            if let Some(n) = found {
+                if run.timeline().current() == Some(StepId::SystemPackages) {
+                    break n;
+                }
+            }
+            assert!(Instant::now() < deadline, "{tail:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(alive(kid));
+        drop(run);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(kid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(kid), "the update's work outlived the run");
+    }
+
     #[test]
     fn reboot_yes_is_never_sent() {
         let dir = tempfile::tempdir().unwrap();
@@ -901,7 +1039,7 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         );
         let mut run = UpdateRun::start(argv, vec![], timeline(), log.clone()).unwrap();
         let mut asked = false;
-        let mut late: Option<Result<(), String>> = None;
+        let mut late: Option<Result<(), PasswordError>> = None;
         drive(&mut run, |e, run| {
             if matches!(e, Event::NeedsPassword { .. }) {
                 asked = true; // the user's dialog stays open
@@ -926,6 +1064,7 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         drive_virtual(&mut run, |e, run| {
             if matches!(e, Event::NeedsPassword { .. }) {
                 result = Some(run.answer_password(Some("echoed")));
+                assert_eq!(result, Some(Err(PasswordError::WouldEcho)));
                 // Cancelling carries no secret and is fine.
                 run.answer_password(None).unwrap();
             }
@@ -1009,6 +1148,29 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
             }
         });
         assert_eq!(attempts, vec![1, 2, 1]);
+    }
+
+    /// Started from the launcher, Almanac has no TERM (or a dumb one): the
+    /// update gets one terminal type always, so gum, mise and pacman draw
+    /// the same screen the detector was written against.
+    #[test]
+    fn the_update_always_gets_the_same_terminal_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "echo \"term=${TERM-unset}\"";
+        for inherited in [vec![], vec![("TERM".to_string(), "dumb".to_string())]] {
+            let mut run = UpdateRun::start_inner(
+                script(dir.path(), body),
+                vec![],
+                &STRIPPED_ENV,
+                &inherited,
+                timeline(),
+                dir.path().join("t.log"),
+            )
+            .unwrap();
+            drive(&mut run, |_, _| {});
+            let t = run.log_tail();
+            assert!(t.contains("term=xterm-256color"), "{inherited:?}: {t}");
+        }
     }
 
     #[test]

@@ -247,6 +247,17 @@ enum Stopped {
     /// The terminal would have echoed the password, so it was not sent and
     /// the update was interrupted.
     PasswordRefused,
+    /// The password could not be sent for another reason (the terminal
+    /// could not be read or written), and the update was interrupted.
+    PasswordUnsent,
+}
+
+/// What a refused password makes of the run once Almanac stops it.
+fn stopped_after(e: &crate::inwindow::run::PasswordError) -> Stopped {
+    match e {
+        crate::inwindow::run::PasswordError::WouldEcho => Stopped::PasswordRefused,
+        _ => Stopped::PasswordUnsent,
+    }
 }
 
 /// The update stopped because of `why` (sudo is asked before anything
@@ -269,6 +280,10 @@ fn mark_stopped(t: &mut Timeline, why: Stopped) {
                 Stopped::PasswordRefused => tr(
                     "Almanac stopped the update without sending the password: the terminal \
                      would have shown your password as you typed it.",
+                ),
+                Stopped::PasswordUnsent => tr(
+                    "Almanac stopped the update: the password was not sent, because the \
+                     update's terminal could not be reached.",
                 ),
             };
             if none_done {
@@ -1354,7 +1369,7 @@ impl Live {
                 // Still asked for: refused, not stale. Stop it.
                 if let Some(u) = slot.as_mut().filter(|u| u.asks_password()) {
                     match u.interrupt() {
-                        Ok(()) => self.stopped.set(Some(Stopped::PasswordRefused)),
+                        Ok(()) => self.stopped.set(Some(stopped_after(&e))),
                         Err(e) => eprintln!("almanac: {e}"),
                     }
                 }
@@ -2363,6 +2378,36 @@ mod tests {
         assert_eq!(*changed, Changed::Nothing);
         assert_eq!(*fix, Some(Fix::RetryUpdate));
         assert!(pauses(&t));
+    }
+
+    /// Only an echoing terminal is blamed on echo: a password that could
+    /// not be sent for another reason (the terminal could not be read)
+    /// says so, and still ends as a visible failure with Try again.
+    #[test]
+    fn a_password_not_sent_for_another_reason_does_not_blame_echo() {
+        use crate::inwindow::run::PasswordError;
+        assert_eq!(stopped_after(&PasswordError::WouldEcho), Stopped::PasswordRefused);
+        assert_eq!(
+            stopped_after(&PasswordError::Terminal("tcgetattr: EIO".into())),
+            Stopped::PasswordUnsent
+        );
+        let mut t = timeline();
+        set(
+            &mut t,
+            StepId::Snapshot,
+            StepState::Failed {
+                reason: "It stopped with an error (exit status 130).".into(),
+                changed: Changed::Unknown,
+                fix: Some(Fix::RetryUpdate),
+            },
+        );
+        mark_stopped(&mut t, Stopped::PasswordUnsent);
+        let StepState::Failed { reason, fix, .. } = &t.steps[0].1 else {
+            panic!("still failed")
+        };
+        assert!(!reason.contains("shown your password"), "{reason}");
+        assert!(reason.contains("not sent"), "{reason}");
+        assert_eq!(*fix, Some(Fix::RetryUpdate));
     }
 
     /// In the window the rest of Update all is the Other apps step: no

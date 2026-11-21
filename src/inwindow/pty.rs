@@ -7,6 +7,7 @@
 //! output without blocking, and polls for the exit.
 
 use std::io;
+use std::path::Path;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -15,6 +16,8 @@ use std::time::{Duration, Instant};
 use rustix::fs::{fcntl_getfl, fcntl_setfl, open, Mode, OFlags};
 use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
 use rustix::termios::{tcsetwinsize, Winsize};
+
+use super::procs::{self, Proc};
 
 /// Columns and rows the child sees.
 const COLS: u16 = 120;
@@ -30,6 +33,11 @@ pub struct Pty {
     master: Option<OwnedFd>,
     child: Child,
     status: Option<i32>,
+    /// The child's descendants that were on a terminal when last seen
+    /// (`track`): the update's own work, which a hangup is meant to end.
+    /// What left the terminal on purpose (`setsid`, a restarted app) is
+    /// not here and is left alone.
+    known: Vec<Proc>,
 }
 
 fn code_of(status: ExitStatus) -> i32 {
@@ -112,7 +120,23 @@ impl Pty {
             master: Some(master),
             child,
             status: None,
+            known: Vec::new(),
         })
+    }
+
+    /// Remember the processes of `tree` (the child's, from
+    /// `procs::tree`) that have a controlling terminal, and forget those
+    /// that are gone. Drop ends whatever of these is still alive, even
+    /// after it left the child's tree.
+    pub fn track(&mut self, tree: &[Proc]) {
+        let root = Path::new("/proc");
+        self.known
+            .retain(|k| procs::stat_of(root, k.pid).is_some_and(|p| p.start == k.start));
+        for p in tree {
+            if p.tty_nr != 0 && !self.known.iter().any(|k| k.pid == p.pid && k.start == p.start) {
+                self.known.push(p.clone());
+            }
+        }
     }
 
     /// The master side, for a caller that wants to poll it.
@@ -120,8 +144,12 @@ impl Pty {
         self.master.as_ref().expect("master lives until drop").as_fd()
     }
 
-    /// Whether the terminal echoes what is typed (a password must not be
-    /// written while it does).
+    /// Whether this terminal echoes what is typed: a cheap guard only.
+    /// Under `omarchy update` the program at this end is `script`, which
+    /// puts this (outer) terminal in raw mode, so it reads "off" whatever
+    /// happens further in; the guard that matters is sudo's own: it turns
+    /// echo off on the terminal it reads the password from (script's inner
+    /// one) before it asks.
     pub fn echo_on(&self) -> Result<bool, String> {
         let t = rustix::termios::tcgetattr(self.master_fd()).map_err(|e| format!("tcgetattr: {e}"))?;
         Ok(t.local_modes.contains(rustix::termios::LocalModes::ECHO))
@@ -175,6 +203,11 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
+        // What runs now, before the hangup scatters it.
+        if self.status.is_none() {
+            let tree = procs::tree(Path::new("/proc"), self.pid);
+            self.track(&tree);
+        }
         // Closing the master hangs the terminal up on the child's session.
         self.master = None;
         if self.status.is_none() {
@@ -190,6 +223,7 @@ impl Drop for Pty {
             if !gone {
                 // The hangup did not end it.
                 self.kill_group();
+                self.kill_known();
                 let _ = self.child.kill();
                 let _ = self.child.wait();
                 return;
@@ -200,10 +234,40 @@ impl Drop for Pty {
         // is its own process group, so one SIGKILL takes them all; the group
         // id stays reserved while any member lives, and ESRCH means none do.
         self.kill_group();
+        // `omarchy update`'s work is not in that group: `script` runs it on
+        // a terminal and in a session of its own (and sudo may add another).
+        self.kill_known();
     }
 }
 
 impl Pty {
+    /// SIGKILL what `track` saw that is still the same process (its start
+    /// time matches, so a reused pid is spared), and anything those started
+    /// since. Root's processes (pacman under sudo) refuse the signal; they
+    /// are not ours to end, and are not what holds Omarchy's update lock.
+    fn kill_known(&self) {
+        let root = Path::new("/proc");
+        let same = |k: &Proc| procs::stat_of(root, k.pid).is_some_and(|p| p.start == k.start);
+        let mut targets: Vec<Proc> = self.known.iter().filter(|k| same(k)).cloned().collect();
+        let mut i = 0;
+        while i < targets.len() {
+            for p in procs::tree(root, targets[i].pid).into_iter().skip(1) {
+                if !targets.iter().any(|t| t.pid == p.pid) {
+                    targets.push(p);
+                }
+            }
+            i += 1;
+        }
+        for t in &targets {
+            if !same(t) {
+                continue;
+            }
+            if let Some(pid) = rustix::process::Pid::from_raw(t.pid as i32) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        }
+    }
+
     /// SIGKILL every process in the child's group.
     fn kill_group(&self) {
         if let Some(pgid) = rustix::process::Pid::from_raw(self.pid as i32) {
