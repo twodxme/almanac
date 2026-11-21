@@ -281,6 +281,8 @@ pub struct LogScan {
     pub builds: Vec<String>,
     /// pacman found its database locked
     pub locked: bool,
+    /// `omarchy update` would not start: another one holds its lock
+    pub update_running: bool,
 }
 
 static LINE: LazyLock<Regex> =
@@ -365,6 +367,9 @@ pub fn scan_log(text: &str) -> LogScan {
     scan
 }
 
+/// What `omarchy-update-lock` says when another update holds its lock.
+const OMARCHY_BUSY: &str = "An Omarchy update is already running";
+
 /// What the terminal showed, as `script` recorded it: escapes and
 /// carriage-return redraws taken out. Only errors are read from it -- the
 /// log has the rest, and `--needed` fills the terminal with harmless
@@ -374,6 +379,8 @@ pub fn scan_output(raw: &str, scan: &mut LogScan) {
         let line = line.trim();
         if let Some(c) = BUILD_FAILED.captures(line) {
             scan.builds.push(c["p"].trim_end_matches(':').to_string());
+        } else if line.starts_with(OMARCHY_BUSY) {
+            scan.update_running = true;
         } else if line.starts_with("error:")
             || (line.starts_with("warning:") && KEYRING.is_match(line))
         {
@@ -489,6 +496,10 @@ pub struct After {
     /// db.lck there, and other users' programs are hidden: whether anything
     /// holds it cannot be told
     pub lock_unclear: bool,
+    /// still waiting, but the system database offers only the installed
+    /// version: checkupdates saw the release in its private copy. Only a
+    /// full upgrade (`-Syu`) can install these; `-S --needed` skips them.
+    pub unsynced: BTreeSet<String>,
 }
 
 pub fn probe_pending() -> Option<BTreeSet<String>> {
@@ -551,16 +562,33 @@ pub fn probe_after(pending: bool) -> After {
     std::thread::scope(|s| {
         let rebuild = s.spawn(move || if rebuild_tool { probe_rebuild() } else { None });
         let units = s.spawn(probe_units);
+        let pending = if pending { probe_pending() } else { None };
+        let unsynced = pending.as_ref().map(probe_unsynced).unwrap_or_default();
         After {
-            pending: if pending { probe_pending() } else { None },
+            pending,
             units: units.join().ok().flatten(),
             rebuild: rebuild.join().ok().flatten(),
             rebuild_tool,
             kernel_gone: probe_kernel(),
             stale_lock: lock_is_stale(),
             lock_unclear: lock_is_unclear(),
+            unsynced,
         }
     })
+}
+
+/// Of `pending`, the repo packages whose system-database version is the
+/// installed one. AUR packages are not in the database and never count.
+fn probe_unsynced(pending: &BTreeSet<String>) -> BTreeSet<String> {
+    let installed = crate::security::installed_versions().unwrap_or_default();
+    pending
+        .iter()
+        .filter(|n| {
+            let synced = crate::inventory::synced_version(n);
+            !synced.is_empty() && installed.get(n.as_str()) == Some(&synced)
+        })
+        .cloned()
+        .collect()
 }
 
 pub fn probe_before(pending: bool) -> Before {
@@ -743,6 +771,69 @@ pub fn lock_scan_in(proc_root: &Path, lock: &Path) -> LockScan {
     scan
 }
 
+/// A process holding the Omarchy update lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Holder {
+    pub pid: u32,
+    pub name: String,
+    /// it has a terminal, where someone may be answering it
+    pub terminal: bool,
+}
+
+/// Where `omarchy-update-lock` takes its lock.
+pub fn omarchy_update_lock() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("omarchy-update.lock")
+}
+
+/// The processes with `lock` open; our own process is left out. Only our
+/// own processes' files can be looked at, which is enough: `omarchy update`
+/// runs as this user.
+pub fn lock_holders_in(proc_root: &Path, lock: &Path) -> Vec<Holder> {
+    let me = std::process::id();
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if pid == me {
+            continue;
+        }
+        let holds = std::fs::read_dir(e.path().join("fd")).is_ok_and(|fds| {
+            fds.flatten()
+                .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t == lock))
+        });
+        if !holds {
+            continue;
+        }
+        let name = std::fs::read_to_string(e.path().join("comm"))
+            .map(|c| c.trim().to_string())
+            .unwrap_or_default();
+        // stat: "pid (comm) state ppid pgrp session tty_nr ..."; comm may
+        // hold spaces and parentheses, so fields count from the last ')'.
+        let terminal = std::fs::read_to_string(e.path().join("stat"))
+            .ok()
+            .and_then(|st| {
+                let rest = st.rsplit_once(')')?.1.to_string();
+                rest.split_whitespace().nth(4)?.parse::<i64>().ok()
+            })
+            // unreadable: assume someone may be at it
+            .is_none_or(|tty| tty != 0);
+        out.push(Holder {
+            pid,
+            name,
+            terminal,
+        });
+    }
+    out.sort_by_key(|h| h.pid);
+    out
+}
+
 /// Processes that hold pacman's lock, as "name (pid)". Our own process is
 /// left out.
 pub fn lockers_in(proc_root: &Path) -> Vec<String> {
@@ -839,6 +930,8 @@ pub struct Preflight {
     pub lock: LockScan,
     pub lock_file: bool,
     pub battery: Option<Battery>,
+    /// processes holding the Omarchy update lock: another `omarchy update`
+    pub other_update: Vec<Holder>,
 }
 
 pub fn probe_preflight() -> Preflight {
@@ -854,6 +947,7 @@ pub fn probe_preflight() -> Preflight {
         lock: lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)),
         lock_file: Path::new(DB_LOCK).exists(),
         battery: battery_in(Path::new("/sys/class/power_supply")),
+        other_update: lock_holders_in(Path::new("/proc"), &omarchy_update_lock()),
     }
 }
 
@@ -867,6 +961,7 @@ fn demo_after() -> After {
         kernel_gone: Some(false),
         stale_lock: false,
         lock_unclear: false,
+        unsynced: BTreeSet::new(),
     }
 }
 
@@ -910,6 +1005,34 @@ pub fn preflight_issues(p: &Preflight, system: bool) -> Vec<Issue> {
                 fix: None,
             });
         }
+    }
+    if system && !p.other_update.is_empty() {
+        let who = p
+            .other_update
+            .iter()
+            .map(|h| format!("{} ({})", h.name, h.pid))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Stopped for you only when no one can be answering it and pacman
+        // is not at work under it.
+        let stuck = p.other_update.iter().all(|h| !h.terminal) && p.lock.running.is_empty();
+        out.push(Issue {
+            level: Level::Block,
+            title: "Another Omarchy update is running".into(),
+            detail: if stuck {
+                format!(
+                    "{who} holds the update lock, with no terminal to answer it in: an earlier \
+                     update whose window was closed. It will wait forever, and no update can \
+                     start until it is stopped. It has not changed any packages."
+                )
+            } else {
+                format!(
+                    "{who} holds the update lock. Finish it in its terminal, or wait for it, \
+                     then update."
+                )
+            },
+            fix: stuck.then(|| Repair::StopUpdate(p.other_update.iter().map(|h| h.pid).collect())),
+        });
     }
     // A service that is running only matters when a lock file is there:
     // then it may be the service's.
@@ -992,6 +1115,8 @@ pub enum CheckId {
     Dkms,
     Builds,
     Lock,
+    /// another `omarchy update` held its lock
+    Busy,
     Units,
     Rebuild,
     Kernel,
@@ -1005,6 +1130,8 @@ pub enum CheckId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Repair {
     RemoveLock,
+    /// end an `omarchy update` left with no terminal, by pid
+    StopUpdate(Vec<u32>),
     Keyring,
     Retry(Vec<String>),
     Rebuild(Vec<String>),
@@ -1115,8 +1242,24 @@ pub fn build_report(i: &Inputs) -> Report {
         ),
     });
 
+    if scan.update_running {
+        checks.push(Check::new(
+            CheckId::Busy,
+            Status::Fail,
+            "Another Omarchy update was running",
+            "omarchy update did not start: an earlier update still holds its lock, often one \
+             whose terminal was closed while it waited for an answer. Nothing was installed. \
+             Update all looks for it next time and offers to stop it.",
+        ));
+    }
+
     if i.system {
-        checks.push(pending_check(&i.before.pending, &i.after.pending));
+        let mut pending = pending_check(&i.before.pending, &i.after.pending, &i.after.unsynced);
+        if scan.update_running {
+            // The update never ran; a retry meets the same lock.
+            pending.repair = None;
+        }
+        checks.push(pending);
     }
 
     match &i.log {
@@ -1225,7 +1368,11 @@ pub fn build_report(i: &Inputs) -> Report {
     }
 }
 
-fn pending_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<String>>) -> Check {
+fn pending_check(
+    before: &Option<BTreeSet<String>>,
+    after: &Option<BTreeSet<String>>,
+    unsynced: &BTreeSet<String>,
+) -> Check {
     let (Some(before), Some(after)) = (before, after) else {
         return Check::new(
             CheckId::Pending,
@@ -1246,18 +1393,30 @@ fn pending_check(before: &Option<BTreeSet<String>>, after: &Option<BTreeSet<Stri
         };
         return Check::new(CheckId::Pending, Status::Pass, "Updates installed", detail);
     }
-    Check::new(
-        CheckId::Pending,
-        Status::Fail,
-        "Updates installed",
-        format!(
-            "{} still waiting: {}.",
-            plural(left.len(), "update is", "updates are"),
-            listing(&left, 6)
-        ),
-    )
-    .items(left.clone())
-    .repair(Repair::Retry(left))
+    let mut detail = format!(
+        "{} still waiting: {}.",
+        plural(left.len(), "update is", "updates are"),
+        listing(&left, 6)
+    );
+    let (stale, retry): (Vec<String>, Vec<String>) =
+        left.iter().cloned().partition(|n| unsynced.contains(n));
+    if !stale.is_empty() {
+        detail += &format!(
+            " {} released after this system's package database was last refreshed, so \
+             installing on its own skips it; Update all refreshes the database first.",
+            if stale.len() == 1 {
+                format!("{} was", stale[0])
+            } else {
+                format!("{} were", listing(&stale, 6))
+            }
+        );
+    }
+    let check = Check::new(CheckId::Pending, Status::Fail, "Updates installed", detail).items(left);
+    if retry.is_empty() {
+        check
+    } else {
+        check.repair(Repair::Retry(retry))
+    }
 }
 
 fn log_checks(scan: &LogScan) -> Vec<Check> {
@@ -1538,7 +1697,7 @@ impl Report {
                 continue;
             }
             let again = match c.id {
-                CheckId::Pending => pending_check(&before.pending, &after.pending),
+                CheckId::Pending => pending_check(&before.pending, &after.pending, &after.unsynced),
                 CheckId::Units => {
                     // The units this run found failed, asked again.
                     let now = after.units.clone().map(|u| {
@@ -1559,7 +1718,7 @@ impl Report {
                 // Signatures, and a command that failed for a cause the
                 // repairs went after: fixed when what was waiting is now in.
                 CheckId::Keyring | CheckId::Exit => {
-                    let pending = pending_check(&before.pending, &after.pending);
+                    let pending = pending_check(&before.pending, &after.pending, &after.unsynced);
                     if pending.status == Status::Pass && !after.stale_lock {
                         Check::new(
                             c.id,
@@ -1596,6 +1755,13 @@ pub fn repair_steps(repairs: &[Repair], have_yay: bool) -> Vec<Step> {
                 out.push(Step::call(
                     "Removing pacman’s stale lock file",
                     Arc::new(remove_stale_lock),
+                ));
+            }
+            Repair::StopUpdate(pids) => {
+                let pids = pids.clone();
+                out.push(Step::call(
+                    "Stopping the stuck update",
+                    Arc::new(move |log| stop_update(&pids, log)),
                 ));
             }
             Repair::Keyring => {
@@ -1662,6 +1828,10 @@ pub fn repair_steps(repairs: &[Repair], have_yay: bool) -> Vec<Step> {
 pub fn describe(r: &Repair, have_yay: bool) -> Option<String> {
     Some(match r {
         Repair::RemoveLock => "Remove pacman’s stale lock file (nothing is using it)".to_string(),
+        Repair::StopUpdate(pids) => format!(
+            "Stop the earlier update left with no terminal ({})",
+            pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+        ),
         Repair::Keyring => "Reload the Arch signing keys and update archlinux-keyring".to_string(),
         Repair::Retry(names) => format!("Install what is still waiting: {}", listing(names, 6)),
         Repair::Rebuild(names) if have_yay => format!("Rebuild with yay: {}", listing(names, 6)),
@@ -1736,6 +1906,47 @@ pub fn rebuild_argv(names: &[String]) -> Vec<String> {
 
 /// The lock is removed only while nothing that takes it is running, asked
 /// again right before: a pacman started since must keep its lock.
+/// End the stuck `omarchy update`: asked again first, so a pid that has
+/// since been reused, gained a terminal, or started pacman is left alone.
+fn stop_update(pids: &[u32], log: LogFn<'_>) -> Result<(), String> {
+    if crate::demo::active() {
+        return Err("not stopped: demo mode does not touch the machine".to_string());
+    }
+    let now = lock_holders_in(Path::new("/proc"), &omarchy_update_lock());
+    if !lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).running.is_empty() {
+        return Err("not stopped: a package manager is running under it".to_string());
+    }
+    for pid in pids {
+        let Some(h) = now.iter().find(|h| h.pid == *pid) else {
+            log(&format!("{pid}: already gone"));
+            continue;
+        };
+        if h.terminal {
+            return Err(format!("not stopped: {} ({pid}) has a terminal now", h.name));
+        }
+        let pid_t = rustix::process::Pid::from_raw(*pid as i32)
+            .ok_or_else(|| format!("{pid}: not a process id"))?;
+        rustix::process::kill_process(pid_t, rustix::process::Signal::TERM)
+            .map_err(|e| format!("could not stop {} ({pid}): {e}", h.name))?;
+        log(&format!("stopped {} ({pid})", h.name));
+    }
+    // Its children (omarchy-update-confirm) hold the lock too.
+    for _ in 0..20 {
+        if lock_holders_in(Path::new("/proc"), &omarchy_update_lock()).is_empty() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let left = lock_holders_in(Path::new("/proc"), &omarchy_update_lock());
+    Err(format!(
+        "still holding the update lock: {}",
+        left.iter()
+            .map(|h| format!("{} ({})", h.name, h.pid))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 fn remove_stale_lock(log: LogFn<'_>) -> Result<(), String> {
     if crate::demo::active() {
         return Err("not removed: demo mode does not touch the machine".to_string());
@@ -2285,6 +2496,7 @@ mod tests {
                 kernel_gone: Some(false),
                 stale_lock: false,
                 lock_unclear: false,
+                unsynced: set(&[]),
             },
         }
     }
@@ -2772,6 +2984,7 @@ mod tests {
             },
             lock_file: true,
             battery: None,
+            other_update: Vec::new(),
         };
         let issues = preflight_issues(&hidden, true);
         assert_eq!(issues.len(), 1);
@@ -2847,6 +3060,7 @@ mod tests {
                 percent: 10,
                 on_battery: true,
             }),
+            other_update: Vec::new(),
         };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues[0].level, Level::Block, "the blocking one first");
@@ -2863,6 +3077,7 @@ mod tests {
             },
             lock_file: true,
             battery: None,
+            other_update: Vec::new(),
         };
         let issues = preflight_issues(&p, true);
         assert_eq!(issues.len(), 2);
@@ -2948,5 +3163,142 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(failed.severity(), "warn");
+    }
+
+    /// The repair ran `yay -S --needed` for releases the system database had
+    /// never seen (checkupdates syncs a private copy): yay skipped every one
+    /// and the repair "failed" the same way again. Those are not retried;
+    /// the report says Update all, which refreshes the database first.
+    #[test]
+    fn a_release_the_system_db_lacks_is_not_retried() {
+        let mut i = inputs();
+        i.exit = Some(1);
+        i.after.pending = Some(set(&["omarchy", "mise-bin"]));
+        i.after.unsynced = set(&["omarchy"]);
+        let r = build_report(&i);
+        let pending = r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap();
+        assert_eq!(pending.status, Status::Fail);
+        assert!(pending.detail.contains("Update all"), "{}", pending.detail);
+        assert_eq!(
+            r.repairs(),
+            vec![Repair::Retry(strs(&["mise-bin"]))],
+            "only what the system database can install is retried"
+        );
+
+        i.after.unsynced = set(&["omarchy", "mise-bin"]);
+        assert!(build_report(&i).repairs().is_empty(), "nothing yay could do");
+    }
+
+    /// `omarchy update` refused to start: an earlier one, its terminal long
+    /// gone, still held the update lock. That is the cause, and retrying the
+    /// packages cannot get past it.
+    #[test]
+    fn another_omarchy_update_holding_the_lock_is_the_cause() {
+        let mut s = scan_log("");
+        scan_output(
+            "Script started on 2026-11-21 12:48:52-08:00 [COMMAND=\"/usr/share/omarchy/bin/omarchy-update \"]\n\
+             An Omarchy update is already running.\r\n",
+            &mut s,
+        );
+        assert!(s.update_running);
+
+        let mut i = inputs();
+        i.exit = Some(1);
+        i.log = Some(s);
+        i.after.pending = i.before.pending.clone();
+        let r = build_report(&i);
+        let busy = r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Busy)
+            .expect("no check for the update already running");
+        assert_eq!(busy.status, Status::Fail);
+        assert!(
+            r.repairs().is_empty(),
+            "a retry would meet the same lock: {:?}",
+            r.repairs()
+        );
+    }
+
+    fn fake_stat(p: &Path, pid: &str, comm: &str, tty_nr: u32) {
+        std::fs::write(
+            p.join("stat"),
+            format!("{pid} ({comm}) S 1 {pid} {pid} {tty_nr} -1 4194560 0 0\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_holders_of_the_omarchy_update_lock_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("omarchy-update.lock");
+        fake_proc(dir.path(), "1", "systemd", &["/sbin/init"]);
+        let p = fake_proc(
+            dir.path(),
+            "920570",
+            "omarchy-update",
+            &["/bin/bash", "/usr/share/omarchy/bin/omarchy-update"],
+        );
+        std::fs::create_dir(p.join("fd")).unwrap();
+        std::os::unix::fs::symlink(&lock, p.join("fd").join("10")).unwrap();
+        fake_stat(&p, "920570", "omarchy-update", 0);
+        let q = fake_proc(dir.path(), "77", "bash", &["bash"]);
+        fake_stat(&q, "77", "bash", 34820);
+        assert_eq!(
+            lock_holders_in(dir.path(), &lock),
+            vec![Holder {
+                pid: 920570,
+                name: "omarchy-update".into(),
+                terminal: false,
+            }]
+        );
+        std::fs::write(p.join("stat"), "920570 (omarchy-update) S 1 1 1 34820 -1\n").unwrap();
+        assert!(lock_holders_in(dir.path(), &lock)[0].terminal);
+    }
+
+    #[test]
+    fn a_stuck_omarchy_update_blocks_and_can_be_stopped() {
+        let stuck = Holder {
+            pid: 920570,
+            name: "omarchy-update".into(),
+            terminal: false,
+        };
+        let p = Preflight {
+            other_update: vec![stuck.clone()],
+            ..Default::default()
+        };
+        let issues = preflight_issues(&p, true);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].level, Level::Block);
+        assert_eq!(issues[0].fix, Some(Repair::StopUpdate(vec![920570])));
+
+        // In a terminal, someone may be answering it: never stopped for them.
+        let live = Preflight {
+            other_update: vec![Holder {
+                terminal: true,
+                ..stuck.clone()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(preflight_issues(&live, true)[0].fix, None);
+
+        // Nor while pacman is at work under it.
+        let busy = Preflight {
+            other_update: vec![stuck],
+            lock: LockScan {
+                running: strs(&["pacman (920600)"]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(preflight_issues(&busy, true).iter().all(|i| i.fix.is_none()));
+    }
+
+    #[test]
+    fn stopping_a_stuck_update_is_one_step() {
+        let steps = repair_steps(&[Repair::StopUpdate(vec![920570])], true);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].label, "Stopping the stuck update");
+        assert!(describe(&Repair::StopUpdate(vec![1]), true).is_some());
     }
 }

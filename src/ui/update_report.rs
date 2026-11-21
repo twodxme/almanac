@@ -287,12 +287,22 @@ impl Win {
         let steps = postupdate::repair_steps(&repairs, Path::new(crate::inventory::YAY).exists());
         let w = self.downgrade();
         let done_steps = steps.clone();
-        tasks::run_each(
+        // The repairs' dialog, closed when the checks are back: the report
+        // that follows takes its place rather than sitting on top of it, and
+        // what the repairs printed goes into that report's log.
+        let task: Rc<RefCell<Option<tasks::TaskDialog>>> = Rc::new(RefCell::new(None));
+        let slot = task.clone();
+        let shown = tasks::run_each(
             &self.window,
             &tr("Repairing the update"),
             steps,
             Some(Box::new(move |ok| {
                 let Some(win) = w.upgrade() else { return };
+                let repairing = slot.borrow_mut().take();
+                let printed = repairing.as_ref().map(|t| {
+                    let b = &t.buffer;
+                    b.text(&b.start_iter(), &b.end_iter(), false).to_string()
+                });
                 let (pacman, before) = {
                     let mut r = run.borrow_mut();
                     r.record.commands.extend(ran(&done_steps, ok));
@@ -304,7 +314,13 @@ impl Win {
                     move || postupdate::probe_after(pacman),
                     move |after: After| {
                         let Some(win) = w.upgrade() else { return };
-                        let again = report.recheck(&before, &after);
+                        let mut again = report.recheck(&before, &after);
+                        if let Some(t) = repairing {
+                            t.dialog.close();
+                        }
+                        if let Some(p) = printed.filter(|p| !p.trim().is_empty()) {
+                            again.log = format!("{}\n\nThe repairs\n\n{}", again.log, p.trim());
+                        }
                         run.borrow_mut().record.recheck = Some(again.clone());
                         win.mark_updated(&postupdate::installed_since(&before, &after));
                         win.after_pacman(true);
@@ -317,6 +333,7 @@ impl Win {
                 );
             })),
         );
+        *task.borrow_mut() = Some(shown);
     }
 
     /// A run that passed: said in a toast, with the tidy-up on it when there

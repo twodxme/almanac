@@ -28,7 +28,7 @@ use serde_json::Value;
 use crate::history::CommandRun;
 use crate::i18n::tr;
 use crate::inventory::{self, App};
-use crate::postupdate::{self, Inputs, Issue, Level, Wait};
+use crate::postupdate::{self, Inputs, Issue, Level, Repair, Wait};
 use crate::tasks::{self, LogFn, Step};
 use crate::ui::actions::{appimage_update_work, popen_new_session, raised, truthy, update_cmd};
 use crate::ui::plugins::{plan_plugin_updates, plugin_step, plugin_update_states};
@@ -369,19 +369,36 @@ impl Win {
         if issues.is_empty() {
             return go(self, busy);
         }
-        let blocked = issues.iter().any(|i| i.level == Level::Block);
+        // A block with a fix of its own (a stuck update to stop) can still be
+        // got past from here; one without cannot, and then nothing is offered.
+        let blocked = issues
+            .iter()
+            .any(|i| i.level == Level::Block && i.fix.is_none());
         let fix = if blocked {
             None
         } else {
             issues.iter().find_map(|i| i.fix.clone())
         };
+        let (fix_label, fix_title, fix_failed) = match &fix {
+            Some(Repair::StopUpdate(_)) => (
+                tr("Stop it and continue"),
+                tr("Stopping the stuck update"),
+                tr("The earlier update is still running, so this one did not start"),
+            ),
+            _ => (
+                tr("Remove it and continue"),
+                tr("Removing pacman’s lock file"),
+                tr("The lock file is still there, so the update did not start"),
+            ),
+        };
+        let any_block = issues.iter().any(|i| i.level == Level::Block);
         let dialog = adw::AlertDialog::builder()
-            .heading(if blocked {
+            .heading(if any_block {
                 tr("The update cannot start yet")
             } else {
                 tr("Before updating")
             })
-            .body(if blocked {
+            .body(if any_block {
                 tr("Starting now would fail part-way.")
             } else {
                 tr("The update can go ahead, but this may get in its way.")
@@ -398,11 +415,11 @@ impl Win {
         }
         dialog.set_extra_child(Some(&list));
         dialog.add_response("cancel", &tr("Cancel"));
-        if !blocked {
+        if !any_block {
             dialog.add_response("continue", &tr("Continue anyway"));
         }
         if fix.is_some() {
-            dialog.add_response("fix", &tr("Remove it and continue"));
+            dialog.add_response("fix", &fix_label);
             dialog.set_response_appearance("fix", adw::ResponseAppearance::Suggested);
         }
         dialog.set_default_response(Some("cancel"));
@@ -418,22 +435,17 @@ impl Win {
                 ("continue", _) => go(&win, busy),
                 ("fix", Some(f)) => {
                     let steps = postupdate::repair_steps(std::slice::from_ref(f), false);
-                    let (w, go) = (win.downgrade(), go.clone());
+                    let (w, go, fix_failed) = (win.downgrade(), go.clone(), fix_failed.clone());
                     tasks::run(
                         &win.window,
-                        &tr("Removing pacman’s lock file"),
+                        &fix_title,
                         steps,
                         Some(Box::new(move |ok| {
                             let Some(win) = w.upgrade() else { return };
                             if ok {
                                 go(&win, busy);
                             } else {
-                                win.say(
-                                    &tr(
-                                        "The lock file is still there, so the update did not start",
-                                    ),
-                                    8,
-                                );
+                                win.say(&fix_failed, 8);
                             }
                         })),
                     );
