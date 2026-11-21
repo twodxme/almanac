@@ -33,6 +33,7 @@ static YES_NO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*\[(?:Y/n|y/N|y/n)\]\??\s*$").unwrap());
 static SELECTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)(?:enter a (?:selection|number)|\(default=[^)]*\))[^:]*:\s*$").unwrap());
+static BUTTON_GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}").unwrap());
 static GUM_CHOICES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Yes\s+No$").unwrap());
 
 fn answer(label: &str, send: &[u8], is_reboot_yes: bool) -> Answer {
@@ -61,17 +62,27 @@ pub fn detect(tail: &str) -> Option<Prompt> {
 
     // gum confirm ends with a key-help line under the choices; it is part of
     // the prompt, not output that came after it.
-    if segments.last().is_some_and(|s| s.contains("toggle") && s.contains("submit")) {
+    let had_help = segments.last().is_some_and(|s| s.contains("toggle") && s.contains("submit"));
+    if had_help {
         segments.pop();
     }
     let last = *segments.last()?;
 
-    if GUM_CHOICES.is_match(last) {
+    // Omarchy translates gum's button labels but not its key-help line, so
+    // with the help line present the two buttons are whatever two cells the
+    // line holds; without it only the English labels are trusted.
+    let buttons: Option<(String, String)> = if had_help {
+        let cells: Vec<&str> = BUTTON_GAP.split(last).map(str::trim).filter(|c| !c.is_empty()).collect();
+        (cells.len() == 2).then(|| (cells[0].to_string(), cells[1].to_string()))
+    } else {
+        GUM_CHOICES.is_match(last).then(|| ("Yes".to_string(), "No".to_string()))
+    };
+    if let Some((yes, no)) = buttons {
         let text = segments.len().checked_sub(2).map(|i| segments[i]).unwrap_or("");
         let reboot = mentions_reboot(text);
         return Some(Prompt::Question {
             text: text.to_string(),
-            answers: vec![answer("Yes", b"y", reboot), answer("No", b"n", false)],
+            answers: vec![answer(&yes, b"y", reboot), answer(&no, b"n", false)],
         });
     }
     let terminated = cleaned.ends_with('\n')
@@ -150,6 +161,17 @@ mod tests {
             detect("[sudo] password for tim: "),
             Some(Prompt::Password { prompt: "[sudo] password for tim:".to_string() })
         );
+    }
+
+    #[test]
+    fn a_translated_gum_confirm_is_found_by_its_help_line() {
+        let screen = gum("Red\u{e9}marrer maintenant ?")
+            .replace("Yes\x1b[39m", "Oui\x1b[39m")
+            .replace("No\x1b[39m", "Non\x1b[39m")
+            .replace("y\x1b[m \x1b[38;2;74;74;74mYes", "y\x1b[m \x1b[38;2;74;74;74mOui");
+        let (text, answers) = question(detect(&screen));
+        assert_eq!(text, "Red\u{e9}marrer maintenant ?");
+        assert_eq!(answers, vec![answer("Oui", b"y", false), answer("Non", b"n", false)]);
     }
 
     #[test]

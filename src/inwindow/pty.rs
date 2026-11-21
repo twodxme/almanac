@@ -42,6 +42,18 @@ fn code_of(status: ExitStatus) -> i32 {
 impl Pty {
     /// Start `argv` on a new terminal with `env` added to the environment.
     pub fn spawn(argv: &[String], env: &[(String, String)]) -> Result<Pty, String> {
+        Pty::spawn_with(argv, env, &[], &[])
+    }
+
+    /// Like `spawn`, but the child first loses the inherited variables named
+    /// in `env_remove`, then gets `env`. `pretend_inherited` is set before the
+    /// removal, to stand in for the parent's environment in tests.
+    pub fn spawn_with(
+        argv: &[String],
+        env: &[(String, String)],
+        env_remove: &[&str],
+        pretend_inherited: &[(String, String)],
+    ) -> Result<Pty, String> {
         let (program, args) = argv.split_first().ok_or("no command to run")?;
         let err = |what: &str, e: rustix::io::Errno| format!("{what}: {e}");
 
@@ -70,8 +82,11 @@ impl Pty {
 
         let dup = |fd: &OwnedFd| fd.try_clone().map_err(|e| format!("dup: {e}"));
         let mut cmd = Command::new(program);
-        cmd.args(args)
-            .envs(env.iter().map(|(k, v)| (k, v)))
+        cmd.args(args).envs(pretend_inherited.iter().map(|(k, v)| (k, v)));
+        for k in env_remove {
+            cmd.env_remove(k);
+        }
+        cmd.envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::from(dup(&slave)?))
             .stdout(Stdio::from(dup(&slave)?))
             .stderr(Stdio::from(slave));
@@ -97,6 +112,13 @@ impl Pty {
     /// The master side, for a caller that wants to poll it.
     pub fn master_fd(&self) -> BorrowedFd<'_> {
         self.master.as_ref().expect("master lives until drop").as_fd()
+    }
+
+    /// Whether the terminal echoes what is typed (a password must not be
+    /// written while it does).
+    pub fn echo_on(&self) -> Result<bool, String> {
+        let t = rustix::termios::tcgetattr(self.master_fd()).map_err(|e| format!("tcgetattr: {e}"))?;
+        Ok(t.local_modes.contains(rustix::termios::LocalModes::ECHO))
     }
 
     /// Send `bytes` to the child as if typed.
