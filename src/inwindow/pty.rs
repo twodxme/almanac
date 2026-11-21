@@ -64,6 +64,10 @@ impl Pty {
         };
         tcsetwinsize(&slave, size).map_err(|e| err("set the terminal size", e))?;
 
+        // Before the spawn, so a failure here cannot leave a child behind.
+        let flags = fcntl_getfl(&master).map_err(|e| err("fcntl", e))?;
+        fcntl_setfl(&master, flags | OFlags::NONBLOCK).map_err(|e| err("fcntl", e))?;
+
         let dup = |fd: &OwnedFd| fd.try_clone().map_err(|e| format!("dup: {e}"));
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -82,9 +86,6 @@ impl Pty {
             });
         }
         let child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
-
-        let flags = fcntl_getfl(&master).map_err(|e| err("fcntl", e))?;
-        fcntl_setfl(&master, flags | OFlags::NONBLOCK).map_err(|e| err("fcntl", e))?;
         Ok(Pty {
             pid: child.id(),
             master: Some(master),
@@ -158,6 +159,12 @@ impl Drop for Pty {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        // The hangup did not end it. The session leader is its own process
+        // group, so this also takes down a grandchild that ignores SIGHUP
+        // (it could otherwise outlive Almanac holding the update lock).
+        if let Some(pgid) = rustix::process::Pid::from_raw(self.pid as i32) {
+            let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -229,9 +236,44 @@ mod tests {
     fn dropping_the_master_ends_the_child() {
         let pty = Pty::spawn(&argv(&["sh", "-c", "sleep 30"]), &[]).unwrap();
         let pid = rustix::process::Pid::from_raw(pty.pid as i32).unwrap();
+        let started = Instant::now();
         drop(pty);
+        // Well under REAP_GRACE: the hangup ended it, not the SIGKILL fallback.
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
         assert_eq!(
             rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+    }
+
+    #[test]
+    fn a_descendant_that_ignores_the_hangup_is_killed_too() {
+        let pty = Pty::spawn(
+            &argv(&["sh", "-c", "trap '' HUP; sleep 30 & echo kid:$!; wait"]),
+            &[],
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let kid = loop {
+            let _ = pty.read_available(&mut out);
+            let text = String::from_utf8_lossy(&out).into_owned();
+            if let Some(n) = text.split("kid:").nth(1).and_then(|r| r.split_whitespace().next()) {
+                if let Ok(n) = n.parse::<i32>() {
+                    break n;
+                }
+            }
+            assert!(Instant::now() < deadline, "{text:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let kid = rustix::process::Pid::from_raw(kid).unwrap();
+        drop(pty);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while rustix::process::test_kill_process(kid).is_ok() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            rustix::process::test_kill_process(kid),
             Err(rustix::io::Errno::SRCH)
         );
     }
