@@ -809,6 +809,22 @@ mod tests {
     }
 
     #[test]
+    fn fail_leaves_rows_of_other_steps_alone() {
+        let mut t = Tracker::new(Timeline::new(
+            &[
+                ("pkg".into(), "1".into(), false),
+                ("tool".into(), "2".into(), true),
+            ],
+            false,
+        ));
+        t.t.apps[0].state = AppState::Installing;
+        t.t.apps[1].state = AppState::Installing;
+        t.fail(StepId::AurAndTools, "x".into(), Changed::Unknown, None);
+        assert_eq!(row(&t, "pkg"), AppState::Installing, "other step's row");
+        assert_eq!(row(&t, "tool"), AppState::Failed);
+    }
+
+    #[test]
     fn restart_note_is_kept() {
         let mut t = tr();
         t.on_output("Update complete. Run omarchy-system reboot when ready.\n");
