@@ -196,6 +196,11 @@ impl Tracker {
         &self.t
     }
 
+    /// Record that a restart is needed but was left to the user.
+    pub fn set_restart_note(&mut self, note: String) {
+        self.t.restart_note = Some(note);
+    }
+
     /// The names of the programs now running in the update's session.
     pub fn on_procs(&mut self, names: &[String]) {
         self.on_procs_at(names, Instant::now());
