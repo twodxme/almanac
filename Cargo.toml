@@ -34,7 +34,7 @@ num-bigint = "0.5.1"
 openssl = "0.10.75"
 openssl-sys = "0.9.117"
 regex = "1.13.1"
-rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
+rustix = { version = "1.1.5", features = ["fs", "process", "pty", "system", "termios"] }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "ring", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
