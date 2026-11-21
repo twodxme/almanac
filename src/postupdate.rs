@@ -701,7 +701,7 @@ impl LockScan {
 
 /// The names a process goes by: its own, and for a script run through an
 /// interpreter (`python /usr/bin/pikaur`), the script's.
-fn program_names(comm: &str, args: &[String]) -> Vec<String> {
+pub(crate) fn program_names(comm: &str, args: &[String]) -> Vec<String> {
     let mut names = vec![comm.to_string()];
     let interpreter = ["python", "perl", "bash", "sh", "ruby", "node"]
         .iter()
