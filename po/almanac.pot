@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-10-31 12:28-0700\n"
+"POT-Creation-Date: 2026-11-21 14:19-0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -73,7 +73,8 @@ msgstr ""
 
 #: src/ui/actions/appimage_add.rs:272 src/ui/actions/link.rs:40
 #: src/ui/actions/link.rs:160 src/ui/history.rs:601 src/ui/news.rs:322
-#: src/ui/plugins/controls.rs:178 src/ui/update_all.rs:400
+#: src/ui/plugins/controls.rs:178 src/ui/update_all.rs:417
+#: src/ui/update_view.rs:730
 msgid "Cancel"
 msgstr ""
 
@@ -117,7 +118,7 @@ msgstr ""
 #: src/ui/actions/rows.rs:129 src/ui/actions/rows.rs:173
 #: src/ui/actions/update.rs:529 src/ui/ai.rs:963 src/ui/packages/details.rs:322
 #: src/ui/plugins/updates.rs:302 src/ui/shell/columns.rs:710
-#: src/ui/update_all.rs:684
+#: src/ui/update_all.rs:696 src/ui/update_view.rs:259 src/ui/update_view.rs:731
 msgid "Update"
 msgstr ""
 
@@ -1214,7 +1215,7 @@ msgid ""
 "are searched separately"
 msgstr ""
 
-#: src/ui/store.rs:506
+#: src/ui/store.rs:506 src/ui/update_view.rs:91
 msgid "Try again"
 msgstr ""
 
@@ -1524,47 +1525,59 @@ msgstr ""
 msgid "Update all is already running"
 msgstr ""
 
-#: src/ui/update_all.rs:380
-msgid "The update cannot start yet"
-msgstr ""
-
-#: src/ui/update_all.rs:382
-msgid "Before updating"
+#: src/ui/update_all.rs:384
+msgid "Stop it and continue"
 msgstr ""
 
 #: src/ui/update_all.rs:385
-msgid "Starting now would fail part-way."
+msgid "Stopping the stuck update"
 msgstr ""
 
-#: src/ui/update_all.rs:387
-msgid "The update can go ahead, but this may get in its way."
+#: src/ui/update_all.rs:386
+msgid "The earlier update is still running, so this one did not start"
 msgstr ""
 
-#: src/ui/update_all.rs:402
-msgid "Continue anyway"
-msgstr ""
-
-#: src/ui/update_all.rs:405
+#: src/ui/update_all.rs:389
 msgid "Remove it and continue"
 msgstr ""
 
-#: src/ui/update_all.rs:424
+#: src/ui/update_all.rs:390
 msgid "Removing pacman’s lock file"
 msgstr ""
 
-#: src/ui/update_all.rs:433
+#: src/ui/update_all.rs:391
 msgid "The lock file is still there, so the update did not start"
 msgstr ""
 
-#: src/ui/update_all.rs:478 src/ui/update_all.rs:482
+#: src/ui/update_all.rs:397
+msgid "The update cannot start yet"
+msgstr ""
+
+#: src/ui/update_all.rs:399
+msgid "Before updating"
+msgstr ""
+
+#: src/ui/update_all.rs:402
+msgid "Starting now would fail part-way."
+msgstr ""
+
+#: src/ui/update_all.rs:404
+msgid "The update can go ahead, but this may get in its way."
+msgstr ""
+
+#: src/ui/update_all.rs:419
+msgid "Continue anyway"
+msgstr ""
+
+#: src/ui/update_all.rs:490 src/ui/update_all.rs:494
 msgid "No terminal found to run the update in"
 msgstr ""
 
-#: src/ui/update_all.rs:521
+#: src/ui/update_all.rs:533
 msgid "Update running in a terminal — it is checked when it finishes"
 msgstr ""
 
-#: src/ui/update_all.rs:640
+#: src/ui/update_all.rs:652
 msgid "Checking what else needs updating…"
 msgstr ""
 
@@ -1612,24 +1625,125 @@ msgstr ""
 msgid "What the update did"
 msgstr ""
 
-#: src/ui/update_report.rs:292
+#: src/ui/update_report.rs:297
 msgid "Repairing the update"
 msgstr ""
 
-#: src/ui/update_report.rs:301
+#: src/ui/update_report.rs:311
 msgid "Checking again…"
 msgstr ""
 
-#: src/ui/update_report.rs:312
+#: src/ui/update_report.rs:328
 msgid "Repaired — every check passes now"
 msgstr ""
 
-#: src/ui/update_report.rs:350
+#: src/ui/update_report.rs:367
 msgid "Tidy up"
 msgstr ""
 
-#: src/ui/update_report.rs:378
+#: src/ui/update_report.rs:395
 msgid "Tidying up after the update"
+msgstr ""
+
+#: src/ui/update_view.rs:48
+msgid "Update finished"
+msgstr ""
+
+#: src/ui/update_view.rs:50
+msgid "Updating your system"
+msgstr ""
+
+#: src/ui/update_view.rs:59
+#, rust-format
+msgid "Stopped at {step}"
+msgstr ""
+
+#: src/ui/update_view.rs:65
+msgid "Updating…"
+msgstr ""
+
+#: src/ui/update_view.rs:68
+msgid "All steps done"
+msgstr ""
+
+#: src/ui/update_view.rs:71
+msgid "Starting…"
+msgstr ""
+
+#: src/ui/update_view.rs:72
+#, rust-format
+msgid "Step {n} of {total}"
+msgstr ""
+
+#: src/ui/update_view.rs:81
+msgid "Nothing was changed."
+msgstr ""
+
+#: src/ui/update_view.rs:82
+msgid "Some changes were made."
+msgstr ""
+
+#: src/ui/update_view.rs:89
+msgid "Stop it and update"
+msgstr ""
+
+#: src/ui/update_view.rs:90
+msgid "Resolve"
+msgstr ""
+
+#: src/ui/update_view.rs:129
+msgid "installing…"
+msgstr ""
+
+#: src/ui/update_view.rs:130
+msgid "downloading…"
+msgstr ""
+
+#: src/ui/update_view.rs:132
+msgid "not updated"
+msgstr ""
+
+#: src/ui/update_view.rs:147
+#, rust-format
+msgid "{done} of {total}"
+msgstr ""
+
+#: src/ui/update_view.rs:290
+msgid "Restart to finish"
+msgstr ""
+
+#: src/ui/update_view.rs:309
+msgid "Safe to keep working"
+msgstr ""
+
+#: src/ui/update_view.rs:339
+msgid "Details"
+msgstr ""
+
+#: src/ui/update_view.rs:568
+msgid "Show details"
+msgstr ""
+
+#: src/ui/update_view.rs:715
+msgid "Your password to update"
+msgstr ""
+
+#: src/ui/update_view.rs:717
+msgid ""
+"Updating changes system files. Almanac asks once, then forgets it when the "
+"update ends."
+msgstr ""
+
+#: src/ui/update_view.rs:721
+msgid "Wrong password — try again"
+msgstr ""
+
+#: src/ui/update_view.rs:725
+msgid "Password"
+msgstr ""
+
+#: src/ui/update_view.rs:802
+msgid "The update asks"
 msgstr ""
 
 #: src/util/human.rs:125 src/util/human.rs:207

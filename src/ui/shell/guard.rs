@@ -54,6 +54,7 @@ mod tests {
         ("ai.rs", include_str!("../ai.rs")),
         ("switchboard.rs", include_str!("../switchboard.rs")),
         ("today.rs", include_str!("../today.rs")),
+        ("update_view.rs", include_str!("../update_view.rs")),
     ];
 
     fn code(src: &str) -> &str {

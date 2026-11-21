@@ -15,3 +15,4 @@ pub mod timings;
 pub mod today;
 pub mod update_all;
 pub mod update_report;
+pub mod update_view;

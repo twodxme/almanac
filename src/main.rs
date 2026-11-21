@@ -8,5 +8,16 @@ fn main() -> gtk::glib::ExitCode {
         almanac::mimeguard::print_snapshot();
         return gtk::glib::ExitCode::SUCCESS;
     }
+    // Debug builds: `--preview-update-view[=running|failure|password|question|none]`
+    // shows the in-window update with a fixed timeline, for screenshots; `none`
+    // opens only the window (with `--page NAME`), as a separate instance.
+    #[cfg(debug_assertions)]
+    if let Some(which) = std::env::args_os().skip(1).find_map(|a| {
+        a.to_str()?
+            .strip_prefix("--preview-update-view")
+            .map(|rest| rest.trim_start_matches('=').to_string())
+    }) {
+        return almanac::ui::shell::run_preview(which);
+    }
     almanac::ui::shell::run()
 }

@@ -28,6 +28,8 @@ mod watch;
 mod window;
 
 pub use app::{application_id, icons_dir, resolve_page, run, AlmanacApp, PAGE_ALIASES};
+#[cfg(debug_assertions)]
+pub use app::run_preview;
 pub(in crate::ui) use helpers::as_text;
 pub use helpers::{
     age, compact, exc_str, fallback_icon, fmt_size, lower_cmp, name, on_bg_failure, panic_text,
