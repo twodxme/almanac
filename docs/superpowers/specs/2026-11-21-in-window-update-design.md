@@ -70,17 +70,16 @@ finish" note). `omarchy update` already records itself with `script` to
 `/tmp/omarchy-update.log`; Almanac reads the PTY directly and keeps its own
 copy for the report's "Show log".
 
-**Password.** Set `SUDO_ASKPASS` to an Almanac helper (the same binary,
-`almanac --askpass`), which forwards sudo's prompt over a per-run Unix socket
-(0600, in `$XDG_RUNTIME_DIR`, random name, peer-credential checked) to the
-running Almanac. Almanac shows the password dialog in-window and returns the
-answer over the socket; nothing is written to disk. sudo is asked once
-(`authorize_update`'s `sudo true`) and kept fresh by Omarchy's keepalive. To
-verify early: that sudo 1.9.17 uses `SUDO_ASKPASS` for a plain `sudo` when the
-session's terminal is a PTY (it may prompt on the PTY instead — then the PTY
-prompt "[sudo] password for …:" is answered from the same dialog; either path
-ends in the same dialog). Cancel → the update stops before any change; the
-timeline says so.
+**Password.** sudo reads the password from the terminal it runs on (it uses
+an askpass helper only with `-A`). `omarchy update` runs on Almanac's PTY, so
+sudo's `[sudo] password for …:` appears in the PTY output; Almanac recognises it
+(`inwindow::prompt`), shows the password dialog in-window, and writes the answer
+plus a newline to the PTY. sudo turns echo off, so the password never appears
+in the output or the log; Almanac keeps it only for that write. sudo is asked
+once (`authorize_update`'s `sudo true`) and kept fresh by Omarchy's keepalive;
+"Sorry, try again." lines count attempts. Cancel → the update stops before any
+change; the timeline says so. *(Revised during implementation: an askpass
+socket was planned and dropped as unnecessary.)*
 
 **Steps from processes, not wording.** Almanac polls the update's process tree
 (`/proc`, children of the spawned session) every ~250 ms and maps the running
