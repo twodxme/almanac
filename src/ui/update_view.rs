@@ -238,6 +238,9 @@ pub struct Inner {
     win: WeakWin,
     dialog: adw::Dialog,
     toolbar: adw::ToolbarView,
+    /// A message for whoever is looking at the dialog (a toast would be
+    /// behind it).
+    banner: adw::Banner,
     title: gtk::Label,
     subtitle: gtk::Label,
     bar: gtk::ProgressBar,
@@ -321,6 +324,13 @@ impl UpdateView {
         let header = adw::HeaderBar::new();
         header.set_show_title(false);
         toolbar.add_top_bar(&header);
+        let banner = adw::Banner::builder()
+            .button_label(tr("Dismiss"))
+            .use_markup(false)
+            .revealed(false)
+            .build();
+        banner.connect_button_clicked(|b| b.set_revealed(false));
+        toolbar.add_top_bar(&banner);
 
         let page = adw::PreferencesPage::new();
 
@@ -410,6 +420,7 @@ impl UpdateView {
             win: win.downgrade(),
             dialog,
             toolbar,
+            banner,
             title,
             subtitle,
             bar,
@@ -920,6 +931,17 @@ impl UpdateView {
         if let Some(t) = last {
             self.render(&t);
         }
+    }
+
+    /// A message under the header, where it is seen while the dialog is up.
+    pub fn notice(&self, text: &str) {
+        self.0.banner.set_title(text);
+        self.0.banner.set_revealed(true);
+    }
+
+    /// The message is over (what it was about has passed).
+    pub fn clear_notice(&self) {
+        self.0.banner.set_revealed(false);
     }
 
     /// The report takes the timeline's place in the same dialog.

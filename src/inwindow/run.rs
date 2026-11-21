@@ -433,6 +433,13 @@ impl UpdateRun {
             .write_all(bytes)
     }
 
+    /// A password request is on screen and may be answered. After
+    /// `answer_password` refused a secret it still is: the terminal would
+    /// have echoed it, so the request is not over.
+    pub fn asks_password(&self) -> bool {
+        matches!(self.open, Some(Prompt::Password { .. }))
+    }
+
     /// Type the password (`Some`) or cancel the request with Ctrl-C (`None`).
     /// Only while a password request is open; a secret only while the
     /// terminal does not echo. The secret lives only for this call.
@@ -661,6 +668,33 @@ wait
         assert_eq!(asked, vec![("[sudo] password for tim:".to_string(), 1)]);
         assert!(!run.log_tail().contains("secret"));
         assert!(!std::fs::read_to_string(&log).unwrap().contains("secret"));
+    }
+
+    /// A password request whose terminal echoes: nothing is typed, the
+    /// request is still open (so the caller can tell this from a stale
+    /// one), and interrupting ends the run.
+    #[test]
+    fn an_echoing_password_request_is_refused_and_can_be_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = script(
+            dir.path(),
+            "printf '[sudo] password for tim: '; read pw; echo \"got=$pw\"",
+        );
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        assert!(!run.asks_password());
+        let mut refused = false;
+        let events = drive(&mut run, |e, run| {
+            if let Event::NeedsPassword { .. } = e {
+                assert!(run.asks_password());
+                refused = run.answer_password(Some("secret")).is_err();
+                assert!(run.asks_password(), "still open after a refusal");
+                run.interrupt().unwrap();
+                assert!(!run.asks_password());
+            }
+        });
+        assert!(refused);
+        assert_ne!(finished_code(&events), 0);
+        assert!(!run.log_tail().contains("secret"));
     }
 
     #[test]

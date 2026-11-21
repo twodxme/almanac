@@ -1393,24 +1393,31 @@ fn pending_check(
         };
         return Check::new(CheckId::Pending, Status::Pass, "Updates installed", detail);
     }
-    let mut detail = format!(
-        "{} still waiting: {}.",
-        plural(left.len(), "update is", "updates are"),
-        listing(&left, 6)
-    );
+    // Each name once: the ones a plain install would get, then the ones the
+    // system database has not seen yet.
     let (stale, retry): (Vec<String>, Vec<String>) =
         left.iter().cloned().partition(|n| unsynced.contains(n));
+    let mut parts = Vec::new();
+    if !retry.is_empty() {
+        parts.push(format!(
+            "{} still waiting: {}.",
+            plural(retry.len(), "update is", "updates are"),
+            listing(&retry, 6)
+        ));
+    }
     if !stale.is_empty() {
-        detail += &format!(
-            " {} released after this system's package database was last refreshed, so \
-             installing on its own skips it; Update all refreshes the database first.",
+        parts.push(format!(
+            "{} released after this system's package database was last refreshed, so \
+             installing on its own skips {}; Update all refreshes the database first.",
             if stale.len() == 1 {
                 format!("{} was", stale[0])
             } else {
                 format!("{} were", listing(&stale, 6))
-            }
-        );
+            },
+            if stale.len() == 1 { "it" } else { "them" }
+        ));
     }
+    let detail = parts.join(" ");
     let check = Check::new(CheckId::Pending, Status::Fail, "Updates installed", detail).items(left);
     if retry.is_empty() {
         check
@@ -1854,7 +1861,22 @@ pub fn installed_since(before: &Before, after: &After) -> Vec<String> {
 /// "Show log": the update's section of pacman.log, then the terminal's
 /// output as `script` recorded it. `unrecorded`: why there is no terminal
 /// output to show, when there was none to read.
+/// What the terminal path calls the update's own output in "Show log".
+pub const TERMINAL_OUTPUT: &str = "In the terminal";
+/// The same in the window, where there is no terminal.
+pub const WINDOW_OUTPUT: &str = "The update’s output";
+
 pub fn log_text(section: Option<&str>, output: &str, unrecorded: Option<&str>) -> String {
+    log_text_as(section, output, unrecorded, TERMINAL_OUTPUT)
+}
+
+/// `log_text`, with the output under `heading`.
+pub fn log_text_as(
+    section: Option<&str>,
+    output: &str,
+    unrecorded: Option<&str>,
+    heading: &str,
+) -> String {
     let mut t = match section {
         Some(s) if !s.trim().is_empty() => format!("{PACMAN_LOG}\n\n{}", s.trim_end()),
         Some(_) => format!("Nothing was written to {PACMAN_LOG}."),
@@ -1862,9 +1884,9 @@ pub fn log_text(section: Option<&str>, output: &str, unrecorded: Option<&str>) -
     };
     let out = clean_output(output);
     if !out.trim().is_empty() {
-        t += &format!("\n\nIn the terminal\n\n{}", out.trim());
+        t += &format!("\n\n{heading}\n\n{}", out.trim());
     } else if let Some(why) = unrecorded {
-        t += &format!("\n\nIn the terminal\n\nNot recorded: {why}.");
+        t += &format!("\n\n{heading}\n\nNot recorded: {why}.");
     }
     t
 }
@@ -3187,6 +3209,36 @@ mod tests {
 
         i.after.unsynced = set(&["omarchy", "mise-bin"]);
         assert!(build_report(&i).repairs().is_empty(), "nothing yay could do");
+    }
+
+    /// The names were said twice: once as still waiting, once as released
+    /// after the last refresh. Each is said once now.
+    #[test]
+    fn stale_waiting_names_are_said_once() {
+        let mut i = inputs();
+        i.exit = Some(0);
+        i.after.pending = Some(set(&["omarchy", "mise-bin"]));
+        i.after.unsynced = set(&["omarchy", "mise-bin"]);
+        let r = build_report(&i);
+        let d = &r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap().detail;
+        assert_eq!(d.matches("omarchy").count(), 1, "{d}");
+        assert_eq!(d.matches("mise-bin").count(), 1, "{d}");
+        assert!(d.contains("Update all refreshes the database first"), "{d}");
+
+        i.after.unsynced = set(&["omarchy"]);
+        let r = build_report(&i);
+        let d = &r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap().detail;
+        assert_eq!(d.matches("omarchy").count(), 1, "{d}");
+        assert_eq!(d.matches("mise-bin").count(), 1, "{d}");
+        assert!(d.starts_with("1 update is still waiting: mise-bin."), "{d}");
+    }
+
+    /// In the window there is no terminal: its output is not called that.
+    #[test]
+    fn the_window_run_output_is_not_called_the_terminal() {
+        let t = log_text_as(None, "done\n", None, WINDOW_OUTPUT);
+        assert!(t.contains("The update’s output\n\ndone"), "{t}");
+        assert!(!t.contains("In the terminal"));
     }
 
     /// `omarchy update` refused to start: an earlier one, its terminal long

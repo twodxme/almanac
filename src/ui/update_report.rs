@@ -172,11 +172,15 @@ impl Win {
         };
         let view = run.borrow().view.clone();
         let list = Win::note_list();
-        let dialog = adw::AlertDialog::builder()
-            .heading(&heading)
-            .body(&body)
-            .build();
-        dialog.set_body_use_markup(false);
+        // Only off the window path: there the report is in the view.
+        let dialog = view.is_none().then(|| {
+            let d = adw::AlertDialog::builder()
+                .heading(&heading)
+                .body(&body)
+                .build();
+            d.set_body_use_markup(false);
+            d
+        });
         for c in report
             .checks
             .iter()
@@ -206,10 +210,10 @@ impl Win {
                     .label(tr("Open Health"))
                     .valign(gtk::Align::Center)
                     .build();
-                let (w, d) = (self.downgrade(), dialog.downgrade());
+                let (w, d) = (self.downgrade(), dialog.as_ref().map(|d| d.downgrade()));
                 let vd = view.as_ref().map(|v| v.dialog().downgrade());
                 open.connect_clicked(move |_| {
-                    if let Some(d) = d.upgrade() {
+                    if let Some(d) = d.as_ref().and_then(|d| d.upgrade()) {
                         d.close();
                     }
                     if let Some(d) = vd.as_ref().and_then(|d| d.upgrade()) {
@@ -278,6 +282,7 @@ impl Win {
             report_in_view(&view, &heading, &body, Some(content.upcast()), buttons);
             return;
         }
+        let Some(dialog) = dialog else { return };
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroll.set_propagate_natural_height(true);
@@ -652,6 +657,20 @@ fn log_shown(text: &str, terminal: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// In the window the report is the view's page: no alert dialog is made
+    /// for it on the side.
+    #[test]
+    fn the_window_report_makes_no_alert_dialog() {
+        let code = include_str!("update_report.rs");
+        let f = code
+            .split("fn show_update_report(")
+            .nth(1)
+            .and_then(|s| s.split("fn show_update_log(").next())
+            .unwrap();
+        let alert = f.find("adw::AlertDialog::builder()").unwrap();
+        assert!(f[..alert].contains("view.is_none().then("), "built only off the view path");
+    }
 
     /// The tidy-up runs paccache as root and deletes the copies a
     /// downgrade needs: offered, never started by a passing run itself.

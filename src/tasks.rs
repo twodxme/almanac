@@ -1293,6 +1293,110 @@ pub fn run_each(
     TaskDialog::build(parent, title, steps, on_done, true)
 }
 
+/// A task run without a dialog of its own (`run_quiet`): what its caller
+/// keeps to stop it, and to tell when it is over.
+pub struct QuietTask {
+    cancelled: Arc<AtomicBool>,
+    proc: Arc<Mutex<Option<Arc<Proc>>>>,
+    finished: Rc<std::cell::Cell<bool>>,
+}
+
+impl QuietTask {
+    /// Stop the step under way (its whole process group) and skip the rest.
+    /// `on_done` is still called, with false.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        let proc = self.proc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(proc) = proc {
+            if proc.poll().is_none() {
+                if let Ok(g) = nix::unistd::getpgid(Some(proc.pid)) {
+                    let _ = nix::sys::signal::killpg(g, nix::sys::signal::Signal::SIGTERM);
+                }
+            }
+        }
+    }
+
+    /// `on_done` has been called.
+    pub fn finished(&self) -> bool {
+        self.finished.get()
+    }
+}
+
+enum Quiet {
+    Step(usize),
+    Line(String),
+    Done(bool),
+}
+
+/// The steps of a batch without a dialog, each run whatever the one before
+/// did: `on_step` hears the index of each step as it starts, `on_line` each
+/// line of output, `on_done` whether all went fine. All on the main thread.
+/// Callers outside `tasks` go through `Win::run_quiet_task` (the demo gate).
+pub fn run_quiet(
+    steps: Vec<Step>,
+    on_step: Box<dyn Fn(usize)>,
+    on_line: Box<dyn Fn(&str)>,
+    on_done: OnDone,
+) -> QuietTask {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let proc: Arc<Mutex<Option<Arc<Proc>>>> = Arc::new(Mutex::new(None));
+    let finished = Rc::new(std::cell::Cell::new(false));
+    let (tx, rx) = std::sync::mpsc::channel::<Quiet>();
+    {
+        let (cancelled, proc) = (cancelled.clone(), proc.clone());
+        std::thread::spawn(move || {
+            let n = std::sync::atomic::AtomicUsize::new(0);
+            let step_tx = Mutex::new(tx.clone());
+            let set_label = |_: &str| {
+                let i = n.fetch_add(1, Ordering::SeqCst);
+                let _ = step_tx.lock().unwrap_or_else(|e| e.into_inner()).send(Quiet::Step(i));
+            };
+            let line_tx = Mutex::new(tx.clone());
+            let log = |line: &str| {
+                let _ = line_tx
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .send(Quiet::Line(line.to_string()));
+            };
+            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                work(&steps, &cancelled, &proc, &set_label, &log, true)
+            }))
+            .unwrap_or_else(|_| Err("the task stopped unexpectedly".to_string()));
+            let ok = match ok {
+                Ok(ok) => ok,
+                Err(exc) => {
+                    log(&format!("failed: {}", human_error(&exc)));
+                    false
+                }
+            };
+            let _ = tx.send(Quiet::Done(ok));
+        });
+    }
+    let fin = finished.clone();
+    // On this thread's context, so a test can run it on a context of its own.
+    glib::MainContext::ref_thread_default().spawn_local(async move {
+        loop {
+            glib::timeout_future(Duration::from_millis(50)).await;
+            while let Ok(m) = rx.try_recv() {
+                match m {
+                    Quiet::Step(i) => on_step(i),
+                    Quiet::Line(l) => on_line(&l),
+                    Quiet::Done(ok) => {
+                        fin.set(true);
+                        on_done(ok);
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    QuietTask {
+        cancelled,
+        proc,
+        finished,
+    }
+}
+
 /// Ask before doing something that cannot be undone by clicking again.
 ///
 /// `detail` is the preview -- the actual list of what will be removed or
@@ -1567,6 +1671,77 @@ mod tests {
             .contains(&"failed: b broke".to_string()));
         assert_eq!(run(false), Ok(false));
         assert_eq!(*ran.lock().unwrap(), vec!["a", "b"]);
+    }
+
+    /// Without a dialog: each step's start, every line and the end reach
+    /// the main thread's callbacks, and a failed step does not stop the rest.
+    #[test]
+    fn a_quiet_task_reports_steps_lines_and_the_end() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let steps = vec![
+                Step::argv("one", v(&["/usr/bin/echo", "hello"])),
+                Step::argv("two", v(&["/usr/bin/false"])),
+                Step::argv("three", v(&["/usr/bin/echo", "after"])),
+            ];
+            let started = Rc::new(RefCell::new(Vec::new()));
+            let lines = Rc::new(RefCell::new(Vec::new()));
+            let done = Rc::new(Cell::new(None));
+            let (s, l, d) = (started.clone(), lines.clone(), done.clone());
+            let task = run_quiet(
+                steps,
+                Box::new(move |i| s.borrow_mut().push(i)),
+                Box::new(move |line: &str| l.borrow_mut().push(line.to_string())),
+                Box::new(move |ok| d.set(Some(ok))),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            while done.get().is_none() && std::time::Instant::now() < deadline {
+                ctx.iteration(true);
+            }
+            assert_eq!(done.get(), Some(false), "a step failed");
+            assert!(task.finished());
+            assert_eq!(*started.borrow(), vec![0, 1, 2]);
+            let all = lines.borrow().join("\n");
+            assert!(all.contains("hello") && all.contains("after"), "{all}");
+        })
+        .unwrap();
+    }
+
+    /// Cancel stops the step under way and the ones after it.
+    #[test]
+    fn a_quiet_task_can_be_cancelled() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let steps = vec![
+                Step::argv("slow", v(&["/usr/bin/sleep", "30"])),
+                Step::argv("never", v(&["/usr/bin/echo", "never"])),
+            ];
+            let started = Rc::new(RefCell::new(Vec::new()));
+            let done = Rc::new(Cell::new(None));
+            let (s, d) = (started.clone(), done.clone());
+            let task = run_quiet(
+                steps,
+                Box::new(move |i| s.borrow_mut().push(i)),
+                Box::new(|_: &str| {}),
+                Box::new(move |ok| d.set(Some(ok))),
+            );
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            while started.borrow().is_empty() && std::time::Instant::now() < deadline {
+                ctx.iteration(true);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            task.cancel();
+            while done.get().is_none() && std::time::Instant::now() < deadline {
+                ctx.iteration(true);
+            }
+            assert_eq!(done.get(), Some(false));
+            assert_eq!(*started.borrow(), vec![0]);
+        })
+        .unwrap();
     }
 
     /// A step's own lines are put in plain English; what it passes on

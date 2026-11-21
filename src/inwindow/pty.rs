@@ -90,10 +90,16 @@ impl Pty {
             .stdin(Stdio::from(dup(&slave)?))
             .stdout(Stdio::from(dup(&slave)?))
             .stderr(Stdio::from(slave));
-        // SAFETY: only async-signal-safe calls (setsid, ioctl) run between
-        // fork and exec. Descriptor 0 is the slave by then.
+        // SAFETY: only async-signal-safe calls (sigaction, setsid, ioctl)
+        // run between fork and exec. Descriptor 0 is the slave by then.
         unsafe {
             cmd.pre_exec(|| {
+                // Ctrl-C (Stop, Cancel, Quit) must reach the update even when
+                // Almanac inherited it ignored, as a background job does.
+                use nix::sys::signal::{signal, SigHandler, Signal};
+                for s in [Signal::SIGINT, Signal::SIGQUIT] {
+                    signal(s, SigHandler::SigDfl).map_err(io::Error::from)?;
+                }
                 rustix::process::setsid().map_err(io::Error::from)?;
                 let stdin = BorrowedFd::borrow_raw(0);
                 rustix::process::ioctl_tiocsctty(stdin).map_err(io::Error::from)?;
@@ -247,6 +253,26 @@ mod tests {
         assert!(out.contains("tty-ok"), "{out:?}");
         assert!(out.contains("got:hi"), "{out:?}");
         assert_eq!(code, Some(3));
+    }
+
+    /// Almanac started from a shell's background job ignores Ctrl-C, and
+    /// that is inherited: Stop, Cancel and Quit sent ^C to an update that
+    /// never heard it. The child starts with the default handling.
+    #[test]
+    fn ctrl_c_reaches_the_child_even_when_almanac_ignores_it() {
+        use nix::sys::signal::{signal, SigHandler, Signal};
+        // SAFETY: the old handler is put back below.
+        let old = unsafe { signal(Signal::SIGINT, SigHandler::SigIgn) }.unwrap();
+        let pty = Pty::spawn(&argv(&["sh", "-c", "grep SigIgn /proc/$$/status"]), &[]);
+        unsafe { signal(Signal::SIGINT, old) }.unwrap();
+        let (out, _) = run_out(&mut pty.unwrap());
+        let mask = out
+            .split_whitespace()
+            .nth(1)
+            .and_then(|m| u64::from_str_radix(m, 16).ok())
+            .expect("SigIgn read");
+        assert_eq!(mask & (1 << (2 - 1)), 0, "SIGINT not ignored: {out:?}");
+        assert_eq!(mask & (1 << (3 - 1)), 0, "SIGQUIT not ignored: {out:?}");
     }
 
     #[test]
