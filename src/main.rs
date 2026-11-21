@@ -8,7 +8,7 @@ fn main() -> gtk::glib::ExitCode {
         almanac::mimeguard::print_snapshot();
         return gtk::glib::ExitCode::SUCCESS;
     }
-    // Debug builds: `--preview-update-view[=running|failure|password|question|none]`
+    // Debug builds: `--preview-update-view[=running|failure|password|question|reboot|none]`
     // shows the in-window update with a fixed timeline, for screenshots; `none`
     // opens only the window (with `--page NAME`), as a separate instance.
     #[cfg(debug_assertions)]

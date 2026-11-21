@@ -38,11 +38,11 @@ fn all_done(t: &Timeline) -> bool {
 pub fn title(t: &Timeline) -> String {
     if let Some((_, changed)) = failure(t) {
         let none_done = !t.steps.iter().any(|(_, s)| matches!(s, StepState::Done { .. }));
-        return tr(if none_done && *changed == Changed::Nothing {
-            "The update didn't start"
+        return if none_done && *changed == Changed::Nothing {
+            tr("The update didn't start")
         } else {
-            "The update stopped"
-        });
+            tr("The update stopped")
+        };
     }
     if all_done(t) {
         return tr("Update finished");
@@ -51,15 +51,11 @@ pub fn title(t: &Timeline) -> String {
 }
 
 /// The line under the heading: `Step n of total`, or `Updating…` when the
-/// steps cannot be told apart; after a failure, what it changed.
+/// steps cannot be told apart; after a failure, the step it stopped at
+/// (what it changed is said once, on the failure card).
 pub fn subtitle(t: &Timeline) -> String {
-    if let Some((id, changed)) = failure(t) {
-        let line = changed_line(changed);
-        return if line.is_empty() {
-            tr("Stopped at {step}").replace("{step}", &tr(id.label()))
-        } else {
-            line
-        };
+    if let Some((id, _)) = failure(t) {
+        return tr("Stopped at: {step}").replace("{step}", &tr(id.label()));
     }
     if t.generic {
         return tr("Updating…");
@@ -155,6 +151,52 @@ pub fn buttons(answers: &[Answer]) -> Vec<&Answer> {
     answers.iter().filter(|a| !a.is_reboot_yes).collect()
 }
 
+/// A button on a question card.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Choice<'a> {
+    Answer(&'a Answer),
+    /// Every answer would agree to a reboot: the only way on is to stop.
+    Stop,
+}
+
+/// The buttons a question gets. Never none: a card without a button would
+/// leave the update waiting with no way to answer it.
+pub fn choices(answers: &[Answer]) -> Vec<Choice<'_>> {
+    let shown = buttons(answers);
+    if shown.is_empty() {
+        return vec![Choice::Stop];
+    }
+    shown.into_iter().map(Choice::Answer).collect()
+}
+
+/// Split off an escape sequence cut short at the end of `s`, to be put in
+/// front of the next chunk: `clean_output` cannot remove half of one.
+pub fn split_trailing_escape(s: &str) -> (&str, &str) {
+    /// Longer than any sequence the update prints; past this it is output.
+    const MAX: usize = 256;
+    let Some(pos) = s.rfind('\x1b') else {
+        return (s, "");
+    };
+    let rest = &s[pos..];
+    if rest.len() > MAX {
+        return (s, "");
+    }
+    let mut chars = rest.chars().skip(1);
+    let complete = match chars.next() {
+        None => false,
+        // CSI: ends at a final byte.
+        Some('[') => chars.any(|c| ('@'..='~').contains(&c)),
+        // OSC: ends at BEL (ST is ESC \, whose ESC would be the last one).
+        Some(']') => chars.any(|c| c == '\x07'),
+        Some(_) => true,
+    };
+    if complete {
+        (s, "")
+    } else {
+        (&s[..pos], rest)
+    }
+}
+
 // --- the view ---
 
 struct StepUi {
@@ -198,6 +240,8 @@ pub struct Inner {
     /// The password or question card on screen.
     prompt: RefCell<Option<gtk::Widget>>,
     fix: RefCell<Option<(Fix, OnFix)>>,
+    /// The end of the last log chunk when it stopped inside an escape.
+    log_carry: RefCell<String>,
     last: RefCell<Option<Timeline>>,
 }
 
@@ -367,6 +411,7 @@ impl UpdateView {
             log_end,
             prompt: RefCell::new(None),
             fix: RefCell::new(None),
+            log_carry: RefCell::new(String::new()),
             last: RefCell::new(None),
         }))
     }
@@ -789,8 +834,11 @@ impl UpdateView {
     }
 
     /// Put a question the update is waiting on under the step, its answers
-    /// as buttons. An answer that agrees to a reboot is never offered.
-    pub fn ask(&self, p: &Prompt, reply: impl Fn(Answer) + 'static) {
+    /// as buttons. An answer that agrees to a reboot is never offered; when
+    /// that leaves none, the card offers `Stop the update` instead, which
+    /// calls `on_stop` (Task 7: send Ctrl-C to the update's terminal). The
+    /// card closes before either callback runs.
+    pub fn ask(&self, p: &Prompt, reply: impl Fn(Answer) + 'static, on_stop: impl Fn() + 'static) {
         let Prompt::Question { text, answers } = p else {
             eprintln!("almanac: a password request reached the question card");
             return;
@@ -800,24 +848,55 @@ impl UpdateView {
         card.append(&label(text, &[]));
         let row = button_row();
         let reply: Rc<dyn Fn(Answer)> = Rc::new(reply);
-        for a in buttons(answers) {
-            let b = gtk::Button::with_label(&a.label);
-            let (a, reply, view) = (a.clone(), reply.clone(), self.downgrade());
-            b.connect_clicked(move |_| {
-                if let Some(v) = UpdateView::upgrade(&view) {
-                    v.close_prompt();
+        let on_stop: Rc<dyn Fn()> = Rc::new(on_stop);
+        for choice in choices(answers) {
+            let view = self.downgrade();
+            let b = match choice {
+                Choice::Answer(a) => {
+                    let b = gtk::Button::with_label(&a.label);
+                    let (a, reply) = (a.clone(), reply.clone());
+                    b.connect_clicked(move |_| {
+                        if let Some(v) = UpdateView::upgrade(&view) {
+                            v.close_prompt();
+                        }
+                        reply(a.clone());
+                    });
+                    b
                 }
-                reply(a.clone());
-            });
+                Choice::Stop => {
+                    let b = gtk::Button::with_label(&tr("Stop the update"));
+                    b.add_css_class("destructive-action");
+                    let on_stop = on_stop.clone();
+                    b.connect_clicked(move |_| {
+                        if let Some(v) = UpdateView::upgrade(&view) {
+                            v.close_prompt();
+                        }
+                        on_stop();
+                    });
+                    b
+                }
+            };
             row.append(&b);
         }
         card.append(&row);
         self.set_prompt(card.upcast());
     }
 
-    /// Offer the fix on the failed step's card.
+    /// Offer the fix on the failed step's card. The view keeps `on_fix`
+    /// until `clear_fix`, so it must hold the view (and anything that holds
+    /// the view) only weakly, or neither is ever freed.
     pub fn show_failure_fix(&self, fix: &Fix, on_fix: impl Fn() + 'static) {
         *self.0.fix.borrow_mut() = Some((fix.clone(), Rc::new(on_fix)));
+        self.rerender();
+    }
+
+    /// Take the fix button away and drop its callback.
+    pub fn clear_fix(&self) {
+        self.0.fix.borrow_mut().take();
+        self.rerender();
+    }
+
+    fn rerender(&self) {
         let last = self.0.last.borrow().clone();
         if let Some(t) = last {
             self.render(&t);
@@ -830,21 +909,41 @@ impl UpdateView {
         self.0.toolbar.set_content(Some(&content));
     }
 
-    /// Add output to Details. Control sequences are cleaned out here.
+    /// Add output to Details. Control sequences are cleaned out here; one
+    /// cut off at the end of a chunk waits for the next.
     pub fn append_log(&self, text: &str) {
-        let text = crate::postupdate::clean_output(text);
+        let follow = self.log_at_bottom();
+        let joined = {
+            let mut carry = self.0.log_carry.borrow_mut();
+            let joined = std::mem::take(&mut *carry) + text;
+            let (ready, rest) = split_trailing_escape(&joined);
+            *carry = rest.to_string();
+            ready.to_string()
+        };
+        let text = crate::postupdate::clean_output(&joined);
         let buf = &self.0.log;
         buf.insert(&mut buf.end_iter(), &text);
-        self.trim_log();
+        self.trim_log(follow);
     }
 
     /// Replace Details with this output (e.g. `UpdateRun::log_tail`).
     pub fn set_log(&self, raw: &str) {
+        let follow = self.log_at_bottom();
+        self.0.log_carry.borrow_mut().clear();
         self.0.log.set_text(&crate::postupdate::clean_output(raw));
-        self.trim_log();
+        self.trim_log(follow);
     }
 
-    fn trim_log(&self) {
+    /// The log is scrolled to its end (or cannot scroll): new output keeps
+    /// it there. Someone reading further up is left where they are.
+    fn log_at_bottom(&self) -> bool {
+        self.0
+            .log_view
+            .vadjustment()
+            .is_none_or(|a| a.value() + a.page_size() >= a.upper() - 4.0)
+    }
+
+    fn trim_log(&self, follow: bool) {
         let buf = &self.0.log;
         let excess = buf.line_count() - LOG_LINES;
         if excess > 0 {
@@ -852,12 +951,14 @@ impl UpdateView {
                 buf.delete(&mut buf.start_iter(), &mut cut);
             }
         }
-        buf.move_mark(&self.0.log_end, &buf.end_iter());
-        self.0.log_view.scroll_mark_onscreen(&self.0.log_end);
+        if follow {
+            buf.move_mark(&self.0.log_end, &buf.end_iter());
+            self.0.log_view.scroll_mark_onscreen(&self.0.log_end);
+        }
     }
 }
 
-/// `almanac --preview-update-view[=running|failure|password|question|none]` (debug
+/// `almanac --preview-update-view[=running|failure|password|question|reboot|none]` (debug
 /// builds only): the dialog fed a fixed timeline, for screenshots. Nothing
 /// runs and nothing is answered.
 #[cfg(debug_assertions)]
@@ -921,15 +1022,21 @@ pub fn preview(win: &Win, which: &str) {
             "password" => view.ask_password("[sudo] password for you: ", 2, |s| {
                 eprintln!("preview: password given: {}", s.is_some())
             }),
-            "question" => {
+            "question" | "reboot" => {
+                let reboot = which == "reboot";
                 let no = Answer { label: "No".into(), send: b"n\r".to_vec(), is_reboot_yes: false };
-                let yes = Answer { label: "Yes".into(), send: b"y\r".to_vec(), is_reboot_yes: false };
+                let yes = Answer { label: "Yes".into(), send: b"y\r".to_vec(), is_reboot_yes: reboot };
                 view.ask(
                     &Prompt::Question {
-                        text: ":: Replace iptables with extra/iptables-nft? [Y/n]".into(),
-                        answers: vec![yes, no],
+                        text: if reboot {
+                            "Reboot now to finish the update?".into()
+                        } else {
+                            ":: Replace iptables with extra/iptables-nft? [Y/n]".into()
+                        },
+                        answers: if reboot { vec![yes] } else { vec![yes, no] },
                     },
                     |a| eprintln!("preview: answered {}", a.label),
+                    || eprintln!("preview: stop"),
                 );
             }
             _ => {}
@@ -1032,7 +1139,8 @@ mod tests {
             },
         );
         assert_eq!(title(&t), "The update didn't start");
-        assert_eq!(subtitle(&t), "Nothing was changed.");
+        // What changed is said on the card only; the subtitle names the step.
+        assert_eq!(subtitle(&t), "Stopped at: Snapshot");
 
         let mut t = five();
         set(&mut t, StepId::Snapshot, done());
@@ -1046,8 +1154,7 @@ mod tests {
             },
         );
         assert_eq!(title(&t), "The update stopped");
-        // Unknown: the line is left out, the subtitle names the step instead.
-        assert_eq!(subtitle(&t), "Stopped at Signing keys");
+        assert_eq!(subtitle(&t), "Stopped at: Signing keys");
     }
 
     #[test]
@@ -1125,5 +1232,29 @@ mod tests {
         let answers = vec![a("Yes", true), a("No", false)];
         let shown: Vec<&str> = buttons(&answers).iter().map(|a| a.label.as_str()).collect();
         assert_eq!(shown, ["No"]);
+        assert_eq!(choices(&answers), vec![Choice::Answer(&answers[1])]);
+
+        // Only a reboot "yes" on offer: the card still has a way on.
+        let only_yes = vec![a("Yes", true)];
+        assert!(buttons(&only_yes).is_empty());
+        assert_eq!(choices(&only_yes), vec![Choice::Stop]);
+    }
+
+    #[test]
+    fn an_escape_cut_at_the_end_waits_for_the_rest() {
+        assert_eq!(split_trailing_escape("plain"), ("plain", ""));
+        assert_eq!(split_trailing_escape("a\x1b[1;3"), ("a", "\x1b[1;3"));
+        assert_eq!(split_trailing_escape("a\x1b"), ("a", "\x1b"));
+        assert_eq!(split_trailing_escape("a\x1b[1mb"), ("a\x1b[1mb", ""));
+        assert_eq!(split_trailing_escape("a\x1b]0;title"), ("a", "\x1b]0;title"));
+        assert_eq!(split_trailing_escape("a\x1b]0;t\x07b"), ("a\x1b]0;t\x07b", ""));
+        assert_eq!(split_trailing_escape("a\x1b(B"), ("a\x1b(B", ""));
+        // Rejoined, the cut sequence cleans away entirely.
+        let (ready, rest) = split_trailing_escape("x\x1b[3");
+        let next = format!("{rest}2mred");
+        assert_eq!(
+            crate::postupdate::clean_output(ready) + &crate::postupdate::clean_output(&next),
+            "xred"
+        );
     }
 }

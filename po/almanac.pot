@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: almanac\n"
 "Report-Msgid-Bugs-To: https://github.com/twodxme/almanac/issues\n"
-"POT-Creation-Date: 2026-11-21 14:19-0800\n"
+"POT-Creation-Date: 2026-11-21 14:26-0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -74,7 +74,7 @@ msgstr ""
 #: src/ui/actions/appimage_add.rs:272 src/ui/actions/link.rs:40
 #: src/ui/actions/link.rs:160 src/ui/history.rs:601 src/ui/news.rs:322
 #: src/ui/plugins/controls.rs:178 src/ui/update_all.rs:417
-#: src/ui/update_view.rs:730
+#: src/ui/update_view.rs:772
 msgid "Cancel"
 msgstr ""
 
@@ -118,7 +118,7 @@ msgstr ""
 #: src/ui/actions/rows.rs:129 src/ui/actions/rows.rs:173
 #: src/ui/actions/update.rs:529 src/ui/ai.rs:963 src/ui/packages/details.rs:322
 #: src/ui/plugins/updates.rs:302 src/ui/shell/columns.rs:710
-#: src/ui/update_all.rs:696 src/ui/update_view.rs:259 src/ui/update_view.rs:731
+#: src/ui/update_all.rs:696 src/ui/update_view.rs:303 src/ui/update_view.rs:773
 msgid "Update"
 msgstr ""
 
@@ -1215,7 +1215,7 @@ msgid ""
 "are searched separately"
 msgstr ""
 
-#: src/ui/store.rs:506 src/ui/update_view.rs:91
+#: src/ui/store.rs:506 src/ui/update_view.rs:87
 msgid "Try again"
 msgstr ""
 
@@ -1645,6 +1645,14 @@ msgstr ""
 msgid "Tidying up after the update"
 msgstr ""
 
+#: src/ui/update_view.rs:42
+msgid "The update didn't start"
+msgstr ""
+
+#: src/ui/update_view.rs:44
+msgid "The update stopped"
+msgstr ""
+
 #: src/ui/update_view.rs:48
 msgid "Update finished"
 msgstr ""
@@ -1653,97 +1661,101 @@ msgstr ""
 msgid "Updating your system"
 msgstr ""
 
-#: src/ui/update_view.rs:59
+#: src/ui/update_view.rs:58
 #, rust-format
-msgid "Stopped at {step}"
+msgid "Stopped at: {step}"
 msgstr ""
 
-#: src/ui/update_view.rs:65
+#: src/ui/update_view.rs:61
 msgid "Updating…"
 msgstr ""
 
-#: src/ui/update_view.rs:68
+#: src/ui/update_view.rs:64
 msgid "All steps done"
 msgstr ""
 
-#: src/ui/update_view.rs:71
+#: src/ui/update_view.rs:67
 msgid "Starting…"
 msgstr ""
 
-#: src/ui/update_view.rs:72
+#: src/ui/update_view.rs:68
 #, rust-format
 msgid "Step {n} of {total}"
 msgstr ""
 
-#: src/ui/update_view.rs:81
+#: src/ui/update_view.rs:77
 msgid "Nothing was changed."
 msgstr ""
 
-#: src/ui/update_view.rs:82
+#: src/ui/update_view.rs:78
 msgid "Some changes were made."
 msgstr ""
 
-#: src/ui/update_view.rs:89
+#: src/ui/update_view.rs:85
 msgid "Stop it and update"
 msgstr ""
 
-#: src/ui/update_view.rs:90
+#: src/ui/update_view.rs:86
 msgid "Resolve"
 msgstr ""
 
-#: src/ui/update_view.rs:129
+#: src/ui/update_view.rs:125
 msgid "installing…"
 msgstr ""
 
-#: src/ui/update_view.rs:130
+#: src/ui/update_view.rs:126
 msgid "downloading…"
 msgstr ""
 
-#: src/ui/update_view.rs:132
+#: src/ui/update_view.rs:128
 msgid "not updated"
 msgstr ""
 
-#: src/ui/update_view.rs:147
+#: src/ui/update_view.rs:143
 #, rust-format
 msgid "{done} of {total}"
 msgstr ""
 
-#: src/ui/update_view.rs:290
+#: src/ui/update_view.rs:334
 msgid "Restart to finish"
 msgstr ""
 
-#: src/ui/update_view.rs:309
+#: src/ui/update_view.rs:353
 msgid "Safe to keep working"
 msgstr ""
 
-#: src/ui/update_view.rs:339
+#: src/ui/update_view.rs:383
 msgid "Details"
 msgstr ""
 
-#: src/ui/update_view.rs:568
+#: src/ui/update_view.rs:610
 msgid "Show details"
 msgstr ""
 
-#: src/ui/update_view.rs:715
+#: src/ui/update_view.rs:757
 msgid "Your password to update"
 msgstr ""
 
-#: src/ui/update_view.rs:717
+#: src/ui/update_view.rs:759
 msgid ""
 "Updating changes system files. Almanac asks once, then forgets it when the "
 "update ends."
 msgstr ""
 
-#: src/ui/update_view.rs:721
+#: src/ui/update_view.rs:763
 msgid "Wrong password — try again"
 msgstr ""
 
-#: src/ui/update_view.rs:725
+#: src/ui/update_view.rs:767
 msgid "Password"
 msgstr ""
 
-#: src/ui/update_view.rs:802
+#: src/ui/update_view.rs:847
 msgid "The update asks"
+msgstr ""
+
+#: src/ui/update_view.rs:867
+msgid "Stop the update"
 msgstr ""
 
 #: src/util/human.rs:125 src/util/human.rs:207
