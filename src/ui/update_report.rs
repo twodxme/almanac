@@ -54,6 +54,8 @@ pub struct Run {
     /// Try again was asked for: Update all starts again once this run's
     /// history entry is written
     pub then_retry: bool,
+    /// its history entry is written (once, whichever way the run ended)
+    pub recorded: bool,
 }
 
 pub type SharedRun = Rc<RefCell<Run>>;
@@ -75,6 +77,7 @@ impl Run {
             view: None,
             retry_offered: false,
             then_retry: false,
+            recorded: false,
         }))
     }
 }
@@ -123,6 +126,34 @@ fn icon(status: Status) -> &'static str {
     }
 }
 
+/// A check's icon: by its status, but a restart and a skipped step say so.
+fn note_icon(c: &postupdate::Check) -> &'static str {
+    match c.id {
+        CheckId::Restart | CheckId::Kernel => "system-reboot-symbolic",
+        CheckId::Skipped => "dialog-warning-symbolic",
+        _ => icon(c.status),
+    }
+}
+
+/// A check's row text: its detail, then up to eight of its items.
+fn note_text(c: &postupdate::Check) -> String {
+    let mut text = c.detail.clone();
+    let shown: Vec<&String> = c
+        .items
+        .iter()
+        .filter(|i| !c.detail.contains(i.as_str()))
+        .take(8)
+        .collect();
+    if !shown.is_empty() {
+        text += "\n";
+        text += &shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+        if c.items.len() > 8 {
+            text += "\n…";
+        }
+    }
+    text
+}
+
 impl Win {
     /// The checks are in: a toast when all passed, else the report.
     pub(in crate::ui) fn surface_update(&self, run: SharedRun) {
@@ -130,7 +161,10 @@ impl Win {
         // The history entry keeps the checks (and `passed` reads them).
         run.borrow_mut().record.report = Some(report.clone());
         if run.borrow().view.is_some() {
-            self.in_window_over(&crate::ui::update_all::finished_note(&report));
+            self.in_window_over(
+                &crate::ui::update_all::finished_note(&report),
+                &crate::ui::update_all::finished_body(&report),
+            );
         }
         if report.passed() {
             self.passed(run, &report.summary());
@@ -186,25 +220,7 @@ impl Win {
             .iter()
             .filter(|c| c.needs_attention() || c.status == Status::Info)
         {
-            let mut text = c.detail.clone();
-            let shown: Vec<&String> = c
-                .items
-                .iter()
-                .filter(|i| !c.detail.contains(i.as_str()))
-                .take(8)
-                .collect();
-            if !shown.is_empty() {
-                text += "\n";
-                text += &shown
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if c.items.len() > 8 {
-                    text += "\n…";
-                }
-            }
-            let row = Win::note_row(icon(c.status), &c.title, &text);
+            let row = Win::note_row(note_icon(c), &c.title, &note_text(c));
             if c.id == CheckId::Pacnew {
                 let open = gtk::Button::builder()
                     .label(tr("Open Health"))
@@ -454,11 +470,24 @@ impl Win {
                     win.show_update_log(&log);
                 }
             });
+            // What is worth knowing although everything passed: a restart to
+            // finish, a step Omarchy went on without (no snapshot…).
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            let report = run.borrow().report.clone();
+            let notes = report.notes();
+            if !notes.is_empty() {
+                let list = Win::note_list();
+                for c in notes {
+                    list.append(&Win::note_row(note_icon(c), &c.title, &note_text(c)));
+                }
+                content.append(&list);
+            }
+            content.append(&show_log);
             report_in_view(
                 &view,
                 &tr("Update finished"),
                 message,
-                Some(show_log.upcast()),
+                Some(content.upcast()),
                 buttons,
             );
             return;
@@ -546,6 +575,10 @@ impl Win {
 
     /// The run's one history entry, and its files let go of.
     pub(in crate::ui) fn finish_update(&self, run: SharedRun) {
+        if std::mem::replace(&mut run.borrow_mut().recorded, true) {
+            return;
+        }
+        crate::ui::update_all::forget_window_run(&run);
         {
             let r = run.borrow();
             let action = r.record.action(r.started.elapsed().as_secs_f64());

@@ -102,6 +102,12 @@ pub fn fix_label(f: &Fix) -> String {
     }
 }
 
+/// Stop is on screen while the update runs: there is always a way out,
+/// whatever it waits on.
+pub fn stop_shown(t: &Timeline) -> bool {
+    failure(t).is_none() && !all_done(t)
+}
+
 /// The bar: steps done out of all of them.
 pub fn fraction(t: &Timeline) -> f64 {
     if t.steps.is_empty() {
@@ -130,6 +136,43 @@ pub fn step_look(s: &StepState) -> Look {
         StepState::Done { .. } => Look::Icon("object-select-symbolic", "success"),
         StepState::Failed { .. } => Look::Icon("dialog-error-symbolic", "error"),
     }
+}
+
+/// The look of step `id` in `t`: a step done with a warning (Omarchy went
+/// on without doing all of it) is not a plain tick.
+pub fn step_look_in(t: &Timeline, id: StepId, s: &StepState) -> Look {
+    match s {
+        StepState::Done { .. } if t.warning(id).is_some() => {
+            Look::Icon("dialog-warning-symbolic", "warning")
+        }
+        _ => step_look(s),
+    }
+}
+
+/// The line under a step: what it is doing, its warning once done, and how
+/// many packages besides its rows it worked on.
+pub fn step_detail(t: &Timeline, id: StepId, s: &StepState) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match s {
+        StepState::Done { detail } => match t.warning(id) {
+            Some(w) => parts.push(w),
+            None if !detail.is_empty() => parts.push(detail.clone()),
+            None => {}
+        },
+        StepState::Running { detail } if !detail.is_empty() => parts.push(detail.clone()),
+        _ => {}
+    }
+    let n = t.others(id);
+    if n > 0 && !matches!(s, StepState::Waiting) {
+        let rows = t.apps.iter().any(|a| a.step == id);
+        parts.push(if rows {
+            crate::i18n::ngettext("and {n} more package", "and {n} more packages", n as u64)
+        } else {
+            crate::i18n::ngettext("{n} package", "{n} packages", n as u64)
+        }
+        .replace("{n}", &n.to_string()));
+    }
+    parts.join(" · ")
 }
 
 /// The text at the end of an app's row and its style class.
@@ -249,7 +292,13 @@ pub struct Inner {
     apps: RefCell<Vec<AppUi>>,
     notes_group: adw::PreferencesGroup,
     restart: adw::ActionRow,
+    /// "The update seems to be waiting", with the last line printed.
+    waiting_group: adw::PreferencesGroup,
+    waiting: adw::ActionRow,
     safe: gtk::Box,
+    stop: gtk::Button,
+    /// What Stop does; while None, Stop is not shown.
+    on_stop: RefCell<Option<OnFix>>,
     expander: gtk::Expander,
     log: gtk::TextBuffer,
     log_view: gtk::TextView,
@@ -311,7 +360,7 @@ fn set_style(w: &impl IsA<gtk::Widget>, on: &[&str], all: &[&str]) {
     }
 }
 
-const STYLES: [&str; 4] = ["dim-label", "success", "error", "accent"];
+const STYLES: [&str; 5] = ["dim-label", "success", "error", "accent", "warning"];
 const ROW_STYLES: [&str; 2] = ["update-now", "update-waiting"];
 
 impl UpdateView {
@@ -361,6 +410,23 @@ impl UpdateView {
         notes_group.set_visible(false);
         page.add(&notes_group);
 
+        let waiting_group = adw::PreferencesGroup::new();
+        let waiting_list = Win::note_list();
+        let waiting = Win::note_row(
+            "dialog-information-symbolic",
+            &tr("The update seems to be waiting."),
+            "",
+        );
+        let show = gtk::Button::builder()
+            .label(tr("Show details"))
+            .valign(gtk::Align::Center)
+            .build();
+        waiting.add_suffix(&show);
+        waiting_list.append(&waiting);
+        waiting_group.add(&waiting_list);
+        waiting_group.set_visible(false);
+        page.add(&waiting_group);
+
         let foot_group = adw::PreferencesGroup::new();
         let foot = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -375,8 +441,16 @@ impl UpdateView {
         dot.add_css_class("success");
         dot.set_accessible_role(gtk::AccessibleRole::Presentation);
         let safe_text = label(&tr("Safe to keep working"), &["success"]);
+        safe_text.set_hexpand(true);
         safe.append(&dot);
         safe.append(&safe_text);
+        // Always a way out while it runs, also from a question Almanac does
+        // not recognise.
+        let stop = gtk::Button::with_label(&tr("Stop the update"));
+        stop.add_css_class("flat");
+        stop.add_css_class("destructive-action");
+        stop.set_visible(false);
+        safe.append(&stop);
 
         let log = gtk::TextBuffer::new(None);
         let log_end = log.create_mark(None, &log.end_iter(), false);
@@ -408,6 +482,14 @@ impl UpdateView {
             .child(&scroll)
             .build();
         expander.add_css_class("dim-label");
+        {
+            let exp = expander.downgrade();
+            show.connect_clicked(move |_| {
+                if let Some(e) = exp.upgrade() {
+                    e.set_expanded(true);
+                }
+            });
+        }
         foot.append(&safe);
         foot.append(&expander);
         foot_group.add(&foot);
@@ -416,7 +498,7 @@ impl UpdateView {
         toolbar.set_content(Some(&page));
         dialog.set_child(Some(&toolbar));
 
-        UpdateView(Rc::new(Inner {
+        let view = UpdateView(Rc::new(Inner {
             win: win.downgrade(),
             dialog,
             toolbar,
@@ -429,7 +511,11 @@ impl UpdateView {
             apps: RefCell::new(Vec::new()),
             notes_group,
             restart,
+            waiting_group,
+            waiting,
             safe,
+            stop,
+            on_stop: RefCell::new(None),
             expander,
             log,
             log_view,
@@ -438,7 +524,47 @@ impl UpdateView {
             fix: RefCell::new(None),
             log_carry: RefCell::new(String::new()),
             last: RefCell::new(None),
-        }))
+        }));
+        let w = view.downgrade();
+        view.0.stop.connect_clicked(move |_| {
+            let f = UpdateView::upgrade(&w).and_then(|v| v.0.on_stop.borrow().clone());
+            if let Some(f) = f {
+                f();
+            }
+        });
+        view
+    }
+
+    /// What Stop does from now on. It must hold the view only weakly.
+    pub fn set_on_stop(&self, f: impl Fn() + 'static) {
+        *self.0.on_stop.borrow_mut() = Some(Rc::new(f));
+        self.0.stop.set_label(&tr("Stop the update"));
+        self.rerender();
+    }
+
+    /// Nothing to stop (between the update and the Other apps).
+    pub fn clear_on_stop(&self) {
+        self.0.on_stop.borrow_mut().take();
+        self.rerender();
+    }
+
+    /// Ctrl-C went out: a second press ends the update's terminal.
+    pub fn stop_sent(&self) {
+        self.0.stop.set_label(&tr("Force stop"));
+    }
+
+    /// The output has been quiet on something Almanac does not recognise
+    /// (`Some(last line)`), or not (`None`).
+    pub fn set_waiting(&self, last_line: Option<&str>) {
+        match last_line {
+            Some(l) => {
+                if self.0.waiting.subtitle().as_deref() != Some(l) {
+                    self.0.waiting.set_subtitle(l);
+                }
+                self.0.waiting_group.set_visible(true);
+            }
+            None => self.0.waiting_group.set_visible(false),
+        }
     }
 
     fn downgrade(&self) -> Weak<Inner> {
@@ -550,7 +676,7 @@ impl UpdateView {
         {
             let steps = self.0.steps.borrow();
             for (ui, (id, state)) in steps.iter().zip(&t.steps) {
-                match step_look(state) {
+                match step_look_in(t, *id, state) {
                     Look::Spinner => {
                         ui.icon.set_visible(false);
                         ui.spinner.set_visible(true);
@@ -570,11 +696,8 @@ impl UpdateView {
                     StepState::Done { .. } => &[],
                 };
                 set_style(&ui.row, row_style, &ROW_STYLES);
-                let detail = match state {
-                    StepState::Running { detail } | StepState::Done { detail } => tr(detail),
-                    _ => String::new(),
-                };
-                ui.row.set_subtitle(&detail);
+                // Details come translated from where they were made.
+                ui.row.set_subtitle(&step_detail(t, *id, state));
 
                 let count = apps_count(t, *id).filter(|_| *state != StepState::Waiting);
                 ui.count.set_visible(count.is_some());
@@ -604,6 +727,12 @@ impl UpdateView {
         self.0
             .safe
             .set_visible(failure(t).is_none() && !all_done(t));
+        self.0
+            .stop
+            .set_visible(stop_shown(t) && self.0.on_stop.borrow().is_some());
+        if !stop_shown(t) {
+            self.0.waiting_group.set_visible(false);
+        }
 
         *self.0.last.borrow_mut() = Some(t.clone());
         self.place_prompt();
@@ -926,6 +1055,11 @@ impl UpdateView {
         self.rerender();
     }
 
+    /// The timeline last shown.
+    pub fn timeline(&self) -> Option<Timeline> {
+        self.0.last.borrow().clone()
+    }
+
     fn rerender(&self) {
         let last = self.0.last.borrow().clone();
         if let Some(t) = last {
@@ -999,7 +1133,7 @@ impl UpdateView {
     }
 }
 
-/// `almanac --preview-update-view[=running|failure|password|question|reboot|none]` (debug
+/// `almanac --preview-update-view[=running|waiting|failure|password|question|reboot|none]` (debug
 /// builds only): the dialog fed a fixed timeline, for screenshots. Nothing
 /// runs and nothing is answered.
 #[cfg(debug_assertions)]
@@ -1050,7 +1184,9 @@ pub fn preview(win: &Win, which: &str) {
         for i in 0..2 {
             t.steps[i].1 = StepState::Done { detail: String::new() };
         }
-        t.steps[2].1 = StepState::Running { detail: "Installing".into() };
+        t.steps[2].1 = StepState::Running { detail: tr("Installing") };
+        t.others.push((StepId::SystemPackages, 182));
+        t.warnings.push((StepId::Snapshot, tr("No snapshot taken")));
         for (i, a) in t.apps.iter_mut().enumerate() {
             a.state = match i {
                 0 | 1 => AppState::Done { version: a.to.clone() },
@@ -1058,8 +1194,10 @@ pub fn preview(win: &Win, which: &str) {
                 _ => AppState::Waiting,
             };
         }
+        view.set_on_stop(|| eprintln!("preview: stop"));
         view.render(&t);
         match which {
+            "waiting" => view.set_waiting(Some("Pick a mirror >")),
             "password" => view.ask_password("[sudo] password for you: ", 2, |s| {
                 eprintln!("preview: password given: {}", s.is_some())
             }),
@@ -1088,9 +1226,46 @@ pub fn preview(win: &Win, which: &str) {
          :: Starting full system upgrade...\n:: Retrieving packages...\n\
          (1/5) upgrading cursor-bin\n(2/5) upgrading mise-bin\n(3/5) upgrading slack-desktop\n",
     );
+    // `ALMANAC_PREVIEW_PNG=file`: the window drawn into a PNG, then quit
+    // (with GDK_BACKEND=broadway nothing reaches the screen at all). No
+    // animations: the dialog's fade-in would be caught half way.
+    let png = std::env::var_os("ALMANAC_PREVIEW_PNG");
+    if png.is_some() {
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_enable_animations(false);
+        }
+    }
     view.present();
+    if let Some(path) = png {
+        let w = win.window.clone();
+        let d = win.window.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+            if let Err(e) = save_png(&w, &d, std::path::Path::new(&path)) {
+                eprintln!("preview: {e}");
+            }
+            if let Some(a) = w.application() {
+                a.quit();
+            }
+        });
+    }
     // The caller of a real run keeps the view; here nothing else would.
     std::mem::forget(view);
+}
+
+#[cfg(debug_assertions)]
+fn save_png(
+    win: &adw::ApplicationWindow,
+    what: &impl IsA<gtk::Widget>,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let (w, h) = (what.width(), what.height());
+    let paintable = gtk::WidgetPaintable::new(Some(what));
+    let snap = gtk::Snapshot::new();
+    paintable.snapshot(&snap, w as f64, h as f64);
+    let node = snap.to_node().ok_or("nothing was drawn")?;
+    let renderer = gtk::prelude::NativeExt::renderer(win).ok_or("no renderer")?;
+    let tex = renderer.render_texture(&node, None);
+    tex.save_to_png(path).map_err(|e| e.to_string())
 }
 
 fn detach(w: &gtk::Widget) {
@@ -1244,6 +1419,67 @@ mod tests {
             }),
             Look::Icon("dialog-error-symbolic", "error")
         );
+    }
+
+    /// A step Omarchy went past without doing its work is done, but not a
+    /// plain tick: it says what did not happen.
+    #[test]
+    fn a_step_with_a_warning_is_not_a_plain_tick() {
+        let mut t = five();
+        set(&mut t, StepId::Snapshot, done());
+        set(&mut t, StepId::SigningKeys, done());
+        t.warnings.push((StepId::Snapshot, "No snapshot taken".into()));
+        let look = |t: &Timeline, id| {
+            let s = &t.steps.iter().find(|(i, _)| *i == id).unwrap().1;
+            step_look_in(t, id, s)
+        };
+        assert_eq!(look(&t, StepId::Snapshot), Look::Icon("dialog-warning-symbolic", "warning"));
+        assert_eq!(look(&t, StepId::SigningKeys), Look::Icon("object-select-symbolic", "success"));
+        assert_eq!(step_detail(&t, StepId::Snapshot, &done()), "No snapshot taken");
+        // Still running: the spinner, whatever it was told so far.
+        assert_eq!(step_look_in(&t, StepId::Snapshot, &running()), Look::Spinner);
+    }
+
+    /// The packages that are not rows are one count in the step's line.
+    #[test]
+    fn other_packages_are_a_count_on_the_step() {
+        let mut t = five();
+        let downloading = StepState::Running { detail: "Downloading".into() };
+        assert_eq!(step_detail(&t, StepId::SystemPackages, &downloading), "Downloading");
+        t.others.push((StepId::SystemPackages, 182));
+        assert_eq!(
+            step_detail(&t, StepId::SystemPackages, &downloading),
+            "Downloading · and 182 more packages"
+        );
+        t.others = vec![(StepId::SystemPackages, 1)];
+        assert_eq!(step_detail(&t, StepId::SystemPackages, &done()), "and 1 more package");
+        // A step with no rows of its own: just the count.
+        t.others = vec![(StepId::AurAndTools, 4)];
+        assert_eq!(step_detail(&t, StepId::AurAndTools, &running()), "4 packages");
+        // The count of rows is rows only.
+        assert_eq!(apps_count(&t, StepId::SystemPackages).as_deref(), Some("0 of 3"));
+        assert_eq!(apps_count(&t, StepId::AurAndTools), None);
+    }
+
+    /// Stop is on screen for as long as the update runs, whatever it is
+    /// doing; once it ended there is nothing to stop.
+    #[test]
+    fn stop_is_offered_while_the_update_runs() {
+        let mut t = five();
+        assert!(stop_shown(&t));
+        set(&mut t, StepId::SystemPackages, running());
+        assert!(stop_shown(&t));
+        set(
+            &mut t,
+            StepId::SystemPackages,
+            StepState::Failed { reason: "x".into(), changed: Changed::Nothing, fix: None },
+        );
+        assert!(!stop_shown(&t));
+        let mut t = five();
+        for (_, s) in t.steps.iter_mut() {
+            *s = done();
+        }
+        assert!(!stop_shown(&t));
     }
 
     #[test]

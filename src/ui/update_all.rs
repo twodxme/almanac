@@ -38,7 +38,7 @@ use crate::ui::actions::{appimage_update_work, popen_new_session, raised, truthy
 use crate::ui::plugins::{plan_plugin_updates, plugin_step, plugin_update_states};
 use crate::ui::shell::{spawn_bg, WeakWin, Win};
 use crate::ui::update_report::{BatchDone, BatchResult, Run, SharedRun};
-use crate::ui::update_view::UpdateView;
+use crate::ui::update_view::{step_label, UpdateView};
 use crate::verify::{self, Outcome, ProbeValue};
 use crate::{agents, patches, plugins, selfupdate, xdg};
 
@@ -217,6 +217,46 @@ pub fn quit_decision(t: &Timeline) -> QuitDecision {
     }
 }
 
+/// The fix for "Another Omarchy update is running", from who holds the
+/// lock now: stopped for you only when nobody can be answering it (no
+/// terminal) and pacman is not at work under it, as the preflight decides.
+/// Otherwise it is left to finish, said in the preflight's words, and the
+/// way on is to try again after.
+fn busy_fix(holders: &[postupdate::Holder], pacman_running: bool) -> (Option<String>, Fix) {
+    let live = holders.iter().any(|h| h.terminal) || pacman_running;
+    if !live || holders.is_empty() {
+        return (None, Fix::StopStuckUpdate(holders.iter().map(|h| h.pid).collect()));
+    }
+    let who = holders
+        .iter()
+        .map(|h| format!("{} ({})", h.name, h.pid))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reason = tr("{who} holds the update lock. Finish it in its terminal, or wait for it, then update.")
+        .replace("{who}", &who);
+    (Some(reason), Fix::RetryUpdate)
+}
+
+/// What Stop does while the update runs in the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopDecision {
+    Now,
+    /// pacman is under way: say what stopping then means, then stop
+    Confirm,
+}
+
+pub fn stop_decision(t: &Timeline) -> StopDecision {
+    let pacman = t
+        .steps
+        .iter()
+        .any(|(id, s)| *id == StepId::SystemPackages && matches!(s, StepState::Running { .. }));
+    if pacman {
+        StopDecision::Confirm
+    } else {
+        StopDecision::Now
+    }
+}
+
 /// The failed step's fix, if it has one.
 fn failed_fix(t: &Timeline) -> Option<Fix> {
     t.steps.iter().find_map(|(_, s)| match s {
@@ -250,6 +290,8 @@ enum Stopped {
     /// The password could not be sent for another reason (the terminal
     /// could not be read or written), and the update was interrupted.
     PasswordUnsent,
+    /// Stop was pressed.
+    ByUser,
 }
 
 /// What a refused password makes of the run once Almanac stops it.
@@ -281,6 +323,7 @@ fn mark_stopped(t: &mut Timeline, why: Stopped) {
                     "Almanac stopped the update without sending the password: the terminal \
                      would have shown your password as you typed it.",
                 ),
+                Stopped::ByUser => tr("You stopped the update."),
                 Stopped::PasswordUnsent => tr(
                     "Almanac stopped the update: the password was not sent, because the \
                      update's terminal could not be reached.",
@@ -405,6 +448,19 @@ pub fn finished_note(r: &postupdate::Report) -> String {
             .filter(|c| c.id == postupdate::CheckId::Item && c.status == postupdate::Status::Pass)
             .count();
     tr("Update finished — {n} updated").replace("{n}", &n.to_string())
+}
+
+/// The notification's body: a restart to finish comes first.
+pub fn finished_body(r: &postupdate::Report) -> String {
+    let restart = r
+        .checks
+        .iter()
+        .any(|c| matches!(c.id, postupdate::CheckId::Restart | postupdate::CheckId::Kernel));
+    if restart {
+        tr("Restart to finish. Open Almanac to see the report.")
+    } else {
+        tr("Open Almanac to see the report.")
+    }
 }
 
 /// The batch after the terminal: what will run, and what is held back with
@@ -1222,6 +1278,8 @@ struct Live {
     started: Instant,
     /// Almanac stopped the update itself, and why
     stopped: Cell<Option<Stopped>>,
+    /// Stop sent Ctrl-C: pressed again, it hangs up
+    interrupted: Cell<bool>,
 }
 
 thread_local! {
@@ -1233,8 +1291,34 @@ thread_local! {
     static BATCH: RefCell<Option<tasks::QuietTask>> = const { RefCell::new(None) };
     /// Stop and quit chose to quit once the Other apps have stopped.
     static QUIT_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// The run whose view is in the window, until its history entry is
+    /// written: Quit writes it then.
+    static IN_WINDOW: RefCell<Option<Weak<RefCell<Run>>>> = const { RefCell::new(None) };
     /// Held while the window is hidden with an update running in it.
     static BACKGROUND: RefCell<Option<gio::ApplicationHoldGuard>> = const { RefCell::new(None) };
+}
+
+/// `run`'s entry is written: Quit has nothing left to write for it.
+pub(in crate::ui) fn forget_window_run(run: &SharedRun) {
+    IN_WINDOW.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.as_ref().is_some_and(|w| w.as_ptr() == Rc::as_ptr(run)) {
+            *r = None;
+        }
+    });
+}
+
+/// The update was stopped before it ended (Quit): its command goes into
+/// the entry as not known to have finished, and the entry says so.
+fn record_stopped(run: &SharedRun, secs: Option<f64>) {
+    let mut r = run.borrow_mut();
+    let argv = r.command.clone();
+    r.record.commands.push(CommandRun {
+        argv,
+        exit: None,
+        secs,
+    });
+    r.record.stopped = true;
 }
 
 /// An update runs in the window: closing the window hides it instead, and
@@ -1296,12 +1380,22 @@ impl Live {
                         },
                     );
                 }
+                Event::PromptGone => self.view.close_prompt(),
                 Event::Finished { code } => {
                     self.finished(code);
                     return glib::ControlFlow::Break;
                 }
             }
         }
+        // Quiet for a minute on something with no card: say so, and where
+        // to look; Stop is beside it.
+        let waiting = self
+            .update
+            .borrow()
+            .as_ref()
+            .filter(|u| u.seems_waiting(Instant::now()))
+            .map(|u| u.last_line());
+        self.view.set_waiting(waiting.as_deref());
         glib::ControlFlow::Continue
     }
 
@@ -1386,10 +1480,30 @@ impl Live {
         }
     }
 
-    /// Stop the update (the card's Stop button): Ctrl-C on its terminal.
+    /// Stop the update (the card's Stop button, or Stop under the
+    /// timeline): Ctrl-C on its terminal.
     fn stop(&self) {
-        if let Some(Err(e)) = self.update.borrow_mut().as_mut().map(|u| u.interrupt()) {
-            eprintln!("almanac: {e}");
+        self.stop_now();
+    }
+
+    /// Ctrl-C on the update's terminal; a second time, the terminal is hung
+    /// up on (an update that ignores Ctrl-C still ends). Whatever card was
+    /// up is no longer answered.
+    fn stop_now(&self) {
+        self.view.close_prompt();
+        let mut slot = self.update.borrow_mut();
+        let Some(u) = slot.as_mut() else { return };
+        self.stopped.set(Some(Stopped::ByUser));
+        if self.interrupted.get() {
+            u.hang_up();
+            return;
+        }
+        match u.interrupt() {
+            Ok(()) => {
+                self.interrupted.set(true);
+                self.view.stop_sent();
+            }
+            Err(e) => eprintln!("almanac: {e}"),
         }
     }
 
@@ -1398,6 +1512,7 @@ impl Live {
     fn finished(&self, code: i32) {
         let t = self.update.borrow_mut().take().map(|u| u.timeline().clone());
         self.pull_log();
+        self.view.set_waiting(None);
         LIVE.with(|l| *l.borrow_mut() = None);
         let Some(mut t) = t else { return };
         if let Some(why) = self.stopped.get() {
@@ -1483,6 +1598,7 @@ impl Win {
                 return win.run_system_update(&command, true, job.rest, run);
             }
             run.borrow_mut().view = Some(view.clone());
+            IN_WINDOW.with(|r| *r.borrow_mut() = Some(Rc::downgrade(&run)));
             win.own_view(&view, run);
             view.present();
         });
@@ -1539,6 +1655,8 @@ impl Win {
             Some((f, Vec::new()))
         });
         let first = update.timeline().clone();
+        // A banner about the attempt before ("still running…") is over.
+        view.clear_notice();
         view.clear_fix();
         view.close_prompt();
         view.set_log("");
@@ -1555,8 +1673,15 @@ impl Win {
             log_from,
             started: Instant::now(),
             stopped: Cell::new(None),
+            interrupted: Cell::new(false),
         });
         LIVE.with(|l| *l.borrow_mut() = Some(Rc::downgrade(&live)));
+        let w = self.downgrade();
+        view.set_on_stop(move || {
+            if let Some(win) = w.upgrade() {
+                win.stop_clicked();
+            }
+        });
         glib::timeout_add_local(Duration::from_millis(150), move || live.tick());
         Ok(())
     }
@@ -1579,14 +1704,23 @@ impl Win {
         let fix = failed_fix(&t);
         run.borrow_mut().retry_offered = fix == Some(Fix::RetryUpdate);
         if pauses(&t) {
-            if let Some(fix) = fix {
-                self.offer_fix(&view, &run, job, fix);
+            match fix {
+                Some(Fix::StopStuckUpdate(_)) => self.offer_busy_fix(&run, job, Some(t.clone())),
+                Some(fix) => self.offer_fix(&view, &run, job, fix),
+                None => {}
             }
             view.dialog().set_can_close(true);
-            self.in_window_over(&tr("Update needs a look"));
+            self.in_window_over(&tr("Update needs a look"), &tr("Open Almanac to see the report."));
             return;
         }
         set_shown(Some(t.clone()));
+        // What the timeline knew goes into the report that replaces it.
+        let restart = t.restart_note.clone();
+        let warnings: Vec<(String, String)> = t
+            .steps
+            .iter()
+            .filter_map(|(id, _)| t.warning(*id).map(|w| (step_label(*id), w)))
+            .collect();
         let (before, started_wall) = {
             let r = run.borrow();
             (r.before.clone(), r.started_wall)
@@ -1612,6 +1746,7 @@ impl Win {
                     after: after.clone(),
                 };
                 let mut report = postupdate::build_report(&inputs);
+                report.add_notes(restart.as_deref(), &warnings);
                 report.log = postupdate::log_text_as(
                     section.as_deref(),
                     &output,
@@ -1748,6 +1883,15 @@ impl Win {
                 BATCH.with(|b| b.borrow_mut().take());
                 if QUIT_PENDING.get() {
                     if let Some(win) = w.upgrade() {
+                        // What the Other apps ran, not known to have finished.
+                        {
+                            let mut r = run.borrow_mut();
+                            for line in &lines {
+                                let argv = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                                r.record.commands.push(CommandRun { argv, exit: None, secs: None });
+                            }
+                            r.record.stopped = true;
+                        }
                         win.quit_now();
                     }
                     return;
@@ -1808,6 +1952,43 @@ impl Win {
         });
     }
 
+    /// "Another Omarchy update is running": who holds the lock decides the
+    /// fix (`busy_fix`). One that someone may be answering in its terminal
+    /// is not offered to be stopped; the card says to finish it there.
+    fn offer_busy_fix(&self, run: &SharedRun, job: Job, t: Option<Timeline>) {
+        let (w, r) = (self.downgrade(), Rc::downgrade(run));
+        spawn_bg(
+            || {
+                let proc_root = Path::new("/proc");
+                let holders =
+                    postupdate::lock_holders_in(proc_root, &postupdate::omarchy_update_lock());
+                let pacman = !postupdate::lockers_in(proc_root).is_empty();
+                (holders, pacman)
+            },
+            move |(holders, pacman)| {
+                let (Some(win), Some(run)) = (w.upgrade(), r.upgrade()) else {
+                    return;
+                };
+                let Some(view) = run.borrow().view.clone() else {
+                    return;
+                };
+                let (reason, fix) = busy_fix(&holders, pacman);
+                if let (Some(reason), Some(mut t)) = (reason, t) {
+                    for (_, s) in &mut t.steps {
+                        if let StepState::Failed { reason: r, .. } = s {
+                            *r = reason.clone();
+                        }
+                    }
+                    view.render(&t);
+                }
+                if fix == Fix::RetryUpdate {
+                    run.borrow_mut().retry_offered = true;
+                }
+                win.offer_fix(&view, &run, job, fix);
+            },
+        );
+    }
+
     /// Stop it: the processes holding Omarchy's update lock now (the
     /// output cannot say which they are), stopped as the preflight's fix
     /// stops them, then the update again.
@@ -1856,7 +2037,7 @@ impl Win {
                     view.notice(&tr(
                         "The earlier update is still running, so this one did not start",
                     ));
-                    win.offer_fix(&view, &run, job, Fix::StopStuckUpdate(Vec::new()));
+                    win.offer_busy_fix(&run, job, view.timeline());
                 }
             })),
         );
@@ -1870,12 +2051,12 @@ impl Win {
 
     /// The run in the window has stopped, or its report is up: the window
     /// may close again, and a hidden one is told how it ended.
-    pub(in crate::ui) fn in_window_over(&self, note: &str) {
+    pub(in crate::ui) fn in_window_over(&self, note: &str, body: &str) {
         set_shown(None);
         if !self.window.is_visible() || !self.window.is_active() {
             if let Some(app) = self.window.application() {
                 let n = gio::Notification::new(note);
-                n.set_body(Some(&tr("Open Almanac to see the report.")));
+                n.set_body(Some(body));
                 app.send_notification(Some("update-finished"), &n);
             }
         }
@@ -1942,7 +2123,55 @@ impl Win {
         }
     }
 
+    /// Stop under the timeline. While pacman works it asks first (stopping
+    /// it then can leave packages half installed), and still stops. In the
+    /// Other apps, the step under way stops and the rest are skipped.
+    fn stop_clicked(&self) {
+        let Some(live) = LIVE.with(|l| l.borrow().as_ref().and_then(Weak::upgrade)) else {
+            BATCH.with(|b| {
+                if let Some(t) = b.borrow().as_ref().filter(|t| !t.finished()) {
+                    t.cancel();
+                }
+            });
+            return;
+        };
+        let t = live.update.borrow().as_ref().map(|u| u.timeline().clone());
+        match t.as_ref().map(stop_decision) {
+            Some(StopDecision::Now) => live.stop_now(),
+            Some(StopDecision::Confirm) => {
+                let dialog = adw::AlertDialog::builder()
+                    .heading(tr("Stop the update?"))
+                    .body(tr("Quitting now would stop pacman part-way."))
+                    .build();
+                dialog.add_response("cancel", &tr("Keep updating"));
+                dialog.add_response("stop", &tr("Stop the update"));
+                dialog.set_response_appearance("stop", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                let l = Rc::downgrade(&live);
+                dialog.connect_response(None, move |_, resp| {
+                    if resp == "stop" {
+                        if let Some(live) = l.upgrade() {
+                            live.stop_now();
+                        }
+                    }
+                });
+                dialog.present(Some(&self.window));
+            }
+            None => {}
+        }
+    }
+
     fn quit_now(&self) {
+        // The run in the window gets its history entry whichever way it
+        // ends: this is the last chance.
+        if let Some(run) = IN_WINDOW.with(|r| r.borrow().as_ref().and_then(Weak::upgrade)) {
+            let live = LIVE.with(|l| l.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(live) = live.filter(|l| l.update.borrow().is_some()) {
+                record_stopped(&run, Some(live.started.elapsed().as_secs_f64()));
+            }
+            self.finish_update(run);
+        }
         let _ = self.on_close();
         BACKGROUND.with(|b| b.borrow_mut().take());
         if let Some(app) = self.window.application() {
@@ -1962,12 +2191,14 @@ impl Win {
             QUIT_PENDING.set(true);
             return;
         }
-        let update = LIVE
-            .with(|l| l.borrow().as_ref().and_then(Weak::upgrade))
-            .and_then(|l| l.update.borrow_mut().take());
+        let live = LIVE.with(|l| l.borrow().as_ref().and_then(Weak::upgrade));
+        let update = live.as_ref().and_then(|l| l.update.borrow_mut().take());
         let Some(mut update) = update else {
             return self.quit_now();
         };
+        if let Some(l) = &live {
+            record_stopped(&l.run, Some(l.started.elapsed().as_secs_f64()));
+        }
         let _ = update.interrupt();
         let w = self.downgrade();
         spawn_bg(
@@ -2300,6 +2531,77 @@ mod tests {
         assert_eq!(quit_decision(&t), QuitDecision::Allow);
     }
 
+    /// Stop is always there while the update runs. While pacman works it
+    /// asks first, saying what stopping then means; it still stops.
+    #[test]
+    fn stop_asks_first_only_while_pacman_works() {
+        let mut t = timeline();
+        assert_eq!(stop_decision(&t), StopDecision::Now);
+        set(&mut t, StepId::SystemPackages, running());
+        assert_eq!(stop_decision(&t), StopDecision::Confirm);
+        set(&mut t, StepId::SystemPackages, done());
+        set(&mut t, StepId::Migrations, running());
+        assert_eq!(stop_decision(&t), StopDecision::Now);
+        let code = include_str!("update_all.rs");
+        let body = code
+            .split("fn stop_clicked(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .expect("stop_clicked");
+        assert!(body.contains("tr(\"Quitting now would stop pacman part-way.\")"));
+        let drive = code.split("fn drive(").nth(1).unwrap();
+        assert!(drive.split("\n    }\n").next().unwrap().contains("set_on_stop("));
+    }
+
+    #[test]
+    fn a_stopped_update_says_who_stopped_it() {
+        let mut t = timeline();
+        set(&mut t, StepId::Snapshot, done());
+        set(
+            &mut t,
+            StepId::SigningKeys,
+            StepState::Failed {
+                reason: "It stopped with an error (exit status 130).".into(),
+                changed: Changed::Unknown,
+                fix: Some(Fix::RetryUpdate),
+            },
+        );
+        mark_stopped(&mut t, Stopped::ByUser);
+        let StepState::Failed { reason, changed, fix } = &t.steps[1].1 else {
+            panic!("still failed")
+        };
+        assert_eq!(reason, "You stopped the update.");
+        assert_eq!(*changed, Changed::Unknown, "a step had finished");
+        assert_eq!(*fix, Some(Fix::RetryUpdate));
+    }
+
+    /// "Stop it and update" only for an update nobody can be answering: one
+    /// with a terminal (someone may be at it) or with pacman at work is
+    /// left to finish, in the preflight's words.
+    #[test]
+    fn a_live_update_elsewhere_is_not_offered_to_be_stopped() {
+        use crate::postupdate::Holder;
+        let h = |pid, terminal| Holder { pid, name: "omarchy-update".into(), terminal };
+        let (reason, fix) = busy_fix(&[h(41, true)], false);
+        let reason = reason.expect("reworded");
+        assert!(reason.contains("Finish it in its terminal"), "{reason}");
+        assert!(reason.contains("omarchy-update (41)"), "{reason}");
+        assert_eq!(fix, Fix::RetryUpdate);
+        let (reason, fix) = busy_fix(&[h(41, false)], true);
+        assert!(reason.is_some());
+        assert_eq!(fix, Fix::RetryUpdate);
+        assert_eq!(busy_fix(&[h(41, false), h(42, false)], false), (None, Fix::StopStuckUpdate(vec![41, 42])));
+        // Gone meanwhile: nothing to stop, the update just starts again.
+        assert_eq!(busy_fix(&[], false), (None, Fix::StopStuckUpdate(vec![])));
+    }
+
+    #[test]
+    fn a_new_attempt_clears_the_earlier_notice() {
+        let code = include_str!("update_all.rs");
+        let drive = code.split("fn drive(").nth(1).unwrap();
+        assert!(drive.split("\n    }\n").next().unwrap().contains("view.clear_notice();"));
+    }
+
     /// A failure that changed nothing stays on the timeline with its fix
     /// (there is nothing for the checks to look at); anything else goes on
     /// to the checks and the report.
@@ -2503,6 +2805,40 @@ mod tests {
         assert_eq!(finished_note(&r), "Update finished — 1 updated");
         r.add_items(&[("b".into(), Outcome::new(Some(false), "did not"))], &[]);
         assert_eq!(finished_note(&r), "Update needs a look");
+    }
+
+    /// A hidden window's notification says a restart is needed, not only
+    /// that the update finished.
+    #[test]
+    fn the_notification_body_carries_the_restart() {
+        let mut r = postupdate::Report::default();
+        assert_eq!(finished_body(&r), "Open Almanac to see the report.");
+        r.add_notes(Some("A restart is needed."), &[]);
+        assert_eq!(finished_body(&r), "Restart to finish. Open Almanac to see the report.");
+    }
+
+    /// Every way a run in the window ends writes its history entry: closing
+    /// the view, Quit (also while the update or the Other apps still ran).
+    #[test]
+    fn every_end_of_a_run_in_the_window_is_recorded() {
+        let code = include_str!("update_all.rs");
+        let body = |f: &str| {
+            code.split(f)
+                .nth(1)
+                .and_then(|s| s.split("\n    }\n").next())
+                .unwrap_or_else(|| panic!("{f}"))
+                .to_string()
+        };
+        assert!(body("fn quit_now(").contains("finish_update("));
+        let stq = body("fn stop_then_quit(");
+        assert!(stq.contains("record_stopped("), "the stopped update is in the entry");
+        let rec = body("fn record_stopped(");
+        assert!(rec.contains("exit: None") && rec.contains("stopped = true"));
+        let other = code.split("if QUIT_PENDING.get() {").nth(1).unwrap();
+        assert!(other.split("return;").next().unwrap().contains("exit: None"));
+        let report = include_str!("update_report.rs");
+        let fin = report.split("fn finish_update(").nth(1).unwrap();
+        assert!(fin.split("\n    }\n").next().unwrap().contains("recorded"), "written once");
     }
 
     #[test]
