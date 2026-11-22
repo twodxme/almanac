@@ -1124,6 +1124,10 @@ pub enum CheckId {
     Warnings,
     Item,
     Held,
+    /// a restart Omarchy asked for (it is left to the user)
+    Restart,
+    /// work a step went on without (Omarchy said so)
+    Skipped,
 }
 
 /// An automatic repair for a failed check.
@@ -1666,6 +1670,26 @@ impl Report {
         }
     }
 
+    /// What the in-window timeline knew that the checks cannot see: the
+    /// restart Omarchy asked for (once: a kernel check may already say it),
+    /// and each step's warning as (step, what it did not do). Both are
+    /// notes: worth knowing, not failures.
+    pub fn add_notes(&mut self, restart: Option<&str>, warnings: &[(String, String)]) {
+        let restart_said = self.checks.iter().any(|c| c.id == CheckId::Kernel);
+        if let Some(note) = restart.filter(|_| !restart_said) {
+            self.checks.push(Check::new(
+                CheckId::Restart,
+                Status::Info,
+                crate::i18n::tr("Restart to finish"),
+                note,
+            ));
+        }
+        for (step, what) in warnings {
+            self.checks
+                .push(Check::new(CheckId::Skipped, Status::Info, step.clone(), what.clone()));
+        }
+    }
+
     /// The one line a toast has room for, when everything passed.
     pub fn summary(&self) -> String {
         let n = self.changes.iter().filter(|c| !c.to.is_empty()).count()
@@ -1684,7 +1708,8 @@ impl Report {
         };
         for c in self.notes() {
             match c.id {
-                CheckId::Kernel => s.push_str(" · restart to finish"),
+                CheckId::Kernel | CheckId::Restart => s.push_str(" · restart to finish"),
+                CheckId::Skipped => s.push_str(&format!(" · {}: {}", c.title, c.detail)),
                 CheckId::Pacnew => {
                     s.push_str(&format!(" · {} (see Health)", c.title.to_lowercase()))
                 }
@@ -2097,6 +2122,8 @@ pub struct RunRecord {
     pub recheck: Option<Report>,
     pub freed: Option<i64>,
     pub snapshot: Option<String>,
+    /// Quit stopped the update before it finished
+    pub stopped: bool,
 }
 
 fn check_result(c: &Check) -> CheckResult {
@@ -2174,6 +2201,9 @@ impl RunRecord {
         if self.recheck.is_some() {
             parts.push("repaired".to_string());
         }
+        if self.stopped {
+            parts.push("stopped before it finished".to_string());
+        }
         if let Some(b) = self.freed.filter(|b| *b > 0) {
             parts.push(format!(
                 "{} freed",
@@ -2187,7 +2217,7 @@ impl RunRecord {
     /// judged by its commands.
     pub fn severity(&self) -> &'static str {
         let bad_exit = self.commands.iter().any(|c| c.exit != Some(0));
-        if self.failed() || (self.last().is_none() && bad_exit) {
+        if self.failed() || self.stopped || (self.last().is_none() && bad_exit) {
             "warn"
         } else {
             ""
@@ -2205,6 +2235,45 @@ mod tests {
 
     fn strs(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// What the timeline knew and the checks cannot see: a restart Omarchy
+    /// asked for, and work it went on without (no snapshot, AUR skipped).
+    /// Soft warnings: the run still passes, the report and toast say them.
+    #[test]
+    fn the_timelines_notes_are_soft_warnings_in_the_report() {
+        let mut r = Report::default();
+        r.add_notes(
+            Some("A restart is needed. Run omarchy-system reboot when ready."),
+            &[("Snapshot".into(), "No snapshot taken".into())],
+        );
+        assert!(r.passed());
+        assert_eq!(r.notes().len(), 2);
+        let restart = r.checks.iter().find(|c| c.id == CheckId::Restart).expect("restart");
+        assert_eq!(restart.title, "Restart to finish");
+        assert!(restart.detail.contains("omarchy-system reboot"));
+        let skipped = r.checks.iter().find(|c| c.id == CheckId::Skipped).expect("skipped");
+        assert_eq!((skipped.title.as_str(), skipped.detail.as_str()), ("Snapshot", "No snapshot taken"));
+        let sum = r.summary();
+        assert!(sum.contains(" · restart to finish"), "{sum}");
+        assert!(sum.contains(" · Snapshot: No snapshot taken"), "{sum}");
+
+        // The kernel check already says restart: not twice.
+        let mut r = Report::default();
+        r.checks.push(Check::new(CheckId::Kernel, Status::Info, "Restart to finish", "k"));
+        r.add_notes(Some("note"), &[]);
+        assert_eq!(r.notes().len(), 1);
+        assert_eq!(r.summary().matches("restart to finish").count(), 1);
+    }
+
+    /// Quit stopped the update: its history entry says so.
+    #[test]
+    fn a_run_stopped_before_it_finished_says_so() {
+        let mut rec = RunRecord::default();
+        rec.commands.push(CommandRun { argv: "omarchy update -y".into(), exit: None, secs: Some(3.0) });
+        rec.stopped = true;
+        assert!(rec.detail().contains("stopped before it finished"), "{}", rec.detail());
+        assert_eq!(rec.severity(), "warn");
     }
 
     /// A clean upgrade, as this machine's own log has them.

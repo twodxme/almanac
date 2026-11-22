@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::i18n::tr;
 use crate::postupdate::clean_output;
 
 /// How long without a recognised process before the view goes generic.
@@ -104,7 +105,15 @@ pub struct AppRow {
 #[derive(Clone, Debug)]
 pub struct Timeline {
     pub steps: Vec<(StepId, StepState)>,
+    /// Rows only for what the Updates list showed (Timeline::new).
     pub apps: Vec<AppRow>,
+    /// Per step, how many other packages pacman worked on: the libraries
+    /// and dependencies that came along, counted, never rows.
+    pub others: Vec<(StepId, usize)>,
+    /// What a step did not do although the update went on: Omarchy said
+    /// so (no snapshot, AUR skipped), or it got past an error. Shown on the
+    /// step, carried into the report.
+    pub warnings: Vec<(StepId, String)>,
     pub restart_note: Option<String>,
     pub generic: bool,
 }
@@ -138,9 +147,30 @@ impl Timeline {
                     state: AppState::Waiting,
                 })
                 .collect(),
+            others: Vec::new(),
+            warnings: Vec::new(),
             restart_note: None,
             generic: false,
         }
+    }
+
+    /// How many packages besides its rows the step worked on.
+    pub fn others(&self, id: StepId) -> usize {
+        self.others
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map_or(0, |(_, n)| *n)
+    }
+
+    /// The step's warnings, joined; None when it has none.
+    pub fn warning(&self, id: StepId) -> Option<String> {
+        let w: Vec<&str> = self
+            .warnings
+            .iter()
+            .filter(|(i, _)| *i == id)
+            .map(|(_, w)| w.as_str())
+            .collect();
+        (!w.is_empty()).then(|| w.join(" · "))
     }
 
     /// The step under way: the last one running.
@@ -180,6 +210,14 @@ pub struct Tracker {
     pending: String,
     /// The row pacman is on.
     open_row: Option<usize>,
+    /// The packages counted in `others`, each once.
+    other_names: Vec<String>,
+    /// A package pacman was on that is not a row has finished.
+    others_done: bool,
+    /// The step pacman printed a fatal-looking error in, and the line. It
+    /// becomes that step's failure only if the update then fails; got past,
+    /// it is a warning.
+    error_seen: Option<(StepId, String)>,
 }
 
 impl Tracker {
@@ -189,6 +227,22 @@ impl Tracker {
             started: Instant::now(),
             pending: String::new(),
             open_row: None,
+            other_names: Vec::new(),
+            others_done: false,
+            error_seen: None,
+        }
+    }
+
+    fn warn(&mut self, id: StepId, text: String) {
+        if !self.t.warnings.iter().any(|(i, w)| *i == id && *w == text) {
+            self.t.warnings.push((id, text));
+        }
+    }
+
+    /// A pacman error was printed in a step the update then got past.
+    fn error_got_past(&mut self) {
+        if let Some((id, _)) = self.error_seen.take() {
+            self.warn(id, tr("Finished after an error"));
         }
     }
 
@@ -213,6 +267,14 @@ impl Tracker {
             .filter_map(|id| self.t.index(id))
             .max();
         if let Some(at) = reached {
+            if self
+                .error_seen
+                .as_ref()
+                .and_then(|(id, _)| self.t.index(*id))
+                .is_some_and(|i| i < at)
+            {
+                self.error_got_past();
+            }
             if !self.t.failed() {
                 for i in 0..at {
                     if !matches!(self.t.steps[i].1, StepState::Failed { .. }) {
@@ -255,6 +317,7 @@ impl Tracker {
         let tail = std::mem::take(&mut self.pending);
         self.segment(&tail);
         if code == 0 {
+            self.error_got_past();
             // Exit 0 means omarchy update finished all its own steps, sampled
             // or not. "Other apps" runs after it, in Almanac: not ours to close.
             let mut closed = Vec::new();
@@ -272,6 +335,13 @@ impl Tracker {
                 self.close_rows(id);
             }
             self.t.generic = false;
+        } else if let Some((id, line)) = self.error_seen.take().filter(|_| !self.t.failed()) {
+            let changed = if self.any_row_done() {
+                Changed::Some
+            } else {
+                Changed::Nothing
+            };
+            self.fail(id, line, changed, Some(Fix::RetryUpdate));
         } else if !self.t.failed() {
             let at = self
                 .t
@@ -286,18 +356,24 @@ impl Tracker {
                 .unwrap_or(StepId::Snapshot);
             self.fail(
                 at,
-                format!("It stopped with an error (exit status {code})."),
+                tr("It stopped with an error (exit status {code}).")
+                    .replace("{code}", &code.to_string()),
                 Changed::Unknown,
                 Some(Fix::RetryUpdate),
             );
         }
     }
 
+    /// `id` failed. Never a step already done: what it did stands.
     fn fail(&mut self, id: StepId, reason: String, changed: Changed, fix: Option<Fix>) {
         if self.t.failed() {
             return;
         }
-        if let Some(i) = self.t.index(id) {
+        let Some(i) = self.t.index(id) else { return };
+        if matches!(self.t.steps[i].1, StepState::Done { .. }) {
+            return;
+        }
+        {
             self.t.steps[i].1 = StepState::Failed {
                 reason,
                 changed,
@@ -328,10 +404,12 @@ impl Tracker {
     }
 
     fn any_row_done(&self) -> bool {
-        self.t
-            .apps
-            .iter()
-            .any(|r| matches!(r.state, AppState::Done { .. }))
+        self.others_done
+            || self
+                .t
+                .apps
+                .iter()
+                .any(|r| matches!(r.state, AppState::Done { .. }))
     }
 
     fn segment(&mut self, raw: &str) {
@@ -344,38 +422,48 @@ impl Tracker {
             // The output cannot say who holds it; the caller fills the ids.
             self.fail(
                 StepId::Snapshot,
-                "Another Omarchy update is running.".into(),
+                tr("Another Omarchy update is running."),
                 Changed::Nothing,
                 Some(Fix::StopStuckUpdate(Vec::new())),
             );
         } else if line.contains("This upgrade needs an answer") {
             self.fail(
                 StepId::SystemPackages,
-                "This update needs an answer only you can give.".into(),
+                tr("This update needs an answer only you can give."),
                 Changed::Nothing,
                 Some(Fix::Resolve),
             );
         } else if line.contains("incorrect password attempt") {
+            // What changed is said by the card, from `changed`.
             self.fail(
                 StepId::Snapshot,
-                "Password not accepted. Nothing was changed.".into(),
+                tr("Password not accepted."),
                 Changed::Nothing,
-                None,
-            );
-        } else if line.starts_with("error: failed retrieving file")
-            || line.contains("failed to commit transaction")
-        {
-            let changed = if self.any_row_done() {
-                Changed::Some
-            } else {
-                Changed::Nothing
-            };
-            self.fail(
-                StepId::SystemPackages,
-                line.to_string(),
-                changed,
                 Some(Fix::RetryUpdate),
             );
+        } else if line.starts_with("error: failed to retrieve some files")
+            || line.contains("failed to commit transaction")
+        {
+            // pacman's own fatal lines; a per-mirror "failed retrieving
+            // file" is not one (it tries the next mirror). Omarchy replays
+            // pacman's stderr after the run, so a line alone proves nothing:
+            // the step it was printed in is blamed only if the update fails.
+            let at = self.t.current().unwrap_or(StepId::SystemPackages);
+            let open = self
+                .t
+                .index(at)
+                .is_some_and(|i| !matches!(self.t.steps[i].1, StepState::Done { .. }));
+            if open && self.error_seen.is_none() {
+                self.error_seen = Some((at, line.to_string()));
+            }
+        } else if line.contains("Continuing the update without a snapshot")
+            || line.contains("so no snapshot was created")
+        {
+            self.warn(StepId::Snapshot, tr("No snapshot taken"));
+        } else if line.contains("AUR is unavailable (so skipping updates)") {
+            self.warn(StepId::AurAndTools, tr("AUR updates skipped"));
+        } else if line.contains("Some mise tools could not be updated") {
+            self.warn(StepId::AurAndTools, tr("Some tools not updated"));
         } else if line.contains("Run omarchy-system reboot when ready") {
             self.t.restart_note = Some(line.to_string());
         } else if line.starts_with(":: Retrieving packages") {
@@ -386,7 +474,7 @@ impl Tracker {
                         StepState::Waiting | StepState::Running { .. }
                     ) {
                         self.t.steps[i].1 = StepState::Running {
-                            detail: "Downloading".into(),
+                            detail: tr("Downloading"),
                         };
                     }
                 }
@@ -399,19 +487,8 @@ impl Tracker {
     /// A row seen in the output; `finished` is the version of an
     /// "upgraded NAME (a -> b)" line, `None` for a row that is starting.
     fn row(&mut self, name: &str, finished: Option<String>) {
-        let found = self.t.apps.iter().position(|r| r.name == name);
-        let at = match found {
-            Some(i) => i,
-            None => {
-                let step = self.t.current().unwrap_or(StepId::SystemPackages);
-                self.t.apps.push(AppRow {
-                    name: name.to_string(),
-                    to: finished.clone().unwrap_or_default(),
-                    step,
-                    state: AppState::Waiting,
-                });
-                self.t.apps.len() - 1
-            }
+        let Some(at) = self.t.apps.iter().position(|r| r.name == name) else {
+            return self.other(name, finished.is_some());
         };
         match finished {
             Some(v) => {
@@ -421,15 +498,43 @@ impl Tracker {
                 }
             }
             None => {
-                if let Some(prev) = self.open_row.take() {
-                    if prev != at && !matches!(self.t.apps[prev].state, AppState::Done { .. }) {
-                        let to = self.t.apps[prev].to.clone();
-                        self.t.apps[prev].state = AppState::Done { version: to };
-                    }
-                }
+                self.close_open_row(Some(at));
                 self.t.apps[at].state = AppState::Installing;
                 self.open_row = Some(at);
             }
+        }
+    }
+
+    /// pacman moved on from the row it was on (to `next`, if a row).
+    fn close_open_row(&mut self, next: Option<usize>) {
+        if let Some(prev) = self.open_row.take() {
+            if Some(prev) != next && !matches!(self.t.apps[prev].state, AppState::Done { .. }) {
+                let to = self.t.apps[prev].to.clone();
+                self.t.apps[prev].state = AppState::Done { version: to };
+            }
+        }
+    }
+
+    /// A package that is not a row: counted on the step under way.
+    fn other(&mut self, name: &str, finished: bool) {
+        if !finished {
+            if self.open_row.is_some() {
+                self.close_open_row(None);
+            } else if !self.other_names.is_empty() {
+                // The package before this one is done.
+                self.others_done = true;
+            }
+        } else {
+            self.others_done = true;
+        }
+        if self.other_names.iter().any(|n| n == name) {
+            return;
+        }
+        self.other_names.push(name.to_string());
+        let step = self.t.current().unwrap_or(StepId::SystemPackages);
+        match self.t.others.iter_mut().find(|(i, _)| *i == step) {
+            Some((_, n)) => *n += 1,
+            None => self.t.others.push((step, 1)),
         }
     }
 }
@@ -608,19 +713,21 @@ mod tests {
         );
     }
 
+    /// Only the packages the Updates list showed are rows; the libraries
+    /// and dependencies pacman also touches are a count on the step.
     #[test]
-    fn unknown_packages_get_rows() {
+    fn only_planned_packages_are_rows_the_rest_a_count() {
         let mut t = tr();
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
-        t.on_output("(1/9) upgrading libfoo\n");
-        let r = t
-            .timeline()
-            .apps
-            .iter()
-            .find(|r| r.name == "libfoo")
-            .unwrap();
-        assert_eq!(r.step, StepId::SystemPackages);
-        assert_eq!(r.state, AppState::Installing);
+        t.on_output("(1/9) upgrading libfoo\n(2/9) upgrading cursor\n(3/9) installing libbar\n");
+        t.on_output("(4/9) upgrading libfoo\n");
+        let tl = t.timeline();
+        assert!(tl.apps.iter().all(|r| r.name != "libfoo" && r.name != "libbar"));
+        assert_eq!(tl.apps.len(), 5);
+        assert_eq!(tl.others(StepId::SystemPackages), 2);
+        assert_eq!(tl.others(StepId::AurAndTools), 0);
+        // An unknown package after a planned one: the planned one is done.
+        assert_eq!(row(&t, "cursor"), AppState::Done { version: "1.2".into() });
     }
 
     #[test]
@@ -688,20 +795,102 @@ mod tests {
         ));
     }
 
+    /// pacman says "failed retrieving file" for each mirror that misses and
+    /// then tries the next; Omarchy replays pacman's stderr after it
+    /// succeeded. Neither is a failure.
     #[test]
-    fn download_failure_fails_system_packages() {
+    fn a_mirror_miss_is_not_a_failure() {
         let mut t = tr();
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
-        t.on_output("error: failed retrieving file 'x' from mirror : Could not resolve host\n");
+        t.on_output("(1/5) upgrading cursor\n");
+        t.on_output(
+            "error: failed retrieving file 'cursor-1.2-1-x86_64.pkg.tar.zst' from \
+             mirror.example.org : The requested URL returned error: 404\n",
+        );
+        assert!(running(&t, StepId::SystemPackages));
+        assert_eq!(row(&t, "cursor"), AppState::Installing);
+        t.on_exit(0);
+        assert!(done(&t, StepId::SystemPackages));
+        assert!(t.timeline().warnings.is_empty());
+    }
+
+    /// pacman's fatal lines count only if the update then fails: the step
+    /// they were printed in is the one that failed, with pacman's words.
+    #[test]
+    fn a_pacman_error_fails_its_step_when_the_update_fails() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_output("error: failed to retrieve some files\n");
+        assert!(running(&t, StepId::SystemPackages), "not yet: the exit decides");
+        t.on_exit(1);
         match state(&t, StepId::SystemPackages) {
-            StepState::Failed {
-                reason, changed, ..
-            } => {
-                assert!(reason.starts_with("error: failed retrieving file"));
+            StepState::Failed { reason, changed, fix } => {
+                assert_eq!(reason, "error: failed to retrieve some files");
                 assert_eq!(changed, Changed::Nothing);
+                assert_eq!(fix, Some(Fix::RetryUpdate));
             }
             o => panic!("{o:?}"),
         }
+    }
+
+    /// The conflict handler moves the files aside and runs pacman again:
+    /// the update went on, so the step is done, with a warning.
+    #[test]
+    fn a_pacman_error_the_update_got_past_is_a_warning() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_output("error: failed to commit transaction (conflicting files)\n");
+        t.on_procs(&s(&["omarchy-migrate"]));
+        assert!(done(&t, StepId::SystemPackages));
+        assert!(running(&t, StepId::Migrations));
+        assert_eq!(t.timeline().warning(StepId::SystemPackages), Some("Finished after an error".into()));
+        t.on_exit(0);
+        assert!(t.timeline().steps.iter().all(|(_, s)| matches!(s, StepState::Done { .. })));
+    }
+
+    /// yay's `pacman -U` fails in the AUR phase: that step fails, the
+    /// finished System packages step stays done.
+    #[test]
+    fn an_aur_phase_error_never_repaints_a_done_step() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-update-system-pkgs"]));
+        t.on_procs(&s(&["omarchy-migrate"]));
+        t.on_procs(&s(&["omarchy-update-aur-pkgs"]));
+        t.on_output("error: failed to commit transaction (conflicting files)\n");
+        t.on_exit(1);
+        assert!(done(&t, StepId::SystemPackages));
+        assert!(t.timeline().warning(StepId::SystemPackages).is_none());
+        assert!(matches!(
+            state(&t, StepId::AurAndTools),
+            StepState::Failed { ref reason, .. } if reason.contains("failed to commit transaction")
+        ));
+    }
+
+    /// Omarchy goes on past these and exits 0: the steps end done, but say
+    /// what did not happen (the exact lines Omarchy prints, colours and all).
+    #[test]
+    fn skipped_work_is_a_warning_not_a_plain_tick() {
+        let mut t = tr();
+        t.on_procs(&s(&["omarchy-snapshot"]));
+        t.on_output("\x1b[33mNo Snapper configs found, so no snapshot was created.\x1b[0m\n");
+        t.on_output("\x1b[33mContinuing the update without a snapshot.\x1b[0m\n");
+        t.on_procs(&s(&["omarchy-update-aur-pkgs"]));
+        t.on_output("\x1b[31m\nAUR is unavailable (so skipping updates)\x1b[0m\n");
+        t.on_procs(&s(&["omarchy-update-boot"]));
+        t.on_output(
+            "\x1b[33m\nSome mise tools could not be updated. Review the errors above and run \
+             'omarchy update mise' to retry.\x1b[0m\n",
+        );
+        t.on_exit(0);
+        let tl = t.timeline();
+        assert!(done(&t, StepId::Snapshot));
+        assert_eq!(tl.warning(StepId::Snapshot), Some("No snapshot taken".into()));
+        assert_eq!(
+            tl.warning(StepId::AurAndTools),
+            Some("AUR updates skipped · Some tools not updated".into())
+        );
+        assert_eq!(tl.warning(StepId::SigningKeys), None);
+        assert_eq!(tl.warnings.len(), 3, "{:?}", tl.warnings);
     }
 
     #[test]
@@ -710,6 +899,7 @@ mod tests {
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
         t.on_output("(1/5) upgrading cursor\n(2/5) upgrading mise\n");
         t.on_output("error: failed to commit transaction (conflicting files)\n");
+        t.on_exit(1);
         assert!(matches!(
             state(&t, StepId::SystemPackages),
             StepState::Failed {
@@ -727,9 +917,10 @@ mod tests {
         assert_eq!(
             state(&t, StepId::Snapshot),
             StepState::Failed {
-                reason: "Password not accepted. Nothing was changed.".into(),
+                // The card adds "Nothing was changed." from `changed`.
+                reason: "Password not accepted.".into(),
                 changed: Changed::Nothing,
-                fix: None
+                fix: Some(Fix::RetryUpdate)
             }
         );
     }
@@ -810,6 +1001,8 @@ mod tests {
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
         t.on_output("(1/5) upgrading cursor\n");
         t.on_output("error: failed to commit transaction (x)\n");
+        assert_eq!(row(&t, "cursor"), AppState::Installing, "not yet: the exit decides");
+        t.on_exit(1);
         assert_eq!(row(&t, "cursor"), AppState::Failed);
     }
 

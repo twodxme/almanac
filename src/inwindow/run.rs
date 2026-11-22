@@ -21,6 +21,7 @@ use super::procs;
 use super::prompt::{self, Answer, Prompt};
 use super::pty::Pty;
 use super::tracker::{Timeline, Tracker};
+use crate::i18n::tr;
 use crate::postupdate::clean_output;
 
 /// How long the output must be quiet before the tail is checked for a prompt.
@@ -34,9 +35,12 @@ const TAIL_LINES: usize = 2000;
 const PROMPT_WINDOW: usize = 4096;
 /// A single unterminated line is cut to this many bytes in memory.
 const PARTIAL_MAX: usize = 64 * 1024;
+/// Output quiet this long, with no question Almanac knows on screen: the
+/// update may be waiting on something only Details shows.
+const SEEMS_WAITING: Duration = Duration::from_secs(60);
+/// The exit code given to an update Almanac hung up on (128 + SIGHUP).
+const HUNG_UP: i32 = 129;
 const RESTART_PROCESS: &str = "omarchy-update-restart";
-const RESTART_NOTE: &str =
-    "A restart is needed. Almanac did not restart your computer. Run omarchy-system reboot when ready.";
 /// Variables that change how the update treats questions and pacman; only
 /// Almanac decides them, never the environment it was started from.
 const STRIPPED_ENV: [&str; 2] = ["OMARCHY_UPDATE_UNATTENDED", "OMARCHY_ALLOW_DIRECT_PACMAN"];
@@ -53,6 +57,9 @@ pub enum Event {
     NeedsPassword { prompt: String, attempt: u32 },
     /// The update waits on a question (always a `Prompt::Question`).
     Question(Prompt),
+    /// The password request or question last raised is no longer on screen
+    /// (output moved past it): its card must go, it would send nothing.
+    PromptGone,
     /// The update ended. The terminal is already released.
     Finished { code: i32 },
 }
@@ -109,6 +116,10 @@ pub struct UpdateRun {
     since_handled: String,
     /// What is on screen and may be answered. Nothing else is written.
     open: Option<Prompt>,
+    /// Almanac hung up on it (`hang_up`); its Finished is still to be said.
+    hung_up: bool,
+    /// `open` was cleared by output; PromptGone is still to be said.
+    gone: bool,
 }
 
 fn open_log(path: &Path) -> Result<File, String> {
@@ -209,6 +220,8 @@ impl UpdateRun {
             handled: None,
             since_handled: String::new(),
             open: None,
+            hung_up: false,
+            gone: false,
         })
     }
 
@@ -242,6 +255,11 @@ impl UpdateRun {
     pub(crate) fn poll_at(&mut self, now: Instant) -> Vec<Event> {
         let mut events = Vec::new();
         let Some(pty) = self.pty.as_ref() else {
+            if std::mem::take(&mut self.hung_up) {
+                self.tracker.on_exit(HUNG_UP);
+                events.push(Event::Changed);
+                events.push(Event::Finished { code: HUNG_UP });
+            }
             return events;
         };
         let mut buf = Vec::new();
@@ -270,6 +288,9 @@ impl UpdateRun {
         }
         if changed {
             events.push(Event::Changed);
+        }
+        if std::mem::take(&mut self.gone) {
+            events.push(Event::PromptGone);
         }
 
         if now.saturating_duration_since(self.last_output) >= PROMPT_IDLE {
@@ -382,6 +403,7 @@ impl UpdateRun {
         if let Some(open) = &self.open {
             if prompt::detect(&self.window).as_ref() != Some(open) {
                 self.open = None;
+                self.gone = true;
             }
         }
         let Some((Prompt::Question { text: qtext, answers }, _)) = self.handled.clone() else {
@@ -447,7 +469,9 @@ impl UpdateRun {
                     // No way to say No: say nothing. Never guess.
                     if let Some(no) = no {
                         if self.write(&no.send).is_ok() {
-                            self.tracker.set_restart_note(RESTART_NOTE.into());
+                            let note = tr("A restart is needed. Almanac did not restart your \
+                                           computer. Run omarchy-system reboot when ready.");
+                            self.tracker.set_restart_note(note);
                             return Some(Event::Changed);
                         }
                     }
@@ -514,6 +538,36 @@ impl UpdateRun {
     pub fn interrupt(&mut self) -> Result<(), String> {
         self.open = None;
         self.write(b"\x03")
+    }
+
+    /// Stop it for good, for an update Ctrl-C did not end: the terminal is
+    /// let go of (a hangup, then whatever of it is left is killed; that
+    /// waits, so off this thread), and the next poll says Finished.
+    pub fn hang_up(&mut self) {
+        if let Some(pty) = self.pty.take() {
+            self.open = None;
+            self.hung_up = true;
+            std::thread::spawn(move || drop(pty));
+        }
+    }
+
+    /// The output has been quiet for a minute and no question Almanac
+    /// knows is on screen: it may be waiting on one it does not know.
+    pub fn seems_waiting(&self, now: Instant) -> bool {
+        self.pty.is_some()
+            && self.open.is_none()
+            && now.saturating_duration_since(self.last_output) >= SEEMS_WAITING
+            && prompt::detect(&self.window).is_none()
+    }
+
+    /// The last thing printed, cleaned, for the "seems to be waiting" hint.
+    pub fn last_line(&self) -> String {
+        let text = clean_output(&self.window);
+        text.split(['\r', '\n'])
+            .map(str::trim)
+            .rfind(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
     }
 
     /// Send one of the open question's answers. Anything else, and any answer
@@ -655,6 +709,65 @@ wait
         assert_ne!(finished_code(&events), 0);
         assert!(!run.log_tail().contains("not-reached"));
         assert!(run.interrupt().is_err(), "nothing to interrupt once it ended");
+    }
+
+    /// Output quiet for a minute on something that is not a question
+    /// Almanac knows: the view says the update seems to be waiting. Not for
+    /// a question on screen (that has its card), nor before the minute.
+    #[test]
+    fn a_minute_of_silence_without_a_known_question_seems_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        for (body, waits) in [
+            ("printf 'Pick a mirror > '\nsleep 5", true),
+            ("printf 'Continue? [Y/n] '\nsleep 5", false),
+        ] {
+            let argv = script(dir.path(), body);
+            let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("w.log")).unwrap();
+            let mut t0 = Instant::now();
+            while run.log_tail().is_empty() {
+                t0 = Instant::now();
+                run.poll_at(t0);
+                std::thread::sleep(Duration::from_millis(10));
+                assert!(Instant::now() < t0 + Duration::from_secs(20), "no output");
+            }
+            run.poll_at(t0 + Duration::from_secs(1));
+            assert!(!run.seems_waiting(t0 + Duration::from_secs(59)), "{body}");
+            assert_eq!(run.seems_waiting(t0 + Duration::from_secs(61)), waits, "{body}");
+        }
+    }
+
+    /// Stop sends Ctrl-C; an update that ignores it is hung up on instead,
+    /// and still ends as Finished (nothing is left waiting).
+    #[test]
+    fn an_update_that_ignores_ctrl_c_is_hung_up_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = script(dir.path(), "trap '' INT\necho started\nsleep 30\necho not-reached");
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        let pid = run.pid() as i32;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !run.log_tail().contains("started") {
+            run.poll();
+            assert!(Instant::now() < deadline, "no output");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        run.interrupt().unwrap();
+        let ignored = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < ignored {
+            assert!(!run.poll().iter().any(|e| matches!(e, Event::Finished { .. })), "Ctrl-C was ignored");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        run.hang_up();
+        let sent = 2;
+        let events = run.poll();
+        assert_eq!(sent, 2);
+        assert_ne!(finished_code(&events), 0);
+        assert!(!run.is_running());
+        assert!(!run.log_tail().contains("not-reached"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive(pid));
     }
 
     #[test]
@@ -1089,6 +1202,33 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         let asked = |evs: Vec<Event>| evs.iter().any(|e| matches!(e, Event::Question(_)));
         assert!(!asked(run.poll_at(t0 + Duration::from_millis(399))));
         assert!(asked(run.poll_at(t0 + Duration::from_millis(401))));
+    }
+
+    /// Output after a question pushes it off screen: whatever waits now is
+    /// not that question, so its card must go (`PromptGone`) rather than
+    /// stay with buttons that send nothing.
+    #[test]
+    fn a_question_pushed_off_screen_takes_its_card_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = script(
+            dir.path(),
+            "printf 'Proceed? [Y/n] '\nsleep 1.5\necho 'unrelated output'\nsleep 1.5",
+        );
+        let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
+        let mut asked: Option<Vec<Answer>> = None;
+        let mut gone_after_ask = false;
+        let mut late = None;
+        drive_virtual(&mut run, |e, run| match e {
+            Event::Question(Prompt::Question { answers, .. }) => asked = Some(answers.clone()),
+            Event::PromptGone if asked.is_some() => {
+                gone_after_ask = true;
+                late = Some(run.answer(&asked.as_ref().unwrap()[0]));
+            }
+            _ => {}
+        });
+        assert!(asked.is_some());
+        assert!(gone_after_ask);
+        assert!(late.expect("tried").is_err());
     }
 
     #[test]

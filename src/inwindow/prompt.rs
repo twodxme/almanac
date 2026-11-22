@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::i18n::tr;
 use crate::postupdate::clean_output;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,13 +99,13 @@ pub fn detect(tail: &str) -> Option<Prompt> {
         let reboot = mentions_reboot(&text);
         return Some(Prompt::Question {
             text,
-            answers: vec![answer("Yes", b"y\n", reboot), answer("No", b"n\n", false)],
+            answers: vec![answer(&tr("Yes"), b"y\n", reboot), answer(&tr("No"), b"n\n", false)],
         });
     }
     if SELECTION.is_match(last) {
         return Some(Prompt::Question {
             text: last.to_string(),
-            answers: vec![answer("Default", b"\n", false)],
+            answers: vec![answer(&tr("Default"), b"\n", false)],
         });
     }
     None
@@ -131,6 +132,25 @@ mod tests {
              \x1b[38;2;98;98;98menter\x1b[m \x1b[38;2;74;74;74msubmit\x1b[38;2;60;60;60m \u{2022} \
              \x1b[38;2;98;98;98my\x1b[m \x1b[38;2;74;74;74mYes\x1b[m\r\x1b[4A"
         )
+    }
+
+    /// The words Almanac puts on the buttons itself reach the translation
+    /// template (gum's own buttons are what is on screen and stay as drawn),
+    /// and so do the driver's and tracker's sentences.
+    #[test]
+    fn the_words_almanac_adds_are_translatable_literals() {
+        let code = |src: &'static str| src.split("#[cfg(test)]").next().unwrap_or(src);
+        let prompt = code(include_str!("prompt.rs"));
+        for w in ["Yes", "No", "Default"] {
+            assert!(prompt.contains(&format!("answer(&tr(\"{w}\")")), "{w}");
+        }
+        let run = code(include_str!("run.rs"));
+        assert!(run.contains("tr(\"A restart is needed."), "the restart note");
+        let tracker = code(include_str!("tracker.rs"));
+        for w in ["Downloading", "Another Omarchy update is running.", "Password not accepted."] {
+            assert!(tracker.contains(&format!("tr(\"{w}\")")), "{w}");
+        }
+        assert!(tracker.contains("tr(\"It stopped with an error (exit status {code}).\")"));
     }
 
     #[test]
