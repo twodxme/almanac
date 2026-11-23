@@ -31,7 +31,10 @@ fn failure(t: &Timeline) -> Option<(StepId, &Changed)> {
 }
 
 fn all_done(t: &Timeline) -> bool {
-    !t.steps.is_empty() && t.steps.iter().all(|(_, s)| matches!(s, StepState::Done { .. }))
+    !t.steps.is_empty()
+        && t.steps
+            .iter()
+            .all(|(_, s)| matches!(s, StepState::Done { .. }))
 }
 
 /// A step's name, translated. Each is a literal so it reaches the
@@ -51,7 +54,10 @@ pub fn step_label(id: StepId) -> String {
 /// The heading: what the update is doing, or how it ended.
 pub fn title(t: &Timeline) -> String {
     if let Some((_, changed)) = failure(t) {
-        let none_done = !t.steps.iter().any(|(_, s)| matches!(s, StepState::Done { .. }));
+        let none_done = !t
+            .steps
+            .iter()
+            .any(|(_, s)| matches!(s, StepState::Done { .. }));
         return if none_done && *changed == Changed::Nothing {
             tr("The update didn't start")
         } else {
@@ -165,12 +171,14 @@ pub fn step_detail(t: &Timeline, id: StepId, s: &StepState) -> String {
     let n = t.others(id);
     if n > 0 && !matches!(s, StepState::Waiting) {
         let rows = t.apps.iter().any(|a| a.step == id);
-        parts.push(if rows {
-            crate::i18n::ngettext("and {n} more package", "and {n} more packages", n as u64)
-        } else {
-            crate::i18n::ngettext("{n} package", "{n} packages", n as u64)
-        }
-        .replace("{n}", &n.to_string()));
+        parts.push(
+            if rows {
+                crate::i18n::ngettext("and {n} more package", "and {n} more packages", n as u64)
+            } else {
+                crate::i18n::ngettext("{n} package", "{n} packages", n as u64)
+            }
+            .replace("{n}", &n.to_string()),
+        );
     }
     parts.join(" · ")
 }
@@ -590,7 +598,8 @@ impl UpdateView {
     fn ensure_steps(&self, t: &Timeline) {
         let same = {
             let steps = self.0.steps.borrow();
-            steps.len() == t.steps.len() && steps.iter().zip(&t.steps).all(|(u, (id, _))| u.id == *id)
+            steps.len() == t.steps.len()
+                && steps.iter().zip(&t.steps).all(|(u, (id, _))| u.id == *id)
         };
         if same {
             return;
@@ -739,7 +748,10 @@ impl UpdateView {
     }
 
     fn render_failure(&self, ui: &StepUi, state: &StepState) {
-        let StepState::Failed { reason, changed, .. } = state else {
+        let StepState::Failed {
+            reason, changed, ..
+        } = state
+        else {
             ui.failure.set_visible(false);
             *ui.failure_key.borrow_mut() = None;
             return;
@@ -910,7 +922,12 @@ impl UpdateView {
 
     /// Ask for the password in place. `reply` gets the password, or None for
     /// Cancel; the card closes first, whatever the reply then does.
-    pub fn ask_password(&self, prompt: &str, attempt: u32, reply: impl Fn(Option<String>) + 'static) {
+    pub fn ask_password(
+        &self,
+        prompt: &str,
+        attempt: u32,
+        reply: impl Fn(Option<String>) + 'static,
+    ) {
         let _ = prompt; // sudo's own wording ("[sudo] password for …") is not shown
         let card = inset_card();
         card.append(&label(&tr("Your password to update"), &["heading"]));
@@ -923,7 +940,9 @@ impl UpdateView {
         }
         let list = Win::note_list();
         list.set_margin_top(6);
-        let entry = adw::PasswordEntryRow::builder().title(tr("Password")).build();
+        let entry = adw::PasswordEntryRow::builder()
+            .title(tr("Password"))
+            .build();
         list.append(&entry);
         card.append(&list);
 
@@ -1182,14 +1201,20 @@ pub fn preview(win: &Win, which: &str) {
         });
     } else {
         for i in 0..2 {
-            t.steps[i].1 = StepState::Done { detail: String::new() };
+            t.steps[i].1 = StepState::Done {
+                detail: String::new(),
+            };
         }
-        t.steps[2].1 = StepState::Running { detail: tr("Installing") };
+        t.steps[2].1 = StepState::Running {
+            detail: tr("Installing"),
+        };
         t.others.push((StepId::SystemPackages, 182));
         t.warnings.push((StepId::Snapshot, tr("No snapshot taken")));
         for (i, a) in t.apps.iter_mut().enumerate() {
             a.state = match i {
-                0 | 1 => AppState::Done { version: a.to.clone() },
+                0 | 1 => AppState::Done {
+                    version: a.to.clone(),
+                },
                 2 => AppState::Installing,
                 _ => AppState::Waiting,
             };
@@ -1203,8 +1228,16 @@ pub fn preview(win: &Win, which: &str) {
             }),
             "question" | "reboot" => {
                 let reboot = which == "reboot";
-                let no = Answer { label: "No".into(), send: b"n\r".to_vec(), is_reboot_yes: false };
-                let yes = Answer { label: "Yes".into(), send: b"y\r".to_vec(), is_reboot_yes: reboot };
+                let no = Answer {
+                    label: "No".into(),
+                    send: b"n\r".to_vec(),
+                    is_reboot_yes: false,
+                };
+                let yes = Answer {
+                    label: "Yes".into(),
+                    send: b"y\r".to_vec(),
+                    is_reboot_yes: reboot,
+                };
                 view.ask(
                     &Prompt::Question {
                         text: if reboot {
@@ -1311,11 +1344,15 @@ mod tests {
     }
 
     fn done() -> StepState {
-        StepState::Done { detail: String::new() }
+        StepState::Done {
+            detail: String::new(),
+        }
     }
 
     fn running() -> StepState {
-        StepState::Running { detail: String::new() }
+        StepState::Running {
+            detail: String::new(),
+        }
     }
 
     /// Step names reach the translation template: each is a literal `tr`
@@ -1344,7 +1381,11 @@ mod tests {
     fn labels_and_positions() {
         let mut t = five();
         assert_eq!(subtitle(&t), "Starting…");
-        for id in [StepId::Snapshot, StepId::SigningKeys, StepId::SystemPackages] {
+        for id in [
+            StepId::Snapshot,
+            StepId::SigningKeys,
+            StepId::SystemPackages,
+        ] {
             set(&mut t, id, done());
         }
         set(&mut t, StepId::Migrations, running());
@@ -1359,7 +1400,10 @@ mod tests {
         assert_eq!(changed_line(&Changed::Some), "Some changes were made.");
         assert_eq!(changed_line(&Changed::Unknown), "");
 
-        assert_eq!(fix_label(&Fix::StopStuckUpdate(vec![1])), "Stop it and update");
+        assert_eq!(
+            fix_label(&Fix::StopStuckUpdate(vec![1])),
+            "Stop it and update"
+        );
         assert_eq!(fix_label(&Fix::Resolve), "Resolve");
         assert_eq!(fix_label(&Fix::RetryUpdate), "Try again");
     }
@@ -1408,9 +1452,15 @@ mod tests {
 
     #[test]
     fn steps_look_like_their_state() {
-        assert_eq!(step_look(&StepState::Waiting), Look::Icon("radio-symbolic", "dim-label"));
+        assert_eq!(
+            step_look(&StepState::Waiting),
+            Look::Icon("radio-symbolic", "dim-label")
+        );
         assert_eq!(step_look(&running()), Look::Spinner);
-        assert_eq!(step_look(&done()), Look::Icon("object-select-symbolic", "success"));
+        assert_eq!(
+            step_look(&done()),
+            Look::Icon("object-select-symbolic", "success")
+        );
         assert_eq!(
             step_look(&StepState::Failed {
                 reason: String::new(),
@@ -1428,36 +1478,63 @@ mod tests {
         let mut t = five();
         set(&mut t, StepId::Snapshot, done());
         set(&mut t, StepId::SigningKeys, done());
-        t.warnings.push((StepId::Snapshot, "No snapshot taken".into()));
+        t.warnings
+            .push((StepId::Snapshot, "No snapshot taken".into()));
         let look = |t: &Timeline, id| {
             let s = &t.steps.iter().find(|(i, _)| *i == id).unwrap().1;
             step_look_in(t, id, s)
         };
-        assert_eq!(look(&t, StepId::Snapshot), Look::Icon("dialog-warning-symbolic", "warning"));
-        assert_eq!(look(&t, StepId::SigningKeys), Look::Icon("object-select-symbolic", "success"));
-        assert_eq!(step_detail(&t, StepId::Snapshot, &done()), "No snapshot taken");
+        assert_eq!(
+            look(&t, StepId::Snapshot),
+            Look::Icon("dialog-warning-symbolic", "warning")
+        );
+        assert_eq!(
+            look(&t, StepId::SigningKeys),
+            Look::Icon("object-select-symbolic", "success")
+        );
+        assert_eq!(
+            step_detail(&t, StepId::Snapshot, &done()),
+            "No snapshot taken"
+        );
         // Still running: the spinner, whatever it was told so far.
-        assert_eq!(step_look_in(&t, StepId::Snapshot, &running()), Look::Spinner);
+        assert_eq!(
+            step_look_in(&t, StepId::Snapshot, &running()),
+            Look::Spinner
+        );
     }
 
     /// The packages that are not rows are one count in the step's line.
     #[test]
     fn other_packages_are_a_count_on_the_step() {
         let mut t = five();
-        let downloading = StepState::Running { detail: "Downloading".into() };
-        assert_eq!(step_detail(&t, StepId::SystemPackages, &downloading), "Downloading");
+        let downloading = StepState::Running {
+            detail: "Downloading".into(),
+        };
+        assert_eq!(
+            step_detail(&t, StepId::SystemPackages, &downloading),
+            "Downloading"
+        );
         t.others.push((StepId::SystemPackages, 182));
         assert_eq!(
             step_detail(&t, StepId::SystemPackages, &downloading),
             "Downloading · and 182 more packages"
         );
         t.others = vec![(StepId::SystemPackages, 1)];
-        assert_eq!(step_detail(&t, StepId::SystemPackages, &done()), "and 1 more package");
+        assert_eq!(
+            step_detail(&t, StepId::SystemPackages, &done()),
+            "and 1 more package"
+        );
         // A step with no rows of its own: just the count.
         t.others = vec![(StepId::AurAndTools, 4)];
-        assert_eq!(step_detail(&t, StepId::AurAndTools, &running()), "4 packages");
+        assert_eq!(
+            step_detail(&t, StepId::AurAndTools, &running()),
+            "4 packages"
+        );
         // The count of rows is rows only.
-        assert_eq!(apps_count(&t, StepId::SystemPackages).as_deref(), Some("0 of 3"));
+        assert_eq!(
+            apps_count(&t, StepId::SystemPackages).as_deref(),
+            Some("0 of 3")
+        );
         assert_eq!(apps_count(&t, StepId::AurAndTools), None);
     }
 
@@ -1472,7 +1549,11 @@ mod tests {
         set(
             &mut t,
             StepId::SystemPackages,
-            StepState::Failed { reason: "x".into(), changed: Changed::Nothing, fix: None },
+            StepState::Failed {
+                reason: "x".into(),
+                changed: Changed::Nothing,
+                fix: None,
+            },
         );
         assert!(!stop_shown(&t));
         let mut t = five();
@@ -1485,20 +1566,36 @@ mod tests {
     #[test]
     fn app_rows_say_where_they_are() {
         let mut t = five();
-        t.apps[0].state = AppState::Done { version: "3.31.15".into() };
-        t.apps[1].state = AppState::Done { version: "2026.11.11".into() };
+        t.apps[0].state = AppState::Done {
+            version: "3.31.15".into(),
+        };
+        t.apps[1].state = AppState::Done {
+            version: "2026.11.11".into(),
+        };
         t.apps[2].state = AppState::Installing;
-        assert_eq!(app_suffix(&t.apps[0]), ("3.31.15 ✓".to_string(), "dim-label"));
-        assert_eq!(app_suffix(&t.apps[2]), ("installing…".to_string(), "accent"));
+        assert_eq!(
+            app_suffix(&t.apps[0]),
+            ("3.31.15 ✓".to_string(), "dim-label")
+        );
+        assert_eq!(
+            app_suffix(&t.apps[2]),
+            ("installing…".to_string(), "accent")
+        );
         t.apps[2].state = AppState::Downloading;
-        assert_eq!(app_suffix(&t.apps[2]), ("downloading…".to_string(), "accent"));
+        assert_eq!(
+            app_suffix(&t.apps[2]),
+            ("downloading…".to_string(), "accent")
+        );
         t.apps[2].state = AppState::Waiting;
         assert_eq!(app_suffix(&t.apps[2]), ("4.47.69".to_string(), "dim-label"));
         t.apps[2].state = AppState::Failed;
         assert_eq!(app_suffix(&t.apps[2]), ("not updated".to_string(), "error"));
 
         // Two of three done, on the step they belong to; none elsewhere.
-        assert_eq!(apps_count(&t, StepId::SystemPackages).as_deref(), Some("2 of 3"));
+        assert_eq!(
+            apps_count(&t, StepId::SystemPackages).as_deref(),
+            Some("2 of 3")
+        );
         assert_eq!(apps_count(&t, StepId::AurAndTools), None);
     }
 
@@ -1508,10 +1605,8 @@ mod tests {
         const SCALE: [i64; 8] = [2, 4, 6, 8, 12, 16, 20, 24];
         let src = include_str!("update_view.rs");
         let code = src.split("#[cfg(test)]").next().unwrap_or(src);
-        let re = regex::Regex::new(
-            r"\.(margin_(?:start|end|top|bottom)|spacing)\((\d+)\)",
-        )
-        .unwrap();
+        let re =
+            regex::Regex::new(r"\.(margin_(?:start|end|top|bottom)|spacing)\((\d+)\)").unwrap();
         let off: Vec<String> = re
             .captures_iter(code)
             .filter(|c| !SCALE.contains(&c[2].parse::<i64>().unwrap_or(-1)))
@@ -1545,8 +1640,14 @@ mod tests {
         assert_eq!(split_trailing_escape("a\x1b[1;3"), ("a", "\x1b[1;3"));
         assert_eq!(split_trailing_escape("a\x1b"), ("a", "\x1b"));
         assert_eq!(split_trailing_escape("a\x1b[1mb"), ("a\x1b[1mb", ""));
-        assert_eq!(split_trailing_escape("a\x1b]0;title"), ("a", "\x1b]0;title"));
-        assert_eq!(split_trailing_escape("a\x1b]0;t\x07b"), ("a\x1b]0;t\x07b", ""));
+        assert_eq!(
+            split_trailing_escape("a\x1b]0;title"),
+            ("a", "\x1b]0;title")
+        );
+        assert_eq!(
+            split_trailing_escape("a\x1b]0;t\x07b"),
+            ("a\x1b]0;t\x07b", "")
+        );
         assert_eq!(split_trailing_escape("a\x1b(B"), ("a\x1b(B", ""));
         // Rejoined, the cut sequence cleans away entirely.
         let (ready, rest) = split_trailing_escape("x\x1b[3");

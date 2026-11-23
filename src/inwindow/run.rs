@@ -152,7 +152,11 @@ fn is_redraw_of(seg: &str, text: &str, answers: &[Answer]) -> bool {
     if seg == text || (seg.contains("toggle") && seg.contains("submit")) {
         return true;
     }
-    let cells: Vec<&str> = seg.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
+    let cells: Vec<&str> = seg
+        .split("  ")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect();
     !cells.is_empty() && cells.iter().all(|c| answers.iter().any(|a| a.label == *c))
 }
 
@@ -187,7 +191,14 @@ impl UpdateRun {
         log_path: PathBuf,
     ) -> Result<UpdateRun, String> {
         env.push(("OMARCHY_UPDATE_UNATTENDED".into(), "0".into()));
-        UpdateRun::start_inner(argv, env, &STRIPPED_ENV[1..], pretend_inherited, timeline, log_path)
+        UpdateRun::start_inner(
+            argv,
+            env,
+            &STRIPPED_ENV[1..],
+            pretend_inherited,
+            timeline,
+            log_path,
+        )
     }
 
     fn start_inner(
@@ -406,7 +417,14 @@ impl UpdateRun {
                 self.gone = true;
             }
         }
-        let Some((Prompt::Question { text: qtext, answers }, _)) = self.handled.clone() else {
+        let Some((
+            Prompt::Question {
+                text: qtext,
+                answers,
+            },
+            _,
+        )) = self.handled.clone()
+        else {
             // A line prompt (or a password) is over once a line ends after it.
             if self.handled.is_some() && text.contains(['\n', '\r']) {
                 self.handled = None;
@@ -451,8 +469,13 @@ impl UpdateRun {
         match p {
             Prompt::Password { prompt } => {
                 self.mark_handled(key);
-                self.open = Some(Prompt::Password { prompt: prompt.clone() });
-                Some(Event::NeedsPassword { prompt, attempt: self.attempt })
+                self.open = Some(Prompt::Password {
+                    prompt: prompt.clone(),
+                });
+                Some(Event::NeedsPassword {
+                    prompt,
+                    attempt: self.attempt,
+                })
             }
             Prompt::Question { ref answers, .. } => {
                 // The programs as they are now, not as they were a moment ago.
@@ -588,8 +611,8 @@ impl UpdateRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use crate::inwindow::tracker::{AppState, StepId, StepState};
+    use std::path::Path;
     use std::time::Duration;
 
     fn timeline() -> Timeline {
@@ -625,12 +648,18 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("the fake update did not finish in time; events: {seen:?}\n{}", run.log_tail());
+        panic!(
+            "the fake update did not finish in time; events: {seen:?}\n{}",
+            run.log_tail()
+        );
     }
 
     /// Like `drive`, on a clock that moves 500 ms per poll, so "output has
     /// been quiet" never depends on how fast the machine is.
-    fn drive_virtual(run: &mut UpdateRun, mut react: impl FnMut(&Event, &mut UpdateRun)) -> Vec<Event> {
+    fn drive_virtual(
+        run: &mut UpdateRun,
+        mut react: impl FnMut(&Event, &mut UpdateRun),
+    ) -> Vec<Event> {
         let deadline = Instant::now() + Duration::from_secs(40);
         let mut vt = Instant::now();
         let mut seen = Vec::new();
@@ -646,7 +675,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("the fake update did not finish in time; events: {seen:?}\n{}", run.log_tail());
+        panic!(
+            "the fake update did not finish in time; events: {seen:?}\n{}",
+            run.log_tail()
+        );
     }
 
     fn finished_code(events: &[Event]) -> i32 {
@@ -686,7 +718,12 @@ wait
             assert!(matches!(s, StepState::Done { .. }), "{id:?} is {s:?}");
         }
         for r in &t.apps {
-            assert!(matches!(r.state, AppState::Done { .. }), "{} is {:?}", r.name, r.state);
+            assert!(
+                matches!(r.state, AppState::Done { .. }),
+                "{} is {:?}",
+                r.name,
+                r.state
+            );
         }
         assert!(events.iter().any(|e| matches!(e, Event::Changed)));
     }
@@ -708,7 +745,10 @@ wait
         assert!(sent);
         assert_ne!(finished_code(&events), 0);
         assert!(!run.log_tail().contains("not-reached"));
-        assert!(run.interrupt().is_err(), "nothing to interrupt once it ended");
+        assert!(
+            run.interrupt().is_err(),
+            "nothing to interrupt once it ended"
+        );
     }
 
     /// Output quiet for a minute on something that is not a question
@@ -722,7 +762,8 @@ wait
             ("printf 'Continue? [Y/n] '\nsleep 5", false),
         ] {
             let argv = script(dir.path(), body);
-            let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("w.log")).unwrap();
+            let mut run =
+                UpdateRun::start(argv, vec![], timeline(), dir.path().join("w.log")).unwrap();
             let mut t0 = Instant::now();
             while run.log_tail().is_empty() {
                 t0 = Instant::now();
@@ -732,7 +773,11 @@ wait
             }
             run.poll_at(t0 + Duration::from_secs(1));
             assert!(!run.seems_waiting(t0 + Duration::from_secs(59)), "{body}");
-            assert_eq!(run.seems_waiting(t0 + Duration::from_secs(61)), waits, "{body}");
+            assert_eq!(
+                run.seems_waiting(t0 + Duration::from_secs(61)),
+                waits,
+                "{body}"
+            );
         }
     }
 
@@ -741,7 +786,10 @@ wait
     #[test]
     fn an_update_that_ignores_ctrl_c_is_hung_up_on() {
         let dir = tempfile::tempdir().unwrap();
-        let argv = script(dir.path(), "trap '' INT\necho started\nsleep 30\necho not-reached");
+        let argv = script(
+            dir.path(),
+            "trap '' INT\necho started\nsleep 30\necho not-reached",
+        );
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
         let pid = run.pid() as i32;
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -753,7 +801,12 @@ wait
         run.interrupt().unwrap();
         let ignored = Instant::now() + Duration::from_millis(800);
         while Instant::now() < ignored {
-            assert!(!run.poll().iter().any(|e| matches!(e, Event::Finished { .. })), "Ctrl-C was ignored");
+            assert!(
+                !run.poll()
+                    .iter()
+                    .any(|e| matches!(e, Event::Finished { .. })),
+                "Ctrl-C was ignored"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         run.hang_up();
@@ -777,7 +830,11 @@ wait
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
         let events = drive(&mut run, |_, _| {});
         assert_eq!(finished_code(&events), 3);
-        assert!(run.timeline().steps.iter().any(|(_, s)| matches!(s, StepState::Failed { .. })));
+        assert!(run
+            .timeline()
+            .steps
+            .iter()
+            .any(|(_, s)| matches!(s, StepState::Failed { .. })));
     }
 
     #[test]
@@ -950,7 +1007,10 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
             StepId::AurAndTools,
             StepId::Checking,
         ] {
-            assert!(seen_running.contains(&id), "{id:?} never ran: {seen_running:?}");
+            assert!(
+                seen_running.contains(&id),
+                "{id:?} never ran: {seen_running:?}"
+            );
         }
         assert!(run.log_tail().contains("declined"), "{}", run.log_tail());
         assert!(!run.log_tail().contains("REBOOTING"));
@@ -962,7 +1022,10 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
     fn alive(pid: i32) -> bool {
         std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
-            .and_then(|s| s.rsplit_once(')').map(|(_, r)| r.trim_start().starts_with('Z')))
+            .and_then(|s| {
+                s.rsplit_once(')')
+                    .map(|(_, r)| r.trim_start().starts_with('Z'))
+            })
             .is_some_and(|zombie| !zombie)
     }
 
@@ -971,7 +1034,8 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
     #[test]
     fn dropping_a_run_under_script_leaves_no_descendant_alive() {
         let dir = tempfile::tempdir().unwrap();
-        let body = "trap '' HUP\n(exec -a omarchy-update-system-pkgs sleep 30) &\necho kid:$!\nsleep 30";
+        let body =
+            "trap '' HUP\n(exec -a omarchy-update-system-pkgs sleep 30) &\necho kid:$!\nsleep 30";
         let argv = under_script(dir.path(), body);
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -1037,7 +1101,11 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
             "stty -echo\nif read -r -t 2 x; then echo \"GOT:$x\"; else echo NOTHING; fi",
         );
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
-        let yes = Answer { label: "Yes".into(), send: b"y\n".to_vec(), is_reboot_yes: true };
+        let yes = Answer {
+            label: "Yes".into(),
+            send: b"y\n".to_vec(),
+            is_reboot_yes: true,
+        };
         assert!(run.answer(&yes).is_err());
         let events = drive(&mut run, |_, _| {});
         assert_eq!(finished_code(&events), 0);
@@ -1066,9 +1134,13 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         assert!(t.contains("askpass=unset"), "{t}");
         assert!(t.contains("extra=yes"), "{t}");
 
-        let mut run =
-            UpdateRun::resolve(script(dir.path(), body), env, timeline(), dir.path().join("b.log"))
-                .unwrap();
+        let mut run = UpdateRun::resolve(
+            script(dir.path(), body),
+            env,
+            timeline(),
+            dir.path().join("b.log"),
+        )
+        .unwrap();
         drive(&mut run, |_, _| {});
         let t = run.log_tail();
         assert!(t.contains("unattended=0"), "{t}");
@@ -1079,18 +1151,28 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
     fn log_tail_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("deep/er/run.log");
-        let argv = script(dir.path(), "for i in $(seq 1 10000); do echo \"line $i\"; done");
+        let argv = script(
+            dir.path(),
+            "for i in $(seq 1 10000); do echo \"line $i\"; done",
+        );
         let mut run = UpdateRun::start(argv, vec![], timeline(), log.clone()).unwrap();
         drive(&mut run, |_, _| {});
         let tail = run.log_tail();
-        assert!(tail.lines().count() <= 2000, "{} lines", tail.lines().count());
+        assert!(
+            tail.lines().count() <= 2000,
+            "{} lines",
+            tail.lines().count()
+        );
         assert!(tail.contains("line 10000"));
         assert!(!tail.contains("line 1\n"));
         let full = std::fs::read_to_string(&log).unwrap();
         assert!(full.contains("line 1\r\n") && full.contains("line 10000"));
         assert_eq!(full.lines().count(), 10000);
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -1101,7 +1183,13 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         drive(&mut run, |_, _| {});
         assert!(!run.is_running());
         assert!(run.poll().is_empty());
-        assert!(run.answer(&Answer { label: "No".into(), send: b"n\n".to_vec(), is_reboot_yes: false }).is_err());
+        assert!(run
+            .answer(&Answer {
+                label: "No".into(),
+                send: b"n\n".to_vec(),
+                is_reboot_yes: false
+            })
+            .is_err());
     }
 
     #[test]
@@ -1112,7 +1200,11 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
             "stty -echo\nif read -r -t 2 x; then echo \"GOT:$x\"; else echo NOTHING; fi",
         );
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
-        let no = Answer { label: "No".into(), send: b"n\n".to_vec(), is_reboot_yes: false };
+        let no = Answer {
+            label: "No".into(),
+            send: b"n\n".to_vec(),
+            is_reboot_yes: false,
+        };
         assert!(run.answer(&no).is_err());
         assert!(run.answer_password(Some("hunter2")).is_err());
         assert!(run.answer_password(None).is_err());
@@ -1128,7 +1220,11 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
             "printf 'Continue? [Y/n] '\nif read -r -t 3 x; then echo \"GOT:$x\"; else echo NOTHING; fi",
         );
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
-        let forged = Answer { label: "Sure".into(), send: b"yes\n".to_vec(), is_reboot_yes: false };
+        let forged = Answer {
+            label: "Sure".into(),
+            send: b"yes\n".to_vec(),
+            is_reboot_yes: false,
+        };
         let mut refused = false;
         let mut password_refused = false;
         drive_virtual(&mut run, |e, run| {
@@ -1163,7 +1259,9 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         });
         assert!(late.expect("tried").is_err());
         assert!(!run.log_tail().contains("latesecret"));
-        assert!(!std::fs::read_to_string(&log).unwrap().contains("latesecret"));
+        assert!(!std::fs::read_to_string(&log)
+            .unwrap()
+            .contains("latesecret"));
     }
 
     #[test]
@@ -1171,7 +1269,10 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("r.log");
         // Echo stays on (the default): typing would show the password.
-        let argv = script(dir.path(), "printf '[sudo] password for tim: '\nsleep 2\necho end");
+        let argv = script(
+            dir.path(),
+            "printf '[sudo] password for tim: '\nsleep 2\necho end",
+        );
         let mut run = UpdateRun::start(argv, vec![], timeline(), log.clone()).unwrap();
         let mut result = None;
         drive_virtual(&mut run, |e, run| {
@@ -1256,7 +1357,9 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         let screen = r"printf ' Continue?\r\n\n  Yes    No  \r\n\n\342\206\220 toggle \342\200\242 enter submit\r'";
         let argv = script(
             dir.path(),
-            &format!("stty -icanon -echo\n{screen}\nread -r -n1 a\n{screen}\nsleep 1.5\necho done:$a"),
+            &format!(
+                "stty -icanon -echo\n{screen}\nread -r -n1 a\n{screen}\nsleep 1.5\necho done:$a"
+            ),
         );
         let mut run = UpdateRun::start(argv, vec![], timeline(), dir.path().join("r.log")).unwrap();
         let mut raised = 0;
@@ -1333,7 +1436,10 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         .unwrap();
         drive(&mut run, |_, _| {});
         let t = run.log_tail();
-        assert!(t.contains("unattended=unset") && t.contains("direct=unset"), "{t}");
+        assert!(
+            t.contains("unattended=unset") && t.contains("direct=unset"),
+            "{t}"
+        );
 
         let mut run = UpdateRun::resolve_inner(
             script(dir.path(), body),
@@ -1345,6 +1451,9 @@ if [ "$ans" = n ]; then echo declined; else echo "REBOOTING:$ans"; fi
         .unwrap();
         drive(&mut run, |_, _| {});
         let t = run.log_tail();
-        assert!(t.contains("unattended=0") && t.contains("direct=unset"), "{t}");
+        assert!(
+            t.contains("unattended=0") && t.contains("direct=unset"),
+            "{t}"
+        );
     }
 }

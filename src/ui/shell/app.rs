@@ -318,7 +318,8 @@ fn py_repr_str(s: &str) -> String {
 #[cfg(debug_assertions)]
 pub fn run_preview(which: String) -> glib::ExitCode {
     let a = AlmanacApp::new();
-    a.app.set_flags(a.app.flags() | gio::ApplicationFlags::NON_UNIQUE);
+    a.app
+        .set_flags(a.app.flags() | gio::ApplicationFlags::NON_UNIQUE);
     let win = a.win.clone();
     a.app.connect_activate(move |_| {
         let (win, which) = (win.clone(), which.clone());

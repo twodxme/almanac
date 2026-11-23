@@ -96,6 +96,17 @@
   </requires>
 
   <releases>
+    <release version="2.3.0" date="2026-11-23">
+      <description>
+        <p>Update all now runs inside the Almanac window, with no terminal.
+        A timeline shows each step of the update and ticks off your apps as
+        they install. The password and any question are asked in the window,
+        and Almanac never says yes to a reboot. Closing the window leaves the
+        update running, and a notification says when it is done.</p>
+        <p>An earlier update left waiting in a closed terminal is now found
+        and can be stopped, instead of every later update failing.</p>
+      </description>
+    </release>
     <release version="2.2.5" date="2026-11-06">
       <description>
         <p>A coding agent that mise no longer has active is no longer listed

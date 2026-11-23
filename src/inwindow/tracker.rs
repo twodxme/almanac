@@ -722,12 +722,20 @@ mod tests {
         t.on_output("(1/9) upgrading libfoo\n(2/9) upgrading cursor\n(3/9) installing libbar\n");
         t.on_output("(4/9) upgrading libfoo\n");
         let tl = t.timeline();
-        assert!(tl.apps.iter().all(|r| r.name != "libfoo" && r.name != "libbar"));
+        assert!(tl
+            .apps
+            .iter()
+            .all(|r| r.name != "libfoo" && r.name != "libbar"));
         assert_eq!(tl.apps.len(), 5);
         assert_eq!(tl.others(StepId::SystemPackages), 2);
         assert_eq!(tl.others(StepId::AurAndTools), 0);
         // An unknown package after a planned one: the planned one is done.
-        assert_eq!(row(&t, "cursor"), AppState::Done { version: "1.2".into() });
+        assert_eq!(
+            row(&t, "cursor"),
+            AppState::Done {
+                version: "1.2".into()
+            }
+        );
     }
 
     #[test]
@@ -821,10 +829,17 @@ mod tests {
         let mut t = tr();
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
         t.on_output("error: failed to retrieve some files\n");
-        assert!(running(&t, StepId::SystemPackages), "not yet: the exit decides");
+        assert!(
+            running(&t, StepId::SystemPackages),
+            "not yet: the exit decides"
+        );
         t.on_exit(1);
         match state(&t, StepId::SystemPackages) {
-            StepState::Failed { reason, changed, fix } => {
+            StepState::Failed {
+                reason,
+                changed,
+                fix,
+            } => {
                 assert_eq!(reason, "error: failed to retrieve some files");
                 assert_eq!(changed, Changed::Nothing);
                 assert_eq!(fix, Some(Fix::RetryUpdate));
@@ -843,9 +858,16 @@ mod tests {
         t.on_procs(&s(&["omarchy-migrate"]));
         assert!(done(&t, StepId::SystemPackages));
         assert!(running(&t, StepId::Migrations));
-        assert_eq!(t.timeline().warning(StepId::SystemPackages), Some("Finished after an error".into()));
+        assert_eq!(
+            t.timeline().warning(StepId::SystemPackages),
+            Some("Finished after an error".into())
+        );
         t.on_exit(0);
-        assert!(t.timeline().steps.iter().all(|(_, s)| matches!(s, StepState::Done { .. })));
+        assert!(t
+            .timeline()
+            .steps
+            .iter()
+            .all(|(_, s)| matches!(s, StepState::Done { .. })));
     }
 
     /// yay's `pacman -U` fails in the AUR phase: that step fails, the
@@ -884,7 +906,10 @@ mod tests {
         t.on_exit(0);
         let tl = t.timeline();
         assert!(done(&t, StepId::Snapshot));
-        assert_eq!(tl.warning(StepId::Snapshot), Some("No snapshot taken".into()));
+        assert_eq!(
+            tl.warning(StepId::Snapshot),
+            Some("No snapshot taken".into())
+        );
         assert_eq!(
             tl.warning(StepId::AurAndTools),
             Some("AUR updates skipped · Some tools not updated".into())
@@ -1001,7 +1026,11 @@ mod tests {
         t.on_procs(&s(&["omarchy-update-system-pkgs"]));
         t.on_output("(1/5) upgrading cursor\n");
         t.on_output("error: failed to commit transaction (x)\n");
-        assert_eq!(row(&t, "cursor"), AppState::Installing, "not yet: the exit decides");
+        assert_eq!(
+            row(&t, "cursor"),
+            AppState::Installing,
+            "not yet: the exit decides"
+        );
         t.on_exit(1);
         assert_eq!(row(&t, "cursor"), AppState::Failed);
     }

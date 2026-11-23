@@ -146,7 +146,11 @@ fn note_text(c: &postupdate::Check) -> String {
         .collect();
     if !shown.is_empty() {
         text += "\n";
-        text += &shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+        text += &shown
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         if c.items.len() > 8 {
             text += "\n…";
         }
@@ -702,7 +706,10 @@ mod tests {
             .and_then(|s| s.split("fn show_update_log(").next())
             .unwrap();
         let alert = f.find("adw::AlertDialog::builder()").unwrap();
-        assert!(f[..alert].contains("view.is_none().then("), "built only off the view path");
+        assert!(
+            f[..alert].contains("view.is_none().then("),
+            "built only off the view path"
+        );
     }
 
     /// The tidy-up runs paccache as root and deletes the copies a

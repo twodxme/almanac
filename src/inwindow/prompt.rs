@@ -32,13 +32,18 @@ static PASSWORD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^(?:\[sudo\] )?password(?: for \S+)?:\s*$").unwrap());
 static YES_NO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*\[(?:Y/n|y/N|y/n)\]\??\s*$").unwrap());
-static SELECTION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(?:enter a (?:selection|number)|\(default=[^)]*\))[^:]*:\s*$").unwrap());
+static SELECTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:enter a (?:selection|number)|\(default=[^)]*\))[^:]*:\s*$").unwrap()
+});
 static BUTTON_GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s{2,}").unwrap());
 static GUM_CHOICES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^Yes\s+No$").unwrap());
 
 fn answer(label: &str, send: &[u8], is_reboot_yes: bool) -> Answer {
-    Answer { label: label.to_string(), send: send.to_vec(), is_reboot_yes }
+    Answer {
+        label: label.to_string(),
+        send: send.to_vec(),
+        is_reboot_yes,
+    }
 }
 
 static REBOOT: LazyLock<Regex> =
@@ -63,7 +68,9 @@ pub fn detect(tail: &str) -> Option<Prompt> {
 
     // gum confirm ends with a key-help line under the choices; it is part of
     // the prompt, not output that came after it.
-    let had_help = segments.last().is_some_and(|s| s.contains("toggle") && s.contains("submit"));
+    let had_help = segments
+        .last()
+        .is_some_and(|s| s.contains("toggle") && s.contains("submit"));
     if had_help {
         segments.pop();
     }
@@ -73,33 +80,48 @@ pub fn detect(tail: &str) -> Option<Prompt> {
     // with the help line present the two buttons are whatever two cells the
     // line holds; without it only the English labels are trusted.
     let buttons: Option<(String, String)> = if had_help {
-        let cells: Vec<&str> = BUTTON_GAP.split(last).map(str::trim).filter(|c| !c.is_empty()).collect();
+        let cells: Vec<&str> = BUTTON_GAP
+            .split(last)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect();
         (cells.len() == 2).then(|| (cells[0].to_string(), cells[1].to_string()))
     } else {
-        GUM_CHOICES.is_match(last).then(|| ("Yes".to_string(), "No".to_string()))
+        GUM_CHOICES
+            .is_match(last)
+            .then(|| ("Yes".to_string(), "No".to_string()))
     };
     if let Some((yes, no)) = buttons {
-        let text = segments.len().checked_sub(2).map(|i| segments[i]).unwrap_or("");
+        let text = segments
+            .len()
+            .checked_sub(2)
+            .map(|i| segments[i])
+            .unwrap_or("");
         let reboot = mentions_reboot(text);
         return Some(Prompt::Question {
             text: text.to_string(),
             answers: vec![answer(&yes, b"y", reboot), answer(&no, b"n", false)],
         });
     }
-    let terminated = cleaned.ends_with('\n')
-        || tail.trim_end_matches([' ', '\t']).ends_with(['\r', '\n']);
+    let terminated =
+        cleaned.ends_with('\n') || tail.trim_end_matches([' ', '\t']).ends_with(['\r', '\n']);
     if terminated {
         return None;
     }
     if PASSWORD.is_match(last) {
-        return Some(Prompt::Password { prompt: last.to_string() });
+        return Some(Prompt::Password {
+            prompt: last.to_string(),
+        });
     }
     if YES_NO.is_match(last) {
         let text = YES_NO.replace(last, "").trim().to_string();
         let reboot = mentions_reboot(&text);
         return Some(Prompt::Question {
             text,
-            answers: vec![answer(&tr("Yes"), b"y\n", reboot), answer(&tr("No"), b"n\n", false)],
+            answers: vec![
+                answer(&tr("Yes"), b"y\n", reboot),
+                answer(&tr("No"), b"n\n", false),
+            ],
         });
     }
     if SELECTION.is_match(last) {
@@ -145,9 +167,16 @@ mod tests {
             assert!(prompt.contains(&format!("answer(&tr(\"{w}\")")), "{w}");
         }
         let run = code(include_str!("run.rs"));
-        assert!(run.contains("tr(\"A restart is needed."), "the restart note");
+        assert!(
+            run.contains("tr(\"A restart is needed."),
+            "the restart note"
+        );
         let tracker = code(include_str!("tracker.rs"));
-        for w in ["Downloading", "Another Omarchy update is running.", "Password not accepted."] {
+        for w in [
+            "Downloading",
+            "Another Omarchy update is running.",
+            "Password not accepted.",
+        ] {
             assert!(tracker.contains(&format!("tr(\"{w}\")")), "{w}");
         }
         assert!(tracker.contains("tr(\"It stopped with an error (exit status {code}).\")"));
@@ -155,15 +184,21 @@ mod tests {
 
     #[test]
     fn yes_no_defaults() {
-        let (text, answers) = question(detect("downloading...\n:: Proceed with installation? [Y/n] "));
+        let (text, answers) = question(detect(
+            "downloading...\n:: Proceed with installation? [Y/n] ",
+        ));
         assert_eq!(text, ":: Proceed with installation?");
-        assert_eq!(answers, vec![answer("Yes", b"y\n", false), answer("No", b"n\n", false)]);
+        assert_eq!(
+            answers,
+            vec![answer("Yes", b"y\n", false), answer("No", b"n\n", false)]
+        );
     }
 
     #[test]
     fn replace_conflict() {
-        let (text, answers) =
-            question(detect(":: python-x and python-y are in conflict. Remove python-y? [y/N] "));
+        let (text, answers) = question(detect(
+            ":: python-x and python-y are in conflict. Remove python-y? [y/N] ",
+        ));
         assert!(text.ends_with("Remove python-y?"));
         assert_eq!(answers[0].send, b"y\n");
         assert_eq!(answers[1].send, b"n\n");
@@ -179,7 +214,9 @@ mod tests {
     fn sudo_password() {
         assert_eq!(
             detect("[sudo] password for tim: "),
-            Some(Prompt::Password { prompt: "[sudo] password for tim:".to_string() })
+            Some(Prompt::Password {
+                prompt: "[sudo] password for tim:".to_string()
+            })
         );
     }
 
@@ -188,17 +225,26 @@ mod tests {
         let screen = gum("Red\u{e9}marrer maintenant ?")
             .replace("Yes\x1b[39m", "Oui\x1b[39m")
             .replace("No\x1b[39m", "Non\x1b[39m")
-            .replace("y\x1b[m \x1b[38;2;74;74;74mYes", "y\x1b[m \x1b[38;2;74;74;74mOui");
+            .replace(
+                "y\x1b[m \x1b[38;2;74;74;74mYes",
+                "y\x1b[m \x1b[38;2;74;74;74mOui",
+            );
         let (text, answers) = question(detect(&screen));
         assert_eq!(text, "Red\u{e9}marrer maintenant ?");
-        assert_eq!(answers, vec![answer("Oui", b"y", false), answer("Non", b"n", false)]);
+        assert_eq!(
+            answers,
+            vec![answer("Oui", b"y", false), answer("Non", b"n", false)]
+        );
     }
 
     #[test]
     fn gum_confirm() {
         let (text, answers) = question(detect(&gum("Continue with the update?")));
         assert_eq!(text, "Continue with the update?");
-        assert_eq!(answers, vec![answer("Yes", b"y", false), answer("No", b"n", false)]);
+        assert_eq!(
+            answers,
+            vec![answer("Yes", b"y", false), answer("No", b"n", false)]
+        );
     }
 
     #[test]
@@ -219,7 +265,11 @@ mod tests {
 
     #[test]
     fn restart_and_power_prompts_are_reboots() {
-        for q in ["Restart to apply updates?", "Shut down now?", "Power off now?"] {
+        for q in [
+            "Restart to apply updates?",
+            "Shut down now?",
+            "Power off now?",
+        ] {
             let (_, answers) = question(detect(&gum(q)));
             assert!(answers[0].is_reboot_yes, "{q}");
         }
@@ -264,7 +314,10 @@ mod tests {
 
     #[test]
     fn a_bare_password_prompt_matches() {
-        assert!(matches!(detect("Password: "), Some(Prompt::Password { .. })));
+        assert!(matches!(
+            detect("Password: "),
+            Some(Prompt::Password { .. })
+        ));
     }
 
     #[test]
@@ -276,6 +329,9 @@ mod tests {
 
     #[test]
     fn an_answered_question_is_not_a_prompt() {
-        assert_eq!(detect(":: Proceed? [Y/n] y\n:: Retrieving packages...\n"), None);
+        assert_eq!(
+            detect(":: Proceed? [Y/n] y\n:: Retrieving packages...\n"),
+            None
+        );
     }
 }

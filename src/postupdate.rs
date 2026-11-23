@@ -1685,8 +1685,12 @@ impl Report {
             ));
         }
         for (step, what) in warnings {
-            self.checks
-                .push(Check::new(CheckId::Skipped, Status::Info, step.clone(), what.clone()));
+            self.checks.push(Check::new(
+                CheckId::Skipped,
+                Status::Info,
+                step.clone(),
+                what.clone(),
+            ));
         }
     }
 
@@ -1862,7 +1866,10 @@ pub fn describe(r: &Repair, have_yay: bool) -> Option<String> {
         Repair::RemoveLock => "Remove pacman’s stale lock file (nothing is using it)".to_string(),
         Repair::StopUpdate(pids) => format!(
             "Stop the earlier update left with no terminal ({})",
-            pids.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+            pids.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Repair::Keyring => "Reload the Arch signing keys and update archlinux-keyring".to_string(),
         Repair::Retry(names) => format!("Install what is still waiting: {}", listing(names, 6)),
@@ -1960,7 +1967,10 @@ fn stop_update(pids: &[u32], log: LogFn<'_>) -> Result<(), String> {
         return Err("not stopped: demo mode does not touch the machine".to_string());
     }
     let now = lock_holders_in(Path::new("/proc"), &omarchy_update_lock());
-    if !lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK)).running.is_empty() {
+    if !lock_scan_in(Path::new("/proc"), Path::new(DB_LOCK))
+        .running
+        .is_empty()
+    {
         return Err("not stopped: a package manager is running under it".to_string());
     }
     for pid in pids {
@@ -1969,7 +1979,10 @@ fn stop_update(pids: &[u32], log: LogFn<'_>) -> Result<(), String> {
             continue;
         };
         if h.terminal {
-            return Err(format!("not stopped: {} ({pid}) has a terminal now", h.name));
+            return Err(format!(
+                "not stopped: {} ({pid}) has a terminal now",
+                h.name
+            ));
         }
         let pid_t = rustix::process::Pid::from_raw(*pid as i32)
             .ok_or_else(|| format!("{pid}: not a process id"))?;
@@ -2249,18 +2262,34 @@ mod tests {
         );
         assert!(r.passed());
         assert_eq!(r.notes().len(), 2);
-        let restart = r.checks.iter().find(|c| c.id == CheckId::Restart).expect("restart");
+        let restart = r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Restart)
+            .expect("restart");
         assert_eq!(restart.title, "Restart to finish");
         assert!(restart.detail.contains("omarchy-system reboot"));
-        let skipped = r.checks.iter().find(|c| c.id == CheckId::Skipped).expect("skipped");
-        assert_eq!((skipped.title.as_str(), skipped.detail.as_str()), ("Snapshot", "No snapshot taken"));
+        let skipped = r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Skipped)
+            .expect("skipped");
+        assert_eq!(
+            (skipped.title.as_str(), skipped.detail.as_str()),
+            ("Snapshot", "No snapshot taken")
+        );
         let sum = r.summary();
         assert!(sum.contains(" · restart to finish"), "{sum}");
         assert!(sum.contains(" · Snapshot: No snapshot taken"), "{sum}");
 
         // The kernel check already says restart: not twice.
         let mut r = Report::default();
-        r.checks.push(Check::new(CheckId::Kernel, Status::Info, "Restart to finish", "k"));
+        r.checks.push(Check::new(
+            CheckId::Kernel,
+            Status::Info,
+            "Restart to finish",
+            "k",
+        ));
         r.add_notes(Some("note"), &[]);
         assert_eq!(r.notes().len(), 1);
         assert_eq!(r.summary().matches("restart to finish").count(), 1);
@@ -2270,9 +2299,17 @@ mod tests {
     #[test]
     fn a_run_stopped_before_it_finished_says_so() {
         let mut rec = RunRecord::default();
-        rec.commands.push(CommandRun { argv: "omarchy update -y".into(), exit: None, secs: Some(3.0) });
+        rec.commands.push(CommandRun {
+            argv: "omarchy update -y".into(),
+            exit: None,
+            secs: Some(3.0),
+        });
         rec.stopped = true;
-        assert!(rec.detail().contains("stopped before it finished"), "{}", rec.detail());
+        assert!(
+            rec.detail().contains("stopped before it finished"),
+            "{}",
+            rec.detail()
+        );
         assert_eq!(rec.severity(), "warn");
     }
 
@@ -3277,7 +3314,10 @@ mod tests {
         );
 
         i.after.unsynced = set(&["omarchy", "mise-bin"]);
-        assert!(build_report(&i).repairs().is_empty(), "nothing yay could do");
+        assert!(
+            build_report(&i).repairs().is_empty(),
+            "nothing yay could do"
+        );
     }
 
     /// The names were said twice: once as still waiting, once as released
@@ -3289,14 +3329,24 @@ mod tests {
         i.after.pending = Some(set(&["omarchy", "mise-bin"]));
         i.after.unsynced = set(&["omarchy", "mise-bin"]);
         let r = build_report(&i);
-        let d = &r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap().detail;
+        let d = &r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Pending)
+            .unwrap()
+            .detail;
         assert_eq!(d.matches("omarchy").count(), 1, "{d}");
         assert_eq!(d.matches("mise-bin").count(), 1, "{d}");
         assert!(d.contains("Update all refreshes the database first"), "{d}");
 
         i.after.unsynced = set(&["omarchy"]);
         let r = build_report(&i);
-        let d = &r.checks.iter().find(|c| c.id == CheckId::Pending).unwrap().detail;
+        let d = &r
+            .checks
+            .iter()
+            .find(|c| c.id == CheckId::Pending)
+            .unwrap()
+            .detail;
         assert_eq!(d.matches("omarchy").count(), 1, "{d}");
         assert_eq!(d.matches("mise-bin").count(), 1, "{d}");
         assert!(d.starts_with("1 update is still waiting: mise-bin."), "{d}");
@@ -3412,7 +3462,9 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(preflight_issues(&busy, true).iter().all(|i| i.fix.is_none()));
+        assert!(preflight_issues(&busy, true)
+            .iter()
+            .all(|i| i.fix.is_none()));
     }
 
     #[test]

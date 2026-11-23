@@ -1349,7 +1349,10 @@ pub fn run_quiet(
             let step_tx = Mutex::new(tx.clone());
             let set_label = |_: &str| {
                 let i = n.fetch_add(1, Ordering::SeqCst);
-                let _ = step_tx.lock().unwrap_or_else(|e| e.into_inner()).send(Quiet::Step(i));
+                let _ = step_tx
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .send(Quiet::Step(i));
             };
             let line_tx = Mutex::new(tx.clone());
             let log = |line: &str| {

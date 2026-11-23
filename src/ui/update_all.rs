@@ -196,8 +196,7 @@ pub enum QuitDecision {
 
 pub fn quit_decision(t: &Timeline) -> QuitDecision {
     let running = |s: &StepState| matches!(s, StepState::Running { .. });
-    if t
-        .steps
+    if t.steps
         .iter()
         .any(|(id, s)| *id == StepId::SystemPackages && running(s))
     {
@@ -207,9 +206,10 @@ pub fn quit_decision(t: &Timeline) -> QuitDecision {
         .steps
         .iter()
         .any(|(_, s)| matches!(s, StepState::Failed { .. }));
-    let under_way = t.steps.iter().any(|(_, s)| {
-        running(s) || (!failed && matches!(s, StepState::Waiting))
-    });
+    let under_way = t
+        .steps
+        .iter()
+        .any(|(_, s)| running(s) || (!failed && matches!(s, StepState::Waiting)));
     if under_way {
         QuitDecision::Confirm
     } else {
@@ -225,15 +225,19 @@ pub fn quit_decision(t: &Timeline) -> QuitDecision {
 fn busy_fix(holders: &[postupdate::Holder], pacman_running: bool) -> (Option<String>, Fix) {
     let live = holders.iter().any(|h| h.terminal) || pacman_running;
     if !live || holders.is_empty() {
-        return (None, Fix::StopStuckUpdate(holders.iter().map(|h| h.pid).collect()));
+        return (
+            None,
+            Fix::StopStuckUpdate(holders.iter().map(|h| h.pid).collect()),
+        );
     }
     let who = holders
         .iter()
         .map(|h| format!("{} ({})", h.name, h.pid))
         .collect::<Vec<_>>()
         .join(", ");
-    let reason = tr("{who} holds the update lock. Finish it in its terminal, or wait for it, then update.")
-        .replace("{who}", &who);
+    let reason =
+        tr("{who} holds the update lock. Finish it in its terminal, or wait for it, then update.")
+            .replace("{who}", &who);
     (Some(reason), Fix::RetryUpdate)
 }
 
@@ -342,9 +346,11 @@ fn mark_stopped(t: &mut Timeline, why: Stopped) {
 /// The Other apps step under way, a row for each (name, new version).
 fn other_apps_start(t: &mut Timeline, apps: &[(String, String)]) {
     match t.steps.iter_mut().find(|(i, _)| *i == StepId::OtherApps) {
-        Some((_, s)) => *s = StepState::Running {
-            detail: String::new(),
-        },
+        Some((_, s)) => {
+            *s = StepState::Running {
+                detail: String::new(),
+            }
+        }
         None => t.steps.push((
             StepId::OtherApps,
             StepState::Running {
@@ -406,8 +412,7 @@ fn other_apps_done(t: &mut Timeline, outcomes: &[(String, Outcome)], ran: bool, 
         }
     });
     let failed = !ok
-        || t
-            .apps
+        || t.apps
             .iter()
             .any(|a| a.step == StepId::OtherApps && a.state == AppState::Failed);
     let some_done = t
@@ -452,10 +457,12 @@ pub fn finished_note(r: &postupdate::Report) -> String {
 
 /// The notification's body: a restart to finish comes first.
 pub fn finished_body(r: &postupdate::Report) -> String {
-    let restart = r
-        .checks
-        .iter()
-        .any(|c| matches!(c.id, postupdate::CheckId::Restart | postupdate::CheckId::Kernel));
+    let restart = r.checks.iter().any(|c| {
+        matches!(
+            c.id,
+            postupdate::CheckId::Restart | postupdate::CheckId::Kernel
+        )
+    });
     if restart {
         tr("Restart to finish. Open Almanac to see the report.")
     } else {
@@ -512,7 +519,10 @@ fn judge_batch(
             } else {
                 Outcome::new(
                     None,
-                    format!("{}: the update ran, but its result could not be checked", app.name),
+                    format!(
+                        "{}: the update ran, but its result could not be checked",
+                        app.name
+                    ),
                 )
             };
             (app, out)
@@ -753,7 +763,13 @@ impl Win {
         let apps: Vec<(String, String, bool)> = pending
             .iter()
             .filter(|a| route(a) == Route::System)
-            .map(|a| (a.name.clone(), a.update.clone(), a.source != inventory::REPO))
+            .map(|a| {
+                (
+                    a.name.clone(),
+                    a.update.clone(),
+                    a.source != inventory::REPO,
+                )
+            })
             .collect();
         let rest: Vec<App> = pending
             .into_iter()
@@ -884,9 +900,7 @@ impl Win {
         let run = Run::new(pacman && command.is_some());
         run.borrow_mut().busy = Some(busy);
         match (command, in_window) {
-            (Some(command), Some(apps)) if pacman => {
-                self.start_in_window(command, run, apps, rest)
-            }
+            (Some(command), Some(apps)) if pacman => self.start_in_window(command, run, apps, rest),
             (Some(command), _) => self.run_system_update(&command, pacman, rest, run),
             (None, _) => {
                 let r = run.clone();
@@ -1510,7 +1524,11 @@ impl Live {
     /// `omarchy update` ended. Its terminal is already released, so the run
     /// is let go of here at once.
     fn finished(&self, code: i32) {
-        let t = self.update.borrow_mut().take().map(|u| u.timeline().clone());
+        let t = self
+            .update
+            .borrow_mut()
+            .take()
+            .map(|u| u.timeline().clone());
         self.pull_log();
         self.view.set_waiting(None);
         LIVE.with(|l| *l.borrow_mut() = None);
@@ -1642,7 +1660,13 @@ impl Win {
 
     /// Start (or start again) `omarchy update` on a terminal of its own, fed
     /// to `view` every 150 ms.
-    fn drive(&self, view: &UpdateView, run: &SharedRun, job: Job, resolve: bool) -> Result<(), String> {
+    fn drive(
+        &self,
+        view: &UpdateView,
+        run: &SharedRun,
+        job: Job,
+        resolve: bool,
+    ) -> Result<(), String> {
         let log_from = std::fs::metadata(&job.log).map(|m| m.len()).unwrap_or(0);
         let t = Timeline::new(&job.apps, !job.rest.is_empty());
         let update = if resolve {
@@ -1710,7 +1734,10 @@ impl Win {
                 None => {}
             }
             view.dialog().set_can_close(true);
-            self.in_window_over(&tr("Update needs a look"), &tr("Open Almanac to see the report."));
+            self.in_window_over(
+                &tr("Update needs a look"),
+                &tr("Open Almanac to see the report."),
+            );
             return;
         }
         set_shown(Some(t.clone()));
@@ -1774,7 +1801,13 @@ impl Win {
     /// The rest of Update all, as the timeline's last step. Update all was
     /// the go-ahead: no "Update N more?" and no task dialog; each app is a
     /// row, its output goes to Details, and it is judged by its own check.
-    fn other_apps_in_window(&self, view: UpdateView, run: SharedRun, rest: Vec<App>, mut t: Timeline) {
+    fn other_apps_in_window(
+        &self,
+        view: UpdateView,
+        run: SharedRun,
+        rest: Vec<App>,
+        mut t: Timeline,
+    ) {
         if rest.is_empty() {
             return self.batch_done(run, BatchResult::default());
         }
@@ -1808,7 +1841,11 @@ impl Win {
                     Err(e) => {
                         other_apps_done(&mut t, &[], false, false);
                         view.render(&t);
-                        let held = vec![format!("{} — {}", tr("Other apps"), crate::util::human_error(&e))];
+                        let held = vec![format!(
+                            "{} — {}",
+                            tr("Other apps"),
+                            crate::util::human_error(&e)
+                        )];
                         win.batch_done(
                             run,
                             BatchResult {
@@ -1839,7 +1876,8 @@ impl Win {
             owners,
         } = batch;
         // Held back, or nothing to do: those rows leave, the report says why.
-        t.apps.retain(|a| a.step != StepId::OtherApps || apps.iter().any(|b| b.name == a.name));
+        t.apps
+            .retain(|a| a.step != StepId::OtherApps || apps.iter().any(|b| b.name == a.name));
         if steps.is_empty() {
             other_apps_done(&mut t, &[], false, false);
             view.render(&t);
@@ -1888,7 +1926,11 @@ impl Win {
                             let mut r = run.borrow_mut();
                             for line in &lines {
                                 let argv = line.split_whitespace().collect::<Vec<_>>().join(" ");
-                                r.record.commands.push(CommandRun { argv, exit: None, secs: None });
+                                r.record.commands.push(CommandRun {
+                                    argv,
+                                    exit: None,
+                                    secs: None,
+                                });
                             }
                             r.record.stopped = true;
                         }
@@ -2102,7 +2144,9 @@ impl Win {
                 self.window.present();
                 let dialog = adw::AlertDialog::builder()
                     .heading(tr("Stop the update and quit?"))
-                    .body(tr("The update is still running. Quitting stops it where it is."))
+                    .body(tr(
+                        "The update is still running. Quitting stops it where it is.",
+                    ))
                     .build();
                 dialog.add_response("cancel", &tr("Keep updating"));
                 dialog.add_response("quit", &tr("Stop and quit"));
@@ -2185,7 +2229,11 @@ impl Win {
         // The Other apps: the step under way is stopped and the rest
         // skipped; Almanac quits once it has (see `run_other_apps`).
         let stopping = BATCH.with(|b| {
-            b.borrow().as_ref().filter(|t| !t.finished()).map(|t| t.cancel()).is_some()
+            b.borrow()
+                .as_ref()
+                .filter(|t| !t.finished())
+                .map(|t| t.cancel())
+                .is_some()
         });
         if stopping {
             QUIT_PENDING.set(true);
@@ -2445,7 +2493,11 @@ mod tests {
             .filter(|l| l.contains(".say("))
             .map(str::trim)
             .collect();
-        assert_eq!(says, vec!["None => self.say(&msg, 8),"], "only with no view open");
+        assert_eq!(
+            says,
+            vec!["None => self.say(&msg, 8),"],
+            "only with no view open"
+        );
         assert!(section.matches(".notice(").count() >= 3);
     }
 
@@ -2477,12 +2529,20 @@ mod tests {
 
     #[test]
     fn the_other_apps_run_their_own_steps_unless_a_debug_build_is_told_otherwise() {
-        let steps = || vec![Step::argv("Updating tuck", vec!["omarchy".into(), "plugin".into()])];
+        let steps = || {
+            vec![Step::argv(
+                "Updating tuck",
+                vec!["omarchy".into(), "plugin".into()],
+            )]
+        };
         let argv = |s: &[Step]| match &s[0].action {
             tasks::StepAction::Argv(a) => a.clone(),
             _ => panic!("argv"),
         };
-        assert_eq!(argv(&rest_steps_from(steps(), None)), vec!["omarchy", "plugin"]);
+        assert_eq!(
+            argv(&rest_steps_from(steps(), None)),
+            vec!["omarchy", "plugin"]
+        );
         let fake = rest_steps_from(steps(), Some("/x/rest.sh".into()));
         assert_eq!(fake[0].label, "Updating tuck");
         if cfg!(debug_assertions) {
@@ -2550,7 +2610,11 @@ mod tests {
             .expect("stop_clicked");
         assert!(body.contains("tr(\"Quitting now would stop pacman part-way.\")"));
         let drive = code.split("fn drive(").nth(1).unwrap();
-        assert!(drive.split("\n    }\n").next().unwrap().contains("set_on_stop("));
+        assert!(drive
+            .split("\n    }\n")
+            .next()
+            .unwrap()
+            .contains("set_on_stop("));
     }
 
     #[test]
@@ -2567,7 +2631,12 @@ mod tests {
             },
         );
         mark_stopped(&mut t, Stopped::ByUser);
-        let StepState::Failed { reason, changed, fix } = &t.steps[1].1 else {
+        let StepState::Failed {
+            reason,
+            changed,
+            fix,
+        } = &t.steps[1].1
+        else {
             panic!("still failed")
         };
         assert_eq!(reason, "You stopped the update.");
@@ -2581,7 +2650,11 @@ mod tests {
     #[test]
     fn a_live_update_elsewhere_is_not_offered_to_be_stopped() {
         use crate::postupdate::Holder;
-        let h = |pid, terminal| Holder { pid, name: "omarchy-update".into(), terminal };
+        let h = |pid, terminal| Holder {
+            pid,
+            name: "omarchy-update".into(),
+            terminal,
+        };
         let (reason, fix) = busy_fix(&[h(41, true)], false);
         let reason = reason.expect("reworded");
         assert!(reason.contains("Finish it in its terminal"), "{reason}");
@@ -2590,7 +2663,10 @@ mod tests {
         let (reason, fix) = busy_fix(&[h(41, false)], true);
         assert!(reason.is_some());
         assert_eq!(fix, Fix::RetryUpdate);
-        assert_eq!(busy_fix(&[h(41, false), h(42, false)], false), (None, Fix::StopStuckUpdate(vec![41, 42])));
+        assert_eq!(
+            busy_fix(&[h(41, false), h(42, false)], false),
+            (None, Fix::StopStuckUpdate(vec![41, 42]))
+        );
         // Gone meanwhile: nothing to stop, the update just starts again.
         assert_eq!(busy_fix(&[], false), (None, Fix::StopStuckUpdate(vec![])));
     }
@@ -2599,7 +2675,11 @@ mod tests {
     fn a_new_attempt_clears_the_earlier_notice() {
         let code = include_str!("update_all.rs");
         let drive = code.split("fn drive(").nth(1).unwrap();
-        assert!(drive.split("\n    }\n").next().unwrap().contains("view.clear_notice();"));
+        assert!(drive
+            .split("\n    }\n")
+            .next()
+            .unwrap()
+            .contains("view.clear_notice();"));
     }
 
     /// A failure that changed nothing stays on the timeline with its fix
@@ -2673,10 +2753,18 @@ mod tests {
             },
         );
         mark_stopped(&mut t, Stopped::PasswordRefused);
-        let StepState::Failed { reason, changed, fix } = &t.steps[0].1 else {
+        let StepState::Failed {
+            reason,
+            changed,
+            fix,
+        } = &t.steps[0].1
+        else {
             panic!("still failed")
         };
-        assert!(reason.contains("would have shown your password"), "{reason}");
+        assert!(
+            reason.contains("would have shown your password"),
+            "{reason}"
+        );
         assert_eq!(*changed, Changed::Nothing);
         assert_eq!(*fix, Some(Fix::RetryUpdate));
         assert!(pauses(&t));
@@ -2688,7 +2776,10 @@ mod tests {
     #[test]
     fn a_password_not_sent_for_another_reason_does_not_blame_echo() {
         use crate::inwindow::run::PasswordError;
-        assert_eq!(stopped_after(&PasswordError::WouldEcho), Stopped::PasswordRefused);
+        assert_eq!(
+            stopped_after(&PasswordError::WouldEcho),
+            Stopped::PasswordRefused
+        );
         assert_eq!(
             stopped_after(&PasswordError::Terminal("tcgetattr: EIO".into())),
             Stopped::PasswordUnsent
@@ -2731,9 +2822,13 @@ mod tests {
     #[test]
     fn an_other_app_row_runs_while_its_steps_do() {
         let mut t = timeline();
-        other_apps_start(&mut t, &[("tuck".into(), "1.2".into()), ("zed".into(), "9".into())]);
+        other_apps_start(
+            &mut t,
+            &[("tuck".into(), "1.2".into()), ("zed".into(), "9".into())],
+        );
         other_apps_working(&mut t, "tuck");
-        let row = |t: &Timeline, n: &str| t.apps.iter().find(|a| a.name == n).map(|a| a.state.clone());
+        let row =
+            |t: &Timeline, n: &str| t.apps.iter().find(|a| a.name == n).map(|a| a.state.clone());
         assert_eq!(row(&t, "tuck"), Some(AppState::Installing));
         assert_eq!(row(&t, "zed"), Some(AppState::Waiting));
         // Quit while the Other apps run asks first.
@@ -2746,7 +2841,10 @@ mod tests {
     fn every_batch_step_has_its_row() {
         let mut b = Batch::default();
         plan_agent(
-            &app(inventory::AGENT, json!({"update_cmd": ["claude", "update"]})),
+            &app(
+                inventory::AGENT,
+                json!({"update_cmd": ["claude", "update"]}),
+            ),
             &mut b,
         )
         .unwrap();
@@ -2757,16 +2855,36 @@ mod tests {
     #[test]
     fn other_apps_rows_end_as_their_checks_say() {
         let mut t = timeline();
-        other_apps_start(&mut t, &[("tuck".into(), "1.2".into()), ("zed".into(), "9".into())]);
-        let at = t.steps.iter().position(|(i, _)| *i == StepId::OtherApps).unwrap();
+        other_apps_start(
+            &mut t,
+            &[("tuck".into(), "1.2".into()), ("zed".into(), "9".into())],
+        );
+        let at = t
+            .steps
+            .iter()
+            .position(|(i, _)| *i == StepId::OtherApps)
+            .unwrap();
         assert!(matches!(t.steps[at].1, StepState::Running { .. }));
         assert_eq!(
-            t.apps.iter().filter(|a| a.step == StepId::OtherApps).count(),
+            t.apps
+                .iter()
+                .filter(|a| a.step == StepId::OtherApps)
+                .count(),
             2
         );
-        other_apps_done(&mut t, &[("tuck".into(), Outcome::new(Some(true), "tuck: 1.2"))], true, true);
+        other_apps_done(
+            &mut t,
+            &[("tuck".into(), Outcome::new(Some(true), "tuck: 1.2"))],
+            true,
+            true,
+        );
         let row = |n: &str| t.apps.iter().find(|a| a.name == n).map(|a| a.state.clone());
-        assert_eq!(row("tuck"), Some(AppState::Done { version: "1.2".into() }));
+        assert_eq!(
+            row("tuck"),
+            Some(AppState::Done {
+                version: "1.2".into()
+            })
+        );
         // zed did not run (held back): its row goes, it is in the report.
         assert_eq!(row("zed"), None);
         assert!(matches!(t.steps[at].1, StepState::Done { .. }));
@@ -2779,12 +2897,19 @@ mod tests {
             true,
             false,
         );
-        let at = t.steps.iter().position(|(i, _)| *i == StepId::OtherApps).unwrap();
+        let at = t
+            .steps
+            .iter()
+            .position(|(i, _)| *i == StepId::OtherApps)
+            .unwrap();
         let StepState::Failed { reason, .. } = &t.steps[at].1 else {
             panic!("failed")
         };
         assert_eq!(reason, "tuck: still 1.1", "the row's own reason");
-        assert_eq!(t.apps.last().map(|a| a.state.clone()), Some(AppState::Failed));
+        assert_eq!(
+            t.apps.last().map(|a| a.state.clone()),
+            Some(AppState::Failed)
+        );
 
         // Nothing ran (declined, or nothing to do): the step is not claimed.
         let mut t = timeline();
@@ -2814,7 +2939,10 @@ mod tests {
         let mut r = postupdate::Report::default();
         assert_eq!(finished_body(&r), "Open Almanac to see the report.");
         r.add_notes(Some("A restart is needed."), &[]);
-        assert_eq!(finished_body(&r), "Restart to finish. Open Almanac to see the report.");
+        assert_eq!(
+            finished_body(&r),
+            "Restart to finish. Open Almanac to see the report."
+        );
     }
 
     /// Every way a run in the window ends writes its history entry: closing
@@ -2831,14 +2959,24 @@ mod tests {
         };
         assert!(body("fn quit_now(").contains("finish_update("));
         let stq = body("fn stop_then_quit(");
-        assert!(stq.contains("record_stopped("), "the stopped update is in the entry");
+        assert!(
+            stq.contains("record_stopped("),
+            "the stopped update is in the entry"
+        );
         let rec = body("fn record_stopped(");
         assert!(rec.contains("exit: None") && rec.contains("stopped = true"));
         let other = code.split("if QUIT_PENDING.get() {").nth(1).unwrap();
-        assert!(other.split("return;").next().unwrap().contains("exit: None"));
+        assert!(other
+            .split("return;")
+            .next()
+            .unwrap()
+            .contains("exit: None"));
         let report = include_str!("update_report.rs");
         let fin = report.split("fn finish_update(").nth(1).unwrap();
-        assert!(fin.split("\n    }\n").next().unwrap().contains("recorded"), "written once");
+        assert!(
+            fin.split("\n    }\n").next().unwrap().contains("recorded"),
+            "written once"
+        );
     }
 
     #[test]

@@ -7,9 +7,9 @@
 //! output without blocking, and polls for the exit.
 
 use std::io;
-use std::path::Path;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -90,7 +90,8 @@ impl Pty {
 
         let dup = |fd: &OwnedFd| fd.try_clone().map_err(|e| format!("dup: {e}"));
         let mut cmd = Command::new(program);
-        cmd.args(args).envs(pretend_inherited.iter().map(|(k, v)| (k, v)));
+        cmd.args(args)
+            .envs(pretend_inherited.iter().map(|(k, v)| (k, v)));
         for k in env_remove {
             cmd.env_remove(k);
         }
@@ -133,7 +134,12 @@ impl Pty {
         self.known
             .retain(|k| procs::stat_of(root, k.pid).is_some_and(|p| p.start == k.start));
         for p in tree {
-            if p.tty_nr != 0 && !self.known.iter().any(|k| k.pid == p.pid && k.start == p.start) {
+            if p.tty_nr != 0
+                && !self
+                    .known
+                    .iter()
+                    .any(|k| k.pid == p.pid && k.start == p.start)
+            {
                 self.known.push(p.clone());
             }
         }
@@ -141,7 +147,10 @@ impl Pty {
 
     /// The master side, for a caller that wants to poll it.
     pub fn master_fd(&self) -> BorrowedFd<'_> {
-        self.master.as_ref().expect("master lives until drop").as_fd()
+        self.master
+            .as_ref()
+            .expect("master lives until drop")
+            .as_fd()
     }
 
     /// Whether this terminal echoes what is typed: a cheap guard only.
@@ -151,7 +160,8 @@ impl Pty {
     /// echo off on the terminal it reads the password from (script's inner
     /// one) before it asks.
     pub fn echo_on(&self) -> Result<bool, String> {
-        let t = rustix::termios::tcgetattr(self.master_fd()).map_err(|e| format!("tcgetattr: {e}"))?;
+        let t =
+            rustix::termios::tcgetattr(self.master_fd()).map_err(|e| format!("tcgetattr: {e}"))?;
         Ok(t.local_modes.contains(rustix::termios::LocalModes::ECHO))
     }
 
@@ -365,7 +375,11 @@ mod tests {
         let started = Instant::now();
         drop(pty);
         // Well under REAP_GRACE: the hangup ended it, not the SIGKILL fallback.
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
         assert_eq!(
             rustix::process::test_kill_process(pid),
             Err(rustix::io::Errno::SRCH)
@@ -384,7 +398,11 @@ mod tests {
         let kid = loop {
             let _ = pty.read_available(&mut out);
             let text = String::from_utf8_lossy(&out).into_owned();
-            if let Some(n) = text.split("kid:").nth(1).and_then(|r| r.split_whitespace().next()) {
+            if let Some(n) = text
+                .split("kid:")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+            {
                 if let Ok(n) = n.parse::<i32>() {
                     break n;
                 }
@@ -413,7 +431,11 @@ mod tests {
     #[test]
     fn a_descendant_that_ignores_the_hangup_is_killed_when_the_leader_dies_of_it() {
         let pty = Pty::spawn(
-            &argv(&["sh", "-c", "(trap '' HUP; exec sleep 30) & echo kid:$!; wait"]),
+            &argv(&[
+                "sh",
+                "-c",
+                "(trap '' HUP; exec sleep 30) & echo kid:$!; wait",
+            ]),
             &[],
         )
         .unwrap();
@@ -422,7 +444,11 @@ mod tests {
         let kid = loop {
             let _ = pty.read_available(&mut out);
             let text = String::from_utf8_lossy(&out).into_owned();
-            if let Some(n) = text.split("kid:").nth(1).and_then(|r| r.split_whitespace().next()) {
+            if let Some(n) = text
+                .split("kid:")
+                .nth(1)
+                .and_then(|r| r.split_whitespace().next())
+            {
                 if let Ok(n) = n.parse::<i32>() {
                     break n;
                 }
@@ -433,7 +459,11 @@ mod tests {
         let kid = rustix::process::Pid::from_raw(kid).unwrap();
         let started = Instant::now();
         drop(pty);
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
         let deadline = Instant::now() + Duration::from_secs(2);
         while rustix::process::test_kill_process(kid).is_ok() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));

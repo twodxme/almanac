@@ -57,7 +57,10 @@ fn children_of(proc_root: &Path, pid: u32) -> Option<Vec<u32>> {
             continue;
         };
         any = true;
-        out.extend(text.split_whitespace().filter_map(|n| n.parse::<u32>().ok()));
+        out.extend(
+            text.split_whitespace()
+                .filter_map(|n| n.parse::<u32>().ok()),
+        );
     }
     any.then_some(out)
 }
@@ -191,18 +194,42 @@ mod tests {
     /// is not part of it.
     fn layout(dir: &Path, with_children: bool) {
         let k = |v: &'static [u32]| with_children.then_some(v);
-        fake(dir, 100, 1, "script", &["script", "-qefc", "omarchy update -y"], k(&[101]));
-        fake(dir, 101, 100, "bash", &["bash", "/usr/bin/omarchy-update", "-y"], k(&[102]));
+        fake(
+            dir,
+            100,
+            1,
+            "script",
+            &["script", "-qefc", "omarchy update -y"],
+            k(&[101]),
+        );
+        fake(
+            dir,
+            101,
+            100,
+            "bash",
+            &["bash", "/usr/bin/omarchy-update", "-y"],
+            k(&[102]),
+        );
         fake(
             dir,
             102,
             101,
             "omarchy-update-",
-            &["/usr/bin/bash", "/opt/omarchy/bin/omarchy-update-system-pkgs"],
+            &[
+                "/usr/bin/bash",
+                "/opt/omarchy/bin/omarchy-update-system-pkgs",
+            ],
             k(&[103]),
         );
         fake(dir, 103, 102, "sudo", &["sudo", "pacman", "-Syu"], k(&[]));
-        fake(dir, 200, 1, "omarchy-snapshot", &["omarchy-snapshot"], k(&[]));
+        fake(
+            dir,
+            200,
+            1,
+            "omarchy-snapshot",
+            &["omarchy-snapshot"],
+            k(&[]),
+        );
         std::fs::create_dir(dir.join("self")).unwrap();
     }
 
@@ -217,7 +244,10 @@ mod tests {
         assert_eq!(t[1].ppid, 100);
         assert_ne!(t[1].tty_nr, 0);
         let names = commands_of(dir.path(), &t);
-        assert!(names.contains(&"omarchy-update-system-pkgs".to_string()), "{names:?}");
+        assert!(
+            names.contains(&"omarchy-update-system-pkgs".to_string()),
+            "{names:?}"
+        );
         assert!(names.contains(&"sudo".to_string()));
         assert!(!names.contains(&"omarchy-snapshot".to_string()), "not ours");
         assert!(tree(dir.path(), 999).is_empty());
@@ -234,7 +264,11 @@ mod tests {
     #[test]
     fn a_zombie_is_gone() {
         assert!(parse_stat(5, "5 (x) Z 1 5 5 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 77 0").is_none());
-        let p = parse_stat(5, "5 (a) b) c) S 1 5 5 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 77 0").unwrap();
+        let p = parse_stat(
+            5,
+            "5 (a) b) c) S 1 5 5 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 77 0",
+        )
+        .unwrap();
         assert_eq!((p.ppid, p.start), (1, 77));
     }
 
@@ -243,6 +277,9 @@ mod tests {
         let me = std::process::id();
         let t = tree(Path::new("/proc"), me);
         assert_eq!(t.first().map(|p| p.pid), Some(me));
-        assert_eq!(stat_of(Path::new("/proc"), me).map(|p| p.start), t.first().map(|p| p.start));
+        assert_eq!(
+            stat_of(Path::new("/proc"), me).map(|p| p.start),
+            t.first().map(|p| p.start)
+        );
     }
 }
