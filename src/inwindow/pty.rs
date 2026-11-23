@@ -294,6 +294,23 @@ mod tests {
         parts.iter().map(|s| s.to_string()).collect()
     }
 
+    /// A killed descendant is reparented to init (or the nearest
+    /// subreaper) and is gone once that parent reaps it. In a container
+    /// whose PID 1 never reaps, it stays a zombie: dead, but `kill(pid, 0)`
+    /// still finds it. Count that as gone; reaping it is not ours to do.
+    fn is_gone(pid: rustix::process::Pid) -> bool {
+        if rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH) {
+            return true;
+        }
+        std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_nonzero()))
+            .ok()
+            .and_then(|stat| {
+                let after = stat.rsplit_once(") ")?.1.to_string();
+                after.chars().next()
+            })
+            .is_some_and(|state| state == 'Z' || state == 'X')
+    }
+
     /// Collect output until the child exits (or ten seconds pass).
     fn run_out(pty: &mut Pty) -> (String, Option<i32>) {
         let mut out = Vec::new();
@@ -413,13 +430,10 @@ mod tests {
         let kid = rustix::process::Pid::from_raw(kid).unwrap();
         drop(pty);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while rustix::process::test_kill_process(kid).is_ok() && Instant::now() < deadline {
+        while !is_gone(kid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(
-            rustix::process::test_kill_process(kid),
-            Err(rustix::io::Errno::SRCH)
-        );
+        assert!(is_gone(kid), "the descendant {kid:?} is still running");
     }
 
     #[test]
@@ -465,12 +479,9 @@ mod tests {
             started.elapsed()
         );
         let deadline = Instant::now() + Duration::from_secs(2);
-        while rustix::process::test_kill_process(kid).is_ok() && Instant::now() < deadline {
+        while !is_gone(kid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(
-            rustix::process::test_kill_process(kid),
-            Err(rustix::io::Errno::SRCH)
-        );
+        assert!(is_gone(kid), "the descendant {kid:?} is still running");
     }
 }
