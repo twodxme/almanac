@@ -31,6 +31,23 @@ impl Win {
     }
 }
 
+impl Win {
+    /// `tasks::run_quiet` from this window: a task without a dialog (the
+    /// update view shows it). In a demo nothing runs and None comes back.
+    pub fn run_quiet_task(
+        &self,
+        steps: Vec<Step>,
+        on_step: Box<dyn Fn(usize)>,
+        on_line: Box<dyn Fn(&str)>,
+        on_done: OnDone,
+    ) -> Option<tasks::QuietTask> {
+        if self.demo_refuses() {
+            return None;
+        }
+        Some(tasks::run_quiet(steps, on_step, on_line, on_done))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// (file, its source) for every section that acts on the machine.
@@ -54,6 +71,7 @@ mod tests {
         ("ai.rs", include_str!("../ai.rs")),
         ("switchboard.rs", include_str!("../switchboard.rs")),
         ("today.rs", include_str!("../today.rs")),
+        ("update_view.rs", include_str!("../update_view.rs")),
     ];
 
     fn code(src: &str) -> &str {
@@ -77,6 +95,16 @@ mod tests {
         let gate = include_str!("guard.rs");
         let run_task = gate.split("pub fn run_task(").nth(1).unwrap_or("");
         assert!(run_task.find("demo_refuses()") < run_task.find("tasks::run("));
+        // The same gate for a task without a dialog of its own.
+        let quiet = gate.split("pub fn run_quiet_task(").nth(1).unwrap_or("");
+        let refuses = quiet.find("demo_refuses()").expect("gated");
+        assert!(refuses < quiet.find("tasks::run_quiet(").expect("runs it"));
+        for (file, src) in FILES {
+            assert!(
+                !code(src).contains("tasks::run_quiet("),
+                "{file} runs a task around the demo gate"
+            );
+        }
     }
 
     /// The actions that change the machine without a task dialog ask the

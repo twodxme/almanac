@@ -1,0 +1,64 @@
+<h2>Recommended: steps, with your apps inside “Installing”</h2>
+<p class="subtitle">Left: while it runs. Right: when a step fails, it turns red and says why, with the fix ready.</p>
+
+<style>
+  .alm{--bg:#1b2427;--card:#232f33;--line:#2f3d42;--txt:#dfe6e6;--dim:#8d9b9e;--acc:#6fb3ab;--ok:#8fc79a;--bad:#d98c8c;
+       background:var(--bg);color:var(--txt);font:13px/1.45 Inter,system-ui,sans-serif;border-radius:12px;padding:22px}
+  .alm h4{margin:0 0 2px;font-size:17px;font-weight:600}
+  .alm .dim{color:var(--dim)}
+  .alm .bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:12px 0}
+  .alm .bar i{display:block;height:100%;background:var(--acc)}
+  .alm .row{display:flex;align-items:center;gap:12px;padding:8px 0}
+  .alm .dot{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px}
+  .alm .done{background:var(--ok);color:#1b2427}.alm .now{border:2px solid var(--acc);border-top-color:transparent}
+  .alm .wait{border:2px solid var(--line)}.alm .fail{background:var(--bad);color:#1b2427}
+  .alm .pill{margin-left:auto;font-size:11px;color:var(--dim)}
+  .alm .sub{margin-left:30px;background:var(--card);border-radius:10px;padding:4px 12px}
+  .alm .sub .row{padding:6px 0;border-bottom:1px solid var(--line)}.alm .sub .row:last-child{border:0}
+  .alm .ico{width:22px;height:22px;border-radius:5px;flex:none}
+  .alm .safe{display:inline-block;margin-top:10px;font-size:12px;color:var(--ok)}
+  .alm .details{margin-top:10px;color:var(--dim);font-size:12px}
+  .alm .btn{padding:7px 14px;border-radius:8px;background:var(--line);display:inline-block}
+  .alm .go{background:var(--acc);color:#1b2427;font-weight:600}
+</style>
+
+<div class="split">
+<div class="alm">
+  <h4>Updating your system</h4>
+  <div class="dim">Step 4 of 6 · about 1 min left</div>
+  <div class="bar"><i style="width:62%"></i></div>
+  <div class="row"><span class="dot done">✓</span>Snapshot taken</div>
+  <div class="row"><span class="dot done">✓</span>Signing keys up to date</div>
+  <div class="row"><span class="dot done">✓</span>Downloaded<span class="pill">5 packages · 690 MB</span></div>
+  <div class="row"><span class="dot now"></span><b>Installing</b><span class="pill">3 of 5</span></div>
+  <div class="sub">
+    <div class="row"><span class="ico" style="background:#3a4a4f"></span>cursor-bin<span class="pill">3.31.15 ✓</span></div>
+    <div class="row"><span class="ico" style="background:#4a3f5c"></span>mise-bin<span class="pill">2026.11.11 ✓</span></div>
+    <div class="row"><span class="ico" style="background:#5c3f4a"></span><b>slack-desktop</b><span class="pill" style="color:var(--acc)">installing…</span></div>
+    <div class="row"><span class="ico" style="background:#5c4f3a"></span><span class="dim">voxtype-bin</span><span class="pill">1.3.0</span></div>
+    <div class="row"><span class="ico" style="background:#3a5c4a"></span><span class="dim">omarchy-speedtest</span><span class="pill">0.2.2</span></div>
+  </div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Omarchy migrations</span></div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Checking everything works</span></div>
+  <span class="safe">● Safe to keep working</span>
+  <div class="details">▸ Details</div>
+</div>
+
+<div class="alm">
+  <h4>The update didn't start</h4>
+  <div class="dim">Nothing was changed.</div>
+  <div class="bar"><i style="width:0"></i></div>
+  <div class="row"><span class="dot fail">!</span><b>Starting</b></div>
+  <div class="sub" style="padding:12px 14px">
+    Another Omarchy update has been waiting since <b>Thu 17:51</b> with no window to answer it in. It never touched your packages.
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <span class="btn">Show details</span><span class="btn go">Stop it and update</span>
+    </div>
+  </div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Snapshot</span></div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Signing keys</span></div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Download</span></div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Installing</span></div>
+  <div class="row"><span class="dot wait"></span><span class="dim">Checking everything works</span></div>
+</div>
+</div>

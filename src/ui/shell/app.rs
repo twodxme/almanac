@@ -216,9 +216,16 @@ impl AlmanacApp {
         win.window.present();
     }
 
-    /// `_on_close`: save the window state; let the close proceed.
+    /// `_on_close`: save the window state; let the close proceed. While an
+    /// update runs in the window, the window hides instead and Almanac
+    /// keeps going until it is over (`update_all::to_background`).
     pub fn on_close(win: &Win) -> glib::Propagation {
-        win.on_close()
+        let close = win.on_close();
+        if crate::ui::update_all::update_running() {
+            win.to_background();
+            return glib::Propagation::Stop;
+        }
+        close
     }
 }
 
@@ -302,6 +309,35 @@ fn py_repr_str(s: &str) -> String {
     }
     out.push(quote);
     out
+}
+
+/// `almanac --preview-update-view[=WHICH]` (debug builds): the window, then
+/// (unless WHICH is `none`) the update view fed a fixed timeline
+/// (`update_view::preview`). A separate instance, so a running Almanac is
+/// left alone.
+#[cfg(debug_assertions)]
+pub fn run_preview(which: String) -> glib::ExitCode {
+    let a = AlmanacApp::new();
+    a.app
+        .set_flags(a.app.flags() | gio::ApplicationFlags::NON_UNIQUE);
+    let win = a.win.clone();
+    a.app.connect_activate(move |_| {
+        let (win, which) = (win.clone(), which.clone());
+        // After the first inventory pass, so the app rows find their icons.
+        glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+            if let Some(w) = win.borrow().clone() {
+                crate::ui::update_view::preview(&w, &which);
+            }
+        });
+    });
+    // The other arguments (`--page NAME`) still apply.
+    let args: Vec<String> = std::env::args_os()
+        .filter_map(|a| a.into_string().ok())
+        .filter(|a| !a.starts_with("--preview-update-view"))
+        .collect();
+    let code = a.app.run_with_args(&args);
+    crate::history::flush();
+    code
 }
 
 /// The entry point for `main.rs`: `sys.exit(AlmanacApp().run(sys.argv))`.

@@ -194,3 +194,13 @@ row.history-detail {
 }
 row.history-detail .title,
 row.history-detail .subtitle { font-size: 0.92em; }
+
+/* The in-window update (update_view.rs): the step under way reads bold,
+   steps not reached yet recede, and the row under a step (its apps, its
+   failure, a question) carries no row chrome of its own. */
+row.update-now .title { font-weight: bold; }
+row.update-waiting .title { opacity: var(--dim-opacity); }
+row.update-slot, row.update-slot:hover { background: none; }
+.update-inset { padding: 12px 14px; }
+/* App rows inside a step sit tighter than the steps, as in the mockup. */
+list.update-apps > row.update-app > box.header { min-height: 40px; }

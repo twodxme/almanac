@@ -27,6 +27,8 @@ mod tables;
 mod watch;
 mod window;
 
+#[cfg(debug_assertions)]
+pub use app::run_preview;
 pub use app::{application_id, icons_dir, resolve_page, run, AlmanacApp, PAGE_ALIASES};
 pub(in crate::ui) use helpers::as_text;
 pub use helpers::{

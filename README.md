@@ -175,7 +175,7 @@ side of a check is cached — `mise outdated`, `git fetch`, GitHub releases —
 because that is the part that costs a network round trip. What is installed is
 read live every time: `mise ls` takes milliseconds, and a commit count against
 already-fetched refs never touches the network. **Update all** rescans by
-itself when its terminal closes.
+itself when it finishes.
 
 A repository update can be visible before it is installable. `checkupdates`
 syncs a private copy of the package database, so it sees releases the system
@@ -204,6 +204,40 @@ Install and removal run **inside the app**. Removal still shows you the full
 `pacman -Rs` preview, including the dependencies it would take with it, before
 anything happens — the confirmation moved somewhere readable, it was not
 dropped.
+
+### Update all, inside the window
+
+On Omarchy, **Update all** runs `omarchy update` inside Almanac: no terminal
+window opens. Omarchy still does the work: its snapshot, keyring, migrations,
+hooks and pacman guard all run as before. Almanac shows it as a timeline:
+*Snapshot → Signing keys → System packages → Omarchy migrations → AUR and
+tools → Checking everything works*, then **Other apps** (Flatpak, plugins,
+AppImages, agents, checkouts) on the same screen. Your apps from the Updates
+list tick off one by one with their new version. The raw output is under
+**Details**.
+
+- **Steps come from what is running, not from wording.** Almanac watches
+  which Omarchy command the update is in. When it cannot tell, it says
+  *Updating…*. It never shows a tick for a step it is not sure of.
+- **The password is asked in the window.** `sudo` asks on the update's own
+  hidden terminal, and Almanac types your answer there with echo off. It is
+  kept only for that one write and never stored.
+- **Almanac never says yes to a reboot.** A needed restart shows as
+  *Restart to finish*. Any other question appears in the window with its
+  answers as buttons, so the update cannot sit waiting where nobody sees it.
+- **A conflict stops on a red step.** When packages conflict, the update
+  stops and that step names them. **Resolve** runs it again and puts
+  pacman's questions to you.
+- **Closing the window does not stop the update.** Almanac keeps running in
+  the background and sends a notification when the update ends; the report
+  is waiting when you reopen it. **Stop** is always there. **Quit** asks
+  first, and refuses while pacman is installing.
+- **A stuck earlier update is found, not blamed on your packages.** If an
+  `omarchy update` left in a closed terminal still holds the update lock,
+  the timeline says so and offers to stop it and update.
+
+On other systems, and when a hidden terminal cannot be opened, Update all
+opens a terminal as before.
 
 ### Scheduled updates
 
